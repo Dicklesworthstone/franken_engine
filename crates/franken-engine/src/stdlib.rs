@@ -615,6 +615,7 @@ pub struct PrototypeHandles {
     pub set_prototype: ObjectHandle,
     pub date_prototype: ObjectHandle,
     pub symbol_prototype: ObjectHandle,
+    pub proxy_prototype: ObjectHandle,
 }
 
 /// Constructor handles for the standard builtins.
@@ -635,6 +636,7 @@ pub struct ConstructorHandles {
     pub date_constructor: ObjectHandle,
     pub symbol_constructor: ObjectHandle,
     pub promise_constructor: ObjectHandle,
+    pub proxy_constructor: ObjectHandle,
 }
 
 /// Namespace object handles (Math, JSON, etc.).
@@ -642,6 +644,7 @@ pub struct ConstructorHandles {
 pub struct NamespaceHandles {
     pub math: ObjectHandle,
     pub json: ObjectHandle,
+    pub reflect: ObjectHandle,
 }
 
 /// The global environment with all stdlib builtins installed.
@@ -687,6 +690,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     let date_proto = heap.alloc(Some(object_proto));
     let symbol_proto = heap.alloc(Some(object_proto));
     let promise_proto = heap.alloc(Some(object_proto));
+    let proxy_proto = heap.alloc(Some(object_proto));
 
     // -- Phase 2: Allocate constructor objects --------------------------------
     let object_ctor = heap.alloc(Some(function_proto));
@@ -704,10 +708,12 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     let date_ctor = heap.alloc(Some(function_proto));
     let symbol_ctor = heap.alloc(Some(function_proto));
     let promise_ctor = heap.alloc(Some(function_proto));
+    let proxy_ctor = heap.alloc(Some(function_proto));
 
     // -- Phase 3: Allocate namespace objects -----------------------------------
     let math_ns = heap.alloc(Some(object_proto));
     let json_ns = heap.alloc(Some(object_proto));
+    let reflect_ns = heap.alloc(Some(object_proto));
 
     // -- Phase 4: Wire constructor.prototype / prototype.constructor -----------
     install_ctor_proto_link(heap, object_ctor, object_proto);
@@ -725,6 +731,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     install_ctor_proto_link(heap, date_ctor, date_proto);
     install_ctor_proto_link(heap, symbol_ctor, symbol_proto);
     install_ctor_proto_link(heap, promise_ctor, promise_proto);
+    install_ctor_proto_link(heap, proxy_ctor, proxy_proto);
 
     // -- Phase 5: Install class tags ------------------------------------------
     set_class_tag(heap, object_proto, "Object");
@@ -742,8 +749,10 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     set_class_tag(heap, date_proto, "Date");
     set_class_tag(heap, symbol_proto, "Symbol");
     set_class_tag(heap, promise_proto, "Promise");
+    set_class_tag(heap, proxy_proto, "Proxy");
     set_class_tag(heap, math_ns, "Math");
     set_class_tag(heap, json_ns, "JSON");
+    set_class_tag(heap, reflect_ns, "Reflect");
 
     // -- Phase 6: Install builtin methods on prototypes -----------------------
     install_object_builtins(heap, &mut registry, object_ctor, object_proto);
@@ -757,6 +766,8 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
     install_set_builtins(heap, &mut registry, set_ctor, set_proto);
     install_error_builtins(heap, &mut registry, error_proto);
     install_promise_builtins(heap, &mut registry, promise_ctor, promise_proto);
+    install_proxy_builtins(heap, &mut registry, proxy_ctor);
+    install_reflect_builtins(heap, &mut registry, reflect_ns);
 
     // -- Phase 7: Allocate the global object ----------------------------------
     let global = heap.alloc(Some(object_proto));
@@ -780,9 +791,11 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
             date_constructor: date_ctor,
             symbol_constructor: symbol_ctor,
             promise_constructor: promise_ctor,
+            proxy_constructor: proxy_ctor,
         },
         math_ns,
         json_ns,
+        reflect_ns,
     );
 
     GlobalEnvironment {
@@ -803,6 +816,7 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
             set_prototype: set_proto,
             date_prototype: date_proto,
             symbol_prototype: symbol_proto,
+            proxy_prototype: proxy_proto,
         },
         constructors: ConstructorHandles {
             object_constructor: object_ctor,
@@ -820,10 +834,12 @@ pub fn install_stdlib(heap: &mut ObjectHeap) -> GlobalEnvironment {
             date_constructor: date_ctor,
             symbol_constructor: symbol_ctor,
             promise_constructor: promise_ctor,
+            proxy_constructor: proxy_ctor,
         },
         namespaces: NamespaceHandles {
             math: math_ns,
             json: json_ns,
+            reflect: reflect_ns,
         },
         registry,
     }
@@ -4872,6 +4888,40 @@ fn install_promise_builtins(
     install_builtin_fn(heap, registry, proto, "finally", BuiltinId::PromiseFinally);
 }
 
+fn install_proxy_builtins(
+    heap: &mut ObjectHeap,
+    registry: &mut BuiltinRegistry,
+    ctor: ObjectHandle,
+) {
+    let _ = registry.register(BuiltinId::ProxyConstructor);
+    install_builtin_fn(heap, registry, ctor, "revocable", BuiltinId::ProxyRevocable);
+}
+
+fn install_reflect_builtins(
+    heap: &mut ObjectHeap,
+    registry: &mut BuiltinRegistry,
+    reflect: ObjectHandle,
+) {
+    install_builtin_fn(heap, registry, reflect, "get", BuiltinId::ReflectGet);
+    install_builtin_fn(heap, registry, reflect, "set", BuiltinId::ReflectSet);
+    install_builtin_fn(heap, registry, reflect, "has", BuiltinId::ReflectHas);
+    install_builtin_fn(
+        heap,
+        registry,
+        reflect,
+        "deleteProperty",
+        BuiltinId::ReflectDeleteProperty,
+    );
+    install_builtin_fn(heap, registry, reflect, "apply", BuiltinId::ReflectApply);
+    install_builtin_fn(
+        heap,
+        registry,
+        reflect,
+        "construct",
+        BuiltinId::ReflectConstruct,
+    );
+}
+
 fn install_global_properties(
     heap: &mut ObjectHeap,
     registry: &mut BuiltinRegistry,
@@ -4879,6 +4929,7 @@ fn install_global_properties(
     ctors: &ConstructorHandles,
     math: ObjectHandle,
     json: ObjectHandle,
+    reflect: ObjectHandle,
 ) {
     // Install constructors on global
     let _ = heap.set_property(
@@ -4956,10 +5007,20 @@ fn install_global_properties(
         PropertyKey::from("Promise"),
         JsValue::Object(ctors.promise_constructor),
     );
+    let _ = heap.set_property(
+        global,
+        PropertyKey::from("Proxy"),
+        JsValue::Object(ctors.proxy_constructor),
+    );
 
     // Namespace objects
     let _ = heap.set_property(global, PropertyKey::from("Math"), JsValue::Object(math));
     let _ = heap.set_property(global, PropertyKey::from("JSON"), JsValue::Object(json));
+    let _ = heap.set_property(
+        global,
+        PropertyKey::from("Reflect"),
+        JsValue::Object(reflect),
+    );
 
     // Global constants
     let _ = heap.set_property(global, PropertyKey::from("undefined"), JsValue::Undefined);
@@ -5181,6 +5242,17 @@ mod tests {
                 .as_deref(),
             Some("Math")
         );
+        let reflect_obj = heap
+            .get(env.namespaces.reflect)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            reflect_obj
+                .as_ordinary()
+                .expect("serde deserialization should succeed")
+                .class_tag
+                .as_deref(),
+            Some("Reflect")
+        );
     }
 
     #[test]
@@ -5215,6 +5287,66 @@ mod tests {
             .get_property(env.global_object, &PropertyKey::from("isNaN"))
             .expect("serde deserialization should succeed");
         assert!(matches!(is_nan, JsValue::Function(_)));
+    }
+
+    #[test]
+    fn test_install_stdlib_proxy_reflect_globals() {
+        let mut heap = ObjectHeap::new();
+        let env = install_stdlib(&mut heap);
+
+        let proxy = heap
+            .get_property(env.global_object, &PropertyKey::from("Proxy"))
+            .expect("Proxy global should be installed");
+        assert_eq!(proxy, JsValue::Object(env.constructors.proxy_constructor));
+        assert!(
+            env.registry
+                .entries()
+                .iter()
+                .any(|(_, id)| *id == BuiltinId::ProxyConstructor),
+            "Proxy constructor should be registered without leaking internal slots"
+        );
+        assert_eq!(
+            heap.get_property(
+                env.constructors.proxy_constructor,
+                &PropertyKey::from("[[Call]]"),
+            )
+            .expect("missing properties should read as undefined"),
+            JsValue::Undefined
+        );
+        let revocable = heap
+            .get_property(
+                env.constructors.proxy_constructor,
+                &PropertyKey::from("revocable"),
+            )
+            .expect("Proxy.revocable should be installed");
+        let JsValue::Function(revocable_slot) = revocable else {
+            panic!("Proxy.revocable should be a builtin function");
+        };
+        assert_eq!(
+            env.registry.lookup(revocable_slot),
+            Some(BuiltinId::ProxyRevocable)
+        );
+
+        let reflect = heap
+            .get_property(env.global_object, &PropertyKey::from("Reflect"))
+            .expect("Reflect global should be installed");
+        assert_eq!(reflect, JsValue::Object(env.namespaces.reflect));
+        for (name, expected) in [
+            ("get", BuiltinId::ReflectGet),
+            ("set", BuiltinId::ReflectSet),
+            ("has", BuiltinId::ReflectHas),
+            ("deleteProperty", BuiltinId::ReflectDeleteProperty),
+            ("apply", BuiltinId::ReflectApply),
+            ("construct", BuiltinId::ReflectConstruct),
+        ] {
+            let value = heap
+                .get_property(env.namespaces.reflect, &PropertyKey::from(name))
+                .expect("Reflect method should be installed");
+            let JsValue::Function(slot) = value else {
+                panic!("Reflect.{name} should be a builtin function");
+            };
+            assert_eq!(env.registry.lookup(slot), Some(expected));
+        }
     }
 
     #[test]

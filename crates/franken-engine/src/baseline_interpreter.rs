@@ -98,6 +98,10 @@ const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 const MAX_CALL_DEPTH: usize = 256;
 /// Deterministic bound for baseline prototype-chain walks.
 const MAX_PROTOTYPE_CHAIN_DEPTH: u32 = 64;
+const PROXY_TYPE_TAG: &str = "Proxy";
+const PROXY_TARGET_SLOT: &str = "__proxy_target";
+const PROXY_HANDLER_SLOT: &str = "__proxy_handler";
+const PROXY_REVOKED_SLOT: &str = "__proxy_revoked";
 /// Approximate per-string heap footprint used for fail-closed budgeting.
 const MEMORY_ESTIMATE_STRING_BASE_BYTES: u64 = 24;
 /// Approximate per-heap-object base footprint.
@@ -312,6 +316,7 @@ pub enum BuiltinFunctionKind {
     ConsoleInfo,
     StringCharAt,
     StringCharCodeAt,
+    ProxyRevoke,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -323,6 +328,8 @@ pub struct BuiltinFunction {
     pub module_specifier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iterator_handle: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_object: Option<u32>,
 }
 
 impl BuiltinFunction {
@@ -331,6 +338,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::Require,
             module_specifier: module_specifier.into(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -339,6 +347,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::IteratorNext,
             module_specifier: String::new(),
             iterator_handle: Some(iterator_handle),
+            bound_object: None,
         }
     }
 
@@ -347,6 +356,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::IteratorSelf,
             module_specifier: String::new(),
             iterator_handle: Some(iterator_handle),
+            bound_object: None,
         }
     }
 
@@ -355,6 +365,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::StringCharAt,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -363,6 +374,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::StringCharCodeAt,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -371,6 +383,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::ConsoleLog,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -379,6 +392,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::ConsoleError,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -387,6 +401,7 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::ConsoleWarn,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
         }
     }
 
@@ -395,6 +410,16 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::ConsoleInfo,
             module_specifier: String::new(),
             iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn proxy_revoke(proxy_id: ObjectId) -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ProxyRevoke,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: Some(proxy_id.0),
         }
     }
 
@@ -409,6 +434,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ConsoleInfo => "info",
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::ProxyRevoke => "revoke",
         }
     }
 }
@@ -1261,7 +1287,11 @@ impl EvidenceLog {
                 Value::AsyncGeneratorFunction(id) => 14 + (*id as u64),
                 Value::AsyncGeneratorObject(id) => 15 + (*id as u64),
                 Value::Promise(id) => 16 + (*id as u64),
-                Value::BuiltinFunction(bf) => 17 + (bf.kind as u64),
+                Value::BuiltinFunction(bf) => {
+                    17 + (bf.kind as u64)
+                        + bf.iterator_handle.map(u64::from).unwrap_or(0)
+                        + bf.bound_object.map(u64::from).unwrap_or(0)
+                }
             };
             hasher_state = hasher_state.wrapping_mul(31).wrapping_add(value_hash);
         }
@@ -2799,6 +2829,16 @@ impl InterpreterCore {
             }
             BuiltinFunctionKind::ConsoleInfo => {
                 self.dispatch_console_hostcall("console:info", args)
+            }
+            BuiltinFunctionKind::ProxyRevoke => {
+                let proxy_id = builtin.bound_object.map(ObjectId).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "Proxy revoker bound object".to_string(),
+                        got: "missing proxy object".to_string(),
+                    }
+                })?;
+                self.revoke_proxy_object(proxy_id)?;
+                Ok(Value::Undefined)
             }
         }
     }
@@ -4707,7 +4747,13 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            let prop = self.prototype_chain_get(oid, &key_str)?;
+                            let prop = self.proxy_aware_get_property(
+                                Some(module),
+                                oid,
+                                &key_str,
+                                Value::Object(oid),
+                                0,
+                            )?;
                             self.write_reg(dst, prop)?;
                         }
                         Value::Iterator(iterator_handle) => {
@@ -4736,7 +4782,19 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.set_object_property(oid, key_str, set_val)?;
+                            if !self.proxy_aware_set_property(
+                                Some(module),
+                                oid,
+                                &key_str,
+                                set_val,
+                                Value::Object(oid),
+                                0,
+                            )? {
+                                return Err(InterpreterError::TypeError {
+                                    expected: "successful Proxy set trap".to_string(),
+                                    got: "falsy set trap result".to_string(),
+                                });
+                            }
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -4755,7 +4813,7 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.remove_object_property(oid, &key_str)?;
+                            self.proxy_aware_delete_property(Some(module), oid, &key_str, 0)?;
                             self.mark_deleted_for_in_iterators(oid, &key_str);
                             self.write_reg(dst, Value::Bool(true))?;
                         }
@@ -4994,7 +5052,7 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
-                    let result = self.eval_in_operator(lhs, rhs)?;
+                    let result = self.eval_in_operator(module, lhs, rhs)?;
                     self.write_reg(dst, result)?;
                     self.ip += 1;
                 }
@@ -6169,7 +6227,12 @@ impl InterpreterCore {
         ))
     }
 
-    fn eval_in_operator(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
+    fn eval_in_operator(
+        &mut self,
+        module: &Ir3Module,
+        lhs: u32,
+        rhs: u32,
+    ) -> Result<Value, InterpreterError> {
         let key = self.property_key_from_value(&self.read_reg(lhs)?);
         let target = self.read_reg(rhs)?;
         match target {
@@ -6177,7 +6240,12 @@ impl InterpreterCore {
                 self.heap
                     .get(object_id.0 as usize)
                     .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-                Ok(Value::Bool(self.prototype_chain_has_key(object_id, &key)?))
+                Ok(Value::Bool(self.proxy_aware_has_property(
+                    Some(module),
+                    object_id,
+                    &key,
+                    0,
+                )?))
             }
             other => Err(InterpreterError::TypeError {
                 expected: "object".to_string(),
@@ -6414,6 +6482,280 @@ impl InterpreterCore {
         }
 
         Ok(false)
+    }
+
+    fn read_object_argument(
+        &self,
+        args: RegRange,
+        offset: u32,
+        expected: &str,
+    ) -> Result<ObjectId, InterpreterError> {
+        if offset >= args.count {
+            return Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: "missing argument".to_string(),
+            });
+        }
+        match self.read_reg(args.start + offset)? {
+            Value::Object(object_id) => Ok(object_id),
+            other => Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn proxy_record(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Option<(ObjectId, ObjectId, bool)>, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        if !matches!(
+            object.properties.get("__type"),
+            Some(Value::Str(kind)) if kind == PROXY_TYPE_TAG
+        ) {
+            return Ok(None);
+        }
+
+        let target = match object.properties.get(PROXY_TARGET_SLOT) {
+            Some(Value::Object(target)) => *target,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "well-formed Proxy target slot".to_string(),
+                    got: other.map_or("missing".to_string(), |value| value.type_name().to_string()),
+                });
+            }
+        };
+        let handler = match object.properties.get(PROXY_HANDLER_SLOT) {
+            Some(Value::Object(handler)) => *handler,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "well-formed Proxy handler slot".to_string(),
+                    got: other.map_or("missing".to_string(), |value| value.type_name().to_string()),
+                });
+            }
+        };
+        let revoked = matches!(
+            object.properties.get(PROXY_REVOKED_SLOT),
+            Some(Value::Bool(true))
+        );
+        Ok(Some((target, handler, revoked)))
+    }
+
+    fn active_proxy_record(
+        &self,
+        object_id: ObjectId,
+    ) -> Result<Option<(ObjectId, ObjectId)>, InterpreterError> {
+        match self.proxy_record(object_id)? {
+            Some((_target, _handler, true)) => Err(InterpreterError::TypeError {
+                expected: "active Proxy object".to_string(),
+                got: "revoked Proxy".to_string(),
+            }),
+            Some((target, handler, false)) => Ok(Some((target, handler))),
+            None => Ok(None),
+        }
+    }
+
+    fn create_proxy_object(
+        &mut self,
+        target: ObjectId,
+        handler: ObjectId,
+    ) -> Result<ObjectId, InterpreterError> {
+        let proxy_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(
+            proxy_id,
+            "__type".to_string(),
+            Value::Str(PROXY_TYPE_TAG.to_string()),
+        )?;
+        self.set_object_property(
+            proxy_id,
+            PROXY_TARGET_SLOT.to_string(),
+            Value::Object(target),
+        )?;
+        self.set_object_property(
+            proxy_id,
+            PROXY_HANDLER_SLOT.to_string(),
+            Value::Object(handler),
+        )?;
+        self.set_object_property(proxy_id, PROXY_REVOKED_SLOT.to_string(), Value::Bool(false))?;
+        Ok(proxy_id)
+    }
+
+    fn revoke_proxy_object(&mut self, proxy_id: ObjectId) -> Result<(), InterpreterError> {
+        if self.proxy_record(proxy_id)?.is_none() {
+            return Err(InterpreterError::TypeError {
+                expected: "Proxy object".to_string(),
+                got: "ordinary object".to_string(),
+            });
+        }
+        self.set_object_property(proxy_id, PROXY_REVOKED_SLOT.to_string(), Value::Bool(true))
+    }
+
+    fn proxy_trap_value(
+        &self,
+        handler_id: ObjectId,
+        trap_name: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        match self.prototype_chain_get(handler_id, trap_name)? {
+            Value::Undefined | Value::Null => Ok(None),
+            trap @ (Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)) => {
+                Ok(Some(trap))
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: format!("callable Proxy.{trap_name} trap or undefined"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn invoke_proxy_trap(
+        &mut self,
+        module: Option<&Ir3Module>,
+        handler_id: ObjectId,
+        trap_name: &str,
+        arguments: Vec<Value>,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let Some(trap) = self.proxy_trap_value(handler_id, trap_name)? else {
+            return Ok(None);
+        };
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: format!("module-backed Proxy.{trap_name} trap dispatch"),
+            got: "missing module context".to_string(),
+        })?;
+        Ok(Some(self.invoke_inline_method_call(
+            Some(module),
+            trap,
+            Value::Object(handler_id),
+            arguments,
+        )?))
+    }
+
+    fn proxy_aware_get_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<Value, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy get recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return self.prototype_chain_get(object_id, key);
+        };
+
+        if let Some(value) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "get",
+            vec![Value::Object(target), Value::Str(key.to_string()), receiver],
+        )? {
+            return Ok(value);
+        }
+
+        self.proxy_aware_get_property(module, target, key, Value::Object(target), depth + 1)
+    }
+
+    fn proxy_aware_set_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        value: Value,
+        receiver: Value,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy set recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            self.set_object_property(object_id, key.to_string(), value)?;
+            return Ok(true);
+        };
+
+        if let Some(result) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "set",
+            vec![
+                Value::Object(target),
+                Value::Str(key.to_string()),
+                value.clone(),
+                receiver,
+            ],
+        )? {
+            return Ok(result.is_truthy());
+        }
+
+        self.proxy_aware_set_property(module, target, key, value, Value::Object(target), depth + 1)
+    }
+
+    fn proxy_aware_has_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy has recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return self.prototype_chain_has_key(object_id, key);
+        };
+
+        if let Some(result) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "has",
+            vec![Value::Object(target), Value::Str(key.to_string())],
+        )? {
+            return Ok(result.is_truthy());
+        }
+
+        self.proxy_aware_has_property(module, target, key, depth + 1)
+    }
+
+    fn proxy_aware_delete_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        depth: u32,
+    ) -> Result<bool, InterpreterError> {
+        if depth >= MAX_PROTOTYPE_CHAIN_DEPTH {
+            return Err(InterpreterError::TypeError {
+                expected: "bounded Proxy delete recursion".to_string(),
+                got: format!("depth {depth}"),
+            });
+        }
+        let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            return self.remove_object_property(object_id, key);
+        };
+
+        if let Some(result) = self.invoke_proxy_trap(
+            module,
+            handler,
+            "deleteProperty",
+            vec![Value::Object(target), Value::Str(key.to_string())],
+        )? {
+            return Ok(result.is_truthy());
+        }
+
+        self.proxy_aware_delete_property(module, target, key, depth + 1)
     }
 
     // -- Promise hostcall dispatch ------------------------------------------
@@ -8254,6 +8596,88 @@ impl InterpreterCore {
                         expected: "u32-bounded Function.prototype.call/apply argument register"
                             .to_string(),
                         got: format!("r2 + argument index {index}"),
+                    })?;
+                self.write_reg(register, argument)?;
+            }
+            self.run_loop(&wrapper)
+        })();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = saved_active_cjs_context;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        result
+    }
+
+    fn invoke_inline_construct(
+        &mut self,
+        module: Option<&Ir3Module>,
+        constructor: Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Reflect.construct dispatch".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let arg_count =
+            u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded Reflect.construct argument count".to_string(),
+                got: format!("{} arguments", arguments.len()),
+            })?;
+        let required_registers =
+            1u32.checked_add(arg_count)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "u32-bounded Reflect.construct register budget".to_string(),
+                    got: format!("1 constructor register + {arg_count} arguments"),
+                })?;
+        if required_registers > self.config.max_registers {
+            return Err(InterpreterError::TypeError {
+                expected: "Reflect.construct arguments within register budget".to_string(),
+                got: format!(
+                    "{required_registers} registers required but max is {}",
+                    self.config.max_registers
+                ),
+            });
+        }
+
+        let mut wrapper = module.clone();
+        let wrapper_start = wrapper.instructions.len();
+        wrapper.instructions.push(Ir3Instruction::Construct {
+            callee: 0,
+            args: RegRange {
+                start: 1,
+                count: arg_count,
+            },
+            dst: 0,
+        });
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
+
+        let snapshot = self.snapshot_module_execution();
+        let saved_active_cjs_context = self.active_cjs_context.clone();
+        let result = (|| -> Result<Value, InterpreterError> {
+            self.registers = vec![Value::Undefined; self.config.max_registers as usize];
+            self.call_stack.clear();
+            self.ip = wrapper_start;
+            self.register_base = 0;
+            self.catch_frames.clear();
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
+            self.finally_modes.clear();
+            self.current_module_specifier = Some(module.header.source_label.clone());
+            self.sync_estimated_memory_bytes()?;
+            self.write_reg(0, constructor)?;
+            for (index, argument) in arguments.into_iter().enumerate() {
+                let register = 1u32
+                    .checked_add(
+                        u32::try_from(index).map_err(|_| InterpreterError::TypeError {
+                            expected: "u32-bounded Reflect.construct argument register".to_string(),
+                            got: format!("argument index {index}"),
+                        })?,
+                    )
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "u32-bounded Reflect.construct argument register".to_string(),
+                        got: format!("r1 + argument index {index}"),
                     })?;
                 self.write_reg(register, argument)?;
             }
@@ -11544,6 +11968,129 @@ impl InterpreterCore {
                 }
 
                 Ok(obj_val) // Return the original object
+            }
+            "builtin:Proxy" => {
+                let target = self.read_object_argument(args, 0, "Proxy target object")?;
+                let handler = self.read_object_argument(args, 1, "Proxy handler object")?;
+                Ok(Value::Object(self.create_proxy_object(target, handler)?))
+            }
+            "builtin:ProxyRevocable" => {
+                let target = self.read_object_argument(args, 0, "Proxy.revocable target object")?;
+                let handler =
+                    self.read_object_argument(args, 1, "Proxy.revocable handler object")?;
+                let proxy_id = self.create_proxy_object(target, handler)?;
+                let result_id = self.alloc_object_with_properties(&[
+                    ("proxy", Value::Object(proxy_id)),
+                    (
+                        "revoke",
+                        Value::BuiltinFunction(BuiltinFunction::proxy_revoke(proxy_id)),
+                    ),
+                ])?;
+                Ok(Value::Object(result_id))
+            }
+            "builtin:ReflectGet" => {
+                let target = self.read_object_argument(args, 0, "Reflect.get target object")?;
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.get property key".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let key_value = self.read_reg(args.start + 1)?;
+                let key = self.property_key_from_value(&key_value);
+                let receiver = if args.count > 2 {
+                    self.read_reg(args.start + 2)?
+                } else {
+                    Value::Object(target)
+                };
+                self.proxy_aware_get_property(module, target, &key, receiver, 0)
+            }
+            "builtin:ReflectSet" => {
+                let target = self.read_object_argument(args, 0, "Reflect.set target object")?;
+                if args.count < 3 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.set property key and value".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let key_value = self.read_reg(args.start + 1)?;
+                let value = self.read_reg(args.start + 2)?;
+                let key = self.property_key_from_value(&key_value);
+                let receiver = if args.count > 3 {
+                    self.read_reg(args.start + 3)?
+                } else {
+                    Value::Object(target)
+                };
+                Ok(Value::Bool(self.proxy_aware_set_property(
+                    module, target, &key, value, receiver, 0,
+                )?))
+            }
+            "builtin:ReflectHas" => {
+                let target = self.read_object_argument(args, 0, "Reflect.has target object")?;
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.has property key".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let key_value = self.read_reg(args.start + 1)?;
+                let key = self.property_key_from_value(&key_value);
+                Ok(Value::Bool(
+                    self.proxy_aware_has_property(module, target, &key, 0)?,
+                ))
+            }
+            "builtin:ReflectDeleteProperty" => {
+                let target =
+                    self.read_object_argument(args, 0, "Reflect.deleteProperty target object")?;
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.deleteProperty property key".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let key_value = self.read_reg(args.start + 1)?;
+                let key = self.property_key_from_value(&key_value);
+                Ok(Value::Bool(
+                    self.proxy_aware_delete_property(module, target, &key, 0)?,
+                ))
+            }
+            "builtin:ReflectApply" => {
+                if args.count < 3 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.apply target, thisArg, and argumentsList".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let target = self.read_reg(args.start)?;
+                if !matches!(
+                    target,
+                    Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_)
+                ) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                }
+                let this_arg = self.read_reg(args.start + 1)?;
+                let arguments = self.array_like_argument_values(self.read_reg(args.start + 2)?)?;
+                self.invoke_inline_method_call(module, target, this_arg, arguments)
+            }
+            "builtin:ReflectConstruct" => {
+                if args.count < 2 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Reflect.construct target and argumentsList".to_string(),
+                        got: "missing argument".to_string(),
+                    });
+                }
+                let target = self.read_reg(args.start)?;
+                if !matches!(target, Value::Function(_) | Value::Closure(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "constructor function".to_string(),
+                        got: target.type_name().to_string(),
+                    });
+                }
+                let arguments = self.array_like_argument_values(self.read_reg(args.start + 1)?)?;
+                self.invoke_inline_construct(module, target, arguments)
             }
             "builtin:Map" => {
                 // Map([iterable]) constructor implementation
@@ -16263,6 +16810,14 @@ impl InterpreterCore {
             386 => Some("builtin:StringPrototypeToLocaleLowerCase".to_string()),
             387 => Some("builtin:StringPrototypeToLocaleUpperCase".to_string()),
             388 => Some("builtin:MathLog".to_string()),
+            389 => Some("builtin:Proxy".to_string()),
+            390 => Some("builtin:ProxyRevocable".to_string()),
+            391 => Some("builtin:ReflectGet".to_string()),
+            392 => Some("builtin:ReflectSet".to_string()),
+            393 => Some("builtin:ReflectHas".to_string()),
+            394 => Some("builtin:ReflectDeleteProperty".to_string()),
+            395 => Some("builtin:ReflectApply".to_string()),
+            396 => Some("builtin:ReflectConstruct".to_string()),
 
             _ => None, // Not a recognized builtin
         }
@@ -17874,6 +18429,296 @@ mod async_runtime_tests_current {
             RuntimeCapability::HeapAllocate,
         ]);
         InterpreterCore::new(config, "async-runtime-test")
+    }
+
+    #[test]
+    fn proxy_and_reflect_builtins_reach_baseline_heap() {
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.set_object_property(target, "answer".to_string(), Value::Int(41))
+            .expect("target property write should succeed");
+
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Str("answer".to_string());
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Reflect.get should read ordinary target"),
+            Value::Int(41)
+        );
+
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(handler);
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .expect("Proxy constructor should allocate baseline proxy");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("Proxy constructor should return object");
+        };
+
+        core.registers[0] = Value::Object(proxy_id);
+        core.registers[1] = Value::Str("answer".to_string());
+        core.registers[2] = Value::Int(42);
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectSet",
+                RegRange { start: 0, count: 3 },
+                None,
+            )
+            .expect("Reflect.set should forward through proxy"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.prototype_chain_get(target, "answer")
+                .expect("target read should succeed"),
+            Value::Int(42)
+        );
+
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Reflect.has should forward through proxy"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectDeleteProperty",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Reflect.deleteProperty should forward through proxy"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Reflect.has should observe deleted target property"),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn proxy_traps_execute_via_baseline_call_path() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 3,
+                frame_size: 1,
+                name: Some("proxy_get_trap".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("from-get-trap".to_string());
+
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.set_object_property(handler, "get".to_string(), Value::Function(0))
+            .expect("handler trap write should succeed");
+
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(handler);
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .expect("Proxy constructor should allocate proxy");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("Proxy constructor should return object");
+        };
+
+        core.registers[0] = Value::Object(proxy_id);
+        core.registers[1] = Value::Str("anything".to_string());
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectGet",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .expect("Reflect.get should execute get trap"),
+            Value::Str("from-get-trap".to_string())
+        );
+    }
+
+    #[test]
+    fn proxy_get_property_instruction_executes_get_trap() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::GetProperty {
+                    obj: 5,
+                    key: 6,
+                    dst: 7,
+                },
+                Ir3Instruction::Return { value: 7 },
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 3,
+                frame_size: 1,
+                name: Some("proxy_instruction_get_trap".to_string()),
+                is_generator: false,
+            }],
+        );
+        module
+            .constant_pool
+            .push("from-instruction-trap".to_string());
+
+        let mut core = test_interpreter();
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.set_object_property(handler, "get".to_string(), Value::Function(0))
+            .expect("handler get trap write should succeed");
+
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(handler);
+        let proxy = core
+            .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
+            .expect("Proxy constructor should allocate proxy");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("Proxy constructor should return object");
+        };
+
+        core.registers[5] = Value::Object(proxy_id);
+        core.registers[6] = Value::Str("viaInstruction".to_string());
+        assert_eq!(
+            core.run_loop(&module)
+                .expect("GetProperty should execute Proxy get trap"),
+            Value::Str("from-instruction-trap".to_string())
+        );
+    }
+
+    #[test]
+    fn proxy_revocation_and_reflect_call_construct_are_executable() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadInt { dst: 0, value: 99 },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadInt { dst: 0, value: 5 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("call_target".to_string()),
+                    is_generator: false,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("construct_target".to_string()),
+                    is_generator: false,
+                },
+            ],
+        );
+
+        let mut core = test_interpreter();
+        let empty_args = core
+            .alloc_array_from_values(&[])
+            .expect("arguments array allocation should succeed");
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Undefined;
+        core.registers[2] = Value::Object(empty_args);
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:ReflectApply",
+                RegRange { start: 0, count: 3 },
+                Some(&module),
+            )
+            .expect("Reflect.apply should call target function"),
+            Value::Int(99)
+        );
+
+        core.registers[0] = Value::Function(1);
+        core.registers[1] = Value::Object(empty_args);
+        let constructed = core
+            .dispatch_builtin_hostcall(
+                "builtin:ReflectConstruct",
+                RegRange { start: 0, count: 2 },
+                Some(&module),
+            )
+            .expect("Reflect.construct should construct target");
+        let Value::Object(constructed_id) = constructed else {
+            panic!("Reflect.construct should return constructed object");
+        };
+        assert_eq!(
+            core.heap[constructed_id.0 as usize].constructor_function,
+            Some(1)
+        );
+
+        let target = core
+            .alloc_object_with_prototype(None)
+            .expect("target allocation should succeed");
+        let handler = core
+            .alloc_object_with_prototype(None)
+            .expect("handler allocation should succeed");
+        core.registers[0] = Value::Object(target);
+        core.registers[1] = Value::Object(handler);
+        let revocable = core
+            .dispatch_builtin_hostcall(
+                "builtin:ProxyRevocable",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("Proxy.revocable should return pair object");
+        let Value::Object(revocable_id) = revocable else {
+            panic!("Proxy.revocable should return object");
+        };
+        let proxy = core
+            .prototype_chain_get(revocable_id, "proxy")
+            .expect("revocable proxy field should exist");
+        let revoker = core
+            .prototype_chain_get(revocable_id, "revoke")
+            .expect("revocable revoke field should exist");
+        let Value::BuiltinFunction(revoker) = revoker else {
+            panic!("revoke field should be callable");
+        };
+
+        core.dispatch_builtin_function(&module, &revoker, RegRange { start: 0, count: 0 }, None)
+            .expect("revoker should execute");
+        let Value::Object(proxy_id) = proxy else {
+            panic!("proxy field should be object");
+        };
+        core.registers[0] = Value::Object(proxy_id);
+        core.registers[1] = Value::Str("x".to_string());
+        let err = core
+            .dispatch_builtin_hostcall("builtin:ReflectGet", RegRange { start: 0, count: 2 }, None)
+            .expect_err("revoked proxy access must fail closed");
+        assert!(matches!(err, InterpreterError::TypeError { .. }));
     }
 
     #[test]

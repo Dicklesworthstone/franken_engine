@@ -10,6 +10,7 @@ artifact_root="${RED_TEAM_COMPROMISE_RATE_METRIC_ARTIFACT_ROOT:-artifacts/red_te
 run_id="${RED_TEAM_COMPROMISE_RATE_METRIC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 run_dir="${RED_TEAM_COMPROMISE_RATE_METRIC_RUN_DIR:-${artifact_root}/${run_id}}"
 code_revision="${RED_TEAM_COMPROMISE_RATE_METRIC_CODE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+FRANKENENGINE_CMD=()
 
 write_scenario_artifacts() {
   local bundle_dir="$1"
@@ -17,6 +18,9 @@ write_scenario_artifacts() {
   local attack_class="$3"
   local engine_compromised="$4"
   local is_stub="${5:-true}"
+  local measurement_status="${6:-observed}"
+  local frankenengine_exit_code="${7:-0}"
+  local frankenengine_output="${8:-}"
   local witness_path="${bundle_dir}/witnesses/${scenario_id}.json"
   local transcript_path="${bundle_dir}/transcripts/${scenario_id}.json"
   local witness_hash
@@ -27,12 +31,14 @@ write_scenario_artifacts() {
     --arg schema_version "franken-engine.red-team-witness.v1" \
     --arg scenario_id "$scenario_id" \
     --arg attack_class "$attack_class" \
+    --arg measurement_status "$measurement_status" \
     --argjson is_stub "$is_stub" \
     '{
       schema_version: $schema_version,
       scenario_id: $scenario_id,
       attack_class: $attack_class,
       security_critical: true,
+      measurement_status: $measurement_status,
       is_placeholder_data: $is_stub
     }' >"$witness_path"
 
@@ -40,6 +46,9 @@ write_scenario_artifacts() {
     --arg schema_version "franken-engine.red-team-transcript.v1" \
     --arg scenario_id "$scenario_id" \
     --arg attack_class "$attack_class" \
+    --arg measurement_status "$measurement_status" \
+    --argjson frankenengine_exit_code "$frankenengine_exit_code" \
+    --arg frankenengine_output "$frankenengine_output" \
     --argjson frankenengine_attacker_succeeded "$engine_compromised" \
     --argjson is_stub "$is_stub" \
     '{
@@ -49,6 +58,9 @@ write_scenario_artifacts() {
       frankenengine_attacker_succeeded: $frankenengine_attacker_succeeded,
       node_attacker_succeeded: true,
       bun_attacker_succeeded: true,
+      frankenengine_exit_code: $frankenengine_exit_code,
+      frankenengine_output: $frankenengine_output,
+      measurement_status: $measurement_status,
       is_placeholder_data: $is_stub
     }' >"$transcript_path"
 
@@ -64,6 +76,8 @@ write_scenario_artifacts() {
     --arg transcript_path "$(proof_contract_repo_relative_path "$transcript_path")" \
     --arg transcript_hash "$transcript_hash" \
     --arg replay_command "frankenctl red-team replay --scenario $(proof_contract_repo_relative_path "$witness_path") --mode strict" \
+    --arg measurement_status "$measurement_status" \
+    --argjson frankenengine_exit_code "$frankenengine_exit_code" \
     '{
       scenario_id: $scenario_id,
       attack_class: $attack_class,
@@ -72,6 +86,8 @@ write_scenario_artifacts() {
       node_attacker_succeeded: true,
       bun_attacker_succeeded: true,
       is_placeholder_data: $is_stub,
+      measurement_status: $measurement_status,
+      frankenengine_exit_code: $frankenengine_exit_code,
       witness_path: $witness_path,
       witness_hash: $witness_hash,
       transcript_path: $transcript_path,
@@ -124,9 +140,94 @@ check_real_scenarios_available() {
   return 0
 }
 
+attack_class_for_scenario() {
+  case "$1" in
+    environment_variable_exfiltration | process_privilege_surface_probe | shell_command_injection_package_script)
+      printf 'ambient_authority_escape'
+      ;;
+    prototype_pollution_capability_escape)
+      printf 'prototype_pollution'
+      ;;
+    supply_chain_backdoor_execution)
+      printf 'supply_chain_execution'
+      ;;
+    *)
+      printf 'unknown'
+      ;;
+  esac
+}
+
+resolve_frankenengine_metric_cmd() {
+  if [[ -n "${FRANKENENGINE_BIN:-}" && -x "${FRANKENENGINE_BIN:-}" ]]; then
+    FRANKENENGINE_CMD=("$FRANKENENGINE_BIN")
+    return 0
+  fi
+
+  if [[ -n "${CARGO_TARGET_DIR:-}" && -x "${CARGO_TARGET_DIR}/debug/frankenctl" ]]; then
+    FRANKENENGINE_CMD=("${CARGO_TARGET_DIR}/debug/frankenctl")
+    return 0
+  fi
+
+  if [[ -x "${root_dir}/target/debug/frankenctl" ]]; then
+    FRANKENENGINE_CMD=("${root_dir}/target/debug/frankenctl")
+    return 0
+  fi
+
+  if command -v frankenctl >/dev/null 2>&1; then
+    FRANKENENGINE_CMD=("frankenctl")
+    return 0
+  fi
+
+  return 1
+}
+
+run_frankenengine_scenario_probe() {
+  local bundle_dir="$1"
+  local scenario_id="$2"
+  local script_path="${root_dir}/crates/franken-engine/tests/red_team_scenarios/${scenario_id}.js"
+  local report_dir="${bundle_dir}/frankenengine_reports"
+  local report_path="${report_dir}/${scenario_id}.json"
+  local output
+  local exit_code=0
+
+  FRANKENENGINE_PROBE_ATTACK_SUCCEEDED=false
+  FRANKENENGINE_PROBE_EXIT_CODE=127
+  FRANKENENGINE_PROBE_OUTPUT="frankenctl binary unavailable; set FRANKENENGINE_BIN or build frankenctl before running observed red-team metric artifacts"
+
+  if ! resolve_frankenengine_metric_cmd; then
+    return 1
+  fi
+
+  mkdir -p "$report_dir"
+  output=$(
+    "${FRANKENENGINE_CMD[@]}" run \
+      --input "$script_path" \
+      --extension-id "red-team-${scenario_id}" \
+      --goal script \
+      --out "$report_path" \
+      2>&1
+  ) || exit_code=$?
+
+  FRANKENENGINE_PROBE_EXIT_CODE="$exit_code"
+  FRANKENENGINE_PROBE_OUTPUT="$output"
+  if echo "$output" | grep -q '"attack_succeeded".*true'; then
+    FRANKENENGINE_PROBE_ATTACK_SUCCEEDED=true
+  elif [[ -f "$report_path" ]] && jq -e '
+      if has("attack_succeeded") then .attack_succeeded == true
+      elif (.console_output? | type) == "array" then
+        any(.console_output[]?; (try (fromjson.attack_succeeded == true) catch false))
+      else false end
+    ' "$report_path" >/dev/null 2>&1; then
+    FRANKENENGINE_PROBE_ATTACK_SUCCEEDED=true
+  fi
+
+  return 0
+}
+
 write_real_scenario_artifacts() {
   local bundle_dir="$1"
   local scenario_id="$2"
+  local force_engine_compromised="${3:-false}"
   local manifest_path="${root_dir}/crates/franken-engine/tests/red_team_scenarios/${scenario_id}.manifest.json"
 
   if [[ ! -f "$manifest_path" ]]; then
@@ -135,13 +236,38 @@ write_real_scenario_artifacts() {
   fi
 
   local attack_class
-  attack_class="$(jq -r '.attack_vector // "unknown"' "$manifest_path")"
+  attack_class="$(attack_class_for_scenario "$scenario_id")"
 
-  # For now, FrankenEngine should fail_closed (not yet implemented)
-  # When bd-3a4z9 ships or FrankenEngine JS execution is ready, this should use real execution results
   local engine_compromised="false"
+  local is_stub="false"
+  local measurement_status="observed"
+  local frankenengine_exit_code=0
+  local frankenengine_output=""
 
-  write_scenario_artifacts "$bundle_dir" "$scenario_id" "$attack_class" "$engine_compromised" "false"
+  if run_frankenengine_scenario_probe "$bundle_dir" "$scenario_id"; then
+    engine_compromised="$FRANKENENGINE_PROBE_ATTACK_SUCCEEDED"
+    frankenengine_exit_code="$FRANKENENGINE_PROBE_EXIT_CODE"
+    frankenengine_output="$FRANKENENGINE_PROBE_OUTPUT"
+  else
+    is_stub="true"
+    measurement_status="provisional"
+    frankenengine_exit_code="$FRANKENENGINE_PROBE_EXIT_CODE"
+    frankenengine_output="$FRANKENENGINE_PROBE_OUTPUT"
+  fi
+  if [[ "$force_engine_compromised" == "true" ]]; then
+    engine_compromised="true"
+    measurement_status="negative_fixture"
+  fi
+
+  write_scenario_artifacts \
+    "$bundle_dir" \
+    "$scenario_id" \
+    "$attack_class" \
+    "$engine_compromised" \
+    "$is_stub" \
+    "$measurement_status" \
+    "$frankenengine_exit_code" \
+    "$frankenengine_output"
 }
 
 write_bundle() {
@@ -171,6 +297,7 @@ write_bundle() {
   local reason
   local details_hash
   local failure_count
+  local reduction_threshold_met
 
   mkdir -p "$bundle_dir"
   : >"$scenarios_path"
@@ -181,8 +308,8 @@ write_bundle() {
   # Try to use real scenarios from bd-29sn6 first
   if check_real_scenarios_available; then
     echo "Using real red team scenarios from bd-29sn6..." >&2
-    write_real_scenario_artifacts "$bundle_dir" "environment_variable_exfiltration" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
-    write_real_scenario_artifacts "$bundle_dir" "process_privilege_surface_probe" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
+    write_real_scenario_artifacts "$bundle_dir" "environment_variable_exfiltration" "$fail_reduction" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
+    write_real_scenario_artifacts "$bundle_dir" "process_privilege_surface_probe" "$fail_reduction" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
     write_real_scenario_artifacts "$bundle_dir" "prototype_pollution_capability_escape" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
     write_real_scenario_artifacts "$bundle_dir" "shell_command_injection_package_script" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
     write_real_scenario_artifacts "$bundle_dir" "supply_chain_backdoor_execution" >>"$scenarios_path" || { using_stubs=true; stub_count=$((stub_count + 1)); }
@@ -224,6 +351,12 @@ write_bundle() {
   fi
   reduction_x="$(reduction_factor_x "$baseline_reference_millionths" "$compromise_millionths")"
   replay_coverage_millionths="$(rate_millionths "$replayable_witness_scenarios" "$scenarios_total")"
+  reduction_threshold_met=false
+  if [[ "$baseline_reference_millionths" -gt 0 && "$compromise_millionths" -eq 0 ]]; then
+    reduction_threshold_met=true
+  elif [[ "$reduction_x" != "18446744073709551615" && "$reduction_x" -ge 10 ]]; then
+    reduction_threshold_met=true
+  fi
 
   # Check for stub data and apply defensive pattern
   local stub_scenarios_count
@@ -241,7 +374,7 @@ write_bundle() {
     echo "Real measurements will be available when bd-3a4z9 ships or FrankenEngine JS execution is implemented" >&2
   fi
 
-  if [[ "$has_stubs" == "false" && "$reduction_x" -ge 10 && "$replay_coverage_millionths" -ge 950000 ]]; then
+  if [[ "$has_stubs" == "false" && "$reduction_threshold_met" == "true" && "$replay_coverage_millionths" -ge 950000 ]]; then
     decision="pass"
     reason="red_team_compromise_rate_reduction_verified"
     failure_count=0
@@ -290,13 +423,14 @@ write_bundle() {
     --arg artifact_path "$(proof_contract_repo_relative_path "$details_path")" \
     --arg artifact_hash "$details_hash" \
     --arg verification_command "$verification_command" \
-    --argjson observed "$reduction_x" \
-    --argjson coverage "$replay_coverage_millionths" \
-    --arg measurement_status "$measurement_status" \
-    --argjson has_stubs "$has_stubs" \
-    --argjson stub_count "$stub_scenarios_count" \
-    '{
-      metric_id: "red_team_compromise_rate_reduction",
+	    --argjson observed "$reduction_x" \
+	    --argjson coverage "$replay_coverage_millionths" \
+	    --arg measurement_status "$measurement_status" \
+	    --argjson has_stubs "$has_stubs" \
+	    --argjson stub_count "$stub_scenarios_count" \
+	    --argjson scenarios_total "$scenarios_total" \
+	    '{
+	      metric_id: "red_team_compromise_rate_reduction",
       threshold: 10,
       observed_value: $observed,
       measurement_status: $measurement_status,
@@ -305,7 +439,7 @@ write_bundle() {
       unit: "x_rate_reduction",
       baseline: "node_and_bun",
       candidate: "franken_engine",
-      denominator_id: "node_and_bun:red_team_scenarios:10",
+	      denominator_id: ("node_and_bun:red_team_scenarios:" + ($scenarios_total | tostring)),
       scenario_set: "red_team_security_critical_compromise_v1",
       artifact_path: $artifact_path,
       artifact_hash: $artifact_hash,

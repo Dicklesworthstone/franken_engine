@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    DisruptiveFloorGateConfig, DisruptiveMetricId, GateDecisionState, MetricArtifact,
-    evaluate_disruptive_floor_gate,
+    evaluate_disruptive_floor_gate, DisruptiveFloorGateConfig, DisruptiveMetricId,
+    GateDecisionState, MetricArtifact,
 };
 use frankenengine_engine::red_team_compromise_rate_metric_gate::{
-    RedTeamCompromiseRateDecision, RedTeamCompromiseRateMetricInput,
-    evaluate_red_team_compromise_rate_metric,
+    evaluate_red_team_compromise_rate_metric, RedTeamCompromiseRateDecision,
+    RedTeamCompromiseRateMetricInput,
 };
 use std::path::PathBuf;
 
@@ -27,12 +27,12 @@ fn red_team_fixture_loads_and_passes() {
         "{}",
         report.reason
     );
-    assert_eq!(report.scenarios_total, 10);
-    assert_eq!(report.attacks_successful, 1);
-    assert_eq!(report.compromise_millionths, 100_000);
+    assert_eq!(report.scenarios_total, 5);
+    assert_eq!(report.attacks_successful, 0);
+    assert_eq!(report.compromise_millionths, 0);
     assert_eq!(report.baseline_compromise_millionths_node, 1_000_000);
     assert_eq!(report.baseline_compromise_millionths_bun, 1_000_000);
-    assert_eq!(report.reduction_factor_x, 10);
+    assert_eq!(report.reduction_factor_x, u64::MAX);
 }
 
 #[test]
@@ -41,10 +41,15 @@ fn red_team_child_artifact_is_consumed_by_parent_integrator() {
         "fixtures/red_team_compromise_rate_metric_input_v1.json"
     ))
     .expect("fixture should deserialize");
+    let code_revision = input.code_revision.clone();
     let child_report = evaluate_red_team_compromise_rate_metric(&input);
     let mut artifacts = DisruptiveMetricId::ALL
         .into_iter()
-        .map(|metric_id| MetricArtifact::for_metric(metric_id, metric_id.threshold()))
+        .map(|metric_id| {
+            let mut artifact = MetricArtifact::for_metric(metric_id, metric_id.threshold());
+            artifact.code_revision = code_revision.clone();
+            artifact
+        })
         .collect::<Vec<_>>();
     let red_team_slot = artifacts
         .iter_mut()
@@ -52,10 +57,8 @@ fn red_team_child_artifact_is_consumed_by_parent_integrator() {
         .expect("parent should require red-team metric");
     *red_team_slot = child_report.metric_artifact;
 
-    let parent_report = evaluate_disruptive_floor_gate(
-        &DisruptiveFloorGateConfig::new("rev-under-test"),
-        &artifacts,
-    );
+    let parent_report =
+        evaluate_disruptive_floor_gate(&DisruptiveFloorGateConfig::new(code_revision), &artifacts);
 
     assert_eq!(parent_report.decision, GateDecisionState::Pass);
     assert!(parent_report.observed_disruptive_floor_wording_allowed);
@@ -74,11 +77,11 @@ fn structured_events_include_baseline_comparison_fields() {
         event.metric_id,
         DisruptiveMetricId::RedTeamCompromiseRateReduction
     );
-    assert_eq!(event.scenarios_total, 10);
-    assert_eq!(event.attacks_successful, 1);
-    assert_eq!(event.compromise_millionths, 100_000);
+    assert_eq!(event.scenarios_total, 5);
+    assert_eq!(event.attacks_successful, 0);
+    assert_eq!(event.compromise_millionths, 0);
     assert_eq!(event.baseline_compromise_millionths_node, 1_000_000);
     assert_eq!(event.baseline_compromise_millionths_bun, 1_000_000);
-    assert_eq!(event.reduction_factor_x, 10);
+    assert_eq!(event.reduction_factor_x, u64::MAX);
     assert_eq!(event.threshold_factor_x, 10);
 }

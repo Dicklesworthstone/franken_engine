@@ -140,6 +140,7 @@ execute_scenario() {
                     --arg runtime "$runtime" \
                     --arg script_path "$script_path" \
                     --arg stdout "$output" \
+                    --arg followup_bead "bd-f5idk" \
                     --argjson exit_code "$exit_code" \
                     --argjson attack_succeeded false \
                     '{
@@ -152,9 +153,11 @@ execute_scenario() {
                       stdout: $stdout,
                       stderr: "",
                       outcome: "fail_closed",
+                      payload_execution_status: "rejected_before_attacker_code",
                       measurement_mode: "real_frankenctl_invocation",
                       measurement_status: "PROVISIONAL",
-                      explanation: "frankenctl accepted the scenario payload path but failed before script execution; attack_succeeded is derived from captured process output, not a hardcoded stub"
+                      followup_bead: $followup_bead,
+                      explanation: "frankenctl was invoked with the real scenario payload path and failed before attacker code execution; attack_succeeded is derived from captured process output, not a hardcoded stub"
                     }'
             )"
         fi

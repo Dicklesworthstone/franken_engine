@@ -33,6 +33,7 @@ pub const RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION: &str =
 pub const OBSERVABILITY_DELTA_SCHEMA_VERSION: &str =
     "franken-engine.rgc-cold-start-observability-delta.v1";
 pub const TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.rgc-cold-start-trace-ids.v1";
+pub const RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC: &str = "PROVISIONAL_SYNTHETIC";
 
 pub const REPORT_FILE: &str = "cold_start_compilation_report.json";
 pub const OBSERVABILITY_DELTA_FILE: &str = "cold_start_observability_delta.json";
@@ -106,6 +107,12 @@ pub struct RuntimeImageManifestArtifact {
     pub schema_version: String,
     pub component: String,
     pub bead_id: String,
+    #[serde(default = "default_runtime_image_proof_status")]
+    pub proof_status: String,
+    #[serde(default)]
+    pub proof_limitations: Vec<String>,
+    #[serde(default)]
+    pub release_claim_eligible: bool,
     pub registry_hash: ContentHash,
     pub image_count: u64,
     pub total_bytes: u64,
@@ -488,48 +495,48 @@ fn build_runtime_image_manifest(
         .register(ImageManifest {
             image_id: "img-prewarmed-demo".to_string(),
             kind: ImageKind::Prewarmed,
-            state: ImageState::Ready,
+            state: ImageState::Disabled,
             creation_epoch: SecurityEpoch::from_raw(epoch.as_u64().saturating_sub(2)),
             source_hash: batch_report.batch_hash,
             image_hash: hash_label("img-prewarmed-demo"),
             module_count: total_modules,
             total_size_bytes: 1_048_576,
             warm_start_mode: WarmStartMode::PrewarmedPool,
-            integrity_status: ImageIntegrityStatus::Verified,
-            ttl_seconds: Some(3_600),
-            creation_reason: "prewarmed bootstrap pool".to_string(),
+            integrity_status: ImageIntegrityStatus::Unverified,
+            ttl_seconds: None,
+            creation_reason: synthetic_runtime_image_reason("prewarmed bootstrap pool"),
         })
         .map_err(|error| format!("failed to register prewarmed image: {error}"))?;
     registry
         .register(ImageManifest {
             image_id: "img-zygote-demo".to_string(),
             kind: ImageKind::Zygote,
-            state: ImageState::Ready,
+            state: ImageState::Disabled,
             creation_epoch: SecurityEpoch::from_raw(epoch.as_u64().saturating_sub(1)),
             source_hash: batch_report.batch_hash,
             image_hash: hash_label("img-zygote-demo"),
             module_count: total_modules,
             total_size_bytes: 1_257_472,
             warm_start_mode: WarmStartMode::ZygoteFork,
-            integrity_status: ImageIntegrityStatus::Verified,
-            ttl_seconds: Some(3_600),
-            creation_reason: "fork-safe runtime image".to_string(),
+            integrity_status: ImageIntegrityStatus::Unverified,
+            ttl_seconds: None,
+            creation_reason: synthetic_runtime_image_reason("fork-safe runtime image"),
         })
         .map_err(|error| format!("failed to register zygote image: {error}"))?;
     registry
         .register(ImageManifest {
             image_id: "img-aot-demo".to_string(),
             kind: ImageKind::AotCompiled,
-            state: ImageState::Ready,
+            state: ImageState::Disabled,
             creation_epoch: epoch,
             source_hash: batch_report.batch_hash,
             image_hash: hash_label("img-aot-demo"),
             module_count: total_modules,
             total_size_bytes: 1_572_864,
             warm_start_mode: WarmStartMode::AotRestore,
-            integrity_status: ImageIntegrityStatus::Verified,
-            ttl_seconds: Some(3_600),
-            creation_reason: "AOT restore image".to_string(),
+            integrity_status: ImageIntegrityStatus::Unverified,
+            ttl_seconds: None,
+            creation_reason: synthetic_runtime_image_reason("AOT restore image"),
         })
         .map_err(|error| format!("failed to register AOT image: {error}"))?;
 
@@ -539,6 +546,9 @@ fn build_runtime_image_manifest(
         schema_version: RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.to_string(),
         component: COMPONENT.to_string(),
         bead_id: BEAD_ID.to_string(),
+        proof_status: RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC.to_string(),
+        proof_limitations: synthetic_runtime_image_limitations(),
+        release_claim_eligible: false,
         registry_hash: registry.content_hash(),
         image_count: registry.images.len() as u64,
         total_bytes: registry.total_bytes(),
@@ -741,6 +751,28 @@ fn hash_label(label: &str) -> ContentHash {
     ContentHash::compute(label.as_bytes())
 }
 
+fn default_runtime_image_proof_status() -> String {
+    "UNSPECIFIED_LEGACY".to_string()
+}
+
+fn synthetic_runtime_image_reason(label: &str) -> String {
+    format!(
+        "PROVISIONAL_SYNTHETIC: {label}; image_hash is a demo label hash, not persisted runtime image bytes; no signature, validity window, or epoch-frontier check has been verified"
+    )
+}
+
+fn synthetic_runtime_image_limitations() -> Vec<String> {
+    vec![
+        "runtime image entries are deterministic demo fixtures, not persisted runtime image bytes"
+            .to_string(),
+        "image_hash values are computed from stable demo labels only".to_string(),
+        "no runtime image signature, validity window, or epoch-frontier check has been verified"
+            .to_string(),
+        "manifest is excluded from proof and release claims until real signed image evidence is wired"
+            .to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -901,6 +933,9 @@ mod tests {
             schema_version: RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.to_string(),
             component: COMPONENT.to_string(),
             bead_id: BEAD_ID.to_string(),
+            proof_status: RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC.to_string(),
+            proof_limitations: synthetic_runtime_image_limitations(),
+            release_claim_eligible: false,
             registry_hash: ContentHash::compute(b"test-registry"),
             image_count: 3,
             total_bytes: 1024,

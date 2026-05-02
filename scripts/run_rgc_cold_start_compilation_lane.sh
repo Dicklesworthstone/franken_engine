@@ -328,6 +328,10 @@ validate_artifacts() {
   if [[ -f "${runtime_image_manifest_path}" ]]; then
     jq -e '.schema_version == "franken-engine.rgc-cold-start-runtime-image-manifest.v1"' "${runtime_image_manifest_path}" >/dev/null \
       || record_error "runtime image manifest schema_version mismatch"
+    jq -e '((.proof_status == "PROVISIONAL_SYNTHETIC" and .release_claim_eligible == false) or (.proof_status == "OBSERVED_SIGNED" and .release_claim_eligible == true))' "${runtime_image_manifest_path}" >/dev/null \
+      || record_error "runtime image manifest proof_status/release_claim_eligible mismatch"
+    jq -e 'if .release_claim_eligible then ([.registry.images[].integrity_status] | all(. == "Verified")) else ([.registry.images[].integrity_status] | all(. != "Verified")) end' "${runtime_image_manifest_path}" >/dev/null \
+      || record_error "runtime image manifest integrity status is inconsistent with release eligibility"
   fi
   if [[ -f "${trace_ids_path}" ]]; then
     jq -e '.schema_version == "franken-engine.rgc-cold-start-trace-ids.v1"' "${trace_ids_path}" >/dev/null \

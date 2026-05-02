@@ -25,8 +25,9 @@ use frankenengine_engine::cold_start_compilation_lane::{
     ColdStartObservabilityDeltaRow, EntryKindSummary, OBSERVABILITY_DELTA_FILE,
     OBSERVABILITY_DELTA_SCHEMA_VERSION, PERSISTENT_CACHE_CONTRACT_FILE, PERSISTENT_CACHE_DIR,
     POLICY_ID, REPORT_FILE, REPORT_SCHEMA_VERSION, RUNTIME_IMAGE_MANIFEST_FILE,
-    RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION, RuntimeImageManifestArtifact, SUMMARY_FILE,
-    TRACE_IDS_FILE, TRACE_IDS_SCHEMA_VERSION, TraceIdsArtifact, render_summary,
+    RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION, RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC,
+    RuntimeImageManifestArtifact, SUMMARY_FILE, TRACE_IDS_FILE, TRACE_IDS_SCHEMA_VERSION,
+    TraceIdsArtifact, render_summary,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_image_contract::{ImagePolicy, ImageRegistry};
@@ -286,6 +287,9 @@ fn runtime_image_manifest_artifact_serde_roundtrip() {
         schema_version: RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.to_string(),
         component: COMPONENT.to_string(),
         bead_id: BEAD_ID.to_string(),
+        proof_status: RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC.to_string(),
+        proof_limitations: vec!["synthetic fixture".to_string()],
+        release_claim_eligible: false,
         registry_hash: ContentHash::compute(b"test-registry"),
         image_count: 3,
         total_bytes: 1024,
@@ -304,6 +308,9 @@ fn runtime_image_manifest_no_warm_start() {
         schema_version: RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.to_string(),
         component: COMPONENT.to_string(),
         bead_id: BEAD_ID.to_string(),
+        proof_status: RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC.to_string(),
+        proof_limitations: vec!["synthetic fixture".to_string()],
+        release_claim_eligible: false,
         registry_hash: ContentHash::compute(b"test"),
         image_count: 0,
         total_bytes: 0,

@@ -50,6 +50,13 @@ The parent report is the summary artifact that downstream rollout and supremacy
 work can consume directly. The subordinate artifacts preserve enough detail for
 replay, differential triage, and operator forensics.
 
+Current `runtime_image_manifest.json` output is explicitly
+`PROVISIONAL_SYNTHETIC`: it contains deterministic demo image records whose
+hashes are derived from stable labels, not persisted runtime image bytes. The
+manifest sets `release_claim_eligible=false`, leaves demo images unverified, and
+must not be used as proof/release evidence until real signed image bytes,
+validity windows, and epoch/frontier checks are wired.
+
 ## Gate Runner
 
 Use the rch-backed gate runner:
@@ -82,6 +89,9 @@ jq '.rows[] | {mode_id,preserves_claim,speedup_millionths}' \
   artifacts/.../cold_start_observability_delta.json
 
 jq '.best_warm_start_image_id,.best_warm_start_mode' \
+  artifacts/.../runtime_image_manifest.json
+
+jq '.proof_status,.release_claim_eligible,.registry.images[].integrity_status' \
   artifacts/.../runtime_image_manifest.json
 
 jq '.batch_report.total_graphs,.batch_report.usable_graphs' \

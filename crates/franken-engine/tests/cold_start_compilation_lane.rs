@@ -19,9 +19,11 @@ use cold_start_aot_governance::{BenchmarkVerdict, GovernanceVerdict};
 use cold_start_compilation_lane::{
     AOT_BUNDLE_FILE, AOT_BUNDLE_SCHEMA_VERSION, ArtifactContext, BEAD_ID, OBSERVABILITY_DELTA_FILE,
     OBSERVABILITY_DELTA_SCHEMA_VERSION, REPORT_FILE, REPORT_SCHEMA_VERSION,
-    RUNTIME_IMAGE_MANIFEST_FILE, RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION, SUMMARY_FILE,
-    TRACE_IDS_FILE, TRACE_IDS_SCHEMA_VERSION, TraceIdsArtifact, emit_default_bundle,
+    RUNTIME_IMAGE_MANIFEST_FILE, RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION,
+    RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC, SUMMARY_FILE, TRACE_IDS_FILE,
+    TRACE_IDS_SCHEMA_VERSION, TraceIdsArtifact, emit_default_bundle,
 };
+use runtime_image_contract::{ImageIntegrityStatus, ImageState};
 use serde::de::DeserializeOwned;
 
 fn repo_root() -> PathBuf {
@@ -201,14 +203,28 @@ fn rgc_610_runtime_image_manifest_prefers_aot_restore() {
         RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION
     );
     assert_eq!(
-        runtime_manifest.best_warm_start_image_id.as_deref(),
-        Some("img-aot-demo")
+        runtime_manifest.proof_status,
+        RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC
     );
-    assert_eq!(
-        runtime_manifest.best_warm_start_mode.as_deref(),
-        Some("AotRestore")
+    assert!(!runtime_manifest.release_claim_eligible);
+    assert!(
+        runtime_manifest
+            .proof_limitations
+            .iter()
+            .any(|limitation| limitation.contains("demo labels"))
     );
+    assert!(runtime_manifest.best_warm_start_image_id.is_none());
+    assert!(runtime_manifest.best_warm_start_mode.is_none());
     assert_eq!(runtime_manifest.image_count, 3);
+    for image in &runtime_manifest.registry.images {
+        assert_eq!(image.state, ImageState::Disabled);
+        assert_eq!(image.integrity_status, ImageIntegrityStatus::Unverified);
+        assert!(
+            image.creation_reason.contains("PROVISIONAL_SYNTHETIC"),
+            "image {} must be marked synthetic/provisional",
+            image.image_id
+        );
+    }
 }
 
 #[test]

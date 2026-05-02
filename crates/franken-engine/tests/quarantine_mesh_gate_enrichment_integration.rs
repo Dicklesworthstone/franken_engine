@@ -152,7 +152,7 @@ fn enrichment_fault_scenario_result_serde_roundtrip() {
 #[test]
 fn enrichment_criterion_result_serde_roundtrip() {
     let cr = CriterionResult {
-        name: "isolation_invariant".to_string(),
+        name: "peer_liveness_preserved".to_string(),
         passed: false,
         detail: "peer was quarantined".to_string(),
     };
@@ -334,17 +334,17 @@ fn enrichment_benign_scenario_stays_running() {
 }
 
 // ===========================================================================
-// All scenarios verify isolation
+// All scenarios preserve local peer liveness
 // ===========================================================================
 
 #[test]
-fn enrichment_all_scenarios_verify_isolation() {
+fn enrichment_all_scenarios_preserve_peer_liveness() {
     let mut runner = QuarantineMeshGateRunner::new(42);
     let result = runner.run_all();
     for s in &result.scenarios {
         assert!(
             s.isolation_verified,
-            "{} should verify isolation",
+            "{} should preserve peer liveness",
             s.scenario_id
         );
     }
@@ -422,6 +422,10 @@ fn enrichment_passing_summary_format() {
     let summary = result.summary();
     assert!(summary.starts_with("PASS:"), "summary = {summary}");
     assert!(summary.contains("7/7"), "summary = {summary}");
+    assert!(
+        summary.contains("local containment simulation"),
+        "summary = {summary}"
+    );
 }
 
 // ===========================================================================
@@ -562,15 +566,15 @@ fn enrichment_events_consistent_trace_and_decision() {
 }
 
 // ===========================================================================
-// Events: policy_id is constant v1
+// Events: policy_id discloses local simulation scope
 // ===========================================================================
 
 #[test]
-fn enrichment_events_policy_id_constant() {
+fn enrichment_events_policy_id_discloses_local_simulation_scope() {
     let mut runner = QuarantineMeshGateRunner::new(42);
     let result = runner.run_all();
     for ev in &result.events {
-        assert_eq!(ev.policy_id, "quarantine-mesh-gate-v1");
+        assert_eq!(ev.policy_id, "quarantine-local-containment-simulation-v1");
     }
 }
 

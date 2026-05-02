@@ -491,6 +491,10 @@ fn summary_starts_with_pass_when_all_passed() {
     assert!(r.passed);
     let s = r.summary();
     assert!(s.starts_with("PASS:"), "expected PASS prefix, got: {s}");
+    assert!(
+        s.contains("local containment simulation"),
+        "summary should disclose simulation scope: {s}"
+    );
 }
 
 #[test]
@@ -803,27 +807,27 @@ fn benign_detection_latency_zero() {
 }
 
 // ===========================================================================
-// Section 11: Isolation invariant
+// Section 11: Local peer liveness
 // ===========================================================================
 
 #[test]
-fn all_scenarios_verify_isolation_invariant() {
+fn all_scenarios_preserve_peer_liveness() {
     let result = run_gate(42);
     for s in &result.scenarios {
         assert!(
             s.isolation_verified,
-            "{}: isolation should hold",
+            "{}: peer liveness should hold",
             s.scenario_id,
         );
     }
 }
 
 // ===========================================================================
-// Section 12: Recovery / forensic verification
+// Section 12: Forensic / benign terminal-state verification
 // ===========================================================================
 
 #[test]
-fn quarantined_scenarios_verify_recovery() {
+fn quarantined_scenarios_verify_forensic_snapshot() {
     let result = run_gate(42);
     for s in &result.scenarios {
         if s.final_state == Some(ContainmentState::Quarantined) {
@@ -837,7 +841,7 @@ fn quarantined_scenarios_verify_recovery() {
 }
 
 #[test]
-fn benign_scenario_verifies_recovery_as_running() {
+fn benign_scenario_verifies_benign_running_state() {
     let result = run_gate(42);
     let s = result
         .scenarios
@@ -858,7 +862,7 @@ fn quarantine_scenarios_have_at_least_five_criteria() {
     for s in &result.scenarios {
         if s.final_state == Some(ContainmentState::Quarantined) {
             // detection_within_sla, containment_action_correct, receipt_signed,
-            // isolation_invariant, recovery_or_forensic = 5
+            // peer_liveness_preserved, forensic_or_benign_terminal_state = 5
             assert!(
                 s.criteria.len() >= 5,
                 "{}: quarantined scenario has only {} criteria",
@@ -877,7 +881,8 @@ fn benign_scenario_has_at_least_four_criteria() {
         .iter()
         .find(|s| s.scenario_id == "benign-no-quarantine")
         .unwrap();
-    // detection_within_sla, containment_action_correct, isolation_invariant, recovery_or_forensic
+    // detection_within_sla, containment_action_correct,
+    // peer_liveness_preserved, forensic_or_benign_terminal_state
     assert!(
         s.criteria.len() >= 4,
         "benign scenario has only {} criteria",
@@ -927,24 +932,59 @@ fn criteria_names_include_containment_action_correct() {
 }
 
 #[test]
-fn criteria_names_include_isolation_invariant() {
+fn criteria_names_include_peer_liveness_preserved() {
     let result = run_gate(42);
     for s in &result.scenarios {
         assert!(
-            s.criteria.iter().any(|c| c.name == "isolation_invariant"),
-            "{} missing isolation_invariant criterion",
+            s.criteria
+                .iter()
+                .any(|c| c.name == "peer_liveness_preserved"),
+            "{} missing peer_liveness_preserved criterion",
             s.scenario_id,
         );
     }
 }
 
 #[test]
-fn criteria_names_include_recovery_or_forensic() {
+fn criteria_names_include_forensic_or_benign_terminal_state() {
     let result = run_gate(42);
     for s in &result.scenarios {
         assert!(
-            s.criteria.iter().any(|c| c.name == "recovery_or_forensic"),
-            "{} missing recovery_or_forensic criterion",
+            s.criteria
+                .iter()
+                .any(|c| c.name == "forensic_or_benign_terminal_state"),
+            "{} missing forensic_or_benign_terminal_state criterion",
+            s.scenario_id,
+        );
+    }
+}
+
+#[test]
+fn criteria_do_not_claim_request_isolation_or_reattestation() {
+    let result = run_gate(42);
+    for s in &result.scenarios {
+        assert!(
+            !s.criteria.iter().any(|c| c.name == "isolation_invariant"),
+            "{} should not claim live request isolation was exercised",
+            s.scenario_id,
+        );
+        assert!(
+            !s.criteria.iter().any(|c| c.name == "recovery_or_forensic"),
+            "{} should not claim re-attestation recovery was exercised",
+            s.scenario_id,
+        );
+        assert!(
+            s.criteria
+                .iter()
+                .any(|c| c.detail.contains("request_isolation_not_exercised")),
+            "{} should disclose request isolation was not exercised",
+            s.scenario_id,
+        );
+        assert!(
+            s.criteria
+                .iter()
+                .any(|c| c.detail.contains("re_attestation_not_exercised")),
+            "{} should disclose re-attestation was not exercised",
             s.scenario_id,
         );
     }
@@ -1046,10 +1086,10 @@ fn events_decision_id_contains_seed_hex() {
 }
 
 #[test]
-fn events_policy_id_is_quarantine_mesh_gate_v1() {
+fn events_policy_id_discloses_local_simulation_scope() {
     let result = run_gate(42);
     for e in &result.events {
-        assert_eq!(e.policy_id, "quarantine-mesh-gate-v1");
+        assert_eq!(e.policy_id, "quarantine-local-containment-simulation-v1");
     }
 }
 
@@ -1274,7 +1314,7 @@ fn gate_result_serde_json_roundtrip_preserves_all_nested_structures() {
 }
 
 #[test]
-fn gate_integration_quarantine_isolation_does_not_affect_peers() {
+fn gate_integration_quarantine_preserves_peer_liveness() {
     // Run gate and confirm that for every scenario that quarantines a target,
     // the peer extension stays Running (verified via isolation_verified field).
     let r = run_gate(42);

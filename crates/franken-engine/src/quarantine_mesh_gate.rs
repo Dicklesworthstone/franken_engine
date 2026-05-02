@@ -1,17 +1,19 @@
-//! Release gate: autonomous quarantine mesh validation under fault injection.
+//! Release gate: local quarantine containment simulation under fault injection.
 //!
-//! This module does **not** build the quarantine mesh. It subjects the
-//! delivered mesh (fleet_convergence, containment_executor, fleet_immune_protocol,
-//! revocation_chain) to fault-injection validation campaigns and confirms it
-//! meets the resilience bar defined in Section 10.9 item 3.
+//! This module does **not** validate the delivered fleet/revocation mesh.
+//! It exercises a local `ContainmentExecutor` with deterministic fault evidence
+//! and records local containment, isolation, forensic, and receipt behavior.
+//! Artifacts from this gate must be treated as local simulation evidence only;
+//! fleet-wide propagation, revocation-chain enforcement, and convergence SLO
+//! claims require a separate live runtime/CLI proof.
 //!
-//! Gate criteria:
+//! Local simulation criteria:
 //! 1. Autonomous detection + isolation within SLA (< 500ms simulated).
 //! 2. Fault injection: partition, Byzantine, cascading, exhaustion, clock skew.
-//! 3. Isolation invariant: quarantined cannot issue requests to non-quarantined.
-//! 4. Recovery: re-attestation after fault clearance.
+//! 3. Local peer liveness: non-target executor state remains running.
+//! 4. Forensic preservation: quarantined terminal state retains a snapshot.
 //! 5. Signed receipts for all quarantine decisions.
-//! 6. Degraded-mode (coordinator partitioned): documented fallback semantics hold.
+//! 6. Degraded-mode local threshold behavior is explicitly simulated.
 //!
 //! Plan reference: Section 10.9, item 3, bd-uwc.
 //! Dependencies: bd-3a5e (safety_decision_router), bd-34l (fleet_convergence).
@@ -25,6 +27,8 @@ use crate::containment_executor::{
 };
 use crate::expected_loss_selector::ContainmentAction;
 use crate::security_epoch::SecurityEpoch;
+
+const LOCAL_CONTAINMENT_SIMULATION_POLICY_ID: &str = "quarantine-local-containment-simulation-v1";
 
 // ---------------------------------------------------------------------------
 // FaultType — categories of injected faults
@@ -99,9 +103,14 @@ pub struct FaultScenarioResult {
     pub final_state: Option<ContainmentState>,
     /// Detection latency in nanoseconds (simulated).
     pub detection_latency_ns: u64,
-    /// Whether isolation invariant held.
+    /// Whether local peer liveness was preserved.
+    ///
+    /// This is not evidence that a quarantined component was denied a live
+    /// capability-bearing request to a non-quarantined peer.
     pub isolation_verified: bool,
-    /// Whether recovery succeeded after fault clearance.
+    /// Whether the local forensic/benign terminal-state check passed.
+    ///
+    /// This is not evidence of fault clearance or re-attestation.
     pub recovery_verified: bool,
 }
 
@@ -149,7 +158,7 @@ impl GateValidationResult {
     pub fn summary(&self) -> String {
         if self.passed {
             format!(
-                "PASS: {}/{} fault-injection scenarios passed",
+                "PASS: {}/{} local containment simulation scenarios passed",
                 self.passed_scenarios, self.total_scenarios
             )
         } else {
@@ -207,7 +216,7 @@ pub struct GateValidationEvent {
 /// SLA threshold for detection latency (500ms = 500_000_000 ns).
 const DETECTION_SLA_NS: u64 = 500_000_000;
 
-/// Runner for quarantine mesh gate validation.
+/// Runner for local quarantine containment simulation validation.
 #[derive(Debug)]
 pub struct QuarantineMeshGateRunner {
     seed: u64,
@@ -225,11 +234,11 @@ impl QuarantineMeshGateRunner {
             events: Vec::new(),
             trace_id: format!("qmg-trace-{seed:016x}"),
             decision_id: format!("qmg-decision-{seed:016x}"),
-            policy_id: "quarantine-mesh-gate-v1".to_string(),
+            policy_id: LOCAL_CONTAINMENT_SIMULATION_POLICY_ID.to_string(),
         }
     }
 
-    /// Run all fault-injection scenarios and produce the gate result.
+    /// Run all local fault-injection scenarios and produce the gate result.
     pub fn run_all(&mut self) -> GateValidationResult {
         let scenarios = self.build_scenarios();
         let mut results = Vec::new();
@@ -433,16 +442,18 @@ impl QuarantineMeshGateRunner {
             final_state = executor.state(&scenario.target_extension);
         }
 
-        // Criterion 3: Isolation invariant — peer must still be Running.
+        // Criterion 3: local peer liveness — peer must still be Running.
         let peer_state = executor.state(&peer_ext);
-        let isolation_ok = peer_state == Some(ContainmentState::Running);
+        let peer_liveness_ok = peer_state == Some(ContainmentState::Running);
         criteria.push(CriterionResult {
-            name: "isolation_invariant".to_string(),
-            passed: isolation_ok,
-            detail: format!("peer_state={peer_state:?}"),
+            name: "peer_liveness_preserved".to_string(),
+            passed: peer_liveness_ok,
+            detail: format!(
+                "peer_state={peer_state:?}; scope=local_state_only; request_isolation_not_exercised"
+            ),
         });
 
-        // Criterion 4: Recovery after fault clearance.
+        // Criterion 4: forensic preservation or benign terminal state.
         let recovery_ok =
             if scenario.expect_quarantine && final_state == Some(ContainmentState::Quarantined) {
                 // Quarantined state is terminal — verify forensic snapshot exists.
@@ -455,9 +466,11 @@ impl QuarantineMeshGateRunner {
                 true
             };
         criteria.push(CriterionResult {
-            name: "recovery_or_forensic".to_string(),
+            name: "forensic_or_benign_terminal_state".to_string(),
             passed: recovery_ok,
-            detail: format!("final_state={final_state:?}"),
+            detail: format!(
+                "final_state={final_state:?}; scope=forensic_snapshot_or_benign_running; re_attestation_not_exercised"
+            ),
         });
 
         let all_passed = criteria.iter().all(|c| c.passed);
@@ -482,7 +495,7 @@ impl QuarantineMeshGateRunner {
             receipts_emitted,
             final_state,
             detection_latency_ns: scenario.detection_latency_ns,
-            isolation_verified: isolation_ok,
+            isolation_verified: peer_liveness_ok,
             recovery_verified: recovery_ok,
         }
     }
@@ -723,18 +736,18 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Isolation invariant
+    // Local peer liveness
     // -----------------------------------------------------------------------
 
     #[test]
-    fn all_scenarios_verify_isolation() {
+    fn all_scenarios_preserve_peer_liveness() {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
 
         for scenario in &result.scenarios {
             assert!(
                 scenario.isolation_verified,
-                "isolation should hold for {}",
+                "peer liveness should hold for {}",
                 scenario.scenario_id
             );
         }
@@ -870,6 +883,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
         assert!(result.summary().starts_with("PASS:"));
+        assert!(result.summary().contains("local containment simulation"));
     }
 
     // -----------------------------------------------------------------------
@@ -1370,15 +1384,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Enrichment: policy_id is constant
+    // Enrichment: policy_id discloses local simulation scope
     // -----------------------------------------------------------------------
 
     #[test]
-    fn policy_id_is_v1() {
+    fn policy_id_discloses_local_simulation_scope() {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
         for ev in &result.events {
-            assert_eq!(ev.policy_id, "quarantine-mesh-gate-v1");
+            assert_eq!(ev.policy_id, "quarantine-local-containment-simulation-v1");
         }
     }
 

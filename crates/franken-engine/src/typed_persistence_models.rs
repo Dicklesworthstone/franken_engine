@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlmodel::prelude::*;
+use sqlmodel::{FieldInfo, SqlType, Value, InheritanceStrategy};
 
 // ---------------------------------------------------------------------------
 // ReplacementLineage: sqlmodel_rust typed model

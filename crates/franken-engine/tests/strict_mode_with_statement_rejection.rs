@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use frankenengine_engine::parser::ParserError;
+use frankenengine_engine::parser::ParseError;
 use frankenengine_engine::parser_api_stability::parse_script;
 
 #[test]
@@ -28,10 +28,10 @@ fn strict_mode_with_statement_global_context_rejection() {
         Err(parser_error) => {
             // Verify this is the expected strict mode error
             let error_message = parser_error.to_string();
-            let error_code = parser_error.error_code();
+            let error_code = format!("{:?}", parser_error.code);
 
             // Check for strict mode with statement error code
-            if error_code == "strict_mode_with_statement" {
+            if error_code == "StrictModeWithStatement" {
                 // SUCCESS: Proper strict mode validation
                 println!("✅ CORRECT REJECTION: with statement properly rejected in strict mode");
                 println!("   Error code: {}", error_code);
@@ -40,7 +40,7 @@ fn strict_mode_with_statement_global_context_rejection() {
                 // WRONG ERROR: Rejected for different reason
                 panic!(
                     "INCORRECT REJECTION: with statement rejected but with wrong error code.\n\
-                    Expected: 'strict_mode_with_statement'\n\
+                    Expected: 'StrictModeWithStatement'\n\
                     Actual: '{}'\n\
                     Message: '{}'\n\
                     This indicates parser rejects with statements generally, not strict-mode-specific rejection.",
@@ -65,10 +65,10 @@ fn strict_mode_with_statement_function_context_rejection() {
             );
         }
         Err(parser_error) => {
-            let error_code = parser_error.error_code();
+            let error_code = format!("{:?}", parser_error.code);
             assert_eq!(
                 error_code,
-                "strict_mode_with_statement",
+                "StrictModeWithStatement",
                 "Expected strict mode with statement error, got: {} - {}",
                 error_code,
                 parser_error.to_string()
@@ -90,10 +90,10 @@ fn non_strict_mode_with_statement_should_parse() {
         }
         Err(parser_error) => {
             // This suggests with statements aren't implemented at all
-            let error_code = parser_error.error_code();
+            let error_code = format!("{:?}", parser_error.code);
             let error_message = parser_error.to_string();
 
-            if error_code.contains("unsupported") || error_code.contains("unimplemented") {
+            if error_code.contains("Unsupported") || error_message.contains("unsupported") {
                 panic!(
                     "IMPLEMENTATION GAP: with statements not implemented at all.\n\
                     Error code: {}\n\
@@ -147,7 +147,7 @@ fn inspect_with_statement_error_details() {
             Ok(_) => println!("✅ PARSED SUCCESSFULLY"),
             Err(e) => {
                 println!("❌ PARSE ERROR:");
-                println!("   Error code: {}", e.error_code());
+                println!("   Error code: {:?}", e.code);
                 println!("   Message: {}", e.to_string());
                 println!("   Debug: {:?}", e);
             }

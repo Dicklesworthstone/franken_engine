@@ -11,11 +11,18 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::deterministic_serde::{CanonicalValue, SchemaHash};
+use crate::engine_object_id::ObjectDomain;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_object,
+    verify_object,
+};
 
 // ---------------------------------------------------------------------------
 // Schema constants
@@ -24,8 +31,14 @@ use crate::security_epoch::SecurityEpoch;
 /// Schema version for the runtime image contract envelope.
 pub const RUNTIME_IMAGE_SCHEMA_VERSION: &str = "franken-engine.runtime-image-contract.v1";
 
+/// Schema version for signed runtime image acceptance envelopes.
+pub const SIGNED_RUNTIME_IMAGE_SCHEMA_VERSION: &str =
+    "franken-engine.signed-runtime-image-manifest.v1";
+
 /// Bead identifier originating this module.
 pub const RUNTIME_IMAGE_BEAD_ID: &str = "bd-1lsy.7.10.4";
+
+const SIGNED_RUNTIME_IMAGE_SCHEMA_DEF: &[u8] = b"franken-engine.signed-runtime-image-manifest.v1";
 
 // ---------------------------------------------------------------------------
 // ImageKind
@@ -222,6 +235,276 @@ pub struct ImageManifest {
     pub ttl_seconds: Option<u64>,
     /// Human-readable reason the image was created.
     pub creation_reason: String,
+}
+
+fn signed_runtime_image_schema() -> &'static SchemaHash {
+    static HASH: LazyLock<SchemaHash> =
+        LazyLock::new(|| SchemaHash::from_definition(SIGNED_RUNTIME_IMAGE_SCHEMA_DEF));
+    &HASH
+}
+
+// ---------------------------------------------------------------------------
+// SignedRuntimeImageManifest
+// ---------------------------------------------------------------------------
+
+/// Signed runtime-image acceptance envelope.
+///
+/// This wrapper is the security boundary for using an [`ImageManifest`] as a
+/// runtime decision input. It binds the image manifest to an explicit epoch
+/// validity window and revocation/checkpoint frontier before signing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedRuntimeImageManifest {
+    /// Schema version tag for this signed envelope.
+    pub schema_version: String,
+    /// Runtime image manifest being accepted.
+    pub manifest: ImageManifest,
+    /// First epoch at which this image may be accepted.
+    pub valid_from_epoch: SecurityEpoch,
+    /// Last epoch at which this image may be accepted; `None` means open-ended.
+    pub valid_until_epoch: Option<SecurityEpoch>,
+    /// Trust frontier the image was built against.
+    pub frontier_epoch: SecurityEpoch,
+    /// Signer expected to authenticate this envelope.
+    pub signer: VerificationKey,
+    /// Signature over the unsigned view of this envelope.
+    pub signature: Signature,
+}
+
+/// Verifier-supplied runtime image acceptance context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeImageAcceptanceContext {
+    /// Authoritative current runtime epoch.
+    pub current_epoch: SecurityEpoch,
+    /// Highest durable policy/revocation frontier accepted by the verifier.
+    pub accepted_frontier_epoch: SecurityEpoch,
+    /// Signers trusted to authorize runtime image manifests.
+    pub trusted_signers: Vec<VerificationKey>,
+}
+
+impl RuntimeImageAcceptanceContext {
+    /// Build an explicit acceptance context for signed runtime image checks.
+    pub fn new(
+        current_epoch: SecurityEpoch,
+        accepted_frontier_epoch: SecurityEpoch,
+        trusted_signers: Vec<VerificationKey>,
+    ) -> Self {
+        Self {
+            current_epoch,
+            accepted_frontier_epoch,
+            trusted_signers,
+        }
+    }
+}
+
+/// Fail-closed errors from signed runtime image acceptance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeImageAcceptanceError {
+    /// No trusted image signing keys were supplied.
+    EmptyTrustedSignerSet,
+    /// Envelope signer is not trusted by the verifier.
+    UntrustedSigner { signer: VerificationKey },
+    /// Envelope signature is absent.
+    MissingSignature,
+    /// Envelope signature verification failed.
+    SignatureInvalid { detail: String },
+    /// Validity window is inverted.
+    InvalidValidityWindow {
+        valid_from_epoch: SecurityEpoch,
+        valid_until_epoch: SecurityEpoch,
+    },
+    /// Current epoch is before the artifact validity window.
+    NotYetValid {
+        current_epoch: SecurityEpoch,
+        valid_from_epoch: SecurityEpoch,
+    },
+    /// Current epoch is after the artifact validity window.
+    Expired {
+        current_epoch: SecurityEpoch,
+        valid_until_epoch: SecurityEpoch,
+    },
+    /// Artifact is bound to a future frontier.
+    FutureFrontier {
+        current_epoch: SecurityEpoch,
+        frontier_epoch: SecurityEpoch,
+    },
+    /// Artifact is bound to a frontier older than the verifier's durable frontier.
+    FrontierRegression {
+        accepted_frontier_epoch: SecurityEpoch,
+        artifact_frontier_epoch: SecurityEpoch,
+    },
+}
+
+impl fmt::Display for RuntimeImageAcceptanceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyTrustedSignerSet => write!(f, "no trusted runtime image signers supplied"),
+            Self::UntrustedSigner { signer } => {
+                write!(f, "runtime image signer is not trusted: {signer}")
+            }
+            Self::MissingSignature => write!(f, "runtime image signature is missing"),
+            Self::SignatureInvalid { detail } => {
+                write!(f, "runtime image signature verification failed: {detail}")
+            }
+            Self::InvalidValidityWindow {
+                valid_from_epoch,
+                valid_until_epoch,
+            } => write!(
+                f,
+                "invalid runtime image validity window: {valid_from_epoch} > {valid_until_epoch}"
+            ),
+            Self::NotYetValid {
+                current_epoch,
+                valid_from_epoch,
+            } => write!(
+                f,
+                "runtime image is not yet valid: current {current_epoch} < valid_from {valid_from_epoch}"
+            ),
+            Self::Expired {
+                current_epoch,
+                valid_until_epoch,
+            } => write!(
+                f,
+                "runtime image is expired: current {current_epoch} > valid_until {valid_until_epoch}"
+            ),
+            Self::FutureFrontier {
+                current_epoch,
+                frontier_epoch,
+            } => write!(
+                f,
+                "runtime image frontier is in the future: current {current_epoch} < frontier {frontier_epoch}"
+            ),
+            Self::FrontierRegression {
+                accepted_frontier_epoch,
+                artifact_frontier_epoch,
+            } => write!(
+                f,
+                "runtime image frontier regressed: accepted {accepted_frontier_epoch} > artifact {artifact_frontier_epoch}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeImageAcceptanceError {}
+
+impl SignaturePreimage for SignedRuntimeImageManifest {
+    fn signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::SignedManifest
+    }
+
+    fn signature_schema(&self) -> &SchemaHash {
+        signed_runtime_image_schema()
+    }
+
+    fn unsigned_view(&self) -> CanonicalValue {
+        let mut copy = self.clone();
+        copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("signed runtime image should serialize"),
+        )
+    }
+}
+
+impl SignedRuntimeImageManifest {
+    /// Create and sign a runtime image envelope.
+    pub fn sign(
+        manifest: ImageManifest,
+        valid_from_epoch: SecurityEpoch,
+        valid_until_epoch: Option<SecurityEpoch>,
+        frontier_epoch: SecurityEpoch,
+        signing_key: &SigningKey,
+    ) -> Result<Self, crate::signature_preimage::SignatureError> {
+        let signer = signing_key.verification_key();
+        let mut envelope = Self {
+            schema_version: SIGNED_RUNTIME_IMAGE_SCHEMA_VERSION.to_owned(),
+            manifest,
+            valid_from_epoch,
+            valid_until_epoch,
+            frontier_epoch,
+            signer,
+            signature: Signature::from_bytes(SIGNATURE_SENTINEL),
+        };
+        envelope.signature = sign_object(&envelope, signing_key)?;
+        Ok(envelope)
+    }
+
+    /// Verify the envelope signature and epoch/frontier acceptance context.
+    pub fn verify_for_acceptance(
+        &self,
+        context: &RuntimeImageAcceptanceContext,
+    ) -> Result<&ImageManifest, RuntimeImageAcceptanceError> {
+        self.verify_epoch_window(context.current_epoch)?;
+        self.verify_frontier(context)?;
+        self.verify_signature(context)?;
+        Ok(&self.manifest)
+    }
+
+    fn verify_epoch_window(
+        &self,
+        current_epoch: SecurityEpoch,
+    ) -> Result<(), RuntimeImageAcceptanceError> {
+        if let Some(valid_until_epoch) = self.valid_until_epoch {
+            if valid_until_epoch.as_u64() < self.valid_from_epoch.as_u64() {
+                return Err(RuntimeImageAcceptanceError::InvalidValidityWindow {
+                    valid_from_epoch: self.valid_from_epoch,
+                    valid_until_epoch,
+                });
+            }
+            if current_epoch.as_u64() > valid_until_epoch.as_u64() {
+                return Err(RuntimeImageAcceptanceError::Expired {
+                    current_epoch,
+                    valid_until_epoch,
+                });
+            }
+        }
+        if current_epoch.as_u64() < self.valid_from_epoch.as_u64() {
+            return Err(RuntimeImageAcceptanceError::NotYetValid {
+                current_epoch,
+                valid_from_epoch: self.valid_from_epoch,
+            });
+        }
+        Ok(())
+    }
+
+    fn verify_frontier(
+        &self,
+        context: &RuntimeImageAcceptanceContext,
+    ) -> Result<(), RuntimeImageAcceptanceError> {
+        if self.frontier_epoch.as_u64() > context.current_epoch.as_u64() {
+            return Err(RuntimeImageAcceptanceError::FutureFrontier {
+                current_epoch: context.current_epoch,
+                frontier_epoch: self.frontier_epoch,
+            });
+        }
+        if self.frontier_epoch.as_u64() < context.accepted_frontier_epoch.as_u64() {
+            return Err(RuntimeImageAcceptanceError::FrontierRegression {
+                accepted_frontier_epoch: context.accepted_frontier_epoch,
+                artifact_frontier_epoch: self.frontier_epoch,
+            });
+        }
+        Ok(())
+    }
+
+    fn verify_signature(
+        &self,
+        context: &RuntimeImageAcceptanceContext,
+    ) -> Result<(), RuntimeImageAcceptanceError> {
+        if context.trusted_signers.is_empty() {
+            return Err(RuntimeImageAcceptanceError::EmptyTrustedSignerSet);
+        }
+        if !context.trusted_signers.contains(&self.signer) {
+            return Err(RuntimeImageAcceptanceError::UntrustedSigner {
+                signer: self.signer.clone(),
+            });
+        }
+        if self.signature.is_sentinel() {
+            return Err(RuntimeImageAcceptanceError::MissingSignature);
+        }
+        verify_object(self, &self.signer, &self.signature).map_err(|error| {
+            RuntimeImageAcceptanceError::SignatureInvalid {
+                detail: error.to_string(),
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -572,6 +855,14 @@ impl ImageRegistry {
         ready
             .into_iter()
             .filter(|m| m.warm_start_mode != WarmStartMode::Cold)
+            // Filter out images that don't meet integrity requirements
+            .filter(|m| {
+                if self.policy.require_integrity_check {
+                    matches!(m.integrity_status, ImageIntegrityStatus::Verified)
+                } else {
+                    true
+                }
+            })
             .max_by_key(|m| (priority(m), m.creation_epoch.as_u64()))
     }
 
@@ -644,6 +935,40 @@ mod tests {
             require_integrity_check: true,
             min_module_count_for_image: 1,
         }
+    }
+
+    fn test_keypair(seed: u8) -> (SigningKey, VerificationKey) {
+        crate::signature_preimage::generate_keypair_from_seed(&[seed; 32])
+    }
+
+    fn signed_test_manifest(
+        id: &str,
+        valid_from_epoch: SecurityEpoch,
+        valid_until_epoch: Option<SecurityEpoch>,
+        frontier_epoch: SecurityEpoch,
+    ) -> (SignedRuntimeImageManifest, VerificationKey) {
+        let (signing_key, verification_key) = test_keypair(7);
+        let envelope = SignedRuntimeImageManifest::sign(
+            test_manifest(id),
+            valid_from_epoch,
+            valid_until_epoch,
+            frontier_epoch,
+            &signing_key,
+        )
+        .expect("signed runtime image should sign");
+        (envelope, verification_key)
+    }
+
+    fn acceptance_context(
+        current_epoch: SecurityEpoch,
+        accepted_frontier_epoch: SecurityEpoch,
+        trusted_signer: VerificationKey,
+    ) -> RuntimeImageAcceptanceContext {
+        RuntimeImageAcceptanceContext::new(
+            current_epoch,
+            accepted_frontier_epoch,
+            vec![trusted_signer],
+        )
     }
 
     // -- ImageKind --
@@ -804,6 +1129,182 @@ mod tests {
         let back: ImageManifest =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
+    }
+
+    // -- SignedRuntimeImageManifest --
+
+    #[test]
+    fn signed_runtime_image_accepts_trusted_epoch_window() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-ok",
+            SecurityEpoch::from_raw(10),
+            Some(SecurityEpoch::from_raw(20)),
+            SecurityEpoch::from_raw(12),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(12),
+            signer,
+        );
+
+        let accepted = envelope
+            .verify_for_acceptance(&context)
+            .expect("trusted signed runtime image should be accepted");
+
+        assert_eq!(accepted.image_id, "signed-ok");
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_future_validity_window() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-future",
+            SecurityEpoch::from_raw(20),
+            Some(SecurityEpoch::from_raw(30)),
+            SecurityEpoch::from_raw(12),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(12),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::NotYetValid { .. }
+        ));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_expired_window() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-expired",
+            SecurityEpoch::from_raw(5),
+            Some(SecurityEpoch::from_raw(10)),
+            SecurityEpoch::from_raw(8),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(8),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(error, RuntimeImageAcceptanceError::Expired { .. }));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_inverted_window() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-inverted",
+            SecurityEpoch::from_raw(20),
+            Some(SecurityEpoch::from_raw(10)),
+            SecurityEpoch::from_raw(8),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(8),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::InvalidValidityWindow { .. }
+        ));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_frontier_regression() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-regressed-frontier",
+            SecurityEpoch::from_raw(5),
+            Some(SecurityEpoch::from_raw(20)),
+            SecurityEpoch::from_raw(8),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(10),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::FrontierRegression { .. }
+        ));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_future_frontier() {
+        let (envelope, signer) = signed_test_manifest(
+            "signed-future-frontier",
+            SecurityEpoch::from_raw(5),
+            Some(SecurityEpoch::from_raw(30)),
+            SecurityEpoch::from_raw(25),
+        );
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(10),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::FutureFrontier { .. }
+        ));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_tampered_manifest() {
+        let (mut envelope, signer) = signed_test_manifest(
+            "signed-tampered",
+            SecurityEpoch::from_raw(5),
+            Some(SecurityEpoch::from_raw(20)),
+            SecurityEpoch::from_raw(10),
+        );
+        envelope.manifest.image_hash = ContentHash::compute(b"tampered-image");
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(10),
+            signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::SignatureInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn signed_runtime_image_rejects_untrusted_signer() {
+        let (envelope, _) = signed_test_manifest(
+            "signed-untrusted",
+            SecurityEpoch::from_raw(5),
+            Some(SecurityEpoch::from_raw(20)),
+            SecurityEpoch::from_raw(10),
+        );
+        let (_, other_signer) = test_keypair(9);
+        let context = acceptance_context(
+            SecurityEpoch::from_raw(15),
+            SecurityEpoch::from_raw(10),
+            other_signer,
+        );
+
+        let error = envelope.verify_for_acceptance(&context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeImageAcceptanceError::UntrustedSigner { .. }
+        ));
     }
 
     // -- ImagePolicy --
@@ -1187,5 +1688,55 @@ mod tests {
             .best_warm_start()
             .expect("serde deserialization should succeed");
         assert_eq!(best.image_id, "z2");
+    }
+
+    #[test]
+    fn best_warm_start_rejects_unverified_when_integrity_required() {
+        let mut reg = ImageRegistry::new(ImagePolicy::default()); // require_integrity_check = true
+        let mut img = test_manifest("unverified-aot");
+        img.kind = ImageKind::AotCompiled;
+        img.warm_start_mode = WarmStartMode::AotRestore;
+        img.integrity_status = ImageIntegrityStatus::Unverified;
+        reg.register(img).unwrap();
+        // Should fail-closed when integrity is required but image is unverified
+        assert!(reg.best_warm_start().is_none());
+    }
+
+    #[test]
+    fn best_warm_start_rejects_corrupted_when_integrity_required() {
+        let mut reg = ImageRegistry::new(ImagePolicy::default()); // require_integrity_check = true
+        let mut img = test_manifest("corrupted-aot");
+        img.kind = ImageKind::AotCompiled;
+        img.warm_start_mode = WarmStartMode::AotRestore;
+        img.integrity_status = ImageIntegrityStatus::CorruptionDetected;
+        reg.register(img).unwrap();
+        // Should fail-closed when integrity is required but image is corrupted
+        assert!(reg.best_warm_start().is_none());
+    }
+
+    #[test]
+    fn best_warm_start_rejects_expired_when_integrity_required() {
+        let mut reg = ImageRegistry::new(ImagePolicy::default()); // require_integrity_check = true
+        let mut img = test_manifest("expired-aot");
+        img.kind = ImageKind::AotCompiled;
+        img.warm_start_mode = WarmStartMode::AotRestore;
+        img.integrity_status = ImageIntegrityStatus::Expired;
+        reg.register(img).unwrap();
+        // Should fail-closed when integrity is required but image is expired
+        assert!(reg.best_warm_start().is_none());
+    }
+
+    #[test]
+    fn best_warm_start_allows_unverified_when_integrity_not_required() {
+        let mut policy = ImagePolicy::default();
+        policy.require_integrity_check = false;
+        let mut reg = ImageRegistry::new(policy);
+        let mut img = test_manifest("unverified-but-allowed");
+        img.kind = ImageKind::AotCompiled;
+        img.warm_start_mode = WarmStartMode::AotRestore;
+        img.integrity_status = ImageIntegrityStatus::Unverified;
+        reg.register(img).unwrap();
+        // Should allow when integrity checking is disabled
+        assert!(reg.best_warm_start().is_some());
     }
 }

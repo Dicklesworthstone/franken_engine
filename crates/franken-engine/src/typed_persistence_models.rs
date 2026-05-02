@@ -13,7 +13,6 @@
 
 use serde::{Deserialize, Serialize};
 use sqlmodel::prelude::*;
-use sqlmodel::{FieldInfo, InheritanceStrategy, SqlType, Value};
 
 // ---------------------------------------------------------------------------
 // ReplacementLineage: sqlmodel_rust typed model
@@ -145,6 +144,145 @@ pub struct SpecializationIndexEntry {
 
     /// Metadata for specialization parameters and constraints.
     pub metadata_json: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlmodel::{FieldInfo, Model, Row, SqlType, Value};
+
+    fn field<T: Model>(field_name: &str) -> &'static FieldInfo {
+        T::fields()
+            .iter()
+            .find(|field| field.name == field_name)
+            .expect("typed persistence field exists")
+    }
+
+    fn assert_round_trips<T>(model: T)
+    where
+        T: Clone + Model + PartialEq + std::fmt::Debug,
+    {
+        let values = model.to_row();
+        let row = Row::new(
+            values
+                .iter()
+                .map(|(column, _)| (*column).to_string())
+                .collect(),
+            values.into_iter().map(|(_, value)| value).collect(),
+        );
+
+        let restored = T::from_row(&row).expect("typed persistence row round-trips");
+        assert_eq!(restored, model);
+    }
+
+    #[test]
+    fn replacement_lineage_model_exports_sqlmodel_metadata() {
+        assert_eq!(ReplacementLineageEntry::TABLE_NAME, "replacement_lineage");
+        assert_eq!(ReplacementLineageEntry::PRIMARY_KEY, &["sequence_id"]);
+
+        let fields = ReplacementLineageEntry::fields();
+        assert_eq!(fields.len(), 9);
+        assert!(field::<ReplacementLineageEntry>("sequence_id").primary_key);
+        assert_eq!(
+            field::<ReplacementLineageEntry>("metadata_json").sql_type,
+            SqlType::Text
+        );
+    }
+
+    #[test]
+    fn ifc_provenance_model_marks_declassification_ref_nullable() {
+        assert_eq!(IfcProvenanceEntry::TABLE_NAME, "ifc_provenance");
+        assert_eq!(IfcProvenanceEntry::PRIMARY_KEY, &["provenance_id"]);
+
+        let declassification_ref = field::<IfcProvenanceEntry>("declassification_ref");
+        assert_eq!(declassification_ref.sql_type, SqlType::Text);
+        assert!(declassification_ref.nullable);
+    }
+
+    #[test]
+    fn specialization_index_model_marks_invalidation_fields_nullable() {
+        assert_eq!(SpecializationIndexEntry::TABLE_NAME, "specialization_index");
+        assert_eq!(
+            SpecializationIndexEntry::PRIMARY_KEY,
+            &["specialization_id"]
+        );
+
+        assert!(field::<SpecializationIndexEntry>("invalidation_timestamp_ms").nullable);
+        assert!(field::<SpecializationIndexEntry>("invalidation_reason").nullable);
+        assert_eq!(
+            field::<SpecializationIndexEntry>("specialized_content_hash").sql_type,
+            SqlType::Text
+        );
+    }
+
+    #[test]
+    fn typed_persistence_models_round_trip_through_sqlmodel_rows() {
+        assert_round_trips(ReplacementLineageEntry {
+            sequence_id: 7,
+            slot_id: "slot-alpha".to_string(),
+            operation_type: "promotion".to_string(),
+            source_state: "candidate".to_string(),
+            target_state: "active".to_string(),
+            receipt_artifact_id: "receipt-7".to_string(),
+            receipt_signature: "sig-7".to_string(),
+            timestamp_ms: 1_700_000_000_007,
+            metadata_json: r#"{"trace_id":"trace-replacement"}"#.to_string(),
+        });
+
+        assert_round_trips(IfcProvenanceEntry {
+            provenance_id: 11,
+            source_label: "secret/model".to_string(),
+            target_label: "operator/audit".to_string(),
+            edge_type: "declassification".to_string(),
+            flow_operation: "emit_receipt".to_string(),
+            security_level: "high".to_string(),
+            declassification_ref: Some("decision-11".to_string()),
+            timestamp_ms: 1_700_000_000_011,
+            trace_id: "trace-ifc".to_string(),
+            metadata_json: r#"{"policy_id":"ifc-policy"}"#.to_string(),
+        });
+
+        assert_round_trips(SpecializationIndexEntry {
+            specialization_id: 13,
+            proof_artifact_id: "proof-13".to_string(),
+            specialization_type: "fallback".to_string(),
+            specialized_version: "v2-safe".to_string(),
+            status: "invalidated".to_string(),
+            invalidation_timestamp_ms: None,
+            invalidation_reason: None,
+            security_epoch: 4,
+            created_timestamp_ms: 1_700_000_000_013,
+            specialized_content_hash: "sha256:abc123".to_string(),
+            metadata_json: r#"{"fallback":"deterministic"}"#.to_string(),
+        });
+
+        let null_option_values = SpecializationIndexEntry {
+            specialization_id: 17,
+            proof_artifact_id: "proof-17".to_string(),
+            specialization_type: "optimization".to_string(),
+            specialized_version: "v3".to_string(),
+            status: "active".to_string(),
+            invalidation_timestamp_ms: None,
+            invalidation_reason: None,
+            security_epoch: 5,
+            created_timestamp_ms: 1_700_000_000_017,
+            specialized_content_hash: "sha256:def456".to_string(),
+            metadata_json: "{}".to_string(),
+        }
+        .to_row();
+
+        assert!(
+            null_option_values
+                .iter()
+                .any(|(column, value)| *column == "invalidation_timestamp_ms"
+                    && *value == Value::Null)
+        );
+        assert!(
+            null_option_values
+                .iter()
+                .any(|(column, value)| *column == "invalidation_reason" && *value == Value::Null)
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

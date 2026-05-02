@@ -66,6 +66,64 @@ fn typed_record_metadata<T: TypedStoreRecord>(
     metadata
 }
 
+fn typed_integrity_error<T: TypedStoreRecord>(detail: impl Into<String>) -> StorageError {
+    StorageError::IntegrityViolation {
+        store: T::STORE_KIND,
+        detail: format!("{} validation failed: {}", T::MODEL_NAME, detail.into()),
+    }
+}
+
+fn require_non_empty_typed<T: TypedStoreRecord>(field_name: &str, value: &str) -> StorageResult<()> {
+    if value.trim().is_empty() {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field_name}` must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn require_non_negative_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: i64,
+) -> StorageResult<()> {
+    if value < 0 {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field_name}` must be non-negative, got {value}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_allowed_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &str,
+    allowed: &[&str],
+) -> StorageResult<()> {
+    if allowed.contains(&value) {
+        return Ok(());
+    }
+    Err(typed_integrity_error::<T>(format!(
+        "`{field_name}` value `{value}` is not one of {}",
+        allowed.join(", ")
+    )))
+}
+
+fn require_json_object_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &str,
+) -> StorageResult<()> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(value).map_err(|err| typed_integrity_error::<T>(format!(
+            "`{field_name}` must be valid JSON object: {err}"
+        )))?;
+    if parsed.is_object() {
+        return Ok(());
+    }
+    Err(typed_integrity_error::<T>(format!(
+        "`{field_name}` must be a JSON object"
+    )))
+}
+
 fn require_typed_metadata<T: TypedStoreRecord>(
     record: &StoreRecord,
     key: &str,
@@ -131,6 +189,11 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
     /// Additional query-friendly metadata copied from typed fields.
     fn typed_record_extra_metadata(&self) -> BTreeMap<String, String>;
 
+    /// Validate production invariants before typed writes and after typed reads.
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
     /// Deterministic storage key for this typed model.
     fn typed_record_key(&self) -> StorageResult<String> {
         typed_record_key(Self::STORE_KIND, self.typed_record_id())
@@ -156,6 +219,7 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
 
     /// Convert this typed model into a generic store record.
     fn to_store_record(&self, revision: u64) -> StorageResult<StoreRecord> {
+        self.validate_typed_record()?;
         let typed_record_id = self.typed_record_id();
         let value = serde_json::to_vec(self).map_err(|err| StorageError::IntegrityViolation {
             store: Self::STORE_KIND,
@@ -224,6 +288,7 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
                 ),
             });
         }
+        model.validate_typed_record()?;
         Ok(model)
     }
 }
@@ -1198,6 +1263,28 @@ impl TypedStoreRecord for ReplacementLineageEntry {
             ("slot_id".to_string(), self.slot_id.clone()),
         ])
     }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("sequence_id", self.sequence_id)?;
+        require_non_empty_typed::<Self>("slot_id", &self.slot_id)?;
+        require_allowed_typed::<Self>(
+            "operation_type",
+            &self.operation_type,
+            &[
+                "promotion",
+                "demotion",
+                "delegate_to_native",
+                "rollback",
+                "re_promotion",
+            ],
+        )?;
+        require_non_empty_typed::<Self>("source_state", &self.source_state)?;
+        require_non_empty_typed::<Self>("target_state", &self.target_state)?;
+        require_non_empty_typed::<Self>("receipt_artifact_id", &self.receipt_artifact_id)?;
+        require_non_empty_typed::<Self>("receipt_signature", &self.receipt_signature)?;
+        require_non_negative_typed::<Self>("timestamp_ms", self.timestamp_ms)?;
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1299,6 +1386,30 @@ impl TypedStoreRecord for IfcProvenanceEntry {
             );
         }
         metadata
+    }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("provenance_id", self.provenance_id)?;
+        require_non_empty_typed::<Self>("source_label", &self.source_label)?;
+        require_non_empty_typed::<Self>("target_label", &self.target_label)?;
+        require_allowed_typed::<Self>(
+            "edge_type",
+            &self.edge_type,
+            &["flow", "flow_event", "declassification", "aggregation"],
+        )?;
+        require_non_empty_typed::<Self>("flow_operation", &self.flow_operation)?;
+        require_non_empty_typed::<Self>("security_level", &self.security_level)?;
+        if self.edge_type == "declassification" {
+            let Some(declassification_ref) = &self.declassification_ref else {
+                return Err(typed_integrity_error::<Self>(
+                    "`declassification_ref` is required for declassification edges",
+                ));
+            };
+            require_non_empty_typed::<Self>("declassification_ref", declassification_ref)?;
+        }
+        require_non_negative_typed::<Self>("timestamp_ms", self.timestamp_ms)?;
+        require_non_empty_typed::<Self>("trace_id", &self.trace_id)?;
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
     }
 }
 
@@ -1417,6 +1528,32 @@ impl TypedStoreRecord for SpecializationIndexEntry {
         }
         metadata
     }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("specialization_id", self.specialization_id)?;
+        require_non_empty_typed::<Self>("proof_artifact_id", &self.proof_artifact_id)?;
+        require_non_empty_typed::<Self>("specialization_type", &self.specialization_type)?;
+        require_non_empty_typed::<Self>("specialized_version", &self.specialized_version)?;
+        require_allowed_typed::<Self>("status", &self.status, &["active", "invalidated", "archived"])?;
+        if self.status == "invalidated" {
+            let Some(timestamp_ms) = self.invalidation_timestamp_ms else {
+                return Err(typed_integrity_error::<Self>(
+                    "`invalidation_timestamp_ms` is required when status is invalidated",
+                ));
+            };
+            require_non_negative_typed::<Self>("invalidation_timestamp_ms", timestamp_ms)?;
+            let Some(reason) = &self.invalidation_reason else {
+                return Err(typed_integrity_error::<Self>(
+                    "`invalidation_reason` is required when status is invalidated",
+                ));
+            };
+            require_non_empty_typed::<Self>("invalidation_reason", reason)?;
+        }
+        require_non_negative_typed::<Self>("security_epoch", self.security_epoch)?;
+        require_non_negative_typed::<Self>("created_timestamp_ms", self.created_timestamp_ms)?;
+        require_non_empty_typed::<Self>("specialized_content_hash", &self.specialized_content_hash)?;
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
+    }
 }
 
 #[cfg(test)]
@@ -1496,7 +1633,7 @@ mod tests {
             proof_artifact_id: "proof-13".to_string(),
             specialization_type: "fallback".to_string(),
             specialized_version: "v2-safe".to_string(),
-            status: "invalidated".to_string(),
+            status: "active".to_string(),
             invalidation_timestamp_ms: None,
             invalidation_reason: None,
             security_epoch: 4,

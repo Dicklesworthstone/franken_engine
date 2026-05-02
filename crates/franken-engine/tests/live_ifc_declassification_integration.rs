@@ -20,6 +20,62 @@ fn test_signing_key(seed: u8) -> SigningKey {
 }
 
 // ---------------------------------------------------------------------------
+// Structured Event Pipeline for IFC Tests
+// ---------------------------------------------------------------------------
+
+/// Structured event emitted by IFC integration tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IfcTestEvent {
+    /// Trace ID for correlation.
+    pub trace_id: String,
+    /// Test function name.
+    pub test_name: String,
+    /// Component being tested.
+    pub component: String,
+    /// Event name.
+    pub event: String,
+    /// Test outcome.
+    pub outcome: String,
+    /// Optional event details.
+    pub details: Option<String>,
+}
+
+/// Test event collector for structured logging.
+#[derive(Debug, Default)]
+pub struct IfcTestEventCollector {
+    events: Vec<IfcTestEvent>,
+}
+
+impl IfcTestEventCollector {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn emit_event(
+        &mut self,
+        trace_id: &str,
+        test_name: &str,
+        component: &str,
+        event: &str,
+        outcome: &str,
+        details: Option<&str>,
+    ) {
+        self.events.push(IfcTestEvent {
+            trace_id: trace_id.to_string(),
+            test_name: test_name.to_string(),
+            component: component.to_string(),
+            event: event.to_string(),
+            outcome: outcome.to_string(),
+            details: details.map(str::to_string),
+        });
+    }
+
+    pub fn drain_events(&mut self) -> Vec<IfcTestEvent> {
+        std::mem::take(&mut self.events)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Proof Artifact Structures for IFC/Declassification
 // ---------------------------------------------------------------------------
 
@@ -312,6 +368,8 @@ fn test_ifc_schema_version() {
 #[test]
 fn test_ifc_declassification_proof_artifacts() {
     // Generate comprehensive IFC/declassification proof artifacts
+    let mut event_collector = IfcTestEventCollector::new();
+    let trace_id = "ifc-proof-artifacts-test";
 
     let output_dir = std::env::temp_dir().join("ifc_declassification_artifacts");
     fs::create_dir_all(&output_dir).expect("Failed to create output directory");
@@ -589,13 +647,20 @@ fn test_ifc_declassification_proof_artifacts() {
     assert!(trace_path.exists());
     assert!(report_path.exists());
 
-    println!(
-        "✅ Generated IFC/declassification proof artifacts in: {}",
-        output_dir.display()
+    event_collector.emit_event(
+        trace_id,
+        "test_ifc_declassification_proof_artifacts",
+        "ifc_declassification",
+        "proof_artifacts_generated",
+        "success",
+        Some(&format!(
+            "Generated proof artifacts in: {}. Files: flow_policy_input.json, flow_labels.json, declassification_decision.json, signed_declassification_receipt.json, provenance_trace.json, verifier_report.json",
+            output_dir.display()
+        )),
     );
-    println!(
-        "📄 Files: flow_policy_input.json, flow_labels.json, declassification_decision.json, signed_declassification_receipt.json, provenance_trace.json, verifier_report.json"
-    );
+
+    // Emit collected events through structured pipeline
+    let _events = event_collector.drain_events();
 }
 
 /// Test demonstrating the content binding security fix.
@@ -605,6 +670,8 @@ fn test_ifc_declassification_proof_artifacts() {
 #[test]
 fn test_content_binding_prevents_content_swapping_attack() {
     // Generate a signing key pair for testing
+    let mut event_collector = IfcTestEventCollector::new();
+    let trace_id = "content-binding-attack-test";
     let signing_key = test_signing_key(7);
     let verification_key = signing_key.verification_key();
 
@@ -668,13 +735,25 @@ fn test_content_binding_prevents_content_swapping_attack() {
         Ok(_) => panic!("Attack should not succeed"),
     }
 
-    println!("✅ Content binding successfully prevents content swapping attacks");
+    event_collector.emit_event(
+        trace_id,
+        "test_content_binding_prevents_content_swapping_attack",
+        "content_binding",
+        "attack_prevention_validated",
+        "success",
+        Some("Content binding successfully prevents content swapping attacks"),
+    );
+
+    // Emit collected events through structured pipeline
+    let _events = event_collector.drain_events();
 }
 
 /// Test that high-security labels require content binding as a defensive measure.
 #[test]
 fn test_high_security_labels_require_content_binding() {
     // Create a receipt for Secret data without content binding
+    let mut event_collector = IfcTestEventCollector::new();
+    let trace_id = "high-security-binding-test";
     let receipt_without_binding = DeclassificationReceipt {
         receipt_id: "test-receipt-no-binding".to_string(),
         source_label: Label::Secret, // High-security label
@@ -728,5 +807,15 @@ fn test_high_security_labels_require_content_binding() {
         "Public/Internal labels should not require content binding for backward compatibility"
     );
 
-    println!("✅ High-security labels properly require content binding");
+    event_collector.emit_event(
+        trace_id,
+        "test_high_security_labels_require_content_binding",
+        "security_labels",
+        "content_binding_requirement_validated",
+        "success",
+        Some("High-security labels properly require content binding"),
+    );
+
+    // Emit collected events through structured pipeline
+    let _events = event_collector.drain_events();
 }

@@ -2231,6 +2231,14 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             .strip_suffix('\r')
             .unwrap_or(segment.strip_suffix('\n').unwrap_or(segment));
 
+        if line_idx == 0 {
+            let line_without_bom = line.strip_prefix('\u{feff}').unwrap_or(line);
+            if line_without_bom.starts_with("#!") {
+                byte_offset = byte_offset.saturating_add(segment.len() as u64);
+                continue;
+            }
+        }
+
         if !accumulating {
             current_text.clear();
             current_byte_offset = byte_offset;
@@ -12384,6 +12392,22 @@ mod tests {
     }
 
     #[test]
+    fn merge_logical_lines_ignores_initial_hashbang_comment() {
+        let lines = merge_logical_lines("#! /usr/bin/env node\n\"use strict\";\nconst x = 1;");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "\"use strict\";");
+        assert_eq!(lines[0].start_line, 2);
+        assert_eq!(lines[1].text, "const x = 1;");
+    }
+
+    #[test]
+    fn merge_logical_lines_only_ignores_hashbang_at_start() {
+        let lines = merge_logical_lines("const x = 1;\n#! /usr/bin/env node");
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].text, "#! /usr/bin/env node");
+    }
+
+    #[test]
     fn merge_logical_lines_block() {
         // A block spanning multiple lines should be merged into one logical line.
         let lines = merge_logical_lines("if (x) {\n  y;\n}");
@@ -12500,6 +12524,18 @@ process.exit(attackSucceeded ? 0 : 1);"#,
             }
             other => panic!("expected multiline attackSucceeded declaration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_script_hashbang_preserves_following_strict_mode_directive() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(
+                "#! /usr/bin/env node\n\"use strict\";\nwith (obj) { x; }",
+                ParseGoal::Script,
+            )
+            .expect_err("strict-mode with should still be rejected after hashbang");
+        assert_eq!(err.code, ParseErrorCode::StrictModeWithStatement);
     }
 
     // -----------------------------------------------------------------------

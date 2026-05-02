@@ -1269,8 +1269,14 @@ fn prepare_source_entry_js_hashbang_is_normalized_before_parse() {
         prepared.source_ingestion.original_source_hash,
         prepared.source_ingestion.normalized_source_hash
     );
-    assert!(prepared.prepared_source.starts_with("// hashbang stripped"));
+    let first_line = prepared
+        .prepared_source
+        .lines()
+        .next()
+        .expect("prepared source should retain a first physical line");
+    assert!(first_line.trim().is_empty());
     assert!(!prepared.prepared_source.starts_with("#!"));
+    assert!(!prepared.prepared_source.starts_with("//"));
     assert!(prepared.prepared_source.contains("\n\"use strict\";"));
 
     let parser = CanonicalEs2020Parser;

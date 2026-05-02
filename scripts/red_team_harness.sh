@@ -133,6 +133,31 @@ execute_scenario() {
         if [[ -f "$report_path" ]]; then
             structured_log="$(cat "$report_path")"
         else
+            local payload_execution_status="failed_closed_before_report"
+            local measurement_status="OBSERVED_FAIL_CLOSED"
+            local denial_reason="frankenctl_nonzero_exit"
+            local explanation="frankenctl was invoked with the real scenario payload path and failed closed before emitting a report; attack_succeeded is derived from captured process output, not a hardcoded stub"
+            if [[ "$output" == *"unauthorized flow detected"* ]]; then
+                payload_execution_status="modeled_payload_body_denied_by_lattice"
+                measurement_status="OBSERVED_FAIL_CLOSED"
+                denial_reason="no_lattice_or_declassification_path"
+                explanation="frankenctl ingested the real scenario payload past the hashbang, modeled its lowered body, and failed closed on an information-flow denial; attack_succeeded is derived from captured process output, not a hardcoded stub"
+            elif [[ "$output" == *"capability denied:"* ]]; then
+                payload_execution_status="modeled_payload_body_denied_by_capability_policy"
+                measurement_status="OBSERVED_FAIL_CLOSED"
+                denial_reason="capability_denied"
+                explanation="frankenctl ingested the real scenario payload and failed closed on a runtime capability denial; attack_succeeded is derived from captured process output, not a hardcoded stub"
+            elif [[ "$output" == *"type error:"* ]]; then
+                payload_execution_status="modeled_payload_body_failed_closed_runtime_type_error"
+                measurement_status="OBSERVED_FAIL_CLOSED"
+                denial_reason="runtime_type_error"
+                explanation="frankenctl ingested the real scenario payload and failed closed during deterministic runtime modeling; attack_succeeded is derived from captured process output, not a hardcoded stub"
+            elif [[ "$output" == *"UnsupportedSyntax"* || "$output" == *"parse:"* ]]; then
+                payload_execution_status="parser_rejected_before_body_model"
+                measurement_status="PROVISIONAL"
+                denial_reason="parser_rejection"
+                explanation="frankenctl was invoked with the real scenario payload path but failed before body modeling; attack_succeeded is derived from captured process output, not a hardcoded stub"
+            fi
             structured_log="$(
                 jq -n \
                     --arg schema_version "franken-engine.red-team-frankenengine-execution.v1" \
@@ -140,7 +165,11 @@ execute_scenario() {
                     --arg runtime "$runtime" \
                     --arg script_path "$script_path" \
                     --arg stdout "$output" \
-                    --arg followup_bead "bd-f5idk" \
+                    --arg payload_execution_status "$payload_execution_status" \
+                    --arg measurement_status "$measurement_status" \
+                    --arg denial_reason "$denial_reason" \
+                    --arg resolution_bead "bd-f5idk" \
+                    --arg explanation "$explanation" \
                     --argjson exit_code "$exit_code" \
                     --argjson attack_succeeded false \
                     '{
@@ -153,11 +182,12 @@ execute_scenario() {
                       stdout: $stdout,
                       stderr: "",
                       outcome: "fail_closed",
-                      payload_execution_status: "rejected_before_attacker_code",
+                      payload_execution_status: $payload_execution_status,
                       measurement_mode: "real_frankenctl_invocation",
-                      measurement_status: "PROVISIONAL",
-                      followup_bead: $followup_bead,
-                      explanation: "frankenctl was invoked with the real scenario payload path and failed before attacker code execution; attack_succeeded is derived from captured process output, not a hardcoded stub"
+                      measurement_status: $measurement_status,
+                      denial_reason: $denial_reason,
+                      resolution_bead: $resolution_bead,
+                      explanation: $explanation
                     }'
             )"
         fi

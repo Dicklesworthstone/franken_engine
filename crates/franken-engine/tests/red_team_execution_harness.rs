@@ -212,6 +212,59 @@ fn frankenctl_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_frankenctl"))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FrankenEngineFailureClassification {
+    payload_execution_status: &'static str,
+    measurement_status: &'static str,
+    denial_reason: &'static str,
+    explanation: &'static str,
+}
+
+fn classify_frankenengine_failure(stderr: &str) -> FrankenEngineFailureClassification {
+    if stderr.contains("unauthorized flow detected") {
+        return FrankenEngineFailureClassification {
+            payload_execution_status: "modeled_payload_body_denied_by_lattice",
+            measurement_status: "OBSERVED_FAIL_CLOSED",
+            denial_reason: "no_lattice_or_declassification_path",
+            explanation: "frankenctl ingested the real scenario payload past the hashbang, modeled its lowered body, and failed closed on an information-flow denial; attack_succeeded is derived from captured process output, not a hardcoded stub",
+        };
+    }
+
+    if stderr.contains("capability denied:") {
+        return FrankenEngineFailureClassification {
+            payload_execution_status: "modeled_payload_body_denied_by_capability_policy",
+            measurement_status: "OBSERVED_FAIL_CLOSED",
+            denial_reason: "capability_denied",
+            explanation: "frankenctl ingested the real scenario payload and failed closed on a runtime capability denial; attack_succeeded is derived from captured process output, not a hardcoded stub",
+        };
+    }
+
+    if stderr.contains("type error:") {
+        return FrankenEngineFailureClassification {
+            payload_execution_status: "modeled_payload_body_failed_closed_runtime_type_error",
+            measurement_status: "OBSERVED_FAIL_CLOSED",
+            denial_reason: "runtime_type_error",
+            explanation: "frankenctl ingested the real scenario payload and failed closed during deterministic runtime modeling; attack_succeeded is derived from captured process output, not a hardcoded stub",
+        };
+    }
+
+    if stderr.contains("UnsupportedSyntax") || stderr.contains("parse:") {
+        return FrankenEngineFailureClassification {
+            payload_execution_status: "parser_rejected_before_body_model",
+            measurement_status: "PROVISIONAL",
+            denial_reason: "parser_rejection",
+            explanation: "frankenctl was invoked with the real scenario payload path but failed before body modeling; attack_succeeded is derived from captured process output, not a hardcoded stub",
+        };
+    }
+
+    FrankenEngineFailureClassification {
+        payload_execution_status: "failed_closed_before_report",
+        measurement_status: "OBSERVED_FAIL_CLOSED",
+        denial_reason: "frankenctl_nonzero_exit",
+        explanation: "frankenctl was invoked with the real scenario payload path and failed closed before emitting a report; attack_succeeded is derived from captured process output, not a hardcoded stub",
+    }
+}
+
 fn fallback_frankenengine_structured_log(
     script_path: &Path,
     scenario_name: &str,
@@ -219,6 +272,7 @@ fn fallback_frankenengine_structured_log(
     stdout: &str,
     stderr: &str,
 ) -> String {
+    let classification = classify_frankenengine_failure(stderr);
     json!({
         "schema_version": "franken-engine.red-team-frankenengine-execution.v1",
         "scenario": scenario_name,
@@ -229,11 +283,12 @@ fn fallback_frankenengine_structured_log(
         "stdout": stdout,
         "stderr": stderr,
         "outcome": "fail_closed",
-        "payload_execution_status": "rejected_before_attacker_code",
+        "payload_execution_status": classification.payload_execution_status,
         "measurement_mode": "real_frankenctl_invocation",
-        "measurement_status": "PROVISIONAL",
-        "followup_bead": "bd-f5idk",
-        "explanation": "frankenctl was invoked with the real scenario payload path and failed before attacker code execution; attack_succeeded is derived from captured process output, not a hardcoded stub"
+        "measurement_status": classification.measurement_status,
+        "denial_reason": classification.denial_reason,
+        "resolution_bead": "bd-f5idk",
+        "explanation": classification.explanation
     })
     .to_string()
 }
@@ -342,8 +397,51 @@ fn red_team_harness_executes_all_scenarios() {
                 .contains("\"measurement_mode\":\"real_frankenctl_invocation\"")
                 && result
                     .structured_log
-                    .contains("\"followup_bead\":\"bd-f5idk\"")),
+                    .contains("\"resolution_bead\":\"bd-f5idk\"")),
         "FrankenEngine red-team arm should preserve structured process evidence"
+    );
+}
+
+#[test]
+fn red_team_harness_environment_variable_exfiltration_frankenengine_denies_modeled_body() {
+    let result = execute_scenario("environment_variable_exfiltration", &Runtime::FrankenEngine);
+
+    println!(
+        "FrankenEngine environment-variable red-team result: exit_code={}, attack_succeeded={}, matches_expectation={}",
+        result.exit_code, result.attack_succeeded, result.matches_expectation
+    );
+    println!("stderr: {}", result.stderr.trim());
+    println!("structured_log: {}", result.structured_log.trim());
+
+    assert!(
+        !result.attack_succeeded,
+        "FrankenEngine must not leak process.env canary"
+    );
+    assert!(
+        result.matches_expectation,
+        "FrankenEngine fail-closed result should match the scenario manifest"
+    );
+    assert!(
+        result.stderr.contains("unauthorized flow detected"),
+        "stderr should include the fail-closed lattice denial"
+    );
+    assert!(
+        result
+            .structured_log
+            .contains("\"payload_execution_status\":\"modeled_payload_body_denied_by_lattice\""),
+        "structured fallback should classify this as body-level lattice denial"
+    );
+    assert!(
+        result
+            .structured_log
+            .contains("\"measurement_status\":\"OBSERVED_FAIL_CLOSED\""),
+        "structured fallback should be observed fail-closed evidence"
+    );
+    assert!(
+        !result
+            .structured_log
+            .contains("rejected_before_attacker_code"),
+        "hashbang handling should no longer report the old parser-level rejection"
     );
 }
 

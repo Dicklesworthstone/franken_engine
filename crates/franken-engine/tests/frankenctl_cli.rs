@@ -1473,6 +1473,73 @@ fn frankenctl_run_writes_execution_report() {
 }
 
 #[test]
+fn frankenctl_run_accepts_hashbang_javascript_and_reports_normalization() {
+    let source_path = temp_path("frankenctl_run_hashbang_source", "js");
+    let report_path = temp_path("frankenctl_run_hashbang_report", "json");
+    write_source(
+        &source_path,
+        "#! /usr/bin/env node\n\"use strict\";\nlet value = 2 + 3;\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .args([
+            "run",
+            "--input",
+            source_path
+                .to_str()
+                .expect("source path should be valid utf8"),
+            "--extension-id",
+            "ext-cli-run-hashbang",
+            "--goal",
+            "script",
+            "--out",
+            report_path
+                .to_str()
+                .expect("report path should be valid utf8"),
+        ])
+        .output()
+        .expect("run command should execute");
+
+    assert!(
+        output.status.success(),
+        "hashbang run failed with status={:?}\nstdout={}\nstderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout_json = parse_stdout_json(&output);
+    assert_eq!(
+        stdout_json["source_ingestion"]["source_language"].as_str(),
+        Some("javascript")
+    );
+    assert_eq!(
+        stdout_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
+    );
+    assert_ne!(
+        stdout_json["source_ingestion"]["original_source_hash"],
+        stdout_json["source_ingestion"]["normalized_source_hash"]
+    );
+    assert_eq!(
+        stdout_json["extension_id"].as_str(),
+        Some("ext-cli-run-hashbang")
+    );
+
+    let report_bytes = fs::read(&report_path).expect("hashbang run report should be written");
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&report_bytes).expect("hashbang report should parse as json");
+    assert_eq!(
+        report_json["source_ingestion"]["normalization_applied"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        report_json["extension_id"].as_str(),
+        Some("ext-cli-run-hashbang")
+    );
+}
+
+#[test]
 fn frankenctl_run_normalizes_inline_typescript_input() {
     let source_path = temp_path("frankenctl_run_source_ts", "js");
     let report_path = temp_path("frankenctl_run_report_ts", "json");

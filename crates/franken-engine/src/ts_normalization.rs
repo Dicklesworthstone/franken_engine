@@ -350,19 +350,18 @@ pub fn prepare_source_entry_for_public_entrypoints(
 }
 
 fn normalize_hashbang_for_es2020_parser(source: &str) -> (String, bool) {
-    if !source.starts_with("#!") {
+    let source_without_bom = source.strip_prefix('\u{feff}').unwrap_or(source);
+    if !source_without_bom.starts_with("#!") {
         return (source.to_string(), false);
     }
 
-    let replacement = "// hashbang stripped for ES2020 parser compatibility";
-    if let Some(newline_index) = source.find('\n') {
-        let mut normalized = String::with_capacity(replacement.len() + source.len());
-        normalized.push_str(replacement);
-        normalized.push_str(&source[newline_index..]);
-        (normalized, true)
-    } else {
-        (replacement.to_string(), true)
+    let hashbang_line_end = source.find('\n').unwrap_or(source.len());
+    let mut normalized = String::with_capacity(source.len());
+    for _ in 0..hashbang_line_end {
+        normalized.push(' ');
     }
+    normalized.push_str(&source[hashbang_line_end..]);
+    (normalized, true)
 }
 
 pub fn normalize_typescript_to_es2020(
@@ -4313,6 +4312,29 @@ abstract class Base { }"#;
             prepared.source_ingestion.original_source_hash,
             prepared.source_ingestion.normalized_source_hash
         );
+    }
+
+    #[test]
+    fn prepare_public_source_entry_hashbang_line_is_parse_safe_whitespace() {
+        let prepared = prepare_source_entry_for_public_entrypoints(
+            "#! /usr/bin/env node\n\"use strict\";\nconst value = 1;",
+            "fixture.js",
+            "trace-js-hashbang",
+            "decision-js-hashbang",
+            "policy-js-hashbang",
+        )
+        .expect("hashbang source preparation should succeed");
+
+        let first_line = prepared
+            .prepared_source
+            .lines()
+            .next()
+            .expect("prepared source should retain first physical line");
+        assert!(prepared.source_ingestion.normalization_applied);
+        assert!(first_line.trim().is_empty());
+        assert!(!prepared.prepared_source.starts_with("#!"));
+        assert!(!prepared.prepared_source.starts_with("//"));
+        assert!(prepared.prepared_source.contains("\n\"use strict\";"));
     }
 
     #[test]

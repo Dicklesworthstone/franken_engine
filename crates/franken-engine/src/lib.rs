@@ -491,6 +491,7 @@ pub mod ts_normalization;
 pub mod ts_normalization_evidence;
 pub mod ts_resolution_manifest;
 pub mod ts_shipped_path_evidence;
+pub mod typed_persistence_models;
 pub mod typed_array_fast_lane;
 pub mod unit_test_taxonomy;
 pub mod universal_dominance_ratchet;

@@ -14,6 +14,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+// TODO: Import typed models for sqlmodel_rust integration
+// use crate::typed_persistence_models::{ReplacementLineageEntry, IfcProvenanceEntry, SpecializationIndexEntry};
+
 /// Current schema version for storage-adapter contracts.
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -45,7 +48,10 @@ impl StoreKind {
         }
     }
 
-    /// Inventory-mapped frankensqlite integration point for the store.
+    /// Inventory-mapped integration point for the store.
+    ///
+    /// Typed-heavy stores use sqlmodel_rust boundaries for compile-time schema validation,
+    /// while generic stores continue using frankensqlite integration points.
     pub fn integration_point(self) -> &'static str {
         match self {
             Self::ReplayIndex => "frankensqlite::control_plane::replay_index",
@@ -53,9 +59,10 @@ impl StoreKind {
             Self::BenchmarkLedger => "frankensqlite::benchmark::ledger",
             Self::PolicyCache => "frankensqlite::control_plane::policy_cache",
             Self::PlasWitness => "frankensqlite::analysis::plas_witness",
-            Self::ReplacementLineage => "frankensqlite::replacement::lineage_log",
-            Self::IfcProvenance => "frankensqlite::control_plane::ifc_provenance",
-            Self::SpecializationIndex => "frankensqlite::control_plane::specialization_index",
+            // Typed-heavy stores use sqlmodel_rust typed boundaries
+            Self::ReplacementLineage => "sqlmodel_rust::ReplacementLineageEntry",
+            Self::IfcProvenance => "sqlmodel_rust::IfcProvenanceEntry",
+            Self::SpecializationIndex => "sqlmodel_rust::SpecializationIndexEntry",
         }
     }
 }

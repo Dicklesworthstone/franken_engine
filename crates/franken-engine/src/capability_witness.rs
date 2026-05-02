@@ -195,6 +195,8 @@ pub enum WitnessError {
     PromotionTheoremFailed { failed_checks: Vec<String> },
     /// Required and denied capability sets overlap.
     RequiredDeniedOverlap { capabilities: Vec<String> },
+    /// Denied capability is missing a matching denial record.
+    MissingDenialRecord { capability: String },
 }
 
 impl fmt::Display for WitnessError {
@@ -246,6 +248,9 @@ impl fmt::Display for WitnessError {
                     "required and denied capability sets overlap: {}",
                     capabilities.join(",")
                 )
+            }
+            Self::MissingDenialRecord { capability } => {
+                write!(f, "missing denial record for capability: {capability}")
             }
         }
     }
@@ -1731,6 +1736,9 @@ pub struct WitnessValidator {
     pub supported_version: WitnessSchemaVersion,
     /// Minimum confidence lower bound (millionths).
     pub min_confidence_millionths: i64,
+    /// External trust root for security-decision validation.
+    #[serde(default)]
+    active_acceptance_trust_root: Option<CapabilityWitnessTrustRoot>,
 }
 
 impl WitnessValidator {
@@ -1739,11 +1747,35 @@ impl WitnessValidator {
         Self {
             supported_version: WitnessSchemaVersion::CURRENT,
             min_confidence_millionths: 900_000, // 0.90
+            active_acceptance_trust_root: None,
         }
     }
 
-    /// Full validation of a witness artifact.
+    /// Create a validator that can verify trust and promotion gates.
+    pub fn with_trust_root(trust_root: CapabilityWitnessTrustRoot) -> Self {
+        Self {
+            active_acceptance_trust_root: Some(trust_root),
+            ..Self::new()
+        }
+    }
+
+    /// Replace the trust root used by security-decision validation.
+    pub fn set_trust_root(&mut self, trust_root: CapabilityWitnessTrustRoot) {
+        self.active_acceptance_trust_root = Some(trust_root);
+    }
+
+    /// Backwards-compatible structural validation of a witness artifact.
+    ///
+    /// This checks schema, capability/proof shape, content integrity, and
+    /// confidence. It does not establish trust in the signer or prove the
+    /// witness is safe to consume as a security decision input. Use
+    /// `validate_for_security_decision` for the signed promoted-snapshot path.
     pub fn validate(&self, witness: &CapabilityWitness) -> Vec<WitnessError> {
+        self.validate_structural(witness)
+    }
+
+    /// Structural validation of a witness artifact.
+    pub fn validate_structural(&self, witness: &CapabilityWitness) -> Vec<WitnessError> {
         let mut errors = Vec::new();
 
         // Schema compatibility.
@@ -1792,6 +1824,95 @@ impl WitnessValidator {
         }
 
         errors
+    }
+
+    /// Validate a promoted or active witness before security-decision use.
+    ///
+    /// This path layers trust-chain and promotion checks on top of structural
+    /// validation: external trust root, synthesizer signature, promotion
+    /// signature quorum, promotion theorem gate, lifecycle state, rollback
+    /// token shape, and denied-capability record coverage.
+    pub fn validate_for_security_decision(&self, witness: &CapabilityWitness) -> Vec<WitnessError> {
+        let mut errors = self.validate_structural(witness);
+        errors.extend(self.validate_trust_and_promotion(witness));
+        errors
+    }
+
+    /// Trust-chain and promotion validation only.
+    pub fn validate_trust_and_promotion(&self, witness: &CapabilityWitness) -> Vec<WitnessError> {
+        let mut errors = Vec::new();
+
+        if !matches!(
+            witness.lifecycle_state,
+            LifecycleState::Promoted | LifecycleState::Active
+        ) {
+            errors.push(WitnessError::InvalidTransition {
+                from: witness.lifecycle_state,
+                to: LifecycleState::Promoted,
+            });
+        }
+
+        if let Err(error) = self.verify_denial_record_coverage(witness) {
+            errors.push(error);
+        }
+        if let Err(error) = self.verify_rollback_token_shape(witness) {
+            errors.push(error);
+        }
+
+        match self.active_acceptance_trust_root.as_ref() {
+            Some(trust_root) => {
+                if let Err(error) = witness.verify_active_acceptance_with_trust_root(trust_root) {
+                    errors.push(error);
+                }
+            }
+            None => errors.push(CapabilityWitness::external_trust_root_required()),
+        }
+
+        errors
+    }
+
+    fn verify_denial_record_coverage(
+        &self,
+        witness: &CapabilityWitness,
+    ) -> Result<(), WitnessError> {
+        for capability in &witness.denied_capabilities {
+            if !witness
+                .denial_records
+                .iter()
+                .any(|record| record.capability == *capability)
+            {
+                return Err(WitnessError::MissingDenialRecord {
+                    capability: capability.as_str().to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_rollback_token_shape(&self, witness: &CapabilityWitness) -> Result<(), WitnessError> {
+        let Some(token) = witness.rollback_token.as_ref() else {
+            return Ok(());
+        };
+        if token.created_epoch.as_u64() > witness.epoch.as_u64() {
+            return Err(WitnessError::InvalidRollbackToken {
+                reason: format!(
+                    "rollback token epoch {} is newer than witness epoch {}",
+                    token.created_epoch.as_u64(),
+                    witness.epoch.as_u64()
+                ),
+            });
+        }
+        if token.previous_witness_id.as_ref() == Some(&witness.witness_id) {
+            return Err(WitnessError::InvalidRollbackToken {
+                reason: "rollback token references current witness id".to_string(),
+            });
+        }
+        if token.previous_witness_hash == witness.content_hash {
+            return Err(WitnessError::InvalidRollbackToken {
+                reason: "rollback token references current witness hash".to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -3895,6 +4016,10 @@ mod tests {
         SigningKey::from_bytes(key).expect("serde deserialization should succeed")
     }
 
+    fn test_trust_root() -> CapabilityWitnessTrustRoot {
+        CapabilityWitnessTrustRoot::single_authority(test_signing_key().verification_key())
+    }
+
     fn test_extension_id() -> EngineObjectId {
         // SAFETY: Test helper uses valid parameters for engine object ID derivation.
         // derive_id only fails on invalid domain or malformed inputs (both impossible here).
@@ -4743,6 +4868,87 @@ mod tests {
         let validator = WitnessValidator::new();
         let errors = validator.validate(&witness);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn validate_for_security_decision_requires_trust_root() {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Promoted)
+            .expect("promotion theorem metadata should permit promoted transition");
+
+        let errors = WitnessValidator::new().validate_for_security_decision(&witness);
+        assert!(
+            errors.iter().any(|error| {
+                matches!(error, WitnessError::SignatureInvalid { detail }
+                    if detail == ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED)
+            }),
+            "expected trust-root error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_for_security_decision_accepts_trusted_promoted_witness() {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Promoted)
+            .expect("promotion theorem metadata should permit promoted transition");
+
+        let validator = WitnessValidator::with_trust_root(test_trust_root());
+        let errors = validator.validate_for_security_decision(&witness);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn validate_for_security_decision_rejects_draft_witness() {
+        let witness = build_test_witness();
+        let validator = WitnessValidator::with_trust_root(test_trust_root());
+        let errors = validator.validate_for_security_decision(&witness);
+        assert!(
+            errors.iter().any(|error| {
+                matches!(error, WitnessError::InvalidTransition { from, to }
+                    if *from == LifecycleState::Draft && *to == LifecycleState::Promoted)
+            }),
+            "expected lifecycle error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_for_security_decision_rejects_missing_promotion_quorum() {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Promoted)
+            .expect("promotion theorem metadata should permit promoted transition");
+        witness.promotion_signatures.clear();
+
+        let validator = WitnessValidator::with_trust_root(test_trust_root());
+        let errors = validator.validate_for_security_decision(&witness);
+        assert!(
+            errors.iter().any(|error| {
+                matches!(error, WitnessError::SignatureInvalid { detail }
+                    if detail.contains("promotion signature quorum is empty"))
+            }),
+            "expected promotion quorum error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_for_security_decision_rejects_denied_capability_without_record() {
+        let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Promoted)
+            .expect("promotion theorem metadata should permit promoted transition");
+        witness.denial_records.clear();
+
+        let validator = WitnessValidator::with_trust_root(test_trust_root());
+        let errors = validator.validate_for_security_decision(&witness);
+        assert!(
+            errors.iter().any(|error| {
+                matches!(error, WitnessError::MissingDenialRecord { capability }
+                    if capability == "admin-access")
+            }),
+            "expected denial record coverage error, got {errors:?}"
+        );
     }
 
     #[test]

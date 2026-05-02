@@ -7,7 +7,8 @@ use frankenengine_engine::baseline_interpreter::{
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
-    CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+    CapabilityTag, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
+    RegRange,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -20,7 +21,11 @@ fn test_config() -> InterpreterConfig {
     config
 }
 
-fn module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Ir3Module {
+fn module(
+    instructions: Vec<Ir3Instruction>,
+    constant_pool: Vec<String>,
+    function_table: Vec<Ir3FunctionDesc>,
+) -> Ir3Module {
     Ir3Module {
         header: IrHeader {
             schema_version: IrSchemaVersion::CURRENT,
@@ -30,10 +35,20 @@ fn module(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Ir3M
         },
         instructions,
         constant_pool,
-        function_table: Vec::new(),
+        function_table,
         specialization: None,
         required_capabilities: Vec::new(),
     }
+}
+
+fn tag_function_table(name: String, is_generator: bool) -> Vec<Ir3FunctionDesc> {
+    vec![Ir3FunctionDesc {
+        entry: 0,
+        arity: 0,
+        frame_size: 1,
+        name: Some(name),
+        is_generator,
+    }]
 }
 
 fn object_tag_instruction() -> Ir3Instruction {
@@ -44,8 +59,12 @@ fn object_tag_instruction() -> Ir3Instruction {
     }
 }
 
-fn execute(instructions: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Option<Value> {
-    let module = module(instructions, constant_pool);
+fn execute(
+    instructions: Vec<Ir3Instruction>,
+    constant_pool: Vec<String>,
+    function_table: Vec<Ir3FunctionDesc>,
+) -> Option<Value> {
+    let module = module(instructions, constant_pool, function_table);
     let result: ExecutionResult = QuickJsLane::with_config(test_config())
         .execute(&module, "baseline-object-to-string-fuzz")
         .ok()?;
@@ -57,18 +76,19 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let selector = data.first().copied().unwrap_or(0) % 8;
+    let selector = data.first().copied().unwrap_or(0) % 12;
     let fuzz_text = String::from_utf8_lossy(data)
         .chars()
         .take(64)
         .collect::<String>();
-    let (instructions, pool, expected) = match selector {
+    let (instructions, pool, functions, expected) = match selector {
         0 => (
             vec![
                 Ir3Instruction::LoadUndefined { dst: 0 },
                 object_tag_instruction(),
                 Ir3Instruction::Halt,
             ],
+            Vec::new(),
             Vec::new(),
             "[object Undefined]",
         ),
@@ -78,6 +98,7 @@ fuzz_target!(|data: &[u8]| {
                 object_tag_instruction(),
                 Ir3Instruction::Halt,
             ],
+            Vec::new(),
             Vec::new(),
             "[object Null]",
         ),
@@ -91,6 +112,7 @@ fuzz_target!(|data: &[u8]| {
                 Ir3Instruction::Halt,
             ],
             Vec::new(),
+            Vec::new(),
             "[object Boolean]",
         ),
         3 => (
@@ -102,6 +124,7 @@ fuzz_target!(|data: &[u8]| {
                 object_tag_instruction(),
                 Ir3Instruction::Halt,
             ],
+            Vec::new(),
             Vec::new(),
             "[object Number]",
         ),
@@ -115,6 +138,7 @@ fuzz_target!(|data: &[u8]| {
                 Ir3Instruction::Halt,
             ],
             Vec::new(),
+            Vec::new(),
             "[object Number]",
         ),
         5 => (
@@ -127,6 +151,7 @@ fuzz_target!(|data: &[u8]| {
                 Ir3Instruction::Halt,
             ],
             vec![fuzz_text],
+            Vec::new(),
             "[object String]",
         ),
         6 => (
@@ -136,20 +161,85 @@ fuzz_target!(|data: &[u8]| {
                 Ir3Instruction::Halt,
             ],
             Vec::new(),
+            Vec::new(),
             "[object Array]",
         ),
-        _ => (
+        7 => (
             vec![
                 Ir3Instruction::NewObject { dst: 0 },
                 object_tag_instruction(),
                 Ir3Instruction::Halt,
             ],
             Vec::new(),
+            Vec::new(),
             "[object Object]",
+        ),
+        8 => callable_tag_case(
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            fuzz_text,
+            false,
+            "[object Function]",
+        ),
+        9 => callable_tag_case(
+            Ir3Instruction::CreateGenerator {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            fuzz_text,
+            true,
+            "[object GeneratorFunction]",
+        ),
+        10 => callable_tag_case(
+            Ir3Instruction::CreateAsyncFunction {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            fuzz_text,
+            false,
+            "[object AsyncFunction]",
+        ),
+        _ => callable_tag_case(
+            Ir3Instruction::CreateAsyncGenerator {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            fuzz_text,
+            true,
+            "[object AsyncGeneratorFunction]",
         ),
     };
 
-    let value = execute(instructions, pool)
+    let value = execute(instructions, pool, functions)
         .expect("constructed Object.prototype.toString module should execute");
     assert_eq!(value, Value::Str(expected.to_string()));
 });
+
+fn callable_tag_case(
+    create_instruction: Ir3Instruction,
+    function_name: String,
+    is_generator: bool,
+    expected: &'static str,
+) -> (
+    Vec<Ir3Instruction>,
+    Vec<String>,
+    Vec<Ir3FunctionDesc>,
+    &'static str,
+) {
+    (
+        vec![
+            create_instruction,
+            object_tag_instruction(),
+            Ir3Instruction::Halt,
+        ],
+        Vec::new(),
+        tag_function_table(function_name, is_generator),
+        expected,
+    )
+}

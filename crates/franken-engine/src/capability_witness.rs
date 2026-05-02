@@ -1442,15 +1442,20 @@ impl CapabilityWitness {
         let mut accepted_keys = BTreeSet::new();
         for raw_signature in &self.promotion_signatures {
             let signature = Self::signature_from_bytes(raw_signature, "promotion")?;
-            let Some(authorized_key) = trust_root.promotion_verification_keys.iter().find(|key| {
-                !accepted_keys.contains(*key)
-                    && verify_signature(key, &unsigned, &signature).is_ok()
-            }) else {
+            let Some(authorized_key) = trust_root
+                .promotion_verification_keys
+                .iter()
+                .find(|key| {
+                    !accepted_keys.contains(*key)
+                        && verify_signature(key, &unsigned, &signature).is_ok()
+                })
+                .cloned()
+            else {
                 return Err(WitnessError::SignatureInvalid {
                     detail: "promotion signature is not authorized by the trust root".to_string(),
                 });
             };
-            accepted_keys.insert(authorized_key.clone());
+            accepted_keys.insert(authorized_key);
         }
 
         if accepted_keys.len() < trust_root.required_promotion_signatures {

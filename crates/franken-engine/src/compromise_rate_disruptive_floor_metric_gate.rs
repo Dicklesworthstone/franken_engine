@@ -32,9 +32,18 @@ impl RuntimeDenominator {
 
     pub const fn baseline_compromise_rate_millionths(self) -> u64 {
         match self {
-            // TODO: Replace with live red-team measurement integration
-            Self::Node => 850_000, // Placeholder: 85% compromise rate for Node baseline
-            Self::Bun => 750_000,  // Placeholder: 75% compromise rate for Bun baseline
+            // Production paths must use live red-team measurement integration
+            Self::Node => panic!("Node baseline compromise rate requires live red-team integration - placeholder removed"),
+            Self::Bun => panic!("Bun baseline compromise rate requires live red-team integration - placeholder removed"),
+        }
+    }
+
+    /// Test-only baseline rates - explicitly isolated from production proof paths
+    #[cfg(test)]
+    pub const fn test_baseline_compromise_rate_millionths(self) -> u64 {
+        match self {
+            Self::Node => 850_000, // Test placeholder: 85% compromise rate for Node baseline
+            Self::Bun => 750_000,  // Test placeholder: 75% compromise rate for Bun baseline
         }
     }
 }
@@ -501,9 +510,12 @@ pub fn analyze_compromise_rate_metric_input(
         "observed"
     };
 
-    // Determine overall outcome
+    // Determine overall outcome - fail closed when evidence is fictional/placeholder
     let required_reduction_millionths = input.reduction_threshold_factor * 1_000_000;
-    let overall_outcome = if weighted_reduction_ratio >= required_reduction_millionths {
+    let overall_outcome = if has_fictional_data {
+        // Fail closed: fictional/placeholder evidence cannot produce passing artifacts
+        "inconclusive"
+    } else if weighted_reduction_ratio >= required_reduction_millionths {
         "pass"
     } else {
         "fail"
@@ -576,9 +588,9 @@ pub fn generate_compromise_rate_metric_artifact(
                 .is_ok()
                 .then(|| evidence.output_hash.clone())
         })
-        .unwrap_or_else(|| {
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
-        });
+        .ok_or_else(|| {
+            "Missing valid output hash: cannot generate artifact without authentic evidence".to_string()
+        })?;
     let verification_command = input
         .evidence
         .first()

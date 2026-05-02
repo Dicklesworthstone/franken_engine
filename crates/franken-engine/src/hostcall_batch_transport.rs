@@ -18,7 +18,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::hostcall_session_protocol::{
@@ -779,20 +781,36 @@ pub struct BatchReceipt {
 // Hash helpers
 // ---------------------------------------------------------------------------
 
+type HmacSha256 = Hmac<Sha256>;
+
+fn finish_content_hash(hasher: Sha256) -> ContentHash {
+    let digest = hasher.finalize();
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&digest);
+    ContentHash::from_bytes(output)
+}
+
+fn finish_authenticity_hash(mac: HmacSha256) -> AuthenticityHash {
+    let digest = mac.finalize().into_bytes();
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&digest);
+    AuthenticityHash(output)
+}
+
 /// Compute the content hash for a batch entry.
 pub fn compute_entry_content_hash(
     sequence: u64,
     payload: &BatchPayload,
     trace_id: &str,
 ) -> ContentHash {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"franken::batch_transport::entry::");
-    buf.extend_from_slice(&sequence.to_le_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(b"franken::batch_transport::entry::");
+    hasher.update(sequence.to_le_bytes());
     match payload {
         BatchPayload::Inline(data) => {
-            buf.push(1);
-            buf.extend_from_slice(&(data.len() as u64).to_le_bytes());
-            buf.extend_from_slice(data);
+            hasher.update([1]);
+            hasher.update((data.len() as u64).to_le_bytes());
+            hasher.update(data);
         }
         BatchPayload::SharedRegion {
             region_id,
@@ -800,20 +818,20 @@ pub fn compute_entry_content_hash(
             length,
             payload_hash,
         } => {
-            buf.push(2);
-            buf.extend_from_slice(&region_id.to_le_bytes());
-            buf.extend_from_slice(&offset.to_le_bytes());
-            buf.extend_from_slice(&length.to_le_bytes());
-            buf.extend_from_slice(payload_hash.as_bytes());
+            hasher.update([2]);
+            hasher.update(region_id.to_le_bytes());
+            hasher.update(offset.to_le_bytes());
+            hasher.update(length.to_le_bytes());
+            hasher.update(payload_hash.as_bytes());
         }
         BatchPayload::Backpressure(sig) => {
-            buf.push(3);
-            buf.extend_from_slice(&(sig.pending_messages as u64).to_le_bytes());
-            buf.extend_from_slice(&(sig.limit as u64).to_le_bytes());
+            hasher.update([3]);
+            hasher.update((sig.pending_messages as u64).to_le_bytes());
+            hasher.update((sig.limit as u64).to_le_bytes());
         }
     }
-    buf.extend_from_slice(trace_id.as_bytes());
-    ContentHash::compute(&buf)
+    hasher.update(trace_id.as_bytes());
+    finish_content_hash(hasher)
 }
 
 /// Compute the batch-level MAC over all entries.
@@ -823,15 +841,16 @@ pub fn compute_batch_mac(
     entries: &[BatchEntry],
     epoch: SecurityEpoch,
 ) -> AuthenticityHash {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(b"franken::batch_transport::batch_mac::");
-    buf.extend_from_slice(&batch_id.to_le_bytes());
-    buf.extend_from_slice(&epoch.as_u64().to_le_bytes());
+    let mut mac =
+        HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts 32-byte session keys");
+    mac.update(b"franken::batch_transport::batch_mac::");
+    mac.update(&batch_id.to_le_bytes());
+    mac.update(&epoch.as_u64().to_le_bytes());
     for entry in entries {
-        buf.extend_from_slice(&entry.sequence.to_le_bytes());
-        buf.extend_from_slice(entry.content_hash.as_bytes());
+        mac.update(&entry.sequence.to_le_bytes());
+        mac.update(entry.content_hash.as_bytes());
     }
-    AuthenticityHash::compute_keyed(session_key, &buf)
+    finish_authenticity_hash(mac)
 }
 
 // ---------------------------------------------------------------------------
@@ -1102,14 +1121,14 @@ impl BatchTransportState {
 
                 // Build receipt.
                 let receipt_hash = {
-                    let mut buf = Vec::new();
-                    buf.extend_from_slice(b"franken::batch_receipt::");
-                    buf.extend_from_slice(&batch.batch_id.to_le_bytes());
-                    buf.extend_from_slice(batch.session_id.as_bytes());
-                    buf.extend_from_slice(&batch.sequence_start.to_le_bytes());
-                    buf.extend_from_slice(&batch.sequence_end.to_le_bytes());
-                    buf.extend_from_slice(batch.batch_mac.as_bytes());
-                    ContentHash::compute(&buf)
+                    let mut hasher = Sha256::new();
+                    hasher.update(b"franken::batch_receipt::");
+                    hasher.update(batch.batch_id.to_le_bytes());
+                    hasher.update(batch.session_id.as_bytes());
+                    hasher.update(batch.sequence_start.to_le_bytes());
+                    hasher.update(batch.sequence_end.to_le_bytes());
+                    hasher.update(batch.batch_mac.as_bytes());
+                    finish_content_hash(hasher)
                 };
 
                 let receipt = BatchReceipt {
@@ -1947,6 +1966,66 @@ mod tests {
         let h1 = compute_entry_content_hash(1, &p, "t");
         let h2 = compute_entry_content_hash(1, &p, "t");
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn streamed_hash_construction_matches_canonical_preimages() {
+        let payload_bytes: Vec<u8> = (0..=255).cycle().take(8_192).collect();
+        let payload = BatchPayload::Inline(payload_bytes.clone());
+        let trace_id = "trace-streamed";
+        let entry_hash = compute_entry_content_hash(1, &payload, trace_id);
+
+        let mut entry_preimage = Vec::new();
+        entry_preimage.extend_from_slice(b"franken::batch_transport::entry::");
+        entry_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        entry_preimage.push(1);
+        entry_preimage.extend_from_slice(&(payload_bytes.len() as u64).to_le_bytes());
+        entry_preimage.extend_from_slice(&payload_bytes);
+        entry_preimage.extend_from_slice(trace_id.as_bytes());
+        assert_eq!(entry_hash, ContentHash::compute(&entry_preimage));
+
+        let entry = BatchEntry {
+            sequence: 1,
+            payload,
+            content_hash: entry_hash,
+            entry_mac: None,
+            trace_id: trace_id.into(),
+        };
+        let entries = vec![entry];
+        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+
+        let mut mac_preimage = Vec::new();
+        mac_preimage.extend_from_slice(b"franken::batch_transport::batch_mac::");
+        mac_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        mac_preimage.extend_from_slice(&test_epoch().as_u64().to_le_bytes());
+        mac_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        mac_preimage.extend_from_slice(entry_hash.as_bytes());
+        assert_eq!(
+            mac,
+            AuthenticityHash::compute_keyed(&session_key(), &mac_preimage)
+        );
+
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .expect("batch with one streamed-hash entry should build");
+        let batch_mac = batch.batch_mac;
+        let receipt = ts
+            .submit_batch(batch, &mut protocol, &session_key(), 100)
+            .expect("batch with canonical streamed hashes should submit");
+
+        let mut receipt_preimage = Vec::new();
+        receipt_preimage.extend_from_slice(b"franken::batch_receipt::");
+        receipt_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        receipt_preimage.extend_from_slice(b"test-sess");
+        receipt_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        receipt_preimage.extend_from_slice(&1_u64.to_le_bytes());
+        receipt_preimage.extend_from_slice(batch_mac.as_bytes());
+        assert_eq!(
+            receipt.batch_content_hash,
+            ContentHash::compute(&receipt_preimage)
+        );
     }
 
     // --- Submit tests ---

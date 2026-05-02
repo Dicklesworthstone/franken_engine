@@ -21,6 +21,11 @@ use sqlmodel::{Connection, Cx, Outcome, Session, SessionConfig, SessionDebugInfo
 use sqlmodel_core::error::ConfigError;
 use sqlmodel_frankensqlite::FrankenConnection;
 
+use crate::ifc_provenance_index::{DeclassReceiptRecord, FlowDecision, FlowEventRecord};
+use crate::replacement_lineage_log::{
+    DemotionReceiptRecord, LineageChainEntry, ReplacementReceiptRecord,
+};
+use crate::specialization_index::SpecializationRecord;
 use crate::storage_adapter::{
     BatchPutEntry, EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
 };
@@ -389,6 +394,493 @@ pub fn plan_typed_store_backfill<T: TypedStoreRecord>(
         model_name: T::MODEL_NAME.to_string(),
         decisions: records.iter().map(typed_backfill_decision::<T>).collect(),
     }
+}
+
+fn ensure_legacy_store(
+    record: &StoreRecord,
+    expected: StoreKind,
+    model_name: &str,
+) -> StorageResult<()> {
+    if record.store == expected {
+        return Ok(());
+    }
+    Err(StorageError::IntegrityViolation {
+        store: expected,
+        detail: format!(
+            "legacy mapper store mismatch for {model_name}: expected {expected}, got {}",
+            record.store
+        ),
+    })
+}
+
+fn ensure_legacy_typed_id(
+    typed_record_id: i64,
+    store: StoreKind,
+    model_name: &str,
+) -> StorageResult<i64> {
+    if typed_record_id >= 0 {
+        return Ok(typed_record_id);
+    }
+    Err(StorageError::InvalidKey {
+        key: format!(
+            "legacy-map/{}/{model_name}/{typed_record_id}",
+            store.as_str()
+        ),
+    })
+}
+
+fn offset_legacy_typed_id(
+    typed_record_id: i64,
+    offset: usize,
+    store: StoreKind,
+    model_name: &str,
+) -> StorageResult<i64> {
+    let offset = i64::try_from(offset).map_err(|_| StorageError::InvalidKey {
+        key: format!("legacy-map/{}/{model_name}/offset-{offset}", store.as_str()),
+    })?;
+    typed_record_id
+        .checked_add(offset)
+        .filter(|id| *id >= 0)
+        .ok_or_else(|| StorageError::InvalidKey {
+            key: format!(
+                "legacy-map/{}/{model_name}/{typed_record_id}+{offset}",
+                store.as_str()
+            ),
+        })
+}
+
+fn legacy_u64_to_i64(value: u64, store: StoreKind, field_name: &str) -> StorageResult<i64> {
+    i64::try_from(value).map_err(|_| StorageError::IntegrityViolation {
+        store,
+        detail: format!("legacy field `{field_name}` value {value} does not fit in i64"),
+    })
+}
+
+fn legacy_timestamp_ns_to_ms(
+    timestamp_ns: u64,
+    store: StoreKind,
+    field_name: &str,
+) -> StorageResult<i64> {
+    legacy_u64_to_i64(timestamp_ns / 1_000_000, store, field_name)
+}
+
+fn unsupported_legacy_record<T: TypedStoreRecord>(record: &StoreRecord) -> StorageError {
+    StorageError::IntegrityViolation {
+        store: T::STORE_KIND,
+        detail: format!(
+            "legacy key `{}` is not a lossless source for {}; explicit typed model or separate table required",
+            record.key,
+            T::MODEL_NAME
+        ),
+    }
+}
+
+fn legacy_deserialize<T>(record: &StoreRecord, source_record_type: &str) -> StorageResult<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_slice(&record.value).map_err(|err| StorageError::IntegrityViolation {
+        store: record.store,
+        detail: format!(
+            "failed to deserialize legacy {source_record_type} payload from `{}`: {err}",
+            record.key
+        ),
+    })
+}
+
+fn legacy_metadata_json<T: Serialize>(
+    record: &StoreRecord,
+    source_record_type: &str,
+    payload: &T,
+) -> StorageResult<String> {
+    let value_json =
+        std::str::from_utf8(&record.value).map_err(|err| StorageError::IntegrityViolation {
+            store: record.store,
+            detail: format!(
+                "legacy {source_record_type} payload for `{}` is not UTF-8 JSON: {err}",
+                record.key
+            ),
+        })?;
+    serde_json::to_string(&serde_json::json!({
+        "legacy_store": record.store.as_str(),
+        "legacy_key": record.key,
+        "legacy_revision": record.revision,
+        "legacy_metadata": record.metadata,
+        "legacy_record_type": source_record_type,
+        "legacy_value_json": value_json,
+        "legacy_payload": payload,
+    }))
+    .map_err(|err| StorageError::IntegrityViolation {
+        store: record.store,
+        detail: format!(
+            "failed to serialize lossless legacy metadata for `{}`: {err}",
+            record.key
+        ),
+    })
+}
+
+fn label_json<T: Serialize>(
+    store: StoreKind,
+    field_name: &str,
+    label: &T,
+) -> StorageResult<String> {
+    serde_json::to_string(label).map_err(|err| StorageError::IntegrityViolation {
+        store,
+        detail: format!("failed to serialize `{field_name}` as lossless label JSON: {err}"),
+    })
+}
+
+fn replacement_receipt_signature_json(record: &ReplacementReceiptRecord) -> StorageResult<String> {
+    serde_json::to_string(&record.receipt.signature_bundle).map_err(|err| {
+        StorageError::IntegrityViolation {
+            store: StoreKind::ReplacementLineage,
+            detail: format!(
+                "failed to serialize replacement receipt signature bundle for `{}`: {err}",
+                record.receipt_id
+            ),
+        }
+    })
+}
+
+fn replacement_integrity_ref_json(receipt_content_hash: &str) -> StorageResult<String> {
+    serde_json::to_string(&serde_json::json!({
+        "legacy_integrity_ref": "receipt_content_hash",
+        "receipt_content_hash": receipt_content_hash,
+    }))
+    .map_err(|err| StorageError::IntegrityViolation {
+        store: StoreKind::ReplacementLineage,
+        detail: format!("failed to serialize replacement integrity reference: {err}"),
+    })
+}
+
+fn map_legacy_replacement_receipt_record(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: ReplacementReceiptRecord,
+) -> StorageResult<ReplacementLineageEntry> {
+    Ok(ReplacementLineageEntry {
+        sequence_id: typed_record_id,
+        slot_id: record.slot_id.as_str().to_string(),
+        operation_type: record.replacement_kind.as_str().to_string(),
+        source_state: record.old_cell_digest.clone(),
+        target_state: record.new_cell_digest.clone(),
+        receipt_artifact_id: record.receipt_id.clone(),
+        receipt_signature: replacement_receipt_signature_json(&record)?,
+        timestamp_ms: legacy_timestamp_ns_to_ms(
+            record.promotion_timestamp_ns,
+            StoreKind::ReplacementLineage,
+            "promotion_timestamp_ns",
+        )?,
+        metadata_json: legacy_metadata_json(source, "replacement_receipt", &record)?,
+    })
+}
+
+fn map_legacy_demotion_receipt_record(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: DemotionReceiptRecord,
+) -> StorageResult<ReplacementLineageEntry> {
+    Ok(ReplacementLineageEntry {
+        sequence_id: typed_record_id,
+        slot_id: record.slot_id.as_str().to_string(),
+        operation_type: "demotion".to_string(),
+        source_state: record.demoted_cell_digest.clone(),
+        target_state: record.restored_cell_digest.clone(),
+        receipt_artifact_id: record.receipt_id.clone(),
+        receipt_signature: replacement_integrity_ref_json(&record.receipt_content_hash)?,
+        timestamp_ms: legacy_timestamp_ns_to_ms(
+            record.timestamp_ns,
+            StoreKind::ReplacementLineage,
+            "timestamp_ns",
+        )?,
+        metadata_json: legacy_metadata_json(source, "demotion_receipt", &record)?,
+    })
+}
+
+fn map_legacy_lineage_chain_entry(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: LineageChainEntry,
+) -> StorageResult<ReplacementLineageEntry> {
+    Ok(ReplacementLineageEntry {
+        sequence_id: typed_record_id,
+        slot_id: record.slot_id.as_str().to_string(),
+        operation_type: record.kind.as_str().to_string(),
+        source_state: record.from_cell_digest.clone(),
+        target_state: record.to_cell_digest.clone(),
+        receipt_artifact_id: record.receipt_id.clone(),
+        receipt_signature: replacement_integrity_ref_json(&record.receipt_content_hash)?,
+        timestamp_ms: legacy_timestamp_ns_to_ms(
+            record.timestamp_ns,
+            StoreKind::ReplacementLineage,
+            "timestamp_ns",
+        )?,
+        metadata_json: legacy_metadata_json(source, "lineage_chain", &record)?,
+    })
+}
+
+/// Explicit lossless mapper from supported legacy ReplacementLineage records.
+///
+/// Hash-pointer and evidence side-table rows are intentionally rejected because
+/// flattening them into lineage entries would invent missing lineage fields.
+pub fn map_legacy_replacement_lineage_record(
+    record: &StoreRecord,
+    typed_record_id: i64,
+) -> StorageResult<Vec<ReplacementLineageEntry>> {
+    ensure_legacy_store(
+        record,
+        StoreKind::ReplacementLineage,
+        ReplacementLineageEntry::MODEL_NAME,
+    )?;
+    let typed_record_id = ensure_legacy_typed_id(
+        typed_record_id,
+        StoreKind::ReplacementLineage,
+        ReplacementLineageEntry::MODEL_NAME,
+    )?;
+
+    let entry = if record.key.starts_with("replacement_receipts/") {
+        map_legacy_replacement_receipt_record(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "replacement_receipt")?,
+        )?
+    } else if record.key.starts_with("demotion_receipts/") {
+        map_legacy_demotion_receipt_record(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "demotion_receipt")?,
+        )?
+    } else if record.key.starts_with("lineage_chain/") {
+        map_legacy_lineage_chain_entry(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "lineage_chain")?,
+        )?
+    } else {
+        return Err(unsupported_legacy_record::<ReplacementLineageEntry>(record));
+    };
+    Ok(vec![entry])
+}
+
+fn map_legacy_ifc_flow_event(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: FlowEventRecord,
+) -> StorageResult<IfcProvenanceEntry> {
+    Ok(IfcProvenanceEntry {
+        provenance_id: typed_record_id,
+        source_label: label_json(
+            StoreKind::IfcProvenance,
+            "source_label",
+            &record.source_label,
+        )?,
+        target_label: label_json(
+            StoreKind::IfcProvenance,
+            "sink_clearance",
+            &record.sink_clearance,
+        )?,
+        edge_type: if matches!(record.decision, FlowDecision::Declassified) {
+            "declassification".to_string()
+        } else {
+            "flow_event".to_string()
+        },
+        flow_operation: format!("flow_event:{}", record.decision),
+        security_level: format!("source_level:{}", record.source_label.level()),
+        declassification_ref: record.receipt_ref.clone(),
+        timestamp_ms: legacy_u64_to_i64(
+            record.timestamp_ms,
+            StoreKind::IfcProvenance,
+            "timestamp_ms",
+        )?,
+        trace_id: record.event_id.clone(),
+        metadata_json: legacy_metadata_json(source, "ifc_flow_event", &record)?,
+    })
+}
+
+fn map_legacy_ifc_declass_receipt(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: DeclassReceiptRecord,
+) -> StorageResult<IfcProvenanceEntry> {
+    Ok(IfcProvenanceEntry {
+        provenance_id: typed_record_id,
+        source_label: label_json(
+            StoreKind::IfcProvenance,
+            "source_label",
+            &record.source_label,
+        )?,
+        target_label: label_json(
+            StoreKind::IfcProvenance,
+            "sink_clearance",
+            &record.sink_clearance,
+        )?,
+        edge_type: "declassification".to_string(),
+        flow_operation: format!("declass_receipt:{}", record.decision),
+        security_level: format!("source_level:{}", record.source_label.level()),
+        declassification_ref: Some(record.receipt_id.clone()),
+        timestamp_ms: legacy_u64_to_i64(
+            record.timestamp_ms,
+            StoreKind::IfcProvenance,
+            "timestamp_ms",
+        )?,
+        trace_id: record.receipt_id.clone(),
+        metadata_json: legacy_metadata_json(source, "ifc_declass_receipt", &record)?,
+    })
+}
+
+/// Explicit lossless mapper from supported legacy IFC provenance records.
+///
+/// Flow-proof and confinement-claim rows are rejected for this typed table
+/// because they do not carry timestamped source-to-sink provenance events.
+pub fn map_legacy_ifc_provenance_record(
+    record: &StoreRecord,
+    typed_record_id: i64,
+) -> StorageResult<Vec<IfcProvenanceEntry>> {
+    ensure_legacy_store(
+        record,
+        StoreKind::IfcProvenance,
+        IfcProvenanceEntry::MODEL_NAME,
+    )?;
+    let typed_record_id = ensure_legacy_typed_id(
+        typed_record_id,
+        StoreKind::IfcProvenance,
+        IfcProvenanceEntry::MODEL_NAME,
+    )?;
+
+    let entry = if record.key.starts_with("flow_event::") {
+        map_legacy_ifc_flow_event(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "ifc_flow_event")?,
+        )?
+    } else if record.key.starts_with("declass_receipt::") {
+        map_legacy_ifc_declass_receipt(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "ifc_declass_receipt")?,
+        )?
+    } else {
+        return Err(unsupported_legacy_record::<IfcProvenanceEntry>(record));
+    };
+    Ok(vec![entry])
+}
+
+fn map_legacy_specialization_receipt(
+    source: &StoreRecord,
+    typed_record_id: i64,
+    record: SpecializationRecord,
+) -> StorageResult<Vec<SpecializationIndexEntry>> {
+    if record.proof_input_ids.is_empty() {
+        return Err(StorageError::IntegrityViolation {
+            store: StoreKind::SpecializationIndex,
+            detail: format!(
+                "legacy specialization receipt `{}` has no proof inputs for typed proof_artifact_id mapping",
+                record.receipt_id.to_hex()
+            ),
+        });
+    }
+    if record.proof_input_ids.len() != record.proof_types.len() {
+        return Err(StorageError::IntegrityViolation {
+            store: StoreKind::SpecializationIndex,
+            detail: format!(
+                "legacy specialization receipt `{}` has {} proof ids but {} proof types",
+                record.receipt_id.to_hex(),
+                record.proof_input_ids.len(),
+                record.proof_types.len()
+            ),
+        });
+    }
+
+    let mut entries = Vec::with_capacity(record.proof_input_ids.len());
+    for (idx, (proof_id, proof_type)) in record
+        .proof_input_ids
+        .iter()
+        .zip(record.proof_types.iter())
+        .enumerate()
+    {
+        let specialization_id = offset_legacy_typed_id(
+            typed_record_id,
+            idx,
+            StoreKind::SpecializationIndex,
+            SpecializationIndexEntry::MODEL_NAME,
+        )?;
+        let metadata_json = serde_json::to_string(&serde_json::json!({
+            "legacy_mapping_ordinal": idx,
+            "legacy_current_proof_type": proof_type.to_string(),
+            "legacy_source": serde_json::from_str::<serde_json::Value>(
+                &legacy_metadata_json(source, "specialization_receipt", &record)?
+            ).map_err(|err| StorageError::IntegrityViolation {
+                store: StoreKind::SpecializationIndex,
+                detail: format!("failed to compose specialization legacy metadata: {err}"),
+            })?,
+        }))
+        .map_err(|err| StorageError::IntegrityViolation {
+            store: StoreKind::SpecializationIndex,
+            detail: format!(
+                "failed to serialize specialization typed metadata for `{}`: {err}",
+                source.key
+            ),
+        })?;
+
+        entries.push(SpecializationIndexEntry {
+            specialization_id,
+            proof_artifact_id: proof_id.to_hex(),
+            specialization_type: record.optimization_class.to_string(),
+            specialized_version: record.receipt_id.to_hex(),
+            status: if record.active {
+                "active".to_string()
+            } else {
+                "invalidated".to_string()
+            },
+            invalidation_timestamp_ms: None,
+            invalidation_reason: None,
+            security_epoch: legacy_u64_to_i64(
+                record.epoch.as_u64(),
+                StoreKind::SpecializationIndex,
+                "epoch",
+            )?,
+            created_timestamp_ms: legacy_timestamp_ns_to_ms(
+                record.timestamp_ns,
+                StoreKind::SpecializationIndex,
+                "timestamp_ns",
+            )?,
+            specialized_content_hash: record.receipt_id.to_hex(),
+            metadata_json,
+        });
+    }
+    Ok(entries)
+}
+
+/// Explicit lossless mapper from supported legacy SpecializationIndex records.
+///
+/// Benchmark and invalidation rows are intentionally rejected because they are
+/// side tables/events and cannot be represented as standalone specialization
+/// rows without fabricating proof and version fields.
+pub fn map_legacy_specialization_index_record(
+    record: &StoreRecord,
+    typed_record_id: i64,
+) -> StorageResult<Vec<SpecializationIndexEntry>> {
+    ensure_legacy_store(
+        record,
+        StoreKind::SpecializationIndex,
+        SpecializationIndexEntry::MODEL_NAME,
+    )?;
+    let typed_record_id = ensure_legacy_typed_id(
+        typed_record_id,
+        StoreKind::SpecializationIndex,
+        SpecializationIndexEntry::MODEL_NAME,
+    )?;
+
+    if record.key.starts_with("receipt:") {
+        return map_legacy_specialization_receipt(
+            record,
+            typed_record_id,
+            legacy_deserialize(record, "specialization_receipt")?,
+        );
+    }
+    Err(unsupported_legacy_record::<SpecializationIndexEntry>(
+        record,
+    ))
 }
 
 /// Convenience extension for storing typed SQLModel records through any adapter.
@@ -931,6 +1423,14 @@ impl TypedStoreRecord for SpecializationIndexEntry {
 #[allow(clippy::manual_async_fn)] // Mock trait impls must match sqlmodel_core::Connection signatures.
 mod tests {
     use super::*;
+    use crate::engine_object_id::{ObjectDomain, SchemaId, derive_id};
+    use crate::ifc_artifacts::{DeclassificationDecision, Label, ProofMethod};
+    use crate::ifc_provenance_index::{FlowDecision, FlowEventRecord, FlowProofRecord};
+    use crate::proof_specialization_receipt::{OptimizationClass, ProofType};
+    use crate::replacement_lineage_log::{LineageChainEntry, ReplacementKind};
+    use crate::security_epoch::SecurityEpoch;
+    use crate::slot_registry::SlotId;
+    use crate::specialization_index::SpecializationRecord;
     use crate::storage_adapter::InMemoryStorageAdapter;
     use sqlmodel::{FieldInfo, Model, Row, SqlType, Value};
     use sqlmodel_core::{
@@ -1019,6 +1519,30 @@ mod tests {
             metadata,
             revision: 1,
         }
+    }
+
+    fn legacy_json_record<T: Serialize>(store: StoreKind, key: &str, value: &T) -> StoreRecord {
+        StoreRecord {
+            store,
+            key: key.to_string(),
+            value: serde_json::to_vec(value).expect("legacy fixture serializes"),
+            metadata: BTreeMap::new(),
+            revision: 7,
+        }
+    }
+
+    fn test_slot_id(name: &str) -> SlotId {
+        SlotId::new(name).expect("valid slot id")
+    }
+
+    fn test_engine_object_id(seed: &[u8]) -> crate::engine_object_id::EngineObjectId {
+        derive_id(
+            ObjectDomain::EvidenceRecord,
+            "typed-persistence-test",
+            &SchemaId::from_definition(b"typed-persistence-test-schema"),
+            seed,
+        )
+        .expect("deterministic test object id")
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -1583,6 +2107,277 @@ mod tests {
         assert_eq!(
             entry.metadata.get("proof_artifact_id"),
             Some(&"proof-13".to_string())
+        );
+    }
+
+    #[test]
+    fn legacy_replacement_lineage_chain_maps_losslessly_and_rejects_hash_pointer() {
+        let chain = LineageChainEntry {
+            slot_id: test_slot_id("slot-alpha"),
+            timestamp_ns: 1_700_000_123_456_789,
+            receipt_id: "receipt-alpha".to_string(),
+            kind: ReplacementKind::DelegateToNative,
+            from_cell_digest: "delegate-digest".to_string(),
+            to_cell_digest: "native-digest".to_string(),
+            receipt_content_hash: "sha256:lineage".to_string(),
+        };
+        let source = legacy_json_record(
+            StoreKind::ReplacementLineage,
+            "lineage_chain/slot-alpha/00001700000123456789/receipt-alpha",
+            &chain,
+        );
+
+        let mapped = map_legacy_replacement_lineage_record(&source, 41)
+            .expect("lineage-chain rows are lossless lineage entries");
+        assert_eq!(mapped.len(), 1);
+        let entry = &mapped[0];
+        assert_eq!(entry.sequence_id, 41);
+        assert_eq!(entry.slot_id, "slot-alpha");
+        assert_eq!(entry.operation_type, "delegate_to_native");
+        assert_eq!(entry.source_state, "delegate-digest");
+        assert_eq!(entry.target_state, "native-digest");
+        assert_eq!(entry.receipt_artifact_id, "receipt-alpha");
+        assert_eq!(entry.timestamp_ms, 1_700_000_123);
+        assert!(entry.receipt_signature.contains("receipt_content_hash"));
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&entry.metadata_json).expect("lossless metadata is JSON");
+        assert_eq!(metadata["legacy_record_type"], "lineage_chain");
+        assert_eq!(metadata["legacy_key"], source.key);
+        assert_eq!(
+            metadata["legacy_payload"]["receipt_content_hash"],
+            "sha256:lineage"
+        );
+        assert!(
+            metadata["legacy_value_json"]
+                .as_str()
+                .expect("source JSON retained")
+                .contains("receipt-alpha")
+        );
+
+        let pointer = legacy_record(
+            StoreKind::ReplacementLineage,
+            "replacement_by_hash/sha256:lineage",
+            b"lineage_chain/slot-alpha/00001700000123456789/receipt-alpha",
+            BTreeMap::new(),
+        );
+        let err = map_legacy_replacement_lineage_record(&pointer, 42)
+            .expect_err("hash-pointer rows must not become fake lineage rows");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("separate table required"));
+    }
+
+    #[test]
+    fn legacy_replacement_demotion_receipt_maps_integrity_reference() {
+        let demotion = DemotionReceiptRecord {
+            receipt_id: "demotion-r1".to_string(),
+            slot_id: test_slot_id("slot-beta"),
+            demoted_cell_digest: "native-digest".to_string(),
+            restored_cell_digest: "delegate-digest".to_string(),
+            demotion_reason: "rollback guard tripped".to_string(),
+            timestamp_ns: 1_700_000_124_999_999,
+            rollback_token_used: "rollback-token".to_string(),
+            linked_replacement_receipt_id: Some("replacement-r1".to_string()),
+            receipt_content_hash: "sha256:demotion".to_string(),
+        };
+        let source = legacy_json_record(
+            StoreKind::ReplacementLineage,
+            "demotion_receipts/slot-beta/00001700000124999999/demotion-r1",
+            &demotion,
+        );
+
+        let mapped = map_legacy_replacement_lineage_record(&source, 43)
+            .expect("demotion receipt maps to a typed lineage row");
+        assert_eq!(mapped.len(), 1);
+        let entry = &mapped[0];
+        assert_eq!(entry.sequence_id, 43);
+        assert_eq!(entry.operation_type, "demotion");
+        assert_eq!(entry.source_state, "native-digest");
+        assert_eq!(entry.target_state, "delegate-digest");
+        assert_eq!(entry.receipt_artifact_id, "demotion-r1");
+        assert!(entry.receipt_signature.contains("sha256:demotion"));
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&entry.metadata_json).expect("lossless metadata is JSON");
+        assert_eq!(metadata["legacy_record_type"], "demotion_receipt");
+        assert_eq!(
+            metadata["legacy_payload"]["linked_replacement_receipt_id"],
+            "replacement-r1"
+        );
+    }
+
+    #[test]
+    fn legacy_ifc_flow_event_maps_label_json_and_rejects_proof_side_table() {
+        let source_label = Label::Custom {
+            name: "tenant-alpha/pii".to_string(),
+            level: 3,
+        };
+        let event = FlowEventRecord {
+            event_id: "flow-1".to_string(),
+            extension_id: "ext-a".to_string(),
+            source_label: source_label.clone(),
+            sink_clearance: Label::TopSecret,
+            flow_location: "module::emit".to_string(),
+            decision: FlowDecision::Declassified,
+            receipt_ref: Some("declass-r1".to_string()),
+            timestamp_ms: 1_700_000_222,
+        };
+        let source = legacy_json_record(StoreKind::IfcProvenance, "flow_event::flow-1", &event);
+
+        let mapped = map_legacy_ifc_provenance_record(&source, 51)
+            .expect("flow events are timestamped IFC provenance rows");
+        assert_eq!(mapped.len(), 1);
+        let entry = &mapped[0];
+        assert_eq!(entry.provenance_id, 51);
+        assert_eq!(
+            entry.source_label,
+            serde_json::to_string(&source_label).expect("label serializes")
+        );
+        assert_eq!(
+            entry.target_label,
+            serde_json::to_string(&Label::TopSecret).expect("label serializes")
+        );
+        assert_eq!(entry.edge_type, "declassification");
+        assert_eq!(entry.flow_operation, "flow_event:declassified");
+        assert_eq!(entry.security_level, "source_level:3");
+        assert_eq!(entry.declassification_ref.as_deref(), Some("declass-r1"));
+        assert_eq!(entry.timestamp_ms, 1_700_000_222);
+        assert_eq!(entry.trace_id, "flow-1");
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&entry.metadata_json).expect("lossless metadata is JSON");
+        assert_eq!(metadata["legacy_record_type"], "ifc_flow_event");
+        assert_eq!(metadata["legacy_payload"]["flow_location"], "module::emit");
+
+        let proof = FlowProofRecord {
+            proof_id: "proof-1".to_string(),
+            extension_id: "ext-a".to_string(),
+            source_label: Label::Secret,
+            sink_clearance: Label::TopSecret,
+            proof_method: ProofMethod::StaticAnalysis,
+            epoch_id: 9,
+        };
+        let proof_record =
+            legacy_json_record(StoreKind::IfcProvenance, "flow_proof::proof-1", &proof);
+        let err = map_legacy_ifc_provenance_record(&proof_record, 52)
+            .expect_err("proof rows lack timestamped event semantics for this table");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("separate table required"));
+    }
+
+    #[test]
+    fn legacy_ifc_declassification_receipt_maps_route_metadata() {
+        let receipt = DeclassReceiptRecord {
+            receipt_id: "declass-r2".to_string(),
+            extension_id: "ext-a".to_string(),
+            decision: DeclassificationDecision::Allow,
+            source_label: Label::Secret,
+            sink_clearance: Label::Public,
+            declassification_route_ref: "route-7".to_string(),
+            decision_contract_id: "contract-9".to_string(),
+            timestamp_ms: 1_700_000_555,
+        };
+        let source = legacy_json_record(
+            StoreKind::IfcProvenance,
+            "declass_receipt::declass-r2",
+            &receipt,
+        );
+
+        let mapped = map_legacy_ifc_provenance_record(&source, 53)
+            .expect("declassification receipts are timestamped IFC provenance rows");
+        assert_eq!(mapped.len(), 1);
+        let entry = &mapped[0];
+        assert_eq!(entry.provenance_id, 53);
+        assert_eq!(entry.edge_type, "declassification");
+        assert_eq!(entry.flow_operation, "declass_receipt:allow");
+        assert_eq!(entry.declassification_ref.as_deref(), Some("declass-r2"));
+        assert_eq!(entry.timestamp_ms, 1_700_000_555);
+        assert_eq!(entry.trace_id, "declass-r2");
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&entry.metadata_json).expect("lossless metadata is JSON");
+        assert_eq!(metadata["legacy_record_type"], "ifc_declass_receipt");
+        assert_eq!(
+            metadata["legacy_payload"]["declassification_route_ref"],
+            "route-7"
+        );
+        assert_eq!(
+            metadata["legacy_payload"]["decision_contract_id"],
+            "contract-9"
+        );
+    }
+
+    #[test]
+    fn legacy_specialization_receipt_splits_proofs_and_rejects_side_tables() {
+        let receipt_id = test_engine_object_id(b"specialization-receipt");
+        let proof_a = test_engine_object_id(b"proof-a");
+        let proof_b = test_engine_object_id(b"proof-b");
+        let receipt = SpecializationRecord {
+            receipt_id: receipt_id.clone(),
+            proof_input_ids: vec![proof_a.clone(), proof_b.clone()],
+            proof_types: vec![ProofType::FlowProof, ProofType::ReplayMotif],
+            optimization_class: OptimizationClass::IfcCheckElision,
+            extension_id: "ext-specialized".to_string(),
+            epoch: SecurityEpoch::from_raw(4),
+            timestamp_ns: 1_700_000_333_999_999,
+            active: true,
+        };
+        let source = legacy_json_record(
+            StoreKind::SpecializationIndex,
+            &format!("receipt:{}", receipt_id.to_hex()),
+            &receipt,
+        );
+
+        let mapped = map_legacy_specialization_index_record(&source, 61)
+            .expect("one specialization receipt maps to one row per proof input");
+        assert_eq!(mapped.len(), 2);
+        assert_eq!(mapped[0].specialization_id, 61);
+        assert_eq!(mapped[1].specialization_id, 62);
+        assert_eq!(mapped[0].proof_artifact_id, proof_a.to_hex());
+        assert_eq!(mapped[1].proof_artifact_id, proof_b.to_hex());
+        assert_eq!(mapped[0].specialization_type, "ifc_check_elision");
+        assert_eq!(mapped[0].specialized_version, receipt_id.to_hex());
+        assert_eq!(mapped[0].status, "active");
+        assert_eq!(mapped[0].security_epoch, 4);
+        assert_eq!(mapped[0].created_timestamp_ms, 1_700_000_333);
+        assert_eq!(mapped[0].specialized_content_hash, receipt_id.to_hex());
+
+        let metadata: serde_json::Value =
+            serde_json::from_str(&mapped[1].metadata_json).expect("lossless metadata is JSON");
+        assert_eq!(metadata["legacy_mapping_ordinal"], 1);
+        assert_eq!(metadata["legacy_current_proof_type"], "replay_motif");
+        assert_eq!(
+            metadata["legacy_source"]["legacy_payload"]["extension_id"],
+            "ext-specialized"
+        );
+
+        let invalidation = legacy_record(
+            StoreKind::SpecializationIndex,
+            "invalidation:receipt:123",
+            br#"{"receipt_id":"ignored"}"#,
+            BTreeMap::new(),
+        );
+        let err = map_legacy_specialization_index_record(&invalidation, 63)
+            .expect_err("invalidation rows are events, not standalone specialization rows");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("separate table required"));
+    }
+
+    #[test]
+    fn legacy_mapper_rejects_malformed_supported_json() {
+        let malformed = legacy_record(
+            StoreKind::IfcProvenance,
+            "flow_event::bad-json",
+            b"{not valid json}",
+            BTreeMap::new(),
+        );
+
+        let err = map_legacy_ifc_provenance_record(&malformed, 70)
+            .expect_err("malformed supported legacy rows fail closed");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(
+            err.to_string()
+                .contains("failed to deserialize legacy ifc_flow_event")
         );
     }
 

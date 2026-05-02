@@ -152,6 +152,7 @@ pub enum Statement {
     If(IfStatement),
     For(ForStatement),
     While(WhileStatement),
+    With(WithStatement),
     DoWhile(DoWhileStatement),
     Return(ReturnStatement),
     Throw(ThrowStatement),
@@ -176,6 +177,7 @@ impl Statement {
             Self::If(v) => &v.span,
             Self::For(v) => &v.span,
             Self::While(v) => &v.span,
+            Self::With(v) => &v.span,
             Self::DoWhile(v) => &v.span,
             Self::Return(v) => &v.span,
             Self::Throw(v) => &v.span,
@@ -248,6 +250,13 @@ impl Statement {
                     CanonicalValue::String("while".to_string()),
                 );
                 map.insert("payload".to_string(), while_stmt.canonical_value());
+            }
+            Self::With(with_stmt) => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("with".to_string()),
+                );
+                map.insert("payload".to_string(), with_stmt.canonical_value());
             }
             Self::DoWhile(do_while) => {
                 map.insert(
@@ -973,6 +982,23 @@ impl WhileStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
         map.insert("condition".to_string(), self.condition.canonical_value());
+        map.insert("body".to_string(), self.body.canonical_value());
+        map.insert("span".to_string(), self.span.canonical_value());
+        CanonicalValue::Map(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithStatement {
+    pub object: Expression,
+    pub body: Box<Statement>,
+    pub span: SourceSpan,
+}
+
+impl WithStatement {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+        map.insert("object".to_string(), self.object.canonical_value());
         map.insert("body".to_string(), self.body.canonical_value());
         map.insert("span".to_string(), self.span.canonical_value());
         CanonicalValue::Map(map)

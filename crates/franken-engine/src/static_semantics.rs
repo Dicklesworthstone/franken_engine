@@ -1119,6 +1119,19 @@ fn analyze_statement(
             state.scopes.push(for_of_scope);
             state.bindings.extend(for_of_bindings);
         }
+        Statement::With(with_stmt) => {
+            // Check the object expression
+            check_await_in_expression(state, &with_stmt.object, &with_stmt.span);
+            // Analyze the body statement
+            analyze_statement(
+                state,
+                &with_stmt.body,
+                scope_id,
+                bindings,
+                lexical_names,
+                var_names,
+            );
+        }
     }
 }
 

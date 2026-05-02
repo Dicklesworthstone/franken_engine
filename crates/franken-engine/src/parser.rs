@@ -21,7 +21,7 @@ use crate::ast::{
     ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
     ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
     ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement,
+    VariableDeclarator, WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -71,10 +71,11 @@ pub enum ParseErrorCode {
     InvalidUtf8,
     SourceTooLarge,
     BudgetExceeded,
+    StrictModeWithStatement,
 }
 
 impl ParseErrorCode {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::EmptySource,
         Self::InvalidGoal,
         Self::UnsupportedSyntax,
@@ -82,6 +83,7 @@ impl ParseErrorCode {
         Self::InvalidUtf8,
         Self::SourceTooLarge,
         Self::BudgetExceeded,
+        Self::StrictModeWithStatement,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -93,6 +95,7 @@ impl ParseErrorCode {
             Self::InvalidUtf8 => "invalid_utf8",
             Self::SourceTooLarge => "source_too_large",
             Self::BudgetExceeded => "budget_exceeded",
+            Self::StrictModeWithStatement => "strict_mode_with_statement",
         }
     }
 
@@ -105,6 +108,7 @@ impl ParseErrorCode {
             Self::InvalidUtf8 => "FE-PARSER-DIAG-INVALID-UTF8-0001",
             Self::SourceTooLarge => "FE-PARSER-DIAG-SOURCE-TOO-LARGE-0001",
             Self::BudgetExceeded => "FE-PARSER-DIAG-BUDGET-EXCEEDED-0001",
+            Self::StrictModeWithStatement => "FE-PARSER-DIAG-STRICT-MODE-WITH-STATEMENT-0001",
         }
     }
 
@@ -112,7 +116,9 @@ impl ParseErrorCode {
         match self {
             Self::EmptySource => ParseDiagnosticCategory::Input,
             Self::InvalidGoal => ParseDiagnosticCategory::Goal,
-            Self::UnsupportedSyntax => ParseDiagnosticCategory::Syntax,
+            Self::UnsupportedSyntax | Self::StrictModeWithStatement => {
+                ParseDiagnosticCategory::Syntax
+            }
             Self::IoReadFailed => ParseDiagnosticCategory::System,
             Self::InvalidUtf8 => ParseDiagnosticCategory::Encoding,
             Self::SourceTooLarge | Self::BudgetExceeded => ParseDiagnosticCategory::Resource,
@@ -124,9 +130,11 @@ impl ParseErrorCode {
             Self::IoReadFailed | Self::SourceTooLarge | Self::BudgetExceeded => {
                 ParseDiagnosticSeverity::Fatal
             }
-            Self::EmptySource | Self::InvalidGoal | Self::UnsupportedSyntax | Self::InvalidUtf8 => {
-                ParseDiagnosticSeverity::Error
-            }
+            Self::EmptySource
+            | Self::InvalidGoal
+            | Self::UnsupportedSyntax
+            | Self::InvalidUtf8
+            | Self::StrictModeWithStatement => ParseDiagnosticSeverity::Error,
         }
     }
 
@@ -141,6 +149,7 @@ impl ParseErrorCode {
             Self::IoReadFailed => "parser input could not be read",
             Self::InvalidUtf8 => "parser input is not valid UTF-8",
             Self::SourceTooLarge => "source length/offset exceeds supported limits",
+            Self::StrictModeWithStatement => "with statements are not allowed in strict mode",
             Self::BudgetExceeded => match budget_kind {
                 Some(ParseBudgetKind::SourceBytes) => "source byte budget exceeded",
                 Some(ParseBudgetKind::TokenCount) => "token budget exceeded",
@@ -1637,6 +1646,7 @@ fn statement_kind_label(statement: &Statement) -> &'static str {
         Statement::If(_) => "if",
         Statement::For(_) => "for",
         Statement::While(_) => "while",
+        Statement::With(_) => "with",
         Statement::DoWhile(_) => "do_while",
         Statement::Return(_) => "return",
         Statement::Throw(_) => "throw",
@@ -2104,6 +2114,8 @@ struct ParseExecutionContext<'a> {
     /// Current statement nesting depth (if/for/while/try/switch/function bodies).
     /// Guards against stack overflow from deeply nested statements.
     statement_depth: u64,
+    /// Whether the current parsing context is in strict mode.
+    strict_mode: bool,
 }
 
 impl<'a> ParseExecutionContext<'a> {
@@ -2429,6 +2441,7 @@ fn parse_source(
         token_count,
         max_recursion_observed: 0,
         statement_depth: 0,
+        strict_mode: false,
     };
 
     if source_bytes > options.budget.max_source_bytes {
@@ -2459,6 +2472,18 @@ fn parse_source(
 
     let logical_lines = merge_logical_lines(text);
     let mut statements = Vec::new();
+
+    // Check for "use strict" directive in the first statement of global scripts
+    if !logical_lines.is_empty() {
+        let first_line = &logical_lines[0];
+        for (_start, _end, text) in split_statement_segments(&first_line.text) {
+            let trimmed_text = text.trim();
+            if is_use_strict_directive(trimmed_text) {
+                context.strict_mode = true;
+            }
+            break; // Only check the very first statement
+        }
+    }
 
     for logical_line in &logical_lines {
         for (start_in_line, end_in_line, statement_text) in
@@ -2907,6 +2932,9 @@ fn parse_statement_inner(
     }
     if statement.starts_with("class ") || statement.starts_with("class{") {
         return self::parse_class_declaration(statement, span, context);
+    }
+    if statement.starts_with("with ") || statement.starts_with("with(") {
+        return self::parse_with_statement(statement, span, context);
     }
     if statement.starts_with('{') && statement.ends_with('}') {
         return self::parse_block_statement(statement, goal, span, context);
@@ -7022,13 +7050,44 @@ fn parse_body_statements(
     }
     let logical_lines = merge_logical_lines(trimmed);
     let mut stmts = Vec::new();
+
+    // Save the current strict mode state to restore later for nested scopes
+    let saved_strict_mode = context.strict_mode;
+
+    // Check for "use strict" directive in the first statement
+    if !logical_lines.is_empty() {
+        let first_line = &logical_lines[0];
+        for (_start, _end, text) in split_statement_segments(&first_line.text) {
+            let trimmed_text = text.trim();
+            if is_use_strict_directive(trimmed_text) {
+                context.strict_mode = true;
+            }
+            break; // Only check the very first statement
+        }
+    }
+
     for ll in &logical_lines {
         for (_start, _end, text) in split_statement_segments(&ll.text) {
             let inner_span = span.clone();
             stmts.push(parse_statement(text, goal, inner_span, context)?);
         }
     }
+
+    // Restore the previous strict mode state (for nested function contexts)
+    context.strict_mode = saved_strict_mode;
+
     Ok(stmts)
+}
+
+fn is_use_strict_directive(statement: &str) -> bool {
+    let trimmed = statement.trim();
+    // Check for "use strict" or 'use strict' directive
+    (trimmed == "\"use strict\";" ||
+     trimmed == "'use strict';" ||
+     trimmed == "\"use strict\"" ||
+     trimmed == "'use strict'") &&
+    // Ensure it's not a complex expression
+    !trimmed.contains('(') && !trimmed.contains('+') && !trimmed.contains('-')
 }
 
 fn parse_block_statement(
@@ -7426,6 +7485,42 @@ fn parse_while_statement(
     let body = parse_statement(rest.trim(), goal, span.clone(), context)?;
     Ok(Statement::While(WhileStatement {
         condition,
+        body: Box::new(body),
+        span,
+    }))
+}
+
+fn parse_with_statement(
+    statement: &str,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
+    // ES2020 §13.11.1: Early error check for strict mode
+    if context.strict_mode {
+        return Err(ParseError::new(
+            ParseErrorCode::StrictModeWithStatement,
+            "with statements are not allowed in strict mode",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
+
+    let after_with = statement
+        .strip_prefix("with")
+        .unwrap_or(statement)
+        .trim_start();
+    let (object_src, rest) = extract_balanced(after_with, '(', ')').ok_or_else(|| {
+        ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "with statement requires a parenthesized object expression",
+            context.source_label.to_string(),
+            Some(span.clone()),
+        )
+    })?;
+    let object = parse_expression(object_src.trim(), &span, context, 1)?;
+    let body = parse_statement(rest.trim(), ParseGoal::Script, span.clone(), context)?;
+    Ok(Statement::With(WithStatement {
+        object,
         body: Box::new(body),
         span,
     }))

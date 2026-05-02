@@ -89,6 +89,24 @@ fn validate_typed_record_metadata<T: TypedStoreRecord>(record: &StoreRecord) -> 
     )
 }
 
+fn typed_key_prefix(store: StoreKind) -> String {
+    format!("typed/{}/", store.as_str())
+}
+
+fn has_current_typed_format(record: &StoreRecord) -> bool {
+    record
+        .metadata
+        .get(TYPED_RECORD_FORMAT_KEY)
+        .is_some_and(|format| format == TYPED_RECORD_FORMAT_VALUE)
+}
+
+fn has_partial_typed_marker<T: TypedStoreRecord>(record: &StoreRecord) -> bool {
+    record.key.starts_with(&typed_key_prefix(T::STORE_KIND))
+        || record.metadata.contains_key(TYPED_MODEL_KEY)
+        || record.metadata.contains_key(TYPED_STORE_KIND_KEY)
+        || record.metadata.contains_key(TYPED_RECORD_ID_KEY)
+}
+
 /// Typed model boundary for records persisted through [`StorageAdapter`].
 ///
 /// This intentionally only accepts records produced by this typed boundary.
@@ -199,6 +217,174 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
             });
         }
         Ok(model)
+    }
+}
+
+/// Backfill classification for generic store rows seen during typed migration planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedBackfillStatus {
+    /// Row already uses the current typed StoreRecord envelope and can be replayed as typed data.
+    Ready,
+    /// Row is a legacy or non-current envelope that needs an explicit lossless domain mapper.
+    LegacyUnsupported,
+    /// Row is malformed, corrupt, or addressed to the wrong typed store.
+    Rejected,
+}
+
+/// Per-row typed backfill decision with structured, log-friendly details.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedBackfillDecision {
+    pub store: StoreKind,
+    pub key: String,
+    pub model_name: String,
+    pub status: TypedBackfillStatus,
+    pub typed_record_id: Option<i64>,
+    pub reason: String,
+    pub error_code: Option<String>,
+}
+
+/// Dry-run plan for migrating generic StoreRecord data into one typed SQLModel table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedBackfillPlan {
+    pub target_store: StoreKind,
+    pub model_name: String,
+    pub decisions: Vec<TypedBackfillDecision>,
+}
+
+impl TypedBackfillPlan {
+    /// Number of rows that already pass the typed boundary.
+    pub fn ready_count(&self) -> usize {
+        self.decisions
+            .iter()
+            .filter(|decision| decision.status == TypedBackfillStatus::Ready)
+            .count()
+    }
+
+    /// Number of rows requiring an explicit legacy-to-typed mapper.
+    pub fn legacy_unsupported_count(&self) -> usize {
+        self.decisions
+            .iter()
+            .filter(|decision| decision.status == TypedBackfillStatus::LegacyUnsupported)
+            .count()
+    }
+
+    /// Number of rows that must not be migrated without operator intervention.
+    pub fn rejected_count(&self) -> usize {
+        self.decisions
+            .iter()
+            .filter(|decision| decision.status == TypedBackfillStatus::Rejected)
+            .count()
+    }
+
+    /// True when one or more rows need store-specific lossless conversion logic.
+    pub fn requires_explicit_legacy_mapper(&self) -> bool {
+        self.legacy_unsupported_count() > 0
+    }
+
+    /// True only when every examined row can be replayed through the typed boundary.
+    pub fn all_ready(&self) -> bool {
+        !self.decisions.is_empty() && self.ready_count() == self.decisions.len()
+    }
+}
+
+fn typed_backfill_rejection<T: TypedStoreRecord>(
+    record: &StoreRecord,
+    reason: String,
+    error_code: Option<String>,
+) -> TypedBackfillDecision {
+    TypedBackfillDecision {
+        store: record.store,
+        key: record.key.clone(),
+        model_name: T::MODEL_NAME.to_string(),
+        status: TypedBackfillStatus::Rejected,
+        typed_record_id: None,
+        reason,
+        error_code,
+    }
+}
+
+fn typed_backfill_integrity_rejection<T: TypedStoreRecord>(
+    record: &StoreRecord,
+    detail: String,
+) -> TypedBackfillDecision {
+    let err = StorageError::IntegrityViolation {
+        store: T::STORE_KIND,
+        detail,
+    };
+    typed_backfill_rejection::<T>(record, err.to_string(), Some(err.code().to_string()))
+}
+
+fn typed_backfill_decision<T: TypedStoreRecord>(record: &StoreRecord) -> TypedBackfillDecision {
+    if record.store != T::STORE_KIND {
+        return typed_backfill_integrity_rejection::<T>(
+            record,
+            format!(
+                "backfill store mismatch for {}: expected {}, got {}",
+                T::MODEL_NAME,
+                T::STORE_KIND,
+                record.store
+            ),
+        );
+    }
+
+    if !has_current_typed_format(record) {
+        if has_partial_typed_marker::<T>(record) {
+            return typed_backfill_integrity_rejection::<T>(
+                record,
+                format!(
+                    "partial typed envelope for {} cannot be treated as legacy input",
+                    T::MODEL_NAME
+                ),
+            );
+        }
+
+        let reason = match record.metadata.get(TYPED_RECORD_FORMAT_KEY) {
+            Some(format) => format!(
+                "record format `{format}` is not `{TYPED_RECORD_FORMAT_VALUE}`; explicit lossless mapper required"
+            ),
+            None => "legacy or untyped StoreRecord lacks sqlmodel_rust typed metadata; explicit lossless mapper required".to_string(),
+        };
+        return TypedBackfillDecision {
+            store: record.store,
+            key: record.key.clone(),
+            model_name: T::MODEL_NAME.to_string(),
+            status: TypedBackfillStatus::LegacyUnsupported,
+            typed_record_id: None,
+            reason,
+            error_code: None,
+        };
+    }
+
+    match T::from_store_record(record) {
+        Ok(model) => TypedBackfillDecision {
+            store: record.store,
+            key: record.key.clone(),
+            model_name: T::MODEL_NAME.to_string(),
+            status: TypedBackfillStatus::Ready,
+            typed_record_id: Some(model.typed_record_id()),
+            reason: "typed record passed sqlmodel_rust boundary validation".to_string(),
+            error_code: None,
+        },
+        Err(err) => typed_backfill_rejection::<T>(
+            record,
+            format!("typed payload rejected: {err}"),
+            Some(err.code().to_string()),
+        ),
+    }
+}
+
+/// Build a dry-run typed backfill plan without mutating storage.
+///
+/// This intentionally does not auto-convert legacy records. Existing generic stores
+/// have store-specific payloads and keys, so a production backfill must provide an
+/// explicit lossless mapper before writing typed SQLModel rows.
+pub fn plan_typed_store_backfill<T: TypedStoreRecord>(
+    records: &[StoreRecord],
+) -> TypedBackfillPlan {
+    TypedBackfillPlan {
+        target_store: T::STORE_KIND,
+        model_name: T::MODEL_NAME.to_string(),
+        decisions: records.iter().map(typed_backfill_decision::<T>).collect(),
     }
 }
 
@@ -762,6 +948,21 @@ mod tests {
         }
     }
 
+    fn legacy_record(
+        store: StoreKind,
+        key: &str,
+        value: &'static [u8],
+        metadata: BTreeMap<String, String>,
+    ) -> StoreRecord {
+        StoreRecord {
+            store,
+            key: key.to_string(),
+            value: value.to_vec(),
+            metadata,
+            revision: 1,
+        }
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct NoopConnection;
 
@@ -1291,6 +1492,194 @@ mod tests {
             Some(&"proof-13".to_string())
         );
     }
+
+    #[test]
+    fn typed_backfill_plan_separates_ready_legacy_corrupt_and_wrong_store_records() {
+        let ready = replacement_entry(7)
+            .to_store_record(5)
+            .expect("typed record should serialize");
+        let ready_key = ready.key.clone();
+
+        let legacy = legacy_record(
+            StoreKind::ReplacementLineage,
+            "lineage_chain/slot-alpha/00000000000000000007/receipt-7",
+            br#"{"receipt_id":"receipt-7","slot_id":"slot-alpha"}"#,
+            BTreeMap::from([("table".to_string(), "lineage_chain".to_string())]),
+        );
+        let legacy_key = legacy.key.clone();
+
+        let mut corrupt = replacement_entry(8)
+            .to_store_record(6)
+            .expect("typed record should serialize");
+        corrupt.value = b"{not json}".to_vec();
+        let corrupt_key = corrupt.key.clone();
+
+        let wrong_store = ifc_entry(11, "trace-ifc")
+            .to_store_record(7)
+            .expect("typed record should serialize");
+        let wrong_store_key = wrong_store.key.clone();
+
+        let plan = plan_typed_store_backfill::<ReplacementLineageEntry>(&[
+            ready,
+            legacy,
+            corrupt,
+            wrong_store,
+        ]);
+
+        assert_eq!(plan.target_store, StoreKind::ReplacementLineage);
+        assert_eq!(plan.model_name, "ReplacementLineageEntry");
+        assert_eq!(plan.ready_count(), 1);
+        assert_eq!(plan.legacy_unsupported_count(), 1);
+        assert_eq!(plan.rejected_count(), 2);
+        assert!(plan.requires_explicit_legacy_mapper());
+        assert!(!plan.all_ready());
+
+        let ready_decision = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.key == ready_key)
+            .expect("ready typed row is present");
+        assert_eq!(ready_decision.status, TypedBackfillStatus::Ready);
+        assert_eq!(ready_decision.typed_record_id, Some(7));
+        assert!(ready_decision.error_code.is_none());
+
+        let legacy_decision = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.key == legacy_key)
+            .expect("legacy row is present");
+        assert_eq!(
+            legacy_decision.status,
+            TypedBackfillStatus::LegacyUnsupported
+        );
+        assert!(legacy_decision.typed_record_id.is_none());
+        assert!(legacy_decision.error_code.is_none());
+        assert!(
+            legacy_decision
+                .reason
+                .contains("explicit lossless mapper required"),
+            "legacy records must not be coerced implicitly: {legacy_decision:#?}"
+        );
+
+        let corrupt_decision = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.key == corrupt_key)
+            .expect("corrupt typed row is present");
+        assert_eq!(corrupt_decision.status, TypedBackfillStatus::Rejected);
+        assert_eq!(corrupt_decision.error_code.as_deref(), Some("FE-STOR-0007"));
+        assert!(corrupt_decision.reason.contains("typed payload rejected"));
+
+        let wrong_store_decision = plan
+            .decisions
+            .iter()
+            .find(|decision| decision.key == wrong_store_key)
+            .expect("wrong-store row is present");
+        assert_eq!(wrong_store_decision.status, TypedBackfillStatus::Rejected);
+        assert_eq!(
+            wrong_store_decision.error_code.as_deref(),
+            Some("FE-STOR-0007")
+        );
+        assert!(
+            wrong_store_decision
+                .reason
+                .contains("backfill store mismatch")
+        );
+
+        let json = serde_json::to_string(&plan).expect("backfill plan is loggable JSON");
+        assert!(json.contains("\"status\":\"LegacyUnsupported\""));
+        assert!(json.contains("\"error_code\":\"FE-STOR-0007\""));
+    }
+
+    #[test]
+    fn typed_backfill_plan_rejects_partial_typed_envelopes() {
+        let partial = legacy_record(
+            StoreKind::ReplacementLineage,
+            "typed/replacement_lineage/00000000000000000009",
+            br#"{"sequence":9,"kind":"legacy"}"#,
+            BTreeMap::new(),
+        );
+
+        let plan = plan_typed_store_backfill::<ReplacementLineageEntry>(&[partial]);
+
+        assert_eq!(plan.ready_count(), 0);
+        assert_eq!(plan.legacy_unsupported_count(), 0);
+        assert_eq!(plan.rejected_count(), 1);
+        assert!(!plan.requires_explicit_legacy_mapper());
+        assert_eq!(plan.decisions[0].status, TypedBackfillStatus::Rejected);
+        assert_eq!(
+            plan.decisions[0].error_code.as_deref(),
+            Some("FE-STOR-0007")
+        );
+        assert!(
+            plan.decisions[0].reason.contains("partial typed envelope"),
+            "typed-looking rows without complete metadata are corrupt, not legacy: {:#?}",
+            plan.decisions[0]
+        );
+    }
+
+    #[test]
+    fn typed_backfill_plan_marks_domain_legacy_prefixes_as_mapper_required() {
+        let ifc_legacy = legacy_record(
+            StoreKind::IfcProvenance,
+            "flow_event::ev-1",
+            br#"{"event_id":"ev-1","extension_id":"ext-a"}"#,
+            BTreeMap::new(),
+        );
+        let ifc_plan = plan_typed_store_backfill::<IfcProvenanceEntry>(&[ifc_legacy]);
+        assert_eq!(ifc_plan.ready_count(), 0);
+        assert_eq!(ifc_plan.legacy_unsupported_count(), 1);
+        assert_eq!(ifc_plan.rejected_count(), 0);
+        assert!(ifc_plan.requires_explicit_legacy_mapper());
+        assert_eq!(
+            ifc_plan.decisions[0].status,
+            TypedBackfillStatus::LegacyUnsupported
+        );
+
+        let specialization_legacy = legacy_record(
+            StoreKind::SpecializationIndex,
+            "receipt:proof-13",
+            br#"{"receipt_id":"proof-13","active":true}"#,
+            BTreeMap::new(),
+        );
+        let specialization_plan =
+            plan_typed_store_backfill::<SpecializationIndexEntry>(&[specialization_legacy]);
+        assert_eq!(specialization_plan.ready_count(), 0);
+        assert_eq!(specialization_plan.legacy_unsupported_count(), 1);
+        assert_eq!(specialization_plan.rejected_count(), 0);
+        assert!(specialization_plan.requires_explicit_legacy_mapper());
+        assert!(
+            specialization_plan.decisions[0]
+                .reason
+                .contains("explicit lossless mapper required")
+        );
+    }
+
+    #[test]
+    fn typed_backfill_plan_all_ready_when_every_row_is_current_typed_format() {
+        let rows = vec![
+            ifc_entry(11, "trace-ifc")
+                .to_store_record(1)
+                .expect("typed record serializes"),
+            ifc_entry(12, "trace-ifc")
+                .to_store_record(2)
+                .expect("typed record serializes"),
+        ];
+
+        let plan = plan_typed_store_backfill::<IfcProvenanceEntry>(&rows);
+
+        assert_eq!(plan.ready_count(), 2);
+        assert_eq!(plan.legacy_unsupported_count(), 0);
+        assert_eq!(plan.rejected_count(), 0);
+        assert!(plan.all_ready());
+        assert_eq!(
+            plan.decisions
+                .iter()
+                .map(|decision| decision.typed_record_id)
+                .collect::<Vec<_>>(),
+            vec![Some(11), Some(12)]
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,7 +1687,8 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 // TODO: Implement SQLModel session management for typed store operations
-// TODO: Add explicit migration/backfill support for legacy generic StoreRecord data
+// ✓ DONE: Add explicit typed backfill dry-run planning for legacy generic StoreRecord data
+// TODO: Add store-specific lossless legacy-to-typed backfill mappers
 // ✓ DONE: Add typed StoreRecord boundaries and StorageAdapter extension methods
 // TODO: Add validation rules for each model (foreign keys, constraints)
 // ✓ DONE: Implement query builders for common access patterns

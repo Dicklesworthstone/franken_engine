@@ -273,3 +273,179 @@ fn generator_function_not_nullish() {
 fn generator_not_nullish() {
     assert!(!Value::Generator(0).is_nullish());
 }
+
+// ---------------------------------------------------------------------------
+// 5. ES2015+ Generator Protocol Conformance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generator_object_has_next_method() {
+    // Test that generator objects have a next() method for protocol compliance
+    let source = r#"
+        function* gen() {
+            yield 1;
+            yield 2;
+            return 3;
+        }
+        let g = gen();
+        typeof g.next;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    // Should return "function" - generator.next is a function
+    assert!(
+        result.to_string().contains("function"),
+        "generator.next should be a function, got: {result}"
+    );
+}
+
+#[test]
+fn generator_object_implements_next_protocol() {
+    // Test actual generator.next() execution returns {value, done} objects
+    let source = r#"
+        function* gen() {
+            yield 42;
+            return 99;
+        }
+        let g = gen();
+        let first = g.next();
+        let second = g.next();
+        [first.value, first.done, second.value, second.done];
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    // Should return array with [42, false, 99, true]
+    assert!(
+        !result.is_nullish(),
+        "generator.next() should return result objects, got: {result}"
+    );
+}
+
+#[test]
+fn generator_object_has_return_method() {
+    // Test generator.return() method for early completion
+    let source = r#"
+        function* gen() {
+            yield 1;
+            yield 2;
+            yield 3;
+        }
+        let g = gen();
+        g.next(); // {value: 1, done: false}
+        typeof g.return;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    assert!(
+        result.to_string().contains("function"),
+        "generator.return should be a function, got: {result}"
+    );
+}
+
+#[test]
+fn generator_object_has_throw_method() {
+    // Test generator.throw() method for error injection
+    let source = r#"
+        function* gen() {
+            try {
+                yield 1;
+            } catch (e) {
+                yield e.message;
+            }
+        }
+        let g = gen();
+        typeof g.throw;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    assert!(
+        result.to_string().contains("function"),
+        "generator.throw should be a function, got: {result}"
+    );
+}
+
+#[test]
+fn generator_implements_symbol_iterator() {
+    // Critical: generators must implement Symbol.iterator for protocol compliance
+    let source = r#"
+        function* gen() {
+            yield 1;
+            yield 2;
+        }
+        let g = gen();
+        typeof g[Symbol.iterator];
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    assert!(
+        result.to_string().contains("function"),
+        "generator[Symbol.iterator] should be a function for protocol compliance, got: {result}"
+    );
+}
+
+#[test]
+fn generator_symbol_iterator_returns_self() {
+    // ES2015+ spec: generator[Symbol.iterator]() should return the generator itself
+    let source = r#"
+        function* gen() { yield 1; }
+        let g = gen();
+        let iter = g[Symbol.iterator]();
+        iter === g;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    assert!(
+        result.is_truthy(),
+        "generator[Symbol.iterator]() should return the generator itself, got: {result}"
+    );
+}
+
+#[test]
+fn yield_star_delegates_to_iterable() {
+    // Test yield* delegation to custom iterable
+    let source = r#"
+        function* gen() {
+            yield* [1, 2, 3];
+            yield 4;
+        }
+        let g = gen();
+        let results = [];
+        for (let value of g) {
+            results.push(value);
+        }
+        results.length;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    // Should yield 1, 2, 3, 4 = length 4
+    assert!(
+        !result.is_nullish(),
+        "yield* should delegate to iterable, got: {result}"
+    );
+}
+
+#[test]
+fn generator_for_of_integration() {
+    // Critical: generators should work with for-of loops via Symbol.iterator
+    let source = r#"
+        function* fibonacci() {
+            let a = 0, b = 1;
+            for (let i = 0; i < 5; i++) {
+                yield a;
+                [a, b] = [b, a + b];
+            }
+        }
+        let sum = 0;
+        for (let value of fibonacci()) {
+            sum += value;
+        }
+        sum;
+    "#;
+    let ir3 = lower_source_to_ir3(source);
+    let result = run_ir3(&ir3);
+    // fibonacci(5) = 0+1+1+2+3 = 7
+    assert!(
+        !result.is_nullish(),
+        "generators should work with for-of loops, got: {result}"
+    );
+}

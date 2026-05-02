@@ -164,7 +164,7 @@ run_test_mode() {
   run_step "frankensqlite_enrichment" "frankensqlite" \
     "cargo test -p frankenengine-engine --test storage_adapter_enrichment_integration" \
     cargo test -p frankenengine-engine --test storage_adapter_enrichment_integration
-  run_step "fastapi_service_endpoints" "fastapi_rust" \
+  run_step "fastapi_service_endpoints_adapted_fastapi_core" "fastapi_rust" \
     "cargo test -p frankenengine-engine --test service_endpoint_template_integration" \
     cargo test -p frankenengine-engine --test service_endpoint_template_integration
   run_step "sqlmodel_boundary" "sqlmodel_rust" \

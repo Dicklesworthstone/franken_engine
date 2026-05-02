@@ -1,4 +1,4 @@
-//! Service endpoint integration template aligned to `fastapi_rust` conventions.
+//! Service endpoint integration template backed by adapted `fastapi_rust` contracts.
 //!
 //! This module defines framework-agnostic request/response envelopes for
 //! service surfaces that FrankenEngine exposes to operators and automation:
@@ -7,18 +7,246 @@
 //! - evidence export
 //! - replay control
 //!
-//! The goal is to keep endpoint contracts deterministic and easy to bind to a
-//! concrete transport layer while preserving stable structured-log fields.
+//! Engine-domain payloads stay transport-neutral, but the public route contract
+//! and serialized HTTP response adapter use `/dp/fastapi_rust/crates/fastapi-core`
+//! request/response primitives directly. That keeps the service/API boundary
+//! tied to the sibling framework without forcing runtime internals to become
+//! HTTP handlers.
 
 use std::collections::BTreeMap;
 
+use fastapi_core::{
+    Method as FastapiMethod, Request as FastapiRequest, Response as FastapiResponse,
+    ResponseBody as FastapiResponseBody, StatusCode as FastapiStatusCode,
+};
 use serde::{Deserialize, Serialize};
+
+pub const FASTAPI_RUST_ADR: &str = "docs/adr/ADR-0002-fastapi-rust-reuse-scope.md";
+pub const FASTAPI_RUST_BOUNDARY: &str = "/dp/fastapi_rust/crates/fastapi-core";
 
 pub const SCOPE_HEALTH_READ: &str = "engine.health.read";
 pub const SCOPE_CONTROL_WRITE: &str = "engine.control.write";
 pub const SCOPE_EVIDENCE_READ: &str = "engine.evidence.read";
 pub const SCOPE_REPLAY_READ: &str = "engine.replay.read";
 pub const SCOPE_REPLAY_WRITE: &str = "engine.replay.write";
+
+const FASTAPI_REQUEST_COMPONENT: &str = "fastapi_core::Request";
+const FASTAPI_RESPONSE_COMPONENT: &str = "fastapi_core::Response";
+const FASTAPI_STATUS_COMPONENT: &str = "fastapi_core::StatusCode";
+const FASTAPI_METHOD_COMPONENT: &str = "fastapi_core::Method";
+const FASTAPI_JSON_COMPONENT: &str = "fastapi_core::ResponseBody::Bytes";
+const FASTAPI_AUTH_COMPONENT: &str = "fastapi_core::middleware::Middleware";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FastapiEndpointFamily {
+    Health,
+    ControlAction,
+    EvidenceExport,
+    ReplayControl,
+}
+
+impl FastapiEndpointFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Health => "health",
+            Self::ControlAction => "control_action",
+            Self::EvidenceExport => "evidence_export",
+            Self::ReplayControl => "replay_control",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastapiEndpointContract {
+    pub family: FastapiEndpointFamily,
+    pub endpoint: &'static str,
+    pub method: FastapiMethod,
+    pub path: &'static str,
+    pub required_scope: &'static str,
+    pub component_refs: &'static [&'static str],
+}
+
+impl FastapiEndpointContract {
+    pub fn method_name(&self) -> &'static str {
+        self.method.as_str()
+    }
+
+    pub fn matches_request(&self, request: &FastapiRequest) -> bool {
+        request.method() == self.method && request.path() == self.path
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastapiEndpointEvidence {
+    pub family: String,
+    pub endpoint: String,
+    pub method: String,
+    pub path: String,
+    pub required_scope: String,
+    pub backed_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FastapiReuseEvidence {
+    pub boundary: String,
+    pub repo_path: String,
+    pub adr: String,
+    pub proof_state: String,
+    pub components: Vec<String>,
+    pub endpoints: Vec<FastapiEndpointEvidence>,
+}
+
+pub fn fastapi_endpoint_contracts() -> Vec<FastapiEndpointContract> {
+    vec![
+        FastapiEndpointContract {
+            family: FastapiEndpointFamily::Health,
+            endpoint: "health",
+            method: FastapiMethod::Get,
+            path: "/v1/engine/health",
+            required_scope: SCOPE_HEALTH_READ,
+            component_refs: &[
+                FASTAPI_REQUEST_COMPONENT,
+                FASTAPI_RESPONSE_COMPONENT,
+                FASTAPI_STATUS_COMPONENT,
+            ],
+        },
+        FastapiEndpointContract {
+            family: FastapiEndpointFamily::ControlAction,
+            endpoint: "control_action",
+            method: FastapiMethod::Post,
+            path: "/v1/engine/control/actions",
+            required_scope: SCOPE_CONTROL_WRITE,
+            component_refs: &[
+                FASTAPI_REQUEST_COMPONENT,
+                FASTAPI_RESPONSE_COMPONENT,
+                FASTAPI_AUTH_COMPONENT,
+            ],
+        },
+        FastapiEndpointContract {
+            family: FastapiEndpointFamily::EvidenceExport,
+            endpoint: "evidence_export",
+            method: FastapiMethod::Get,
+            path: "/v1/engine/evidence",
+            required_scope: SCOPE_EVIDENCE_READ,
+            component_refs: &[
+                FASTAPI_REQUEST_COMPONENT,
+                FASTAPI_RESPONSE_COMPONENT,
+                FASTAPI_JSON_COMPONENT,
+            ],
+        },
+        FastapiEndpointContract {
+            family: FastapiEndpointFamily::ReplayControl,
+            endpoint: "replay_status",
+            method: FastapiMethod::Get,
+            path: "/v1/engine/replay/status",
+            required_scope: SCOPE_REPLAY_READ,
+            component_refs: &[
+                FASTAPI_REQUEST_COMPONENT,
+                FASTAPI_RESPONSE_COMPONENT,
+                FASTAPI_STATUS_COMPONENT,
+            ],
+        },
+        FastapiEndpointContract {
+            family: FastapiEndpointFamily::ReplayControl,
+            endpoint: "replay_control",
+            method: FastapiMethod::Post,
+            path: "/v1/engine/replay/control",
+            required_scope: SCOPE_REPLAY_WRITE,
+            component_refs: &[
+                FASTAPI_REQUEST_COMPONENT,
+                FASTAPI_RESPONSE_COMPONENT,
+                FASTAPI_STATUS_COMPONENT,
+            ],
+        },
+    ]
+}
+
+pub fn match_fastapi_request(request: &FastapiRequest) -> Option<FastapiEndpointContract> {
+    fastapi_endpoint_contracts()
+        .into_iter()
+        .find(|contract| contract.matches_request(request))
+}
+
+pub fn fastapi_reuse_evidence() -> FastapiReuseEvidence {
+    FastapiReuseEvidence {
+        boundary: "fastapi_rust".to_string(),
+        repo_path: FASTAPI_RUST_BOUNDARY.to_string(),
+        adr: FASTAPI_RUST_ADR.to_string(),
+        proof_state: "adapted_fastapi_core_contracts".to_string(),
+        components: vec![
+            FASTAPI_REQUEST_COMPONENT.to_string(),
+            FASTAPI_RESPONSE_COMPONENT.to_string(),
+            FASTAPI_STATUS_COMPONENT.to_string(),
+            FASTAPI_METHOD_COMPONENT.to_string(),
+            FASTAPI_AUTH_COMPONENT.to_string(),
+        ],
+        endpoints: fastapi_endpoint_contracts()
+            .into_iter()
+            .map(|contract| FastapiEndpointEvidence {
+                family: contract.family.as_str().to_string(),
+                endpoint: contract.endpoint.to_string(),
+                method: contract.method_name().to_string(),
+                path: contract.path.to_string(),
+                required_scope: contract.required_scope.to_string(),
+                backed_by: contract
+                    .component_refs
+                    .iter()
+                    .map(|component| (*component).to_string())
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+pub fn validate_fastapi_reuse_evidence() -> Result<(), EndpointFailure> {
+    let evidence = fastapi_reuse_evidence();
+    if evidence.boundary != "fastapi_rust"
+        || evidence.repo_path != FASTAPI_RUST_BOUNDARY
+        || evidence.proof_state != "adapted_fastapi_core_contracts"
+    {
+        return Err(EndpointFailure::new(
+            "fastapi_reuse_invalid",
+            "fastapi_rust reuse evidence must declare adapted fastapi_core contracts",
+        ));
+    }
+    for required in [
+        FASTAPI_REQUEST_COMPONENT,
+        FASTAPI_RESPONSE_COMPONENT,
+        FASTAPI_STATUS_COMPONENT,
+        FASTAPI_METHOD_COMPONENT,
+    ] {
+        if !evidence
+            .components
+            .iter()
+            .any(|component| component == required)
+        {
+            return Err(EndpointFailure::new(
+                "fastapi_reuse_missing_component",
+                format!("missing {required}"),
+            ));
+        }
+    }
+    for family in [
+        FastapiEndpointFamily::Health,
+        FastapiEndpointFamily::ControlAction,
+        FastapiEndpointFamily::EvidenceExport,
+        FastapiEndpointFamily::ReplayControl,
+    ] {
+        let family_name = family.as_str();
+        if !evidence
+            .endpoints
+            .iter()
+            .any(|endpoint| endpoint.family == family_name && !endpoint.backed_by.is_empty())
+        {
+            return Err(EndpointFailure::new(
+                "fastapi_reuse_missing_endpoint_family",
+                format!("missing adapted fastapi_rust endpoint family {family_name}"),
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Shared request context populated by transport adapters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +305,18 @@ pub struct EndpointResponse<T> {
     pub log: StructuredLogEvent,
 }
 
+impl<T> EndpointResponse<T> {
+    pub fn fastapi_status(&self) -> FastapiStatusCode {
+        fastapi_status_for_endpoint_response(self)
+    }
+}
+
+impl<T: Serialize> EndpointResponse<T> {
+    pub fn to_fastapi_response(&self) -> Result<FastapiResponse, serde_json::Error> {
+        endpoint_response_to_fastapi(self)
+    }
+}
+
 /// Framework-agnostic failure returned from backend providers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointFailure {
@@ -93,6 +333,36 @@ impl EndpointFailure {
             details: BTreeMap::new(),
         }
     }
+}
+
+pub fn fastapi_status_for_endpoint_response<T>(
+    response: &EndpointResponse<T>,
+) -> FastapiStatusCode {
+    if response.error.is_none() && response.status == "ok" {
+        return FastapiStatusCode::OK;
+    }
+
+    match response
+        .error
+        .as_ref()
+        .map(|error| error.error_code.as_str())
+    {
+        Some("unauthorized") => FastapiStatusCode::UNAUTHORIZED,
+        Some("invalid_request") => FastapiStatusCode::BAD_REQUEST,
+        Some("not_found") => FastapiStatusCode::NOT_FOUND,
+        Some("timeout") => FastapiStatusCode::GATEWAY_TIMEOUT,
+        Some("unavailable") => FastapiStatusCode::SERVICE_UNAVAILABLE,
+        _ => FastapiStatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+pub fn endpoint_response_to_fastapi<T: Serialize>(
+    response: &EndpointResponse<T>,
+) -> Result<FastapiResponse, serde_json::Error> {
+    let bytes = serde_json::to_vec(response)?;
+    Ok(FastapiResponse::with_status(response.fastapi_status())
+        .header("content-type", b"application/json".to_vec())
+        .body(FastapiResponseBody::Bytes(bytes)))
 }
 
 /// Health endpoint payload.
@@ -669,6 +939,99 @@ mod tests {
             MockEvidenceProvider,
             MockReplayController,
         )
+    }
+
+    #[test]
+    fn fastapi_reuse_evidence_is_adapted_and_complete() {
+        validate_fastapi_reuse_evidence().expect("fastapi reuse evidence");
+        let evidence = fastapi_reuse_evidence();
+
+        assert_eq!(evidence.boundary, "fastapi_rust");
+        assert_eq!(evidence.repo_path, FASTAPI_RUST_BOUNDARY);
+        assert_eq!(evidence.proof_state, "adapted_fastapi_core_contracts");
+        assert!(
+            evidence
+                .components
+                .iter()
+                .any(|component| component == FASTAPI_RESPONSE_COMPONENT)
+        );
+        for family in [
+            "health",
+            "control_action",
+            "evidence_export",
+            "replay_control",
+        ] {
+            assert!(
+                evidence
+                    .endpoints
+                    .iter()
+                    .any(|endpoint| endpoint.family == family),
+                "missing endpoint family {family}"
+            );
+        }
+    }
+
+    #[test]
+    fn fastapi_route_contracts_match_core_requests() {
+        let health_request = FastapiRequest::new(FastapiMethod::Get, "/v1/engine/health");
+        let control_request =
+            FastapiRequest::new(FastapiMethod::Post, "/v1/engine/control/actions");
+        let miss_request = FastapiRequest::new(FastapiMethod::Delete, "/v1/engine/health");
+
+        let health = match_fastapi_request(&health_request).expect("health route");
+        assert_eq!(health.endpoint, "health");
+        assert_eq!(health.required_scope, SCOPE_HEALTH_READ);
+        assert_eq!(health.method_name(), "GET");
+
+        let control = match_fastapi_request(&control_request).expect("control route");
+        assert_eq!(control.endpoint, "control_action");
+        assert_eq!(control.required_scope, SCOPE_CONTROL_WRITE);
+        assert_eq!(control.method_name(), "POST");
+
+        assert!(match_fastapi_request(&miss_request).is_none());
+    }
+
+    #[test]
+    fn endpoint_response_serializes_through_fastapi_core_response() {
+        let calls = Rc::new(Cell::new(0));
+        let template = template(calls);
+        let response =
+            template.health_endpoint(&auth_with_scopes(&[SCOPE_HEALTH_READ]), &context());
+
+        let fastapi_response = response.to_fastapi_response().expect("fastapi response");
+        assert_eq!(fastapi_response.status(), FastapiStatusCode::OK);
+        assert!(fastapi_response.headers().iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type") && value == b"application/json"
+        }));
+        let FastapiResponseBody::Bytes(body) = fastapi_response.body_ref() else {
+            panic!("expected JSON bytes body");
+        };
+        let json: serde_json::Value = serde_json::from_slice(body).expect("json body");
+        assert_eq!(json["endpoint"], "health");
+        assert_eq!(json["log"]["event"], "health.read");
+    }
+
+    #[test]
+    fn endpoint_errors_map_to_fastapi_status_codes() {
+        let calls = Rc::new(Cell::new(0));
+        let template = template(calls);
+        let unauthorized = template.health_endpoint(&auth_with_scopes(&[]), &context());
+        assert_eq!(
+            unauthorized.fastapi_status(),
+            FastapiStatusCode::UNAUTHORIZED
+        );
+
+        let mut details = BTreeMap::new();
+        details.insert("field".to_string(), "extension_id".to_string());
+        let invalid = error_response::<ControlActionResponse>(
+            "control_action",
+            "request.invalid",
+            &context(),
+            "invalid_request",
+            "request validation failed",
+            details,
+        );
+        assert_eq!(invalid.fastapi_status(), FastapiStatusCode::BAD_REQUEST);
     }
 
     #[test]

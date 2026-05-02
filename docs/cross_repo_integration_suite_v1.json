@@ -69,11 +69,16 @@
     {
       "boundary": "fastapi_rust",
       "repo_path": "/dp/fastapi_rust",
+      "proof_state": "adapted_fastapi_core_contracts",
       "test_targets": [
         "service_endpoint_template_integration"
       ],
-      "suite_commands": [],
+      "suite_commands": [
+        "cargo test -p frankenengine-engine --test service_endpoint_template_integration fastapi_rust"
+      ],
       "verifies": [
+        "adapted fastapi_core route contracts",
+        "fastapi_core Response/StatusCode JSON adapter",
         "health endpoint envelope",
         "control actions",
         "evidence export",

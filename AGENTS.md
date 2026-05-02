@@ -88,26 +88,6 @@ runtime validation or be missed entirely.
 concrete `/dp/sqlmodel_rust` model/schema APIs for inventory rows marked "sqlmodel_rust on 
 frankensqlite", or add policy guards that reject raw implementations for typed-heavy stores.
 
-**DEVIATION**: Service/API endpoint templates are implemented through local endpoint envelope and 
-handler types instead of direct or adapted `/dp/fastapi_rust` contracts as mandated above. 
-Specifically:
-
-- `crates/franken-engine/src/policy_controller/service_endpoint_template.rs` defines local 
-  `RequestContext`, `AuthContext`, `ErrorEnvelope`, `EndpointResponse`, auth scope names, and 
-  handlers for health, control actions, evidence export, and replay control.
-- `crates/franken-engine/tests/service_endpoint_template_integration.rs` validates those endpoint 
-  classes through local stub providers instead of a `/dp/fastapi_rust`-backed adapter or 
-  compatibility fixture.
-
-**Impact**: Auth scope names, error envelopes, structured-log fields, pagination/error semantics, 
-and action routing conventions can drift from `/dp/fastapi_rust` while cross-repo evidence still 
-passes against a parallel local contract surface.
-
-**Required Fix**: **P0 Follow-up Bead Filed: bd-2sju4** - Replace the local template with direct or 
-adapted `/dp/fastapi_rust` contracts/components for health, control actions, evidence export, and 
-replay control, or add a maintainer-approved exception artifact plus a review gate that fails when 
-an in-scope service endpoint lacks direct/adapted fastapi_rust evidence.
-
 ---
 
 ## Code Editing Discipline

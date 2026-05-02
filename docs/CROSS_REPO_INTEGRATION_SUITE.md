@@ -21,8 +21,8 @@ at the seams with:
   `scripts/e2e/run_asupersync_contract_matrix.sh`
 - `frankentui`: adapter contract and enrichment integration tests
 - `frankensqlite`: storage-adapter contract and enrichment integration tests
-- `fastapi_rust`: service-endpoint integration tests for health, control,
-  evidence export, and replay control
+- `fastapi_rust`: adapted `fastapi_core` route/response contracts for health,
+  control, evidence export, and replay control
 - `sqlmodel_rust`: boundary-rule verification plus shared inventory coverage
 
 Shared inventory and schema-drift protection comes from the
@@ -107,3 +107,8 @@ Each suite run writes:
 
 `run_manifest.json` carries the exact command list, trace/decision/policy ids,
 selected sibling roots, failure attribution, and replay commands.
+
+For the `fastapi_rust` boundary, `service_endpoint_template_integration` now
+imports `/dp/fastapi_rust/crates/fastapi-core` directly and verifies route
+selection through `fastapi_core::Request` plus JSON transport mapping through
+`fastapi_core::Response` and `fastapi_core::StatusCode`.

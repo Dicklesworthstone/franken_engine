@@ -94,6 +94,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba4173ce977db76d7434bb01f0bd94914a9719570ccb8f9e7d56ded6ba8b70a"
 dependencies = [
+ "asupersync-macros",
  "base64",
  "bincode-next",
  "crc32fast",
@@ -131,6 +132,17 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "asupersync-macros"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2af06b9b9eee8c56e17ebc3ecf0b8fbe3f757037ee0488d8074551dfc663168"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -595,6 +607,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastapi-core"
+version = "0.3.0"
+dependencies = [
+ "asupersync",
+ "fastapi-openapi",
+ "fastapi-router",
+ "fastapi-types",
+ "futures-executor",
+ "parking_lot",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fastapi-openapi"
+version = "0.3.0"
+dependencies = [
+ "fastapi-router",
+ "fastapi-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fastapi-router"
+version = "0.3.0"
+dependencies = [
+ "fastapi-types",
+ "serde_json",
+]
+
+[[package]]
+name = "fastapi-types"
+version = "0.3.0"
+
+[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -668,6 +716,7 @@ dependencies = [
  "clap",
  "criterion",
  "ed25519-dalek",
+ "fastapi-core",
  "franken-decision",
  "franken-evidence",
  "franken-kernel",
@@ -731,6 +780,17 @@ name = "futures-core"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-executor"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baf29c38818342a3b26b5b923639e7b1f4a61fc5e76102d4b1981c6dc7a7579d"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "futures-util",
+]
 
 [[package]]
 name = "futures-io"

@@ -21,14 +21,19 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use fastapi_core::{
+    Method as FastapiMethod, Request as FastapiRequest, ResponseBody as FastapiResponseBody,
+    StatusCode as FastapiStatusCode,
+};
 use frankenengine_engine::policy_controller::service_endpoint_template::{
     AuthContext, ControlAction, ControlActionRequest, ControlActionResponse,
     DecisionContractExecutor, EndpointFailure, EndpointResponse, ErrorEnvelope,
     EvidenceExportProvider, EvidenceExportRequest, EvidenceExportResponse, EvidenceRecord,
-    HealthStatusResponse, ReplayCommand, ReplayControlRequest, ReplayControlResponse,
-    ReplayController, RequestContext, RuntimeHealthProvider, SCOPE_CONTROL_WRITE,
-    SCOPE_EVIDENCE_READ, SCOPE_HEALTH_READ, SCOPE_REPLAY_READ, SCOPE_REPLAY_WRITE,
-    ServiceEndpointTemplate, StructuredLogEvent,
+    FASTAPI_RUST_BOUNDARY, HealthStatusResponse, ReplayCommand, ReplayControlRequest,
+    ReplayControlResponse, ReplayController, RequestContext, RuntimeHealthProvider,
+    SCOPE_CONTROL_WRITE, SCOPE_EVIDENCE_READ, SCOPE_HEALTH_READ, SCOPE_REPLAY_READ,
+    SCOPE_REPLAY_WRITE, ServiceEndpointTemplate, StructuredLogEvent, fastapi_reuse_evidence,
+    match_fastapi_request, validate_fastapi_reuse_evidence,
 };
 
 // ── Mock providers ──────────────────────────────────────────────────
@@ -288,6 +293,117 @@ fn replay_status_req(session_id: &str) -> ReplayControlRequest {
         trace_id: None,
         session_id: Some(session_id.into()),
     }
+}
+
+// ── Section 0: fastapi_rust adapted boundary ───────────────────────
+
+#[test]
+fn fastapi_rust_adapted_contracts_back_endpoint_template() {
+    validate_fastapi_reuse_evidence().expect("valid fastapi_rust reuse evidence");
+    let evidence = fastapi_reuse_evidence();
+    assert_eq!(evidence.boundary, "fastapi_rust");
+    assert_eq!(evidence.repo_path, FASTAPI_RUST_BOUNDARY);
+    assert_eq!(evidence.proof_state, "adapted_fastapi_core_contracts");
+    assert_eq!(evidence.endpoints.len(), 5);
+
+    for expected_family in [
+        "health",
+        "control_action",
+        "evidence_export",
+        "replay_control",
+    ] {
+        assert!(
+            evidence
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.family == expected_family),
+            "missing fastapi_rust endpoint family {expected_family}"
+        );
+    }
+}
+
+#[test]
+fn fastapi_core_request_routes_select_endpoint_contracts() {
+    let cases = [
+        (
+            FastapiRequest::new(FastapiMethod::Get, "/v1/engine/health"),
+            "health",
+            SCOPE_HEALTH_READ,
+        ),
+        (
+            FastapiRequest::new(FastapiMethod::Post, "/v1/engine/control/actions"),
+            "control_action",
+            SCOPE_CONTROL_WRITE,
+        ),
+        (
+            FastapiRequest::new(FastapiMethod::Get, "/v1/engine/evidence"),
+            "evidence_export",
+            SCOPE_EVIDENCE_READ,
+        ),
+        (
+            FastapiRequest::new(FastapiMethod::Get, "/v1/engine/replay/status"),
+            "replay_status",
+            SCOPE_REPLAY_READ,
+        ),
+        (
+            FastapiRequest::new(FastapiMethod::Post, "/v1/engine/replay/control"),
+            "replay_control",
+            SCOPE_REPLAY_WRITE,
+        ),
+    ];
+
+    for (request, endpoint, scope) in cases {
+        let contract = match_fastapi_request(&request).expect("route contract");
+        assert_eq!(contract.endpoint, endpoint);
+        assert_eq!(contract.required_scope, scope);
+    }
+
+    let wrong_method = FastapiRequest::new(FastapiMethod::Delete, "/v1/engine/health");
+    assert!(match_fastapi_request(&wrong_method).is_none());
+}
+
+#[test]
+fn endpoint_response_exports_fastapi_core_json_response() {
+    let kit = build_template();
+    let response = kit
+        .template
+        .health_endpoint(&auth(&[SCOPE_HEALTH_READ]), &ctx());
+    let fastapi_response = response.to_fastapi_response().expect("fastapi response");
+
+    assert_eq!(fastapi_response.status(), FastapiStatusCode::OK);
+    assert!(fastapi_response.headers().iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("content-type") && value == b"application/json"
+    }));
+    let FastapiResponseBody::Bytes(body) = fastapi_response.body_ref() else {
+        panic!("expected JSON bytes body");
+    };
+    let json: serde_json::Value = serde_json::from_slice(body).expect("json body");
+    assert_eq!(json["endpoint"], "health");
+    assert_eq!(json["trace_id"], "trace-integ-001");
+    assert_eq!(json["log"]["component"], "integration.test");
+}
+
+#[test]
+fn endpoint_response_error_statuses_use_fastapi_core_status_codes() {
+    let kit = build_template();
+    let unauthorized = kit.template.health_endpoint(&auth(&[]), &ctx());
+    let invalid = {
+        let mut kit = build_template();
+        kit.template.control_action_endpoint(
+            &all_scopes_auth(),
+            &ctx(),
+            &control_req("", ControlAction::Stop, "valid reason"),
+        )
+    };
+
+    assert_eq!(
+        unauthorized.to_fastapi_response().unwrap().status(),
+        FastapiStatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        invalid.to_fastapi_response().unwrap().status(),
+        FastapiStatusCode::BAD_REQUEST
+    );
 }
 
 // ── Section 1: Health endpoint pipeline ─────────────────────────────

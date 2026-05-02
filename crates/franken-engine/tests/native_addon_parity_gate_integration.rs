@@ -1843,6 +1843,9 @@ fn enrichment_evaluator_approval_rate_zero_evals() {
 fn enrichment_evaluator_approval_rate_one_third() {
     let mut ev = GateEvaluator::with_defaults(ep());
     // 1 approved
+    ev.add_parity(AddonCohort::Crypto, "ok", GateAxis::Parity, MILLIONTHS, 50);
+    ev.add_throughput(AddonCohort::Crypto, "ok", 10_000, 9_500);
+    ev.add_support_surface(AddonCohort::Crypto, 90, 100);
     ev.evaluate();
     ev.clear();
     // 2 denied
@@ -2021,11 +2024,12 @@ fn enrichment_determinism_parity_entry_hash_stable() {
 // ============================================================================
 
 #[test]
-fn enrichment_e2e_empty_evidence_approved_with_defaults() {
+fn enrichment_e2e_empty_evidence_denied_with_defaults() {
     let mut ev = GateEvaluator::with_defaults(ep());
     let receipt = ev.evaluate();
-    assert!(receipt.is_approved());
-    assert_eq!(receipt.violation_count(), 0);
+    assert!(!receipt.is_approved());
+    assert_eq!(receipt.verdict, GateVerdict::MultipleViolations);
+    assert_eq!(receipt.violation_count(), 3);
     assert!(receipt.observed_cohorts.is_empty());
 }
 

@@ -1002,6 +1002,29 @@ impl GateEvaluator {
         self.evaluation_count += 1;
         let mut violations = Vec::new();
 
+        if self.config.fail_closed
+            && self.parity_entries.is_empty()
+            && self.security_findings.is_empty()
+            && self.throughput_entries.is_empty()
+            && self.support_surface_entries.is_empty()
+        {
+            violations.push(Violation::new(
+                GateAxis::Parity,
+                None,
+                "fail-closed gate requires parity evidence before approval",
+            ));
+            violations.push(Violation::new(
+                GateAxis::Throughput,
+                None,
+                "fail-closed gate requires throughput evidence before approval",
+            ));
+            violations.push(Violation::new(
+                GateAxis::SupportSurface,
+                None,
+                "fail-closed gate requires support-surface evidence before approval",
+            ));
+        }
+
         // --- Parity axis ---
         for entry in &self.parity_entries {
             if !entry.passes {
@@ -1754,11 +1777,13 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_approved_empty_evidence() {
+    fn test_evaluate_denies_empty_evidence_by_default() {
         let mut g = GateEvaluator::with_defaults(epoch());
         let receipt = g.evaluate();
-        // No evidence, no required cohorts -> approved
-        assert_eq!(receipt.verdict, GateVerdict::Approved);
+        assert_eq!(receipt.verdict, GateVerdict::MultipleViolations);
+        assert_eq!(receipt.violation_count(), 3);
+        assert_eq!(g.approved_count(), 0);
+        assert_eq!(g.denied_count(), 1);
     }
 
     // -----------------------------------------------------------------------
@@ -1893,8 +1918,8 @@ mod tests {
         let mut g = GateEvaluator::with_defaults(epoch());
         g.evaluate();
         assert_eq!(g.evaluation_count(), 1);
-        assert_eq!(g.approved_count(), 1);
-        assert_eq!(g.denied_count(), 0);
+        assert_eq!(g.approved_count(), 0);
+        assert_eq!(g.denied_count(), 1);
     }
 
     #[test]
@@ -1906,8 +1931,14 @@ mod tests {
     #[test]
     fn test_approval_rate_all_approved() {
         let mut g = GateEvaluator::with_defaults(epoch());
+        g.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50);
+        g.add_throughput(AddonCohort::Crypto, "aes", 1_000_000, 950_000);
+        g.add_support_surface(AddonCohort::Crypto, 90, 100);
         g.evaluate();
         g.clear();
+        g.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50);
+        g.add_throughput(AddonCohort::Crypto, "aes", 1_000_000, 950_000);
+        g.add_support_surface(AddonCohort::Crypto, 90, 100);
         g.evaluate();
         assert_eq!(g.approval_rate_millionths(), MILLIONTHS);
     }
@@ -1915,7 +1946,10 @@ mod tests {
     #[test]
     fn test_approval_rate_half() {
         let mut g = GateEvaluator::with_defaults(epoch());
-        g.evaluate(); // approved (empty)
+        g.add_parity(AddonCohort::Crypto, "ok", GateAxis::Parity, MILLIONTHS, 50);
+        g.add_throughput(AddonCohort::Crypto, "ok", 1_000_000, 950_000);
+        g.add_support_surface(AddonCohort::Crypto, 90, 100);
+        g.evaluate(); // approved
         g.clear();
         g.add_parity(AddonCohort::Crypto, "x", GateAxis::Parity, 100_000, 50);
         g.evaluate(); // denied (low parity)

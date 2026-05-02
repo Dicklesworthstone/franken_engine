@@ -18,11 +18,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use test262_release_gate::{
-    ProfileDecision, Test262CompatibilityPassRateArtifact,
-    Test262CompatibilityPassRateMetadata, Test262CompatibilityProofState,
-    Test262CompatibilityVectorSource, Test262EvidenceCollector, Test262GateError, Test262GateRun,
-    Test262GateRunner, Test262HighWaterMark, Test262ObservedOutcome, Test262ObservedResult,
-    Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverReason, Test262WaiverSet,
+    ProfileDecision, Test262CompatibilityPassRateArtifact, Test262CompatibilityPassRateMetadata,
+    Test262CompatibilityProofState, Test262CompatibilityVectorSource, Test262EvidenceCollector,
+    Test262GateError, Test262GateRun, Test262GateRunner, Test262HighWaterMark,
+    Test262ObservedOutcome, Test262ObservedResult, Test262PinSet, Test262Profile,
+    Test262RunnerConfig, Test262WaiverReason, Test262WaiverSet,
     build_test262_compatibility_pass_rate_artifact, deterministic_worker_assignments,
     next_high_water_mark,
 };
@@ -811,7 +811,10 @@ fn compatibility_artifact_accepts_pinned_subset_without_full_claim() {
     )
     .expect("pinned subset artifact");
 
-    assert_eq!(artifact.proof_state, Test262CompatibilityProofState::PinnedSubset);
+    assert_eq!(
+        artifact.proof_state,
+        Test262CompatibilityProofState::PinnedSubset
+    );
     assert!(!artifact.full_suite_claim_allowed);
     artifact.validate().expect("artifact validates");
 }

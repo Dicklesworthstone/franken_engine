@@ -1,0 +1,25 @@
+# franken-engine lowering IR3 golden
+# Update with:
+#   UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_lowering
+# Then review and commit the diff under tests/golden/lowering/.
+case: try_catch
+goal: Script
+source:
+  try { throw 1; } catch (error) { error; }
+
+constant_pool:
+  <empty>
+
+instructions:
+  0000: BeginTry { catch_target: 5, finally_target: None }
+  0001: LoadInt { dst: 0, value: 1 }
+  0002: Throw { value: 0 }
+  0003: EndTry
+  0004: Jump { target: 10 }
+  0005: EnterCatch { dst: 1 }
+  0006: Move { dst: 2, src: 1 }
+  0007: Move { dst: 0, src: 2 }
+  0008: Move { dst: 3, src: 2 }
+  0009: Move { dst: 0, src: 3 }
+  0010: Return { value: 0 }
+  0011: Halt

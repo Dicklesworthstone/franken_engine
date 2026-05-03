@@ -130,3 +130,12 @@ fn golden_lowering_nullish_coalescing() {
         goal: ParseGoal::Script,
     });
 }
+
+#[test]
+fn golden_lowering_try_catch() {
+    assert_lowering_golden(&LoweringGoldenCase {
+        name: "try_catch",
+        source: "try { throw 1; } catch (error) { error; }\n",
+        goal: ParseGoal::Script,
+    });
+}

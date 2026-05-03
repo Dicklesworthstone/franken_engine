@@ -897,7 +897,7 @@ fn map_legacy_specialization_receipt(
             status: if record.active {
                 "active".to_string()
             } else {
-                "invalidated".to_string()
+                "archived".to_string()
             },
             invalidation_timestamp_ms: None,
             invalidation_reason: None,
@@ -1949,8 +1949,8 @@ mod tests {
             specialization_type: "fallback".to_string(),
             specialized_version: "v2-safe".to_string(),
             status: "invalidated".to_string(),
-            invalidation_timestamp_ms: None,
-            invalidation_reason: None,
+            invalidation_timestamp_ms: Some(1_700_000_000_014),
+            invalidation_reason: Some("fallback superseded".to_string()),
             security_epoch: 4,
             created_timestamp_ms: 1_700_000_000_013,
             specialized_content_hash: "sha256:abc123".to_string(),
@@ -2209,6 +2209,16 @@ mod tests {
     #[test]
     fn typed_store_record_boundary_rejects_negative_ids() {
         let err = replacement_entry(-1).to_store_record(0).unwrap_err();
+        assert!(matches!(
+            err,
+            StorageError::IntegrityViolation {
+                store: StoreKind::ReplacementLineage,
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("sequence_id"));
+
+        let err = typed_record_key(StoreKind::ReplacementLineage, -1).unwrap_err();
         assert!(matches!(err, StorageError::InvalidKey { .. }));
         assert!(err.to_string().contains("typed/replacement_lineage/-1"));
     }
@@ -2534,13 +2544,27 @@ mod tests {
             "ext-specialized"
         );
 
+        let mut inactive_receipt = receipt.clone();
+        inactive_receipt.active = false;
+        let inactive_source = legacy_json_record(
+            StoreKind::SpecializationIndex,
+            &format!("receipt:{}", inactive_receipt.receipt_id.to_hex()),
+            &inactive_receipt,
+        );
+        let archived = map_legacy_specialization_index_record(&inactive_source, 63)
+            .expect("inactive specialization receipt remains serializable typed history");
+        assert_eq!(archived[0].status, "archived");
+        archived[0]
+            .to_store_record(0)
+            .expect("archived legacy specialization row passes typed validation");
+
         let invalidation = legacy_record(
             StoreKind::SpecializationIndex,
             "invalidation:receipt:123",
             br#"{"receipt_id":"ignored"}"#,
             BTreeMap::new(),
         );
-        let err = map_legacy_specialization_index_record(&invalidation, 63)
+        let err = map_legacy_specialization_index_record(&invalidation, 65)
             .expect_err("invalidation rows are events, not standalone specialization rows");
         assert_eq!(err.code(), "FE-STOR-0007");
         assert!(err.to_string().contains("separate table required"));

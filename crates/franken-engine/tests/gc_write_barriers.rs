@@ -21,9 +21,12 @@
     clippy::identity_op
 )]
 
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{
+    Float64, InterpreterConfig, InterpreterCore, Value,
+};
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module, Value};
+use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
 use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
@@ -31,27 +34,30 @@ use std::collections::BTreeSet;
 // ---------------------------------------------------------------------------
 
 fn test_config() -> InterpreterConfig {
-    InterpreterConfig::quickjs_defaults()
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    config
 }
 
 fn test_module_with_object_operations() -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"gc-write-barrier"), "test-gc");
+    m.constant_pool = vec!["test_property".to_string()];
     m.instructions = vec![
         // Create an object
-        Ir3Instruction::CreateObject { dst: 0 },
+        Ir3Instruction::NewObject { dst: 0 },
         // Set a property (should trigger write barrier)
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadStr {
             dst: 1,
-            value: Value::Str("test_property".to_string()),
+            pool_index: 0,
         },
-        Ir3Instruction::LoadConstant {
-            dst: 2,
-            value: Value::Int(42),
-        },
+        Ir3Instruction::LoadInt { dst: 2, value: 42 },
         Ir3Instruction::SetProperty {
-            object: 0,
+            obj: 0,
             key: 1,
-            value: 2,
+            val: 2,
         },
         Ir3Instruction::Halt,
     ];
@@ -292,7 +298,7 @@ fn write_barrier_with_different_value_types() {
     // Test different value types that could contain object references
     let test_values = vec![
         Value::Int(42),
-        Value::Float(crate::ir_contract::Float64::new(3.14)),
+        Value::Float(Float64::new(3.14)),
         Value::Str("string_value".to_string()),
         Value::Bool(true),
         Value::Null,

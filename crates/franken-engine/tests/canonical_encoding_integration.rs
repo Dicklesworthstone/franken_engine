@@ -1825,7 +1825,7 @@ fn error_paths_report_first_registered_domain_when_multiple() {
 #[test]
 fn error_paths_fallback_to_policy_object_when_no_domains_registered() {
     // Test: When no domains are registered, errors should fall back to PolicyObject
-    let guard = CanonicalGuard::new(); // No domains registered
+    let mut guard = CanonicalGuard::new(); // No domains registered
 
     // Test input too short - should fallback to PolicyObject
     let short_input = b"short";
@@ -1857,7 +1857,7 @@ fn error_domain_determination_with_exact_schema_match() {
     let mut guard = CanonicalGuard::new();
 
     // Register multiple domains
-    let policy_schema =
+    let _policy_schema =
         guard.register_class(ObjectDomain::PolicyObject, "Policy", 1, b"policy-schema");
     let evidence_schema = guard.register_class(
         ObjectDomain::EvidenceRecord,

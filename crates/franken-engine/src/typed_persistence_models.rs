@@ -35,6 +35,9 @@ const TYPED_RECORD_FORMAT_VALUE: &str = "sqlmodel_rust_typed_v1";
 const TYPED_MODEL_KEY: &str = "typed_model";
 const TYPED_STORE_KIND_KEY: &str = "store_kind";
 const TYPED_RECORD_ID_KEY: &str = "typed_record_id";
+const TYPED_ID_ALLOCATION_FORMAT_KEY: &str = "typed_id_allocation_format";
+const TYPED_ID_ALLOCATION_FORMAT_VALUE: &str = "sqlmodel_rust_typed_id_allocation_v1";
+const TYPED_ID_ALLOCATION_PREFIX: &str = "typed_id_allocations";
 
 type StorageResult<T> = std::result::Result<T, StorageError>;
 
@@ -293,6 +296,200 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
         model.validate_typed_record()?;
         Ok(model)
     }
+}
+
+/// Durable mapping from a domain natural key to a typed integer primary key.
+///
+/// This record lives in [`StoreKind::PolicyCache`] so typed domain stores keep
+/// only typed rows. Callers use it when a domain already has a stable natural
+/// key, but the SQLModel row requires a compact integer primary key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedRecordIdAllocation {
+    pub schema_version: String,
+    pub store: StoreKind,
+    pub model_name: String,
+    pub natural_key: String,
+    pub typed_record_id: i64,
+}
+
+fn validate_typed_id_natural_key(natural_key: &str) -> StorageResult<()> {
+    if natural_key.trim().is_empty() || natural_key.contains('\0') {
+        return Err(StorageError::InvalidKey {
+            key: format!("{TYPED_ID_ALLOCATION_PREFIX}/{natural_key}"),
+        });
+    }
+    Ok(())
+}
+
+fn typed_id_allocation_prefix<T: TypedStoreRecord>() -> String {
+    format!(
+        "{}/{}/{}",
+        TYPED_ID_ALLOCATION_PREFIX,
+        T::STORE_KIND.as_str(),
+        T::MODEL_NAME
+    )
+}
+
+fn typed_id_allocation_key<T: TypedStoreRecord>(natural_key: &str) -> StorageResult<String> {
+    validate_typed_id_natural_key(natural_key)?;
+    Ok(format!(
+        "{}/{}",
+        typed_id_allocation_prefix::<T>(),
+        hex::encode(natural_key.as_bytes())
+    ))
+}
+
+fn typed_id_allocation_metadata<T: TypedStoreRecord>(
+    natural_key: &str,
+    typed_record_id: i64,
+) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            TYPED_ID_ALLOCATION_FORMAT_KEY.to_string(),
+            TYPED_ID_ALLOCATION_FORMAT_VALUE.to_string(),
+        ),
+        (
+            "typed_allocation_store_kind".to_string(),
+            T::STORE_KIND.as_str().to_string(),
+        ),
+        (
+            "typed_allocation_model".to_string(),
+            T::MODEL_NAME.to_string(),
+        ),
+        ("natural_key".to_string(), natural_key.to_string()),
+        ("typed_record_id".to_string(), typed_record_id.to_string()),
+    ])
+}
+
+fn decode_typed_id_allocation<T: TypedStoreRecord>(
+    record: &StoreRecord,
+) -> StorageResult<TypedRecordIdAllocation> {
+    if record.store != StoreKind::PolicyCache {
+        return Err(StorageError::IntegrityViolation {
+            store: StoreKind::PolicyCache,
+            detail: format!(
+                "typed id allocation for {} must live in PolicyCache, got {}",
+                T::MODEL_NAME,
+                record.store
+            ),
+        });
+    }
+    let allocation: TypedRecordIdAllocation =
+        serde_json::from_slice(&record.value).map_err(|err| StorageError::IntegrityViolation {
+            store: StoreKind::PolicyCache,
+            detail: format!(
+                "failed to deserialize typed id allocation `{}`: {err}",
+                record.key
+            ),
+        })?;
+    if allocation.schema_version != TYPED_ID_ALLOCATION_FORMAT_VALUE
+        || allocation.store != T::STORE_KIND
+        || allocation.model_name != T::MODEL_NAME
+        || allocation.typed_record_id < 0
+        || typed_id_allocation_key::<T>(&allocation.natural_key)? != record.key
+    {
+        return Err(StorageError::IntegrityViolation {
+            store: StoreKind::PolicyCache,
+            detail: format!(
+                "typed id allocation `{}` does not match {} allocation contract",
+                record.key,
+                T::MODEL_NAME
+            ),
+        });
+    }
+    Ok(allocation)
+}
+
+/// Allocate or replay a stable typed integer id for a domain natural key.
+///
+/// The allocator never derives ids by truncating a hash. It persists the
+/// natural-key mapping, reuses an existing id on replay, and otherwise assigns
+/// the next non-negative id after the current model-specific allocation set.
+pub fn allocate_typed_record_id<T, S>(
+    storage: &mut S,
+    natural_key: &str,
+    context: &EventContext,
+) -> StorageResult<i64>
+where
+    T: TypedStoreRecord,
+    S: StorageAdapter,
+{
+    let allocation_key = typed_id_allocation_key::<T>(natural_key)?;
+    if let Some(existing) = storage.get(StoreKind::PolicyCache, &allocation_key, context)? {
+        return Ok(decode_typed_id_allocation::<T>(&existing)?.typed_record_id);
+    }
+
+    let rows = storage.query(
+        StoreKind::PolicyCache,
+        &StoreQuery {
+            key_prefix: Some(format!("{}/", typed_id_allocation_prefix::<T>())),
+            metadata_filters: BTreeMap::new(),
+            limit: None,
+        },
+        context,
+    )?;
+    let mut max_id = -1_i64;
+    for row in rows {
+        let allocation = decode_typed_id_allocation::<T>(&row)?;
+        max_id = max_id.max(allocation.typed_record_id);
+    }
+    let typed_record_id = max_id
+        .checked_add(1)
+        .ok_or_else(|| StorageError::InvalidKey {
+            key: format!("{allocation_key}/overflow"),
+        })?;
+    let allocation = TypedRecordIdAllocation {
+        schema_version: TYPED_ID_ALLOCATION_FORMAT_VALUE.to_string(),
+        store: T::STORE_KIND,
+        model_name: T::MODEL_NAME.to_string(),
+        natural_key: natural_key.to_string(),
+        typed_record_id,
+    };
+    let value =
+        serde_json::to_vec(&allocation).map_err(|err| StorageError::IntegrityViolation {
+            store: StoreKind::PolicyCache,
+            detail: format!("failed to serialize typed id allocation `{allocation_key}`: {err}"),
+        })?;
+    storage.put(
+        StoreKind::PolicyCache,
+        allocation_key,
+        value,
+        typed_id_allocation_metadata::<T>(natural_key, typed_record_id),
+        context,
+    )?;
+    Ok(typed_record_id)
+}
+
+/// Allocate one stable typed id per typed row emitted from a legacy record.
+pub fn allocate_legacy_typed_record_ids<T, S>(
+    storage: &mut S,
+    legacy_record: &StoreRecord,
+    row_count: usize,
+    context: &EventContext,
+) -> StorageResult<Vec<i64>>
+where
+    T: TypedStoreRecord,
+    S: StorageAdapter,
+{
+    if row_count == 0 {
+        return Err(StorageError::InvalidQuery {
+            detail: format!(
+                "cannot allocate zero typed ids for {} legacy record `{}`",
+                T::MODEL_NAME,
+                legacy_record.key
+            ),
+        });
+    }
+    let source = format!(
+        "legacy/{}/{}",
+        legacy_record.store.as_str(),
+        legacy_record.key
+    );
+    (0..row_count)
+        .map(|ordinal| {
+            allocate_typed_record_id::<T, S>(storage, &format!("{source}#{ordinal}"), context)
+        })
+        .collect()
 }
 
 /// Backfill classification for generic store rows seen during typed migration planning.
@@ -2258,6 +2455,155 @@ mod tests {
         let err = invalid.to_store_record(0).unwrap_err();
         assert_eq!(err.code(), "FE-STOR-0007");
         assert!(err.to_string().contains("invalidation_reason"));
+    }
+
+    #[test]
+    fn typed_id_allocator_replays_stable_monotonic_ids_by_model() {
+        let context = EventContext::new("trace-alloc", "decision-alloc", "policy-alloc")
+            .expect("context is valid");
+        let mut adapter = InMemoryStorageAdapter::new();
+
+        let first = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-alpha:receipt-1",
+            &context,
+        )
+        .expect("first allocation succeeds");
+        let replayed = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-alpha:receipt-1",
+            &context,
+        )
+        .expect("existing allocation replays");
+        let second = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-alpha:receipt-2",
+            &context,
+        )
+        .expect("second allocation succeeds");
+        let first_ifc = allocate_typed_record_id::<IfcProvenanceEntry, _>(
+            &mut adapter,
+            "ifc:flow-event:1",
+            &context,
+        )
+        .expect("model-specific allocation succeeds");
+
+        assert_eq!(first, 0);
+        assert_eq!(replayed, 0);
+        assert_eq!(second, 1);
+        assert_eq!(first_ifc, 0);
+
+        let allocation_key =
+            typed_id_allocation_key::<ReplacementLineageEntry>("replacement:slot-alpha:receipt-1")
+                .expect("natural key has stable allocation key");
+        let stored = adapter
+            .get(StoreKind::PolicyCache, &allocation_key, &context)
+            .expect("allocation lookup succeeds")
+            .expect("allocation record exists");
+        let decoded = decode_typed_id_allocation::<ReplacementLineageEntry>(&stored)
+            .expect("allocation record decodes");
+        assert_eq!(decoded.typed_record_id, first);
+        assert_eq!(
+            stored.metadata.get(TYPED_ID_ALLOCATION_FORMAT_KEY),
+            Some(&TYPED_ID_ALLOCATION_FORMAT_VALUE.to_string())
+        );
+
+        let rows = adapter
+            .query(
+                StoreKind::PolicyCache,
+                &StoreQuery {
+                    key_prefix: Some(format!(
+                        "{}/",
+                        typed_id_allocation_prefix::<ReplacementLineageEntry>()
+                    )),
+                    metadata_filters: BTreeMap::new(),
+                    limit: None,
+                },
+                &context,
+            )
+            .expect("allocation query succeeds");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn typed_id_allocator_fails_closed_on_invalid_or_corrupt_allocations() {
+        let context = EventContext::new("trace-alloc", "decision-alloc", "policy-alloc")
+            .expect("context is valid");
+        let mut adapter = InMemoryStorageAdapter::new();
+
+        let err =
+            allocate_typed_record_id::<ReplacementLineageEntry, _>(&mut adapter, " \t ", &context)
+                .expect_err("blank natural keys are rejected");
+        assert_eq!(err.code(), "FE-STOR-0002");
+
+        let err = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "bad\0key",
+            &context,
+        )
+        .expect_err("nul-delimited natural keys are rejected");
+        assert_eq!(err.code(), "FE-STOR-0002");
+
+        let corrupt_key = typed_id_allocation_key::<ReplacementLineageEntry>("replacement:corrupt")
+            .expect("test allocation key is valid");
+        adapter
+            .put(
+                StoreKind::PolicyCache,
+                corrupt_key,
+                b"{not json}".to_vec(),
+                BTreeMap::new(),
+                &context,
+            )
+            .expect("corrupt fixture write succeeds");
+
+        let err = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:new",
+            &context,
+        )
+        .expect_err("corrupt allocation rows block new allocations");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("typed id allocation"));
+    }
+
+    #[test]
+    fn legacy_typed_id_allocator_emits_one_stable_id_per_typed_output_row() {
+        let context = EventContext::new("trace-legacy-alloc", "decision-legacy", "policy-alloc")
+            .expect("context is valid");
+        let mut adapter = InMemoryStorageAdapter::new();
+        let legacy = legacy_record(
+            StoreKind::SpecializationIndex,
+            "receipt:legacy-specialization",
+            b"{}",
+            BTreeMap::new(),
+        );
+
+        let ids = allocate_legacy_typed_record_ids::<SpecializationIndexEntry, _>(
+            &mut adapter,
+            &legacy,
+            3,
+            &context,
+        )
+        .expect("legacy output row ids allocate");
+        let replayed = allocate_legacy_typed_record_ids::<SpecializationIndexEntry, _>(
+            &mut adapter,
+            &legacy,
+            3,
+            &context,
+        )
+        .expect("legacy output row ids replay");
+
+        assert_eq!(ids, vec![0, 1, 2]);
+        assert_eq!(replayed, ids);
+
+        let err = allocate_legacy_typed_record_ids::<SpecializationIndexEntry, _>(
+            &mut adapter,
+            &legacy,
+            0,
+            &context,
+        )
+        .expect_err("zero-row allocations are invalid");
+        assert_eq!(err.code(), "FE-STOR-0003");
     }
 
     #[test]

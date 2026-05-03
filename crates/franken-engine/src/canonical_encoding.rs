@@ -461,7 +461,7 @@ impl CanonicalGuard {
             }
             None => {
                 // Schema hash not found in registry. Try to determine best domain for error reporting.
-                let inferred_domain = self.determine_error_domain(Some(schema_hash));
+                let inferred_domain = self.determine_error_domain(Some(schema_hash.clone()));
 
                 Err(NonCanonicalError {
                     object_class: inferred_domain,
@@ -2433,20 +2433,42 @@ mod tests {
         let bytes3 = make_canonical_payload(&unknown_schema_3, &CanonicalValue::Null);
         let bytes4 = make_canonical_payload(&unknown_schema_4, &CanonicalValue::Null);
 
-        let err1 = guard.validate_from_registry(&bytes1, "t-4domain-1").unwrap_err();
-        let err2 = guard.validate_from_registry(&bytes2, "t-4domain-2").unwrap_err();
-        let err3 = guard.validate_from_registry(&bytes3, "t-4domain-3").unwrap_err();
-        let err4 = guard.validate_from_registry(&bytes4, "t-4domain-4").unwrap_err();
+        let err1 = guard
+            .validate_from_registry(&bytes1, "t-4domain-1")
+            .unwrap_err();
+        let err2 = guard
+            .validate_from_registry(&bytes2, "t-4domain-2")
+            .unwrap_err();
+        let err3 = guard
+            .validate_from_registry(&bytes3, "t-4domain-3")
+            .unwrap_err();
+        let err4 = guard
+            .validate_from_registry(&bytes4, "t-4domain-4")
+            .unwrap_err();
 
         // After the fix, these should not all hardcode PolicyObject
         // For now, this documents current (incorrect) behavior
-        println!("Error domains: {:?}, {:?}, {:?}, {:?}",
-                err1.object_class, err2.object_class, err3.object_class, err4.object_class);
+        println!(
+            "Error domains: {:?}, {:?}, {:?}, {:?}",
+            err1.object_class, err2.object_class, err3.object_class, err4.object_class
+        );
 
         // All should be SchemaViolation errors
-        assert!(matches!(err1.violation, CanonicalViolation::SchemaViolation { .. }));
-        assert!(matches!(err2.violation, CanonicalViolation::SchemaViolation { .. }));
-        assert!(matches!(err3.violation, CanonicalViolation::SchemaViolation { .. }));
-        assert!(matches!(err4.violation, CanonicalViolation::SchemaViolation { .. }));
+        assert!(matches!(
+            err1.violation,
+            CanonicalViolation::SchemaViolation { .. }
+        ));
+        assert!(matches!(
+            err2.violation,
+            CanonicalViolation::SchemaViolation { .. }
+        ));
+        assert!(matches!(
+            err3.violation,
+            CanonicalViolation::SchemaViolation { .. }
+        ));
+        assert!(matches!(
+            err4.violation,
+            CanonicalViolation::SchemaViolation { .. }
+        ));
     }
 }

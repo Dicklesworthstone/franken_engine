@@ -1691,6 +1691,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::NewObject { .. } => "new_object",
             crate::ir_contract::Ir3Instruction::NewArray { .. } => "new_array",
             crate::ir_contract::Ir3Instruction::ArrayPush { .. } => "array_push",
+            crate::ir_contract::Ir3Instruction::ArraySlice { .. } => "array_slice",
             crate::ir_contract::Ir3Instruction::SpreadIntoArray { .. } => "spread_into_array",
             crate::ir_contract::Ir3Instruction::SpreadIntoObject { .. } => "spread_into_object",
             crate::ir_contract::Ir3Instruction::Mod { .. } => "mod",

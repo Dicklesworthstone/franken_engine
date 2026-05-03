@@ -4474,7 +4474,8 @@ impl InterpreterCore {
                 .ok_or(InterpreterError::InstructionOutOfBounds {
                     ip: self.ip,
                     count: module.instructions.len(),
-                })?;
+                })?
+                .clone();
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction

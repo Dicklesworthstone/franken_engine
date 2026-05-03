@@ -328,7 +328,7 @@ fn concurrent_writes_maintain_consistency() {
 
     // Simulate rapid successive writes to different objects
     let mut objects = Vec::new();
-    for i in 0..50 {
+    for _i in 0..50 {
         let obj = core.alloc_object_with_prototype(None).unwrap();
         objects.push(obj);
     }

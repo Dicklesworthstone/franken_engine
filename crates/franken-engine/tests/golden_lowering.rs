@@ -6,7 +6,7 @@ use std::path::Path;
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
-use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParserOptions};
+use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 
 struct LoweringGoldenCase {
     name: &'static str,

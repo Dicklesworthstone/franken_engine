@@ -1,23 +1,32 @@
-use frankenengine_engine::canonical_encoding::ensure_canonical_ordering;
-use frankenengine_engine::content_hash::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
-use frankenengine_engine::lowering_pipeline::{
-    LoweringPipelineConfig, LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2,
-    lower_ir2_to_ir3,
+use frankenengine_engine::ast::{
+    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
+    ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
 };
-use frankenengine_engine::object_model::{Expression, FunctionDeclaration, Literal, Statement};
-use std::collections::BTreeMap;
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
+use frankenengine_engine::lowering_pipeline::{
+    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+};
+
+fn span() -> SourceSpan {
+    SourceSpan::new(0, 1, 1, 1, 1, 2)
+}
 
 /// Helper to create a function declaration with constructor calls in the body
 fn create_function_with_constructor(function_body_expr: Expression) -> FunctionDeclaration {
     FunctionDeclaration {
-        identifier: "testFunc".to_string(),
-        parameters: vec![],
-        body: vec![Statement::Return {
-            argument: Some(Box::new(function_body_expr)),
-        }],
+        name: Some("testFunc".to_string()),
+        params: vec![],
+        body: BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(function_body_expr),
+                span: span(),
+            })],
+            span: span(),
+        },
         is_async: false,
         is_generator: false,
+        span: span(),
     }
 }
 
@@ -25,13 +34,14 @@ fn create_function_with_constructor(function_body_expr: Expression) -> FunctionD
 fn lower_function_to_ir3(
     func_decl: FunctionDeclaration,
 ) -> Result<Vec<Ir3Instruction>, LoweringPipelineError> {
-    let ir0_module = frankenengine_engine::lowering_pipeline::Ir0Module {
-        source_text: "test".to_string(),
-        content_hash: ContentHash::compute(b"test"),
-        module_url: "test.js".to_string(),
-        statements: vec![Statement::FunctionDeclaration(func_decl)],
-        exports: BTreeMap::new(),
-    };
+    let ir0_module = Ir0Module::from_syntax_tree(
+        SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::FunctionDeclaration(func_decl)],
+            span: span(),
+        },
+        "test.js",
+    );
 
     let ir1_result = lower_ir0_to_ir1(&ir0_module)?;
     let ir2_result = lower_ir1_to_ir2(&ir1_result.module)?;
@@ -43,7 +53,7 @@ fn lower_function_to_ir3(
 #[test]
 fn test_simple_constructor_in_function() {
     // function testFunc() { return new Foo(); }
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![],
     };
@@ -64,14 +74,17 @@ fn test_simple_constructor_in_function() {
 #[test]
 fn test_constructor_with_arguments() {
     // function testFunc() { return new Foo(1, 'hello', {x: 1}); }
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![
-            Expression::Literal(Literal::Integer(1)),
-            Expression::Literal(Literal::String("hello".to_string())),
-            Expression::Object {
-                properties: vec![("x".to_string(), Expression::Literal(Literal::Integer(1)))],
-            },
+            Expression::NumericLiteral(1),
+            Expression::StringLiteral("hello".to_string()),
+            Expression::ObjectLiteral(vec![ObjectProperty {
+                key: Expression::Identifier("x".to_string()),
+                value: Expression::NumericLiteral(1),
+                computed: false,
+                shorthand: false,
+            }]),
         ],
     };
 
@@ -93,12 +106,12 @@ fn test_constructor_with_arguments() {
 #[test]
 fn test_nested_constructor_calls() {
     // function testFunc() { return new Outer(new Inner()); }
-    let inner_constructor = Expression::NewExpression {
+    let inner_constructor = Expression::New {
         callee: Box::new(Expression::Identifier("Inner".to_string())),
         arguments: vec![],
     };
 
-    let outer_constructor = Expression::NewExpression {
+    let outer_constructor = Expression::New {
         callee: Box::new(Expression::Identifier("Outer".to_string())),
         arguments: vec![inner_constructor],
     };
@@ -122,14 +135,14 @@ fn test_nested_constructor_calls() {
 fn test_constructor_stored_to_local() {
     // function testFunc() { var x = new Foo(); return x; }
     // We'll simulate this with a sequence expression for simplicity
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![],
     };
 
     // Use assignment to simulate storing to local
-    let assignment = Expression::AssignmentExpression {
-        operator: frankenengine_engine::object_model::AssignmentOperator::Assign,
+    let assignment = Expression::Assignment {
+        operator: AssignmentOperator::Assign,
         left: Box::new(Expression::Identifier("x".to_string())),
         right: Box::new(constructor_call),
     };
@@ -149,20 +162,18 @@ fn test_constructor_stored_to_local() {
 #[test]
 fn test_constructor_as_method_argument() {
     // function testFunc() { return obj.method(new Foo()); }
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![],
     };
 
-    let method_call = Expression::CallExpression {
+    let method_call = Expression::Call {
         callee: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
-            optional: false,
         }),
         arguments: vec![constructor_call],
-        optional: false,
     };
 
     let func_decl = create_function_with_constructor(method_call);
@@ -176,17 +187,18 @@ fn test_constructor_as_method_argument() {
         "Should contain Construct instruction when used as method argument"
     );
     assert!(
-        instructions
-            .iter()
-            .any(|instr| matches!(instr, Ir3Instruction::Call { .. })),
-        "Should also contain Call instruction for method invocation"
+        instructions.iter().any(|instr| matches!(
+            instr,
+            Ir3Instruction::Call { .. } | Ir3Instruction::CallMethod { .. }
+        )),
+        "Should also contain a call instruction for method invocation"
     );
 }
 
 #[test]
 fn test_constructor_chain_with_property_access() {
     // function testFunc() { return new Foo().bar.baz; }
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("Foo".to_string())),
         arguments: vec![],
     };
@@ -196,11 +208,9 @@ fn test_constructor_chain_with_property_access() {
             object: Box::new(constructor_call),
             property: Box::new(Expression::Identifier("bar".to_string())),
             computed: false,
-            optional: false,
         }),
         property: Box::new(Expression::Identifier("baz".to_string())),
         computed: false,
-        optional: false,
     };
 
     let func_decl = create_function_with_constructor(property_chain);
@@ -224,11 +234,11 @@ fn test_constructor_chain_with_property_access() {
 #[test]
 fn test_constructor_deterministic_lowering() {
     // Test that the same constructor call lowers to identical IR3 every time
-    let constructor_call = Expression::NewExpression {
+    let constructor_call = Expression::New {
         callee: Box::new(Expression::Identifier("TestClass".to_string())),
         arguments: vec![
-            Expression::Literal(Literal::Integer(42)),
-            Expression::Literal(Literal::String("test".to_string())),
+            Expression::NumericLiteral(42),
+            Expression::StringLiteral("test".to_string()),
         ],
     };
 
@@ -247,17 +257,17 @@ fn test_constructor_deterministic_lowering() {
     );
 
     // Verify canonical ordering is maintained
-    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"test1"), "test1.js");
+    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"constructor-test"), "test.js");
     ir3_module1.instructions = instructions1;
-    let canonical1 = ensure_canonical_ordering(&ir3_module1);
+    let canonical1 = ir3_module1.canonical_bytes();
 
-    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"test2"), "test2.js");
+    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"constructor-test"), "test.js");
     ir3_module2.instructions = instructions2;
-    let canonical2 = ensure_canonical_ordering(&ir3_module2);
+    let canonical2 = ir3_module2.canonical_bytes();
 
-    assert!(
-        canonical1.is_ok() && canonical2.is_ok(),
-        "Both modules should have canonical ordering"
+    assert_eq!(
+        canonical1, canonical2,
+        "canonical IR3 bytes should be stable"
     );
 }
 
@@ -266,9 +276,9 @@ fn test_constructor_deterministic_lowering() {
 #[test]
 fn test_nullish_coalescing_in_function() {
     // function testFunc() { return a ?? b; }
-    let nullish_coalescing = Expression::BinaryExpression {
+    let nullish_coalescing = Expression::Binary {
         left: Box::new(Expression::Identifier("a".to_string())),
-        operator: frankenengine_engine::object_model::BinaryOperator::NullishCoalescing,
+        operator: BinaryOperator::NullishCoalescing,
         right: Box::new(Expression::Identifier("b".to_string())),
     };
 
@@ -288,13 +298,12 @@ fn test_nullish_coalescing_in_function() {
 #[test]
 fn test_delete_property_in_function() {
     // function testFunc() { return delete obj.prop; }
-    let delete_expr = Expression::UnaryExpression {
-        operator: frankenengine_engine::object_model::UnaryOperator::Delete,
+    let delete_expr = Expression::Unary {
+        operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
-            optional: false,
         }),
     };
 

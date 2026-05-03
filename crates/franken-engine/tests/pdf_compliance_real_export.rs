@@ -8,12 +8,12 @@
 //! Tests cover PDF structure validation, deterministic output, content
 //! embedding, and basic PDF specification compliance.
 
-use frankenengine_engine::engine_object_id::{ObjectDomain, derive_id};
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
     AuditExportFormat, AuditExportRequest, EvidenceEntry, export_audit_evidence,
 };
-use frankenengine_engine::schema_id::SchemaId;
-use frankenengine_engine::{ContentHash, DeterministicTimestamp, EngineObjectId};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use std::collections::BTreeMap;
 
 /// Create a test evidence entry for PDF export testing
@@ -23,7 +23,7 @@ fn create_test_evidence_entry(
     summary: &str,
     timestamp: u64,
 ) -> EvidenceEntry {
-    let schema_id = SchemaId::from_bytes([0u8; 32]);
+    let schema_id = SchemaId::from_definition(b"pdf-compliance-real-export-test-schema");
     let entry_id = derive_id(
         ObjectDomain::EvidenceRecord,
         id,
@@ -35,7 +35,7 @@ fn create_test_evidence_entry(
     EvidenceEntry {
         entry_id,
         kind: kind.to_string(),
-        timestamp: DeterministicTimestamp::from_unix_seconds(timestamp),
+        timestamp: DeterministicTimestamp(timestamp),
         summary: summary.to_string(),
         evidence_hash: ContentHash::compute(b"test-evidence-data"),
         attributes: BTreeMap::new(),
@@ -48,12 +48,16 @@ fn export_entries_as_pdf(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let request = AuditExportRequest {
         format: AuditExportFormat::CompliancePdf,
-        offset: 0,
-        limit: entries.len() as u64,
+        start_tick: DeterministicTimestamp(0),
+        end_tick: DeterministicTimestamp(u64::MAX),
+        evidence_kinds: None,
+        max_entries: Some(entries.len() as u64),
+        requester: "pdf_compliance_real_export_test".to_string(),
+        correlation_id: Some("pdf-real-export".to_string()),
     };
 
-    let result = export_audit_evidence(&entries, request)?;
-    Ok(result.payload)
+    let result = export_audit_evidence(request, entries, DeterministicTimestamp(1640995200))?;
+    Ok(result.payload_bytes)
 }
 
 #[test]

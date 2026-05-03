@@ -1,6 +1,6 @@
 use frankenengine_engine::ast::{
-    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
-    ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration, ParseGoal,
+    ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
@@ -341,5 +341,8 @@ fn test_property_operations_deterministic_lowering() {
     ir3_module2.instructions = instructions2;
     let canonical2 = ir3_module2.canonical_bytes();
 
-    assert_eq!(canonical1, canonical2, "canonical IR3 bytes should be stable");
+    assert_eq!(
+        canonical1, canonical2,
+        "canonical IR3 bytes should be stable"
+    );
 }

@@ -159,11 +159,11 @@ fn enrichment_debug_nonempty_all_types() {
 #[test]
 fn enrichment_clone_independence_capability_profile() {
     let original = CapabilityProfile::engine_core();
-    let mut cloned = original.clone();
-    cloned.capabilities.insert(RuntimeCapability::NetworkEgress);
-    // Original should be unaffected
+    let cloned = original.clone();
+    assert_eq!(original, cloned);
+    assert!(cloned.has(RuntimeCapability::VmDispatch));
     assert!(!original.has(RuntimeCapability::NetworkEgress));
-    assert!(cloned.has(RuntimeCapability::NetworkEgress));
+    assert!(!cloned.has(RuntimeCapability::NetworkEgress));
 }
 
 #[test]
@@ -259,13 +259,13 @@ fn enrichment_full_covers_engine_core_policy_remote() {
     let ec = CapabilityProfile::engine_core();
     let pol = CapabilityProfile::policy();
     let rem = CapabilityProfile::remote();
-    for cap in &ec.capabilities {
+    for cap in ec.capabilities() {
         assert!(full.has(*cap), "full missing engine_core cap {cap}");
     }
-    for cap in &pol.capabilities {
+    for cap in pol.capabilities() {
         assert!(full.has(*cap), "full missing policy cap {cap}");
     }
-    for cap in &rem.capabilities {
+    for cap in rem.capabilities() {
         assert!(full.has(*cap), "full missing remote cap {cap}");
     }
 }
@@ -277,12 +277,12 @@ fn enrichment_full_has_extra_caps_beyond_partitions() {
     let rem = CapabilityProfile::remote();
     let full = CapabilityProfile::full();
     let mut combined = BTreeSet::new();
-    combined.extend(&ec.capabilities);
-    combined.extend(&pol.capabilities);
-    combined.extend(&rem.capabilities);
+    combined.extend(ec.capabilities().iter().copied());
+    combined.extend(pol.capabilities().iter().copied());
+    combined.extend(rem.capabilities().iter().copied());
     // Full has capabilities not in any partition (EnvRead, ProcessSpawn, FsRead, FsWrite, ExtensionLifecycle)
     assert!(full.len() > combined.len());
-    let extras: BTreeSet<_> = full.capabilities.difference(&combined).copied().collect();
+    let extras: BTreeSet<_> = full.capabilities().difference(&combined).copied().collect();
     assert!(extras.contains(&RuntimeCapability::EnvRead));
     assert!(extras.contains(&RuntimeCapability::ProcessSpawn));
     assert!(extras.contains(&RuntimeCapability::FsRead));
@@ -362,7 +362,7 @@ fn enrichment_intersection_associative() {
     let c = CapabilityProfile::policy();
     let ab_c = a.intersect(&b).intersect(&c);
     let a_bc = a.intersect(&b.intersect(&c));
-    assert_eq!(ab_c.capabilities, a_bc.capabilities);
+    assert_eq!(ab_c.capabilities(), a_bc.capabilities());
 }
 
 // =========================================================================
@@ -492,7 +492,7 @@ fn enrichment_subsumption_reflexive_all_profiles() {
         assert!(
             profile.subsumes(profile),
             "{} should subsume itself",
-            profile.kind
+            profile.kind()
         );
     }
 }
@@ -514,24 +514,23 @@ fn enrichment_subsumption_asymmetric_full_vs_others() {
 // ===== PearlTower enrichment =====
 
 // =========================================================================
-// Q. Serde roundtrip for CapabilityProfile — modified custom profile
+// Q. Serde rejects custom CapabilityProfile capability smuggling
 // =========================================================================
 
 #[test]
-fn enrichment_capability_profile_serde_roundtrip_custom() {
-    // Build a custom profile by starting from engine_core and inserting extra caps.
-    let mut profile = CapabilityProfile::engine_core();
-    profile.capabilities.insert(RuntimeCapability::EvidenceEmit);
-    profile.capabilities.insert(RuntimeCapability::PolicyRead);
-    let json = serde_json::to_string(&profile).unwrap();
-    let back: CapabilityProfile = serde_json::from_str(&json).unwrap();
-    assert_eq!(profile, back);
-    assert_eq!(
-        back.capabilities.len(),
-        CapabilityProfile::engine_core().len() + 2
+fn enrichment_capability_profile_serde_rejects_custom_smuggling() {
+    let mut raw = serde_json::to_value(CapabilityProfile::engine_core()).unwrap();
+    raw["capabilities"]
+        .as_array_mut()
+        .expect("canonical profile serializes capabilities as an array")
+        .push(serde_json::json!("PolicyRead"));
+
+    let result: Result<CapabilityProfile, _> = serde_json::from_value(raw);
+    let err = result.expect_err("deserialization must reject non-canonical capability sets");
+    assert!(
+        err.to_string().contains("capability smuggling detected"),
+        "unexpected serde error: {err}"
     );
-    assert!(back.capabilities.contains(&RuntimeCapability::EvidenceEmit));
-    assert!(back.capabilities.contains(&RuntimeCapability::PolicyRead));
 }
 
 #[test]
@@ -573,8 +572,11 @@ fn enrichment_profile_kind_serde_roundtrip_all_variants() {
 fn enrichment_btreeset_union_engine_core_and_policy() {
     let ec = CapabilityProfile::engine_core();
     let pol = CapabilityProfile::policy();
-    let union: BTreeSet<RuntimeCapability> =
-        ec.capabilities.union(&pol.capabilities).copied().collect();
+    let union: BTreeSet<RuntimeCapability> = ec
+        .capabilities()
+        .union(pol.capabilities())
+        .copied()
+        .collect();
     assert_eq!(union.len(), ec.len() + pol.len());
     assert!(union.contains(&RuntimeCapability::VmDispatch));
     assert!(union.contains(&RuntimeCapability::GcInvoke));
@@ -591,11 +593,11 @@ fn enrichment_btreeset_intersection_full_and_engine_core_equals_engine_core() {
     let full = CapabilityProfile::full();
     let ec = CapabilityProfile::engine_core();
     let inter: BTreeSet<RuntimeCapability> = full
-        .capabilities
-        .intersection(&ec.capabilities)
+        .capabilities()
+        .intersection(ec.capabilities())
         .copied()
         .collect();
-    assert_eq!(inter, ec.capabilities);
+    assert_eq!(inter, *ec.capabilities());
 }
 
 #[test]
@@ -609,9 +611,9 @@ fn enrichment_btreeset_subset_all_partitions_within_full() {
     ];
     for partition in &partitions {
         assert!(
-            partition.capabilities.is_subset(&full.capabilities),
+            partition.capabilities().is_subset(full.capabilities()),
             "{:?} capabilities are not a subset of full",
-            partition.kind
+            partition.kind()
         );
     }
 }
@@ -681,7 +683,7 @@ fn enrichment_security_epoch_with_capability_profile_serde() {
     let back: EpochGrant = serde_json::from_str(&json).unwrap();
     assert_eq!(grant, back);
     assert_eq!(back.epoch.as_u64(), 42);
-    assert_eq!(back.profile.kind, ProfileKind::EngineCore);
+    assert_eq!(back.profile.kind(), ProfileKind::EngineCore);
 }
 
 #[test]

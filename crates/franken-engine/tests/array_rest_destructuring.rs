@@ -1,38 +1,39 @@
-use frankenengine_engine::canonical_encoding::ensure_canonical_ordering;
-use frankenengine_engine::content_hash::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
+use frankenengine_engine::ast::{
+    BindingPattern, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
+};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{
-    LoweringPipelineConfig, LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2,
-    lower_ir2_to_ir3,
+    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
 };
-use frankenengine_engine::object_model::{
-    BindingPattern, DeclarationKind, Expression, Literal, Statement, VariableDeclaration,
-    VariableDeclarator,
-};
-use std::collections::BTreeMap;
+
+fn span() -> SourceSpan {
+    SourceSpan::new(0, 1, 1, 1, 1, 2)
+}
 
 /// Helper to create a module with a destructuring assignment statement
-fn create_destructuring_module(
-    pattern: BindingPattern,
-    init: Expression,
-) -> frankenengine_engine::lowering_pipeline::Ir0Module {
+fn create_destructuring_module(pattern: BindingPattern, init: Expression) -> Ir0Module {
     let declarator = VariableDeclarator {
-        id: pattern,
+        pattern,
         initializer: Some(init),
+        span: span(),
     };
 
     let declaration = VariableDeclaration {
-        kind: DeclarationKind::Const,
+        kind: VariableDeclarationKind::Const,
         declarations: vec![declarator],
+        span: span(),
     };
 
-    frankenengine_engine::lowering_pipeline::Ir0Module {
-        source_text: "test".to_string(),
-        content_hash: ContentHash::compute(b"test"),
-        module_url: "test.js".to_string(),
-        statements: vec![Statement::VariableDeclaration(declaration)],
-        exports: BTreeMap::new(),
-    }
+    Ir0Module::from_syntax_tree(
+        SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::VariableDeclaration(declaration)],
+            span: span(),
+        },
+        "test.js",
+    )
 }
 
 /// Helper to lower a destructuring module through all IR levels and extract IR3 instructions
@@ -52,23 +53,21 @@ fn lower_destructuring_to_ir3(
 #[test]
 fn test_simple_rest_destructuring() {
     // const [a, b, ...rest] = [1, 2, 3, 4, 5];
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("a".to_string()),
-            BindingPattern::Identifier("b".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier("rest".to_string()))),
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("a".to_string())),
+        Some(BindingPattern::Identifier("b".to_string())),
+        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+            "rest".to_string(),
+        )))),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(1))),
-            Some(Expression::Literal(Literal::Integer(2))),
-            Some(Expression::Literal(Literal::Integer(3))),
-            Some(Expression::Literal(Literal::Integer(4))),
-            Some(Expression::Literal(Literal::Integer(5))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(1)),
+        Some(Expression::NumericLiteral(2)),
+        Some(Expression::NumericLiteral(3)),
+        Some(Expression::NumericLiteral(4)),
+        Some(Expression::NumericLiteral(5)),
+    ]);
 
     let instructions =
         lower_destructuring_to_ir3(pattern, init).expect("Simple rest should lower successfully");
@@ -93,20 +92,18 @@ fn test_simple_rest_destructuring() {
 #[test]
 fn test_empty_rest_destructuring() {
     // const [a, b, ...rest] = [1, 2];  // rest should be empty array
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("a".to_string()),
-            BindingPattern::Identifier("b".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier("rest".to_string()))),
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("a".to_string())),
+        Some(BindingPattern::Identifier("b".to_string())),
+        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+            "rest".to_string(),
+        )))),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(1))),
-            Some(Expression::Literal(Literal::Integer(2))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(1)),
+        Some(Expression::NumericLiteral(2)),
+    ]);
 
     let instructions =
         lower_destructuring_to_ir3(pattern, init).expect("Empty rest should lower successfully");
@@ -123,21 +120,19 @@ fn test_empty_rest_destructuring() {
 #[test]
 fn test_source_shorter_than_pattern() {
     // const [a, b, c, ...rest] = [1, 2];  // c = undefined, rest = []
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("a".to_string()),
-            BindingPattern::Identifier("b".to_string()),
-            BindingPattern::Identifier("c".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier("rest".to_string()))),
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("a".to_string())),
+        Some(BindingPattern::Identifier("b".to_string())),
+        Some(BindingPattern::Identifier("c".to_string())),
+        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+            "rest".to_string(),
+        )))),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(1))),
-            Some(Expression::Literal(Literal::Integer(2))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(1)),
+        Some(Expression::NumericLiteral(2)),
+    ]);
 
     let instructions = lower_destructuring_to_ir3(pattern, init)
         .expect("Source shorter than pattern should lower successfully");
@@ -162,19 +157,15 @@ fn test_source_shorter_than_pattern() {
 #[test]
 fn test_rest_only_destructuring() {
     // const [...all] = [1, 2, 3];  // all = [1, 2, 3]
-    let pattern = BindingPattern::Array {
-        elements: vec![BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-            "all".to_string(),
-        )))],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![Some(BindingPattern::Rest(Box::new(
+        BindingPattern::Identifier("all".to_string()),
+    )))]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(1))),
-            Some(Expression::Literal(Literal::Integer(2))),
-            Some(Expression::Literal(Literal::Integer(3))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(1)),
+        Some(Expression::NumericLiteral(2)),
+        Some(Expression::NumericLiteral(3)),
+    ]);
 
     let instructions =
         lower_destructuring_to_ir3(pattern, init).expect("Rest only should lower successfully");
@@ -199,30 +190,24 @@ fn test_rest_only_destructuring() {
 #[test]
 fn test_nested_array_rest_destructuring() {
     // const [a, [b, ...inner]] = [1, [2, 3, 4]];
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("a".to_string()),
-            BindingPattern::Array {
-                elements: vec![
-                    BindingPattern::Identifier("b".to_string()),
-                    BindingPattern::Rest(Box::new(BindingPattern::Identifier("inner".to_string()))),
-                ],
-            },
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("a".to_string())),
+        Some(BindingPattern::ArrayPattern(vec![
+            Some(BindingPattern::Identifier("b".to_string())),
+            Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+                "inner".to_string(),
+            )))),
+        ])),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(1))),
-            Some(Expression::Array {
-                elements: vec![
-                    Some(Expression::Literal(Literal::Integer(2))),
-                    Some(Expression::Literal(Literal::Integer(3))),
-                    Some(Expression::Literal(Literal::Integer(4))),
-                ],
-            }),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(1)),
+        Some(Expression::ArrayLiteral(vec![
+            Some(Expression::NumericLiteral(2)),
+            Some(Expression::NumericLiteral(3)),
+            Some(Expression::NumericLiteral(4)),
+        ])),
+    ]);
 
     let instructions =
         lower_destructuring_to_ir3(pattern, init).expect("Nested rest should lower successfully");
@@ -249,29 +234,24 @@ fn test_nested_array_rest_destructuring() {
 #[test]
 fn test_rest_destructuring_deterministic_lowering() {
     // Test that rest destructuring lowering is deterministic
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("first".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier(
-                "remaining".to_string(),
-            ))),
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("first".to_string())),
+        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+            "remaining".to_string(),
+        )))),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(10))),
-            Some(Expression::Literal(Literal::Integer(20))),
-            Some(Expression::Literal(Literal::Integer(30))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(10)),
+        Some(Expression::NumericLiteral(20)),
+        Some(Expression::NumericLiteral(30)),
+    ]);
 
     // Lower the same destructuring twice
     let instructions1 = lower_destructuring_to_ir3(pattern.clone(), init.clone())
         .expect("First lowering should succeed");
     let instructions2 =
         lower_destructuring_to_ir3(pattern, init).expect("Second lowering should succeed");
-
     // Results should be identical (deterministic)
     assert_eq!(
         instructions1.len(),
@@ -293,39 +273,36 @@ fn test_rest_destructuring_deterministic_lowering() {
         "Both passes should emit the same number of ArraySlice instructions"
     );
 
-    // Verify canonical ordering is maintained
-    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"test1"), "test1.js");
+    // Verify deterministic canonical encoding for equivalent modules.
+    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"test"), "test.js");
     ir3_module1.instructions = instructions1;
-    let canonical1 = ensure_canonical_ordering(&ir3_module1);
 
-    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"test2"), "test2.js");
+    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"test"), "test.js");
     ir3_module2.instructions = instructions2;
-    let canonical2 = ensure_canonical_ordering(&ir3_module2);
 
-    assert!(
-        canonical1.is_ok() && canonical2.is_ok(),
-        "Both modules should have canonical ordering"
+    assert_eq!(
+        ir3_module1.canonical_bytes(),
+        ir3_module2.canonical_bytes(),
+        "Equivalent rest-destructuring modules should encode deterministically"
     );
 }
 
 #[test]
 fn test_array_slice_instruction_properties() {
     // const [head, ...tail] = [100, 200, 300, 400];
-    let pattern = BindingPattern::Array {
-        elements: vec![
-            BindingPattern::Identifier("head".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier("tail".to_string()))),
-        ],
-    };
+    let pattern = BindingPattern::ArrayPattern(vec![
+        Some(BindingPattern::Identifier("head".to_string())),
+        Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+            "tail".to_string(),
+        )))),
+    ]);
 
-    let init = Expression::Array {
-        elements: vec![
-            Some(Expression::Literal(Literal::Integer(100))),
-            Some(Expression::Literal(Literal::Integer(200))),
-            Some(Expression::Literal(Literal::Integer(300))),
-            Some(Expression::Literal(Literal::Integer(400))),
-        ],
-    };
+    let init = Expression::ArrayLiteral(vec![
+        Some(Expression::NumericLiteral(100)),
+        Some(Expression::NumericLiteral(200)),
+        Some(Expression::NumericLiteral(300)),
+        Some(Expression::NumericLiteral(400)),
+    ]);
 
     let instructions = lower_destructuring_to_ir3(pattern, init)
         .expect("Array slice properties should lower successfully");

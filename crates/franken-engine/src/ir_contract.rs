@@ -455,6 +455,9 @@ pub enum Ir1Op {
     /// Push a single element onto an array. Stack: [..., array, element] -> [..., array].
     /// The element is popped and appended to the array.
     ArrayPush,
+    /// Slice an array from start index to end. Stack: [..., array, start_index] -> [..., sliced_array].
+    /// Creates a new array containing elements from start_index to array.length.
+    ArraySlice,
     /// Spread an iterable into an array. Stack: [..., array, iterable] -> [..., array].
     /// Iterates the iterable and appends each element to the array.
     SpreadIntoArray,
@@ -753,6 +756,12 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("array_push".to_string()),
+                );
+            }
+            Self::ArraySlice => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("array_slice".to_string()),
                 );
             }
             Self::SpreadIntoArray => {
@@ -1460,6 +1469,8 @@ pub enum Ir3Instruction {
     NewArray { dst: Reg },
     /// Push a single element onto an array: array.push(element).
     ArrayPush { array: Reg, element: Reg },
+    /// Slice an array from start index to end: dst = array.slice(start).
+    ArraySlice { array: Reg, start: Reg, dst: Reg },
     /// Spread an iterable into an array: for (const x of iterable) array.push(x).
     SpreadIntoArray { array: Reg, iterable: Reg },
     /// Spread an object's properties into another object: Object.assign(target, source).
@@ -1868,6 +1879,15 @@ impl Ir3Instruction {
                     "element".to_string(),
                     CanonicalValue::U64(u64::from(*element)),
                 );
+            }
+            Self::ArraySlice { array, start, dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("array_slice".to_string()),
+                );
+                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
+                map.insert("start".to_string(), CanonicalValue::U64(u64::from(*start)));
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
             Self::SpreadIntoArray { array, iterable } => {
                 map.insert(

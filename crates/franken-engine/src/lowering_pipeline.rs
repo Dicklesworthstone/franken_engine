@@ -1374,12 +1374,23 @@ fn lower_destructuring_to_ir1(
                         None => continue,
                     };
                     if let Some(&target_bid) = binding_lookup.get(target_name) {
-                        // Rest collects remaining elements — for now store
-                        // undefined as placeholder since array slicing requires
-                        // runtime support not yet available.
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Undefined,
+                        // Rest collects remaining elements by slicing the source array
+                        // from the current index to the end.
+
+                        // Load the source array
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: source_bid,
                         });
+
+                        // Load the start index (current position in destructuring)
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Integer(index as i64),
+                        });
+
+                        // Emit ArraySlice operation (will be lowered to IR3 later)
+                        ops.push(Ir1Op::ArraySlice);
+
+                        // Store the result array to the rest binding
                         ops.push(Ir1Op::StoreBinding {
                             binding_id: target_bid,
                         });
@@ -3713,6 +3724,15 @@ pub fn lower_ir2_to_ir3(
                     .push(Ir3Instruction::ArrayPush { array, element });
                 value_stack.push(array);
             }
+            Ir1Op::ArraySlice => {
+                // Stack: [..., array, start_index] -> [..., sliced_array]
+                let start = pop_lowering_value(&mut value_stack)?;
+                let array = pop_lowering_value(&mut value_stack)?;
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions
+                    .push(Ir3Instruction::ArraySlice { array, start, dst });
+                value_stack.push(dst);
+            }
             Ir1Op::SpreadIntoArray => {
                 // Stack: [..., array, iterable] -> [..., array]
                 let iterable = pop_lowering_value(&mut value_stack)?;
@@ -4709,6 +4729,15 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions
                         .push(Ir3Instruction::ArrayPush { array, element });
                     fn_value_stack.push(array);
+                }
+                Ir1Op::ArraySlice => {
+                    // Stack: [..., array, start_index] -> [..., sliced_array]
+                    let start = pop_lowering_value(&mut fn_value_stack)?;
+                    let array = pop_lowering_value(&mut fn_value_stack)?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ArraySlice { array, start, dst });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::SpreadIntoArray => {
                     // Stack: [..., array, iterable] -> [..., array]

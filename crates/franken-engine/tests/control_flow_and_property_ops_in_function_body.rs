@@ -1,26 +1,32 @@
-use frankenengine_engine::canonical_encoding::ensure_canonical_ordering;
-use frankenengine_engine::content_hash::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module};
+use frankenengine_engine::ast::{
+    AssignmentOperator, BinaryOperator, BlockStatement, Expression, FunctionDeclaration,
+    ParseGoal, ReturnStatement, SourceSpan, Statement, SyntaxTree, UnaryOperator,
+};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use frankenengine_engine::lowering_pipeline::{
-    LoweringPipelineConfig, LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2,
-    lower_ir2_to_ir3,
+    LoweringPipelineError, lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
 };
-use frankenengine_engine::object_model::{
-    AssignmentOperator, BinaryOperator, Expression, FunctionDeclaration, Literal, Statement,
-    UnaryOperator,
-};
-use std::collections::BTreeMap;
+
+fn span() -> SourceSpan {
+    SourceSpan::new(0, 1, 1, 1, 1, 2)
+}
 
 /// Helper to create a function declaration with control flow or property operations in the body
 fn create_function_with_expression(function_body_expr: Expression) -> FunctionDeclaration {
     FunctionDeclaration {
-        identifier: "testFunc".to_string(),
-        parameters: vec![],
-        body: vec![Statement::Return {
-            argument: Some(Box::new(function_body_expr)),
-        }],
+        name: Some("testFunc".to_string()),
+        params: vec![],
+        body: BlockStatement {
+            body: vec![Statement::Return(ReturnStatement {
+                argument: Some(function_body_expr),
+                span: span(),
+            })],
+            span: span(),
+        },
         is_async: false,
         is_generator: false,
+        span: span(),
     }
 }
 
@@ -28,13 +34,14 @@ fn create_function_with_expression(function_body_expr: Expression) -> FunctionDe
 fn lower_function_to_ir3(
     func_decl: FunctionDeclaration,
 ) -> Result<Vec<Ir3Instruction>, LoweringPipelineError> {
-    let ir0_module = frankenengine_engine::lowering_pipeline::Ir0Module {
-        source_text: "test".to_string(),
-        content_hash: ContentHash::compute(b"test"),
-        module_url: "test.js".to_string(),
-        statements: vec![Statement::FunctionDeclaration(func_decl)],
-        exports: BTreeMap::new(),
-    };
+    let ir0_module = Ir0Module::from_syntax_tree(
+        SyntaxTree {
+            goal: ParseGoal::Script,
+            body: vec![Statement::FunctionDeclaration(func_decl)],
+            span: span(),
+        },
+        "test.js",
+    );
 
     let ir1_result = lower_ir0_to_ir1(&ir0_module)?;
     let ir2_result = lower_ir1_to_ir2(&ir1_result.module)?;
@@ -50,7 +57,7 @@ fn lower_function_to_ir3(
 #[test]
 fn test_nullish_coalescing_in_function_body() {
     // function testFunc() { return a ?? b; }
-    let nullish_expr = Expression::BinaryExpression {
+    let nullish_expr = Expression::Binary {
         left: Box::new(Expression::Identifier("a".to_string())),
         operator: BinaryOperator::NullishCoalescing,
         right: Box::new(Expression::Identifier("b".to_string())),
@@ -72,11 +79,10 @@ fn test_nullish_coalescing_in_function_body() {
 #[test]
 fn test_optional_chaining_in_function_body() {
     // function testFunc() { return obj?.prop; }
-    let optional_member = Expression::Member {
+    let optional_member = Expression::OptionalMember {
         object: Box::new(Expression::Identifier("obj".to_string())),
         property: Box::new(Expression::Identifier("prop".to_string())),
         computed: false,
-        optional: true,
     };
 
     let func_decl = create_function_with_expression(optional_member);
@@ -103,7 +109,7 @@ fn test_optional_chaining_in_function_body() {
 #[test]
 fn test_nullish_coalescing_assignment_in_function_body() {
     // function testFunc() { return a ??= b; }
-    let nullish_assign = Expression::AssignmentExpression {
+    let nullish_assign = Expression::Assignment {
         operator: AssignmentOperator::NullishCoalescingAssign,
         left: Box::new(Expression::Identifier("a".to_string())),
         right: Box::new(Expression::Identifier("b".to_string())),
@@ -125,20 +131,17 @@ fn test_nullish_coalescing_assignment_in_function_body() {
 #[test]
 fn test_nested_optional_chaining() {
     // function testFunc() { return obj?.prop?.method?.(); }
-    let nested_optional = Expression::CallExpression {
-        callee: Box::new(Expression::Member {
-            object: Box::new(Expression::Member {
+    let nested_optional = Expression::OptionalCall {
+        callee: Box::new(Expression::OptionalMember {
+            object: Box::new(Expression::OptionalMember {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("prop".to_string())),
                 computed: false,
-                optional: true,
             }),
             property: Box::new(Expression::Identifier("method".to_string())),
             computed: false,
-            optional: true,
         }),
         arguments: vec![],
-        optional: true,
     };
 
     let func_decl = create_function_with_expression(nested_optional);
@@ -159,12 +162,11 @@ fn test_nested_optional_chaining() {
 #[test]
 fn test_control_flow_deterministic_lowering() {
     // Test that control flow lowering is deterministic
-    let complex_expr = Expression::BinaryExpression {
-        left: Box::new(Expression::Member {
+    let complex_expr = Expression::Binary {
+        left: Box::new(Expression::OptionalMember {
             object: Box::new(Expression::Identifier("a".to_string())),
             property: Box::new(Expression::Identifier("b".to_string())),
             computed: false,
-            optional: true,
         }),
         operator: BinaryOperator::NullishCoalescing,
         right: Box::new(Expression::Identifier("fallback".to_string())),
@@ -206,13 +208,12 @@ fn test_control_flow_deterministic_lowering() {
 #[test]
 fn test_delete_simple_property() {
     // function testFunc() { return delete obj.prop; }
-    let delete_expr = Expression::UnaryExpression {
+    let delete_expr = Expression::Unary {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
-            optional: false,
         }),
     };
 
@@ -232,13 +233,12 @@ fn test_delete_simple_property() {
 #[test]
 fn test_delete_computed_property() {
     // function testFunc() { return delete obj[key]; }
-    let delete_computed = Expression::UnaryExpression {
+    let delete_computed = Expression::Unary {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("obj".to_string())),
             property: Box::new(Expression::Identifier("key".to_string())),
             computed: true,
-            optional: false,
         }),
     };
 
@@ -258,18 +258,16 @@ fn test_delete_computed_property() {
 #[test]
 fn test_delete_nested_property() {
     // function testFunc() { return delete obj.nested.prop; }
-    let delete_nested = Expression::UnaryExpression {
+    let delete_nested = Expression::Unary {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Member {
                 object: Box::new(Expression::Identifier("obj".to_string())),
                 property: Box::new(Expression::Identifier("nested".to_string())),
                 computed: false,
-                optional: false,
             }),
             property: Box::new(Expression::Identifier("prop".to_string())),
             computed: false,
-            optional: false,
         }),
     };
 
@@ -297,15 +295,12 @@ fn test_delete_nested_property() {
 #[test]
 fn test_property_operations_deterministic_lowering() {
     // Test that property operations lower deterministically
-    let property_expr = Expression::UnaryExpression {
+    let property_expr = Expression::Unary {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("target".to_string())),
-            property: Box::new(Expression::Literal(Literal::String(
-                "dynamicKey".to_string(),
-            ))),
+            property: Box::new(Expression::StringLiteral("dynamicKey".to_string())),
             computed: true,
-            optional: false,
         }),
     };
 
@@ -338,16 +333,13 @@ fn test_property_operations_deterministic_lowering() {
     );
 
     // Verify canonical ordering is maintained
-    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"test1"), "test1.js");
+    let mut ir3_module1 = Ir3Module::new(ContentHash::compute(b"property-test"), "property.js");
     ir3_module1.instructions = instructions1;
-    let canonical1 = ensure_canonical_ordering(&ir3_module1);
+    let canonical1 = ir3_module1.canonical_bytes();
 
-    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"test2"), "test2.js");
+    let mut ir3_module2 = Ir3Module::new(ContentHash::compute(b"property-test"), "property.js");
     ir3_module2.instructions = instructions2;
-    let canonical2 = ensure_canonical_ordering(&ir3_module2);
+    let canonical2 = ir3_module2.canonical_bytes();
 
-    assert!(
-        canonical1.is_ok() && canonical2.is_ok(),
-        "Both modules should have canonical ordering"
-    );
+    assert_eq!(canonical1, canonical2, "canonical IR3 bytes should be stable");
 }

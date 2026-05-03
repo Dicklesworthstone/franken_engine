@@ -3311,6 +3311,139 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ifc_lattice_model_satisfies_join_meet_laws_for_builtin_labels() {
+        let labels = Label::all_builtin();
+        let mut checked_pairs = 0usize;
+        let mut checked_triples = 0usize;
+
+        for a in &labels {
+            assert_eq!(a.join(a), *a, "join idempotence failed for {a}");
+            assert_eq!(a.meet(a), *a, "meet idempotence failed for {a}");
+
+            for b in &labels {
+                checked_pairs += 1;
+
+                assert_eq!(
+                    a.join(b),
+                    b.join(a),
+                    "join commutativity failed for {a}, {b}"
+                );
+                assert_eq!(
+                    a.meet(b),
+                    b.meet(a),
+                    "meet commutativity failed for {a}, {b}"
+                );
+                assert_eq!(
+                    a.join(&a.meet(b)),
+                    *a,
+                    "join/meet absorption failed for {a}, {b}"
+                );
+                assert_eq!(
+                    a.meet(&a.join(b)),
+                    *a,
+                    "meet/join absorption failed for {a}, {b}"
+                );
+
+                let join = a.join(b);
+                assert!(
+                    a.can_flow_to(&join) && b.can_flow_to(&join),
+                    "join must be an upper bound for {a}, {b}, got {join}"
+                );
+                for candidate_upper in &labels {
+                    if a.can_flow_to(candidate_upper) && b.can_flow_to(candidate_upper) {
+                        assert!(
+                            join.can_flow_to(candidate_upper),
+                            "join {join} is not least upper bound for {a}, {b}; candidate {candidate_upper}"
+                        );
+                    }
+                }
+
+                let meet = a.meet(b);
+                assert!(
+                    meet.can_flow_to(a) && meet.can_flow_to(b),
+                    "meet must be a lower bound for {a}, {b}, got {meet}"
+                );
+                for candidate_lower in &labels {
+                    if candidate_lower.can_flow_to(a) && candidate_lower.can_flow_to(b) {
+                        assert!(
+                            candidate_lower.can_flow_to(&meet),
+                            "meet {meet} is not greatest lower bound for {a}, {b}; candidate {candidate_lower}"
+                        );
+                    }
+                }
+
+                for c in &labels {
+                    checked_triples += 1;
+                    assert_eq!(
+                        a.join(&b.join(c)),
+                        a.join(b).join(c),
+                        "join associativity failed for {a}, {b}, {c}"
+                    );
+                    assert_eq!(
+                        a.meet(&b.meet(c)),
+                        a.meet(b).meet(c),
+                        "meet associativity failed for {a}, {b}, {c}"
+                    );
+                }
+            }
+        }
+
+        println!(
+            "ifc_lattice_model: checked {checked_pairs} ordered pairs and {checked_triples} ordered triples across {} built-in labels",
+            labels.len()
+        );
+    }
+
+    #[test]
+    fn ifc_lattice_model_computed_labels_are_join_upper_bounds() {
+        let input_labels = vec![Label::Public, Label::Confidential, Label::Secret];
+        let computed = Ir2LabelSource::Computed {
+            input_labels: input_labels.clone(),
+        }
+        .assign_label();
+
+        assert_eq!(computed, Label::Secret);
+        for input in &input_labels {
+            assert!(
+                input.can_flow_to(&computed),
+                "computed label {computed} must be at least as sensitive as input {input}"
+            );
+        }
+
+        println!(
+            "ifc_lattice_model: computed label {computed} covers {} input labels via join",
+            input_labels.len()
+        );
+    }
+
+    #[test]
+    fn ifc_lattice_model_policy_semantics_fail_closed_without_lattice_or_route() {
+        let policy = make_flow_policy();
+
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Confidential, &Label::Public),
+            FlowCheckResult::Prohibited,
+            "explicit prohibition must override otherwise legal policy paths"
+        );
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Secret, &Label::Public),
+            FlowCheckResult::Denied,
+            "secret to public without lattice legality or declassification route must fail closed"
+        );
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Secret, &Label::Internal),
+            FlowCheckResult::DeclassificationRequired {
+                route_id: "declass-1".to_string()
+            },
+            "configured cross-label route must surface a declassification obligation"
+        );
+
+        println!(
+            "ifc_lattice_model: verified policy precedence prohibited > allowed > lattice > declassification > denied"
+        );
+    }
+
     // -- Enrichment: std::error --
 
     #[test]

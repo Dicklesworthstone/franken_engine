@@ -1770,6 +1770,109 @@ mod tests {
         assert!(full.has(RuntimeCapability::ModuleLoad));
     }
 
+    #[test]
+    fn capability_profile_security_algebra_satisfies_subsumption_and_attenuation_laws() {
+        let profiles = [
+            CapabilityProfile::full(),
+            CapabilityProfile::engine_core(),
+            CapabilityProfile::policy(),
+            CapabilityProfile::remote(),
+            CapabilityProfile::compute_only(),
+        ];
+        let full = CapabilityProfile::full();
+        let bottom = CapabilityProfile::compute_only();
+        let mut checked_pairs = 0usize;
+
+        for profile in &profiles {
+            assert!(
+                full.subsumes(profile),
+                "FullCaps must subsume {}",
+                profile.kind()
+            );
+            assert!(
+                profile.subsumes(&bottom),
+                "{} must subsume bottom ComputeOnlyCaps",
+                profile.kind()
+            );
+            assert_eq!(
+                profile.intersect(profile).capabilities(),
+                profile.capabilities(),
+                "intersection idempotence failed for {}",
+                profile.kind()
+            );
+
+            for other in &profiles {
+                checked_pairs += 1;
+                let left = profile.intersect(other);
+                let right = other.intersect(profile);
+
+                assert_eq!(
+                    left.capabilities(),
+                    right.capabilities(),
+                    "intersection commutativity failed for {} and {}",
+                    profile.kind(),
+                    other.kind()
+                );
+                assert!(
+                    profile.capabilities().is_superset(left.capabilities()),
+                    "attenuation granted a capability absent from {}",
+                    profile.kind()
+                );
+                assert!(
+                    other.capabilities().is_superset(left.capabilities()),
+                    "attenuation granted a capability absent from {}",
+                    other.kind()
+                );
+            }
+        }
+
+        println!(
+            "capability_profile_security_algebra: checked {checked_pairs} profile pairs over {} canonical profiles",
+            profiles.len()
+        );
+    }
+
+    #[test]
+    fn capability_profile_security_algebra_keeps_authority_partitions_disjoint() {
+        let partitions = [
+            CapabilityProfile::engine_core(),
+            CapabilityProfile::policy(),
+            CapabilityProfile::remote(),
+        ];
+
+        for (idx, profile) in partitions.iter().enumerate() {
+            for other in partitions.iter().skip(idx + 1) {
+                let intersection = profile.intersect(other);
+                assert!(
+                    intersection.is_empty(),
+                    "{} and {} must not share ambient authority; shared caps: {:?}",
+                    profile.kind(),
+                    other.kind(),
+                    intersection.capabilities()
+                );
+            }
+        }
+
+        println!(
+            "capability_profile_security_algebra: verified EngineCore, Policy, and Remote authority partitions are pairwise disjoint"
+        );
+    }
+
+    #[test]
+    fn capability_profile_security_algebra_unknown_tags_do_not_create_authority() {
+        for unknown in ["", "promise:resolve", "host:escape", "unknown:cap"] {
+            assert_eq!(
+                RuntimeCapability::from_tag_str(unknown),
+                None,
+                "unknown tag {unknown:?} must not map to a typed capability"
+            );
+        }
+
+        println!(
+            "capability_profile_security_algebra: unknown hostcall tags stay outside the capability lattice"
+        );
+    }
+
     // ── Security: capability smuggling prevention ─────────────────
 
     #[test]

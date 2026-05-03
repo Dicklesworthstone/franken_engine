@@ -144,7 +144,9 @@ cargo test
 FrankenEngine is the native runtime heart for `franken_node`, with goals:
 
 - de novo Rust-native execution lanes (no engine bindings for core execution)
-- mathematically explicit runtime security for untrusted extension code
+- mathematically explicit runtime security models for untrusted extension code,
+  with current proof state bounded by `docs/FORMAL_RUNTIME_SECURITY_MODEL_V1.md`,
+  the claim-to-proof matrix, and executable IFC/capability invariant tests
 - deterministic replay and auditable decision artifacts
 - high-performance runtime with mathematically explicit security guarantees
 

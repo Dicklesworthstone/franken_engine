@@ -30,6 +30,7 @@ The first wired gates are:
 - `scripts/e2e/readme_cli_workflow_smoke.sh`
 - `examples/02_signed_decision_receipt/verify.sh`
 - `scripts/e2e/proof_artifact_contract_smoke.sh`
+- `scripts/e2e/runtime_security_model_proof_smoke.sh`
 
 New proof gates should prefer repository-relative artifact paths. The helper
 normalizes paths under the repo root before writing the shared manifest so that

@@ -2006,6 +2006,32 @@ enum PromiseSettlement {
     Rejected(crate::object_model::JsValue),
 }
 
+/// JIT statistics for hot path detection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JitStatistics(pub usize, pub usize, pub u64, pub u64, pub u64);
+
+impl JitStatistics {
+    pub fn function_counts_len(&self) -> usize { self.0 }
+    pub fn loop_counts_len(&self) -> usize { self.1 }
+    pub fn hot_threshold(&self) -> u64 { self.2 }
+    pub fn eviction_counter(&self) -> u64 { self.3 }
+    pub fn total_function_calls(&self) -> u64 { self.4 }
+}
+
+// Allow destructuring as (usize, usize, u64, u64)
+impl Into<(usize, usize, u64, u64)> for JitStatistics {
+    fn into(self) -> (usize, usize, u64, u64) {
+        (self.0, self.1, self.2, self.3)
+    }
+}
+
+// Allow direct destructuring patterns
+impl JitStatistics {
+    pub fn destructure(self) -> (usize, usize, u64, u64) {
+        (self.0, self.1, self.2, self.3)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
@@ -2365,12 +2391,13 @@ impl InterpreterCore {
     }
 
     /// Get JIT statistics for testing and debugging.
-    pub fn jit_get_statistics(&self) -> (usize, usize, u64, u64) {
-        (
+    pub fn jit_get_statistics(&self) -> JitStatistics {
+        JitStatistics(
             self.jit_function_call_counts.len(),
             self.jit_loop_iteration_counts.len(),
             self.jit_hot_threshold,
             self.jit_eviction_counter,
+            self.jit_function_call_counts.values().sum(),
         )
     }
 
@@ -2381,17 +2408,12 @@ impl InterpreterCore {
         self.jit_eviction_counter = 0;
     }
 
-    // ---------------------------------------------------------------------------
-    // JIT hot path detection and tier promotion
-    // ---------------------------------------------------------------------------
+    /// Get the captured console output entries.
+    pub fn console_output(&self) -> &[ConsoleEntry] {
+        &self.console_output
+    }
 
-    /// Record a function call and check if it should be promoted to hot tier.
-    fn jit_record_function_call(&mut self, function_id: u32) -> bool {
-        let count = self.jit_function_call_counts.entry(function_id).or_insert(0);
-        *count += 1;
-
-        // Check if threshold crossed for tier promotion
-        if *count == self.jit_hot_threshold {
+    fn push_console_output(&mut self, level: ConsoleLevel, message: String) {
             self.emit_tier_promotion_event(function_id, *count);
             true // Function is now hot
         } else {

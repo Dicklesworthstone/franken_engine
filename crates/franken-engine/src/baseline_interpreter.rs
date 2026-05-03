@@ -2169,6 +2169,8 @@ impl InterpreterCore {
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
         let trace_id = trace_id.into();
+        // perf: hot path - avoid clone by reusing trace_id for nondeterminism_trace
+        let nondeterminism_trace = NondeterminismTrace::new(&trace_id);
         Self {
             config,
             hook: None,
@@ -2185,7 +2187,7 @@ impl InterpreterCore {
             hostcall_decisions: Vec::new(),
             events: Vec::new(),
             witness_seq: 0,
-            trace_id: trace_id.clone(),
+            trace_id,
             register_base: 0,
             catch_frames: Vec::new(),
             pending_exception: None,
@@ -2219,7 +2221,7 @@ impl InterpreterCore {
             pending_challenges: Vec::new(),
             containment_evidence: Vec::new(),
             decision_receipts: EvidenceLog::new(),
-            nondeterminism_trace: NondeterminismTrace::new(trace_id),
+            nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
             weakmap_storage: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
@@ -2260,16 +2262,15 @@ impl InterpreterCore {
 
     /// Propagate IFC labels through binary operations (join of operand labels).
     fn propagate_binary_operation_label(&mut self, lhs: u32, rhs: u32, dst: u32) -> Result<(), InterpreterError> {
-        let lhs_label = self.get_register_label(lhs)?.clone();
-        let rhs_label = self.get_register_label(rhs)?.clone();
-        let result_label = lhs_label.join(&rhs_label);
+        // perf: hot path - avoid cloning labels, join() already clones internally
+        let result_label = self.get_register_label(lhs)?.join(self.get_register_label(rhs)?);
         self.set_register_label(dst, result_label)
     }
 
     /// Propagate IFC labels through unary operations (preserve operand label).
     fn propagate_unary_operation_label(&mut self, src: u32, dst: u32) -> Result<(), InterpreterError> {
-        let src_label = self.get_register_label(src)?.clone();
-        self.set_register_label(dst, src_label)
+        // perf: hot path - clone only when setting, not for intermediate variable
+        self.set_register_label(dst, self.get_register_label(src)?.clone())
     }
 
     // ---------------------------------------------------------------------------
@@ -2413,13 +2414,6 @@ impl InterpreterCore {
         &self.console_output
     }
 
-    fn push_console_output(&mut self, level: ConsoleLevel, message: String) {
-            self.emit_tier_promotion_event(function_id, *count);
-            true // Function is now hot
-        } else {
-            false
-        }
-    }
 
     /// Record a loop iteration at backedge and check for hot loop promotion.
     fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
@@ -2592,9 +2586,10 @@ impl InterpreterCore {
         self.last_pre_run_seed = Some(seed.clone());
         self.reset_execution_state_from_seed(&seed);
         self.sync_estimated_memory_bytes()?;
+        // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
-        self.current_module_specifier = Some(entry_specifier.clone());
         self.ensure_module_record(module, &entry_specifier)?;
+        self.current_module_specifier = Some(entry_specifier);
         self.inject_runtime_globals()?;
 
         self.push_event("execution_started", "ok", None);
@@ -2798,8 +2793,9 @@ impl InterpreterCore {
         let replaced = {
             let frame = self.scope_chain.current_mut()?;
             let binding_name = name.to_string();
-            let replaced = frame.declare(binding_name.clone(), BindingKind::Var);
-            if let Some(binding) = frame.get_mut(&binding_name) {
+            // perf: hot path - do get_mut first to avoid clone for declare()
+            let replaced = frame.declare(binding_name, BindingKind::Var);
+            if let Some(binding) = frame.get_mut(name) {
                 binding.value = value;
                 binding.initialized = true;
             }
@@ -3744,8 +3740,9 @@ impl InterpreterCore {
             });
         }
 
-        for (i, value) in saved_registers.iter().enumerate() {
-            self.registers[reg_start + i] = value.clone();
+        // perf: hot path - use into_iter to avoid cloning each register value
+        for (i, value) in saved_registers.into_iter().enumerate() {
+            self.registers[reg_start + i] = value;
         }
 
         // Store the settled value in the result register
@@ -6447,12 +6444,11 @@ impl InterpreterCore {
                     let mut previous = None;
                     if let Some(binding) = self.scope_chain.resolve_mut(&name) {
                         if !binding.initialized {
-                            return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
-                            });
+                            // perf: hot path - name is already owned, move instead of clone
+                            return Err(InterpreterError::UninitializedBinding { name });
                         }
                         if binding.kind == BindingKind::Const {
-                            return Err(InterpreterError::ConstAssignment { name: name.clone() });
+                            return Err(InterpreterError::ConstAssignment { name });
                         }
                         previous = Some(binding.clone());
                         binding.value = val;

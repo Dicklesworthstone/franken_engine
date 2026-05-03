@@ -56,7 +56,7 @@ use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
+    CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
     WitnessEvent, WitnessEventKind,
 };
 use crate::iterator_protocol::{
@@ -209,6 +209,52 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     } else {
         HostcallCapabilityClass::Unknown
     }
+}
+
+/// Shared capability gate logic for both Call and HostCall instructions.
+/// Checks if the given capability is allowed and records witness events/decisions.
+fn check_hostcall_capability_gate(
+    interpreter: &mut BaselineInterpreter,
+    capability_tag: &str,
+    instruction_index: u32,
+) -> Result<(), InterpreterError> {
+    let capability_denied = match classify_hostcall_capability(capability_tag) {
+        HostcallCapabilityClass::Runtime(required_cap) => {
+            !interpreter.config.granted_capabilities.contains(&required_cap)
+        }
+        HostcallCapabilityClass::InternalAllowed => false,
+        HostcallCapabilityClass::Unknown => true, // fail-closed on unknown tags
+    };
+
+    if capability_denied {
+        interpreter.emit_witness(
+            WitnessEventKind::CapabilityChecked,
+            Some(&format!("denied:{}", capability_tag)),
+        );
+        interpreter.hostcall_decisions.push(HostcallDecisionRecord {
+            seq: interpreter.hostcall_decisions.len() as u64,
+            capability: CapabilityTag(capability_tag.to_string()),
+            allowed: false,
+            instruction_index,
+        });
+        return Err(InterpreterError::CapabilityDenied {
+            capability: capability_tag.to_string(),
+        });
+    }
+
+    // Record successful capability grant
+    interpreter.emit_witness(
+        WitnessEventKind::CapabilityChecked,
+        Some(&format!("granted:{}", capability_tag)),
+    );
+    interpreter.hostcall_decisions.push(HostcallDecisionRecord {
+        seq: interpreter.hostcall_decisions.len() as u64,
+        capability: CapabilityTag(capability_tag.to_string()),
+        allowed: true,
+        instruction_index,
+    });
+
+    Ok(())
 }
 
 /// Canonical operator-facing label for the deterministic execution profile.
@@ -4603,7 +4649,14 @@ impl InterpreterCore {
                                 if let Some(builtin_cap) =
                                     self.map_function_index_to_builtin_capability(func_idx)
                                 {
-                                    // Dispatch as a builtin hostcall
+                                    // Apply capability gate - same security check as HostCall
+                                    check_hostcall_capability_gate(
+                                        self,
+                                        &builtin_cap,
+                                        self.ip as u32,
+                                    )?;
+
+                                    // Capability granted - dispatch as a builtin hostcall
                                     let result = self.dispatch_builtin_hostcall(
                                         &builtin_cap,
                                         args,
@@ -5051,47 +5104,13 @@ impl InterpreterCore {
                     args,
                     dst,
                 } => {
-                    // Promise hostcalls are always allowed (runtime-internal).
-                    let is_promise_cap = capability.0.starts_with("promise:");
-
-                    let capability_denied = match classify_hostcall_capability(&capability.0) {
-                        HostcallCapabilityClass::Runtime(required_cap) => {
-                            !self.config.granted_capabilities.contains(&required_cap)
-                        }
-                        HostcallCapabilityClass::InternalAllowed => false,
-                        HostcallCapabilityClass::Unknown => true,
-                    };
-                    if capability_denied {
-                        self.emit_witness(
-                            WitnessEventKind::CapabilityChecked,
-                            Some(&format!("denied:{}", capability.0)),
-                        );
-                        self.hostcall_decisions.push(HostcallDecisionRecord {
-                            seq: self.hostcall_decisions.len() as u64,
-                            capability: capability.clone(),
-                            allowed: false,
-                            instruction_index: self.ip as u32,
-                        });
-                        return Err(InterpreterError::CapabilityDenied {
-                            capability: capability.0.clone(),
-                        });
-                    }
+                    // Apply shared capability gate logic
+                    check_hostcall_capability_gate(self, &capability.0, self.ip as u32)?;
 
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
                         Some(&format!("cap:{}", capability.0)),
                     );
-                    self.emit_witness(
-                        WitnessEventKind::CapabilityChecked,
-                        Some(&format!("granted:{}", capability.0)),
-                    );
-
-                    self.hostcall_decisions.push(HostcallDecisionRecord {
-                        seq: self.hostcall_decisions.len() as u64,
-                        capability: capability.clone(),
-                        allowed: true,
-                        instruction_index: self.ip as u32,
-                    });
 
                     // Dispatch promise hostcalls to the promise subsystem.
                     let result = if is_promise_cap {

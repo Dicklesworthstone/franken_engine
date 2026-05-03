@@ -1,16 +1,15 @@
 /// Integration tests for JIT hot path detection system.
 /// Tests counter increment, threshold trigger, multi-function disambiguation,
 /// BTreeMap determinism, threshold config respected, cold function eviction.
-
 use std::collections::BTreeMap;
 
 use frankenengine_engine::{
     Module, ModuleConfig,
-    baseline_interpreter::{InterpreterCore, InterpreterConfig, InterpreterError},
-    ir_contract::Ir3Instruction,
-    value::Value,
-    register::RegisterRange,
+    baseline_interpreter::{InterpreterConfig, InterpreterCore, InterpreterError},
     function::Function,
+    ir_contract::Ir3Instruction,
+    register::RegisterRange,
+    value::Value,
 };
 
 fn create_test_module(instructions: Vec<Ir3Instruction>) -> Module {
@@ -31,14 +30,31 @@ fn create_test_module(instructions: Vec<Ir3Instruction>) -> Module {
 
 fn create_loop_module(loop_count: u32) -> Module {
     let instructions = vec![
-        Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(0.0) },       // counter = 0
-        Ir3Instruction::LoadImmediate { dst: 1, value: Value::Number(loop_count as f64) }, // limit
+        Ir3Instruction::LoadImmediate {
+            dst: 0,
+            value: Value::Number(0.0),
+        }, // counter = 0
+        Ir3Instruction::LoadImmediate {
+            dst: 1,
+            value: Value::Number(loop_count as f64),
+        }, // limit
         // loop start (ip=2)
-        Ir3Instruction::Add { lhs: 0, rhs: 2, dst: 0 },                           // counter += 1
-        Ir3Instruction::LoadImmediate { dst: 2, value: Value::Number(1.0) },      // constant 1
-        Ir3Instruction::Lt { lhs: 0, rhs: 1, dst: 3 },                           // counter < limit
-        Ir3Instruction::JumpIf { cond: 3, target: 2 },                           // if true, jump back to loop start
-        Ir3Instruction::Return { value: 0 },                                     // return counter
+        Ir3Instruction::Add {
+            lhs: 0,
+            rhs: 2,
+            dst: 0,
+        }, // counter += 1
+        Ir3Instruction::LoadImmediate {
+            dst: 2,
+            value: Value::Number(1.0),
+        }, // constant 1
+        Ir3Instruction::Lt {
+            lhs: 0,
+            rhs: 1,
+            dst: 3,
+        }, // counter < limit
+        Ir3Instruction::JumpIf { cond: 3, target: 2 }, // if true, jump back to loop start
+        Ir3Instruction::Return { value: 0 },           // return counter
     ];
     create_test_module(instructions)
 }
@@ -49,11 +65,14 @@ fn create_function_call_module() -> Module {
             Function {
                 name: "caller".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(1) }, // callee function
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(1),
+                    }, // callee function
                     Ir3Instruction::Call {
                         callee: 0,
                         args: RegisterRange { start: 1, count: 0 },
-                        dst: 2
+                        dst: 2,
                     },
                     Ir3Instruction::Return { value: 2 },
                 ],
@@ -65,7 +84,10 @@ fn create_function_call_module() -> Module {
             Function {
                 name: "callee".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(42.0) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Number(42.0),
+                    },
                     Ir3Instruction::Return { value: 0 },
                 ],
                 register_count: 10,
@@ -163,7 +185,9 @@ fn test_jit_threshold_trigger_loop_iterations() {
     assert!(result.is_ok());
 
     // Loop should be above threshold after single execution
-    assert!(interpreter.jit_get_loop_iteration_count(loop_ip) > interpreter.jit_get_hot_threshold());
+    assert!(
+        interpreter.jit_get_loop_iteration_count(loop_ip) > interpreter.jit_get_hot_threshold()
+    );
 }
 
 #[test]
@@ -176,25 +200,34 @@ fn test_jit_multi_function_disambiguation() {
                 name: "caller".to_string(),
                 instructions: vec![
                     // Call function 1
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(1) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(1),
+                    },
                     Ir3Instruction::Call {
                         callee: 0,
                         args: RegisterRange { start: 2, count: 0 },
-                        dst: 3
+                        dst: 3,
                     },
                     // Call function 2
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(2) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(2),
+                    },
                     Ir3Instruction::Call {
                         callee: 0,
                         args: RegisterRange { start: 2, count: 0 },
-                        dst: 3
+                        dst: 3,
                     },
                     // Call function 1 again
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(1) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(1),
+                    },
                     Ir3Instruction::Call {
                         callee: 0,
                         args: RegisterRange { start: 2, count: 0 },
-                        dst: 3
+                        dst: 3,
                     },
                     Ir3Instruction::Return { value: 3 },
                 ],
@@ -206,7 +239,10 @@ fn test_jit_multi_function_disambiguation() {
             Function {
                 name: "func1".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(1.0) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Number(1.0),
+                    },
                     Ir3Instruction::Return { value: 0 },
                 ],
                 register_count: 10,
@@ -217,7 +253,10 @@ fn test_jit_multi_function_disambiguation() {
             Function {
                 name: "func2".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(2.0) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Number(2.0),
+                    },
                     Ir3Instruction::Return { value: 0 },
                 ],
                 register_count: 10,
@@ -286,7 +325,10 @@ fn test_jit_threshold_config_respected() {
     }
 
     // Should be at threshold but not yet "hot"
-    assert_eq!(interpreter.jit_get_function_call_count(1), custom_threshold as u64);
+    assert_eq!(
+        interpreter.jit_get_function_call_count(1),
+        custom_threshold as u64
+    );
 
     // One more execution should exceed threshold
     let result = interpreter.execute_function(&module, 0, &[]);
@@ -307,17 +349,23 @@ fn test_jit_cold_function_eviction() {
                 name: "caller".to_string(),
                 instructions: vec![
                     // Call many different functions
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(1) },
-                    Ir3Instruction::Call {
-                        callee: 0,
-                        args: RegisterRange { start: 2, count: 0 },
-                        dst: 3
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(1),
                     },
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Function(2) },
                     Ir3Instruction::Call {
                         callee: 0,
                         args: RegisterRange { start: 2, count: 0 },
-                        dst: 3
+                        dst: 3,
+                    },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Function(2),
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegisterRange { start: 2, count: 0 },
+                        dst: 3,
                     },
                     Ir3Instruction::Return { value: 3 },
                 ],
@@ -329,7 +377,10 @@ fn test_jit_cold_function_eviction() {
             Function {
                 name: "func1".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(1.0) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Number(1.0),
+                    },
                     Ir3Instruction::Return { value: 0 },
                 ],
                 register_count: 10,
@@ -340,7 +391,10 @@ fn test_jit_cold_function_eviction() {
             Function {
                 name: "func2".to_string(),
                 instructions: vec![
-                    Ir3Instruction::LoadImmediate { dst: 0, value: Value::Number(2.0) },
+                    Ir3Instruction::LoadImmediate {
+                        dst: 0,
+                        value: Value::Number(2.0),
+                    },
                     Ir3Instruction::Return { value: 0 },
                 ],
                 register_count: 10,

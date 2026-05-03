@@ -1238,6 +1238,7 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
 }
 
 /// Thin typed wrapper around the real SQLModel ORM session.
+#[derive(Debug)]
 pub struct TypedSqlModelSession<C: Connection> {
     inner: Session<C>,
 }

@@ -9,16 +9,15 @@
 use frankenengine_engine::baseline_interpreter::{
     InterpreterConfig, InterpreterCore, InterpreterError,
 };
-use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
-use std::collections::BTreeSet;
 
 /// Create an InterpreterCore with minimal capabilities for testing.
 fn minimal_interpreter() -> InterpreterCore {
-    let mut config = InterpreterConfig::default();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities.clear(); // No capabilities granted
     config
         .granted_capabilities
@@ -28,7 +27,7 @@ fn minimal_interpreter() -> InterpreterCore {
 
 /// Create an InterpreterCore with a specific capability granted for positive testing.
 fn interpreter_with_capability(cap: RuntimeCapability) -> InterpreterCore {
-    let mut config = InterpreterConfig::default();
+    let mut config = InterpreterConfig::quickjs_defaults();
     config.granted_capabilities.clear();
     config
         .granted_capabilities
@@ -39,6 +38,7 @@ fn interpreter_with_capability(cap: RuntimeCapability) -> InterpreterCore {
 
 /// Create an IR3 module that makes a hostcall with the given capability tag.
 fn module_with_hostcall(capability_tag: &str) -> Ir3Module {
+    let capability = CapabilityTag(capability_tag.to_string());
     Ir3Module {
         header: IrHeader {
             schema_version: IrSchemaVersion::CURRENT,
@@ -51,7 +51,7 @@ fn module_with_hostcall(capability_tag: &str) -> Ir3Module {
             Ir3Instruction::LoadInt { dst: 0, value: 42 },
             // Attempt hostcall with unknown capability
             Ir3Instruction::HostCall {
-                capability: CapabilityTag(capability_tag.to_string()),
+                capability: capability.clone(),
                 args: RegRange { start: 0, count: 1 },
                 dst: 1,
             },
@@ -59,8 +59,8 @@ fn module_with_hostcall(capability_tag: &str) -> Ir3Module {
         ],
         constant_pool: Vec::new(),
         function_table: Vec::new(),
-        bindings: Vec::new(),
-        debug_info: None,
+        specialization: None,
+        required_capabilities: vec![capability],
     }
 }
 

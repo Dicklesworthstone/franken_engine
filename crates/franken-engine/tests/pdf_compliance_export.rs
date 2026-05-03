@@ -1,11 +1,11 @@
-use frankenengine_engine::content_hash::ContentHash;
-use frankenengine_engine::deterministic_timestamp::DeterministicTimestamp;
-use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain};
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
-    AuditExportFormat, AuditExportRequest, EvidenceEntry, GovernanceError, export_audit_evidence,
+    AuditExportFormat, AuditExportRequest, AuditExportResult, EvidenceEntry, GovernanceError,
+    export_audit_evidence,
 };
-use frankenengine_engine::schema_id::SchemaId;
-use std::collections::{BTreeMap, BTreeSet};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
+use std::collections::BTreeMap;
 
 /// Helper to create a test evidence entry
 fn create_test_evidence_entry(
@@ -16,7 +16,7 @@ fn create_test_evidence_entry(
 ) -> EvidenceEntry {
     // Create a dummy schema for the object ID
     let schema_id = SchemaId::from_definition(b"test-evidence-schema");
-    let entry_id = EngineObjectId::derive(
+    let entry_id = derive_id(
         ObjectDomain::EvidenceRecord,
         id,
         &schema_id,
@@ -48,14 +48,12 @@ fn create_pdf_export_request() -> AuditExportRequest {
 }
 
 /// Helper function to test PDF export with given entries
-fn test_pdf_export_with_entries(entries: Vec<EvidenceEntry>) -> Result<(), GovernanceError> {
+fn test_pdf_export_with_entries(
+    entries: Vec<EvidenceEntry>,
+) -> Result<AuditExportResult, GovernanceError> {
     let request = create_pdf_export_request();
     let now = DeterministicTimestamp(1640995200); // 2022-01-01
-
-    match export_audit_evidence(request, entries, now) {
-        Ok(_) => Ok(()), // Unexpected success
-        Err(err) => Err(err),
-    }
+    export_audit_evidence(request, entries, now)
 }
 
 #[test]
@@ -216,7 +214,7 @@ fn test_other_formats_still_work() {
         "JsonLines format should still work: {:?}",
         json_result.err()
     );
-    let json_output = json_result.unwrap().payload;
+    let json_output = json_result.unwrap().payload_bytes;
     assert!(
         !json_output.is_empty(),
         "JsonLines output should not be empty"
@@ -238,7 +236,7 @@ fn test_other_formats_still_work() {
         "Csv format should still work: {:?}",
         csv_result.err()
     );
-    let csv_output = csv_result.unwrap().payload;
+    let csv_output = csv_result.unwrap().payload_bytes;
     assert!(!csv_output.is_empty(), "CSV output should not be empty");
     assert!(
         csv_output.starts_with(b"entry_id,kind,timestamp,summary,evidence_hash\n"),
@@ -322,26 +320,29 @@ fn test_compliance_pdf_vs_fake_pdf_behavior() {
         "Should fail instead of returning fake content"
     );
 
-    if let Ok(output) = result {
-        // If it somehow succeeds, it MUST NOT contain the old fake content
-        let output_str = String::from_utf8_lossy(&output);
-        assert!(
-            !output_str.contains("FRANKEN_COMPLIANCE_REPORT_V1"),
-            "Output should not contain fake header: {}",
-            output_str
-        );
-        assert!(
-            output_str.starts_with("%PDF-") && output_str.ends_with("%%EOF"),
-            "If PDF generation succeeds, it must be valid PDF format: {}",
-            output_str
-        );
-    } else {
-        // Expected: error case
-        match result.unwrap_err() {
-            GovernanceError::ExportError { .. } => {
-                // This is the expected behavior - fail loud instead of fake
+    match result {
+        Ok(output) => {
+            // If it somehow succeeds, it MUST NOT contain the old fake content
+            let output_str = String::from_utf8_lossy(&output.payload_bytes);
+            assert!(
+                !output_str.contains("FRANKEN_COMPLIANCE_REPORT_V1"),
+                "Output should not contain fake header: {}",
+                output_str
+            );
+            assert!(
+                output_str.starts_with("%PDF-") && output_str.ends_with("%%EOF"),
+                "If PDF generation succeeds, it must be valid PDF format: {}",
+                output_str
+            );
+        }
+        Err(err) => {
+            // Expected: error case
+            match err {
+                GovernanceError::ExportError { .. } => {
+                    // This is the expected behavior - fail loud instead of fake
+                }
+                other => panic!("If PDF fails, it should be ExportError, got: {:?}", other),
             }
-            other => panic!("If PDF fails, it should be ExportError, got: {:?}", other),
         }
     }
 }

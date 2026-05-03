@@ -16,10 +16,10 @@
     clippy::identity_op
 )]
 
-use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
+use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::ir_contract::{Ir3Instruction, Ir3Module, RegRange, Value};
+use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
 use std::collections::BTreeSet;
 
 // ---------------------------------------------------------------------------
@@ -37,36 +37,41 @@ fn test_config() -> InterpreterConfig {
 
 fn create_date_object_module(timestamp_ms: i64) -> Ir3Module {
     let mut m = Ir3Module::new(ContentHash::compute(b"date-test"), "date-locale-test");
+    m.constant_pool = vec![
+        "__type".to_string(),
+        "Date".to_string(),
+        "__timestamp".to_string(),
+    ];
     m.instructions = vec![
         // Create a Date object with specific timestamp
-        Ir3Instruction::CreateObject { dst: 0 },
+        Ir3Instruction::NewObject { dst: 0 },
         // Set __type property to "Date"
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadStr {
             dst: 1,
-            value: Value::Str("__type".to_string()),
+            pool_index: 0,
         },
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadStr {
             dst: 2,
-            value: Value::Str("Date".to_string()),
+            pool_index: 1,
         },
         Ir3Instruction::SetProperty {
-            object: 0,
+            obj: 0,
             key: 1,
-            value: 2,
+            val: 2,
         },
         // Set __timestamp property
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadStr {
             dst: 3,
-            value: Value::Str("__timestamp".to_string()),
+            pool_index: 2,
         },
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadInt {
             dst: 4,
-            value: Value::Int(timestamp_ms),
+            value: timestamp_ms,
         },
         Ir3Instruction::SetProperty {
-            object: 0,
+            obj: 0,
             key: 3,
-            value: 4,
+            val: 4,
         },
         Ir3Instruction::Halt,
     ];
@@ -75,20 +80,23 @@ fn create_date_object_module(timestamp_ms: i64) -> Ir3Module {
 
 fn create_locale_date_format_module(timestamp_ms: i64, locale: &str, method: &str) -> Ir3Module {
     let mut m = create_date_object_module(timestamp_ms);
+    let locale_pool_index = m.constant_pool.len() as u32;
+    m.constant_pool.push(locale.to_string());
 
     // Add locale formatting call
     let mut additional_instructions = vec![
         // Load locale string
-        Ir3Instruction::LoadConstant {
-            dst: 5,
-            value: Value::Str(locale.to_string()),
+        Ir3Instruction::LoadStr {
+            dst: 1,
+            pool_index: locale_pool_index,
         },
         // Call the appropriate locale formatting method
         Ir3Instruction::HostCall {
-            capability: crate::ir_contract::CapabilityTag(method.to_string()),
+            capability: CapabilityTag(method.to_string()),
             args: RegRange { start: 0, count: 2 }, // date object + locale
             dst: 6,
         },
+        Ir3Instruction::Move { dst: 0, src: 6 },
         Ir3Instruction::Halt,
     ];
 
@@ -118,7 +126,7 @@ fn en_us_locale_date_formatting() {
     let result = core.execute(&module);
     assert!(result.is_ok(), "Date formatting should succeed");
 
-    let formatted_date = core.read_reg(6).unwrap();
+    let formatted_date = result.unwrap().value;
     if let Value::Str(date_str) = formatted_date {
         // Should contain MM/DD/YYYY format and English day name
         assert!(date_str.contains('/'), "en-US should use slash separators");
@@ -156,7 +164,7 @@ fn en_gb_locale_date_formatting() {
     let result = core.execute(&module);
     assert!(result.is_ok(), "Date formatting should succeed");
 
-    let formatted_date = core.read_reg(6).unwrap();
+    let formatted_date = result.unwrap().value;
     if let Value::Str(date_str) = formatted_date {
         // Should contain DD/MM/YYYY format (different from en-US)
         assert!(date_str.contains('/'), "en-GB should use slash separators");
@@ -194,7 +202,7 @@ fn ja_jp_locale_date_formatting() {
     let result = core.execute(&module);
     assert!(result.is_ok(), "Date formatting should succeed");
 
-    let formatted_date = core.read_reg(6).unwrap();
+    let formatted_date = result.unwrap().value;
     if let Value::Str(date_str) = formatted_date {
         // Should contain YYYY-MM-DD format with hyphens
         assert!(date_str.contains('-'), "ja-JP should use hyphen separators");
@@ -238,7 +246,7 @@ fn time_formatting_across_locales() {
             locale
         );
 
-        let formatted_time = core.read_reg(6).unwrap();
+        let formatted_time = result.unwrap().value;
         if let Value::Str(time_str) = formatted_time {
             // Time should contain colons for hours:minutes:seconds
             assert!(
@@ -276,7 +284,7 @@ fn full_datetime_formatting() {
     let result = core.execute(&module);
     assert!(result.is_ok(), "DateTime formatting should succeed");
 
-    let formatted_datetime = core.read_reg(6).unwrap();
+    let formatted_datetime = result.unwrap().value;
     if let Value::Str(datetime_str) = formatted_datetime {
         // Should contain both date and time elements
         assert!(
@@ -322,7 +330,7 @@ fn unsupported_locale_fallback() {
         "Unsupported locale should fallback gracefully"
     );
 
-    let formatted_date = core.read_reg(6).unwrap();
+    let formatted_date = result.unwrap().value;
     if let Value::Str(date_str) = formatted_date {
         // Should fallback to en-US format (MM/DD/YYYY with slashes)
         assert!(
@@ -373,8 +381,8 @@ fn locale_formatting_determinism() {
         "Both executions should succeed"
     );
 
-    let formatted1 = core1.read_reg(6).unwrap();
-    let formatted2 = core2.read_reg(6).unwrap();
+    let formatted1 = result1.unwrap().value;
+    let formatted2 = result2.unwrap().value;
 
     // Results should be identical (deterministic)
     assert_eq!(
@@ -403,28 +411,28 @@ fn invalid_date_handling() {
 
     // Create an object that's not a proper Date
     let mut m = Ir3Module::new(ContentHash::compute(b"invalid-date"), "invalid-date-test");
+    m.constant_pool = vec!["en-US".to_string()];
     m.instructions = vec![
         // Create regular object (not a Date)
-        Ir3Instruction::CreateObject { dst: 0 },
+        Ir3Instruction::NewObject { dst: 0 },
         // Try to format it as a date
-        Ir3Instruction::LoadConstant {
+        Ir3Instruction::LoadStr {
             dst: 1,
-            value: Value::Str("en-US".to_string()),
+            pool_index: 0,
         },
         Ir3Instruction::HostCall {
-            capability: crate::ir_contract::CapabilityTag(
-                "builtin:DatePrototypeToLocaleDateString".to_string(),
-            ),
+            capability: CapabilityTag("builtin:DatePrototypeToLocaleDateString".to_string()),
             args: RegRange { start: 0, count: 2 },
             dst: 2,
         },
+        Ir3Instruction::Move { dst: 0, src: 2 },
         Ir3Instruction::Halt,
     ];
 
     let result = core.execute(&m);
     assert!(result.is_ok(), "Invalid date should be handled gracefully");
 
-    let formatted = core.read_reg(2).unwrap();
+    let formatted = result.unwrap().value;
     if let Value::Str(error_str) = formatted {
         assert_eq!(
             error_str, "Invalid Date",
@@ -468,7 +476,7 @@ fn month_and_day_name_localization() {
             locale
         );
 
-        let formatted = core.read_reg(6).unwrap();
+        let formatted = result.unwrap().value;
         if let Value::Str(date_str) = formatted {
             assert!(
                 !date_str.is_empty(),
@@ -534,7 +542,7 @@ fn memory_safety_stress_test() {
             i
         );
 
-        let formatted = core.read_reg(6).unwrap();
+        let formatted = result.unwrap().value;
         if let Value::Str(date_str) = formatted {
             assert!(
                 !date_str.is_empty(),

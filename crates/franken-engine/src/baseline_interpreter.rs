@@ -2463,6 +2463,25 @@ impl InterpreterCore {
         &self.console_output
     }
 
+    /// Seed a register before the next `execute()` call.
+    ///
+    /// This supports low-level IR harnesses that need to start from runtime
+    /// values not directly materializable by current IR3 load instructions,
+    /// such as opaque `Value::Function(idx)` builtin handles.
+    pub fn seed_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+
+        self.registers[reg as usize] = value;
+        self.last_pre_run_seed = None;
+        self.last_post_run_seed = None;
+        Ok(())
+    }
+
     fn push_console_output(&mut self, level: ConsoleLevel, message: String) {
         let max_entries = self.config.max_console_entries;
         if max_entries == 0 {

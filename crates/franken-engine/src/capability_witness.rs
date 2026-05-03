@@ -2,9 +2,10 @@
 //!
 //! A capability witness is a signed, content-addressed artifact that records
 //! the minimal authority envelope an extension needs to operate, the proof
-//! obligations justifying each included capability, statistical confidence
-//! bounds on the envelope's completeness, and deterministic replay/rollback
-//! linkage.
+//! obligations justifying each included capability, empirical ablation support
+//! for the envelope, and deterministic replay/rollback linkage. Wilson score
+//! intervals are evidence summaries only; they do not prove capability
+//! completeness.
 //!
 //! Fixed-point millionths (1_000_000 = 1.0) for all fractional values.
 //! `BTreeMap`/`BTreeSet` for deterministic iteration.
@@ -328,11 +329,31 @@ impl CapabilityWitnessTrustRoot {
 }
 
 // ---------------------------------------------------------------------------
-// ConfidenceInterval — Wilson score bounds
+// ConfidenceInterval - empirical Wilson score support
 // ---------------------------------------------------------------------------
 
-/// Statistical confidence bounds on the completeness of the required
-/// capability set.  Uses Wilson score interval at 95% coverage.
+/// Kind of evidence carried by [`ConfidenceInterval`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceEvidenceKind {
+    /// Wilson interval over ablation trials. This is empirical support only,
+    /// not a proof that the required capabilities are necessary and sufficient.
+    EmpiricalAblationSupport,
+}
+
+impl ConfidenceEvidenceKind {
+    /// Whether this evidence kind establishes formal capability completeness.
+    pub fn establishes_formal_completeness(self) -> bool {
+        false
+    }
+}
+
+/// Empirical confidence bounds over ablation trials for the required
+/// capability set. Uses a Wilson score interval at 95% coverage.
+///
+/// This interval is not a formal proof that the capability set is necessary
+/// and sufficient. Security-decision consumers must rely on proof obligations
+/// and promotion/trust validation for that boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfidenceInterval {
     /// Lower bound (millionths; 950_000 = 0.95).
@@ -348,7 +369,7 @@ pub struct ConfidenceInterval {
 impl ConfidenceInterval {
     /// Create a new confidence interval from ablation trial results.
     ///
-    /// Computes Wilson score interval at ~95% coverage (z ≈ 1.96).
+    /// Computes an empirical Wilson score interval at ~95% coverage (z ≈ 1.96).
     pub fn from_trials(n_trials: u32, n_successes: u32) -> Self {
         if n_trials == 0 {
             return Self {
@@ -409,6 +430,11 @@ impl ConfidenceInterval {
             return 0;
         }
         self.n_successes as i64 * 1_000_000 / self.n_trials as i64
+    }
+
+    /// Evidence classification for this interval.
+    pub fn evidence_kind(&self) -> ConfidenceEvidenceKind {
+        ConfidenceEvidenceKind::EmpiricalAblationSupport
     }
 }
 
@@ -674,8 +700,9 @@ impl PromotionTheoremReport {
 /// A signed, content-addressed PLAS capability witness artifact.
 ///
 /// Records the minimal authority envelope an extension demonstrably needs,
-/// including proof obligations for each capability and statistical confidence
-/// bounds on envelope completeness.
+/// including proof obligations for each capability and empirical ablation
+/// support for the envelope. The confidence interval is not a formal proof of
+/// envelope completeness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityWitness {
     /// Unique witness identifier (content-addressed).
@@ -702,7 +729,7 @@ pub struct CapabilityWitness {
     pub denial_records: Vec<DenialRecord>,
 
     // -- Confidence --
-    /// Statistical confidence on envelope completeness.
+    /// Empirical ablation support for the envelope; not a formal proof.
     pub confidence: ConfidenceInterval,
 
     // -- Determinism & replay --
@@ -1734,7 +1761,7 @@ impl WitnessBuilder {
 pub struct WitnessValidator {
     /// Supported schema version.
     pub supported_version: WitnessSchemaVersion,
-    /// Minimum confidence lower bound (millionths).
+    /// Minimum empirical confidence lower bound (millionths).
     pub min_confidence_millionths: i64,
     /// External trust root for security-decision validation.
     #[serde(default)]
@@ -4629,6 +4656,26 @@ mod tests {
     fn confidence_below_threshold() {
         let ci = ConfidenceInterval::from_trials(10, 5);
         assert!(!ci.meets_threshold(900_000));
+    }
+
+    #[test]
+    fn confidence_evidence_kind_is_empirical_only() {
+        let ci = ConfidenceInterval::from_trials(100, 100);
+        let evidence_kind = ci.evidence_kind();
+
+        assert_eq!(
+            evidence_kind,
+            ConfidenceEvidenceKind::EmpiricalAblationSupport
+        );
+        assert!(!evidence_kind.establishes_formal_completeness());
+    }
+
+    #[test]
+    fn confidence_threshold_does_not_establish_formal_completeness() {
+        let ci = ConfidenceInterval::from_trials(500, 500);
+
+        assert!(ci.meets_threshold(900_000));
+        assert!(!ci.evidence_kind().establishes_formal_completeness());
     }
 
     #[test]

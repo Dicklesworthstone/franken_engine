@@ -15,6 +15,7 @@ use crate::engine_object_id::EngineObjectId;
 use crate::proof_specialization_receipt::{OptimizationClass, ProofType};
 use crate::security_epoch::SecurityEpoch;
 use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
+use crate::typed_persistence_models::{SpecializationIndexEntry, TypedStorageAdapterExt};
 
 // ---------------------------------------------------------------------------
 // Record types stored in the index
@@ -615,6 +616,59 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
             None,
         );
         Ok(deleted)
+    }
+
+    // -----------------------------------------------------------------------
+    // Typed Store Operations (Demonstration of TypedStorageAdapterExt)
+    // -----------------------------------------------------------------------
+
+    /// Insert a specialization entry using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.put_typed() instead of generic
+    /// storage.put() operations. The domain mapping is explicit and lossless since
+    /// SpecializationIndexEntry is the exact typed model for this store.
+    pub fn insert_typed_entry(
+        &mut self,
+        entry: &SpecializationIndexEntry,
+        trace_id: &str,
+    ) -> Result<(), SpecializationIndexError>
+    where
+        S: TypedStorageAdapterExt,
+    {
+        let ctx = self.make_ctx(trace_id);
+
+        // Use typed operation instead of generic storage.put(STORE, key, value, metadata, &ctx)
+        let _stored_record = self
+            .storage
+            .put_typed(entry, &ctx)
+            .map_err(|e| SpecializationIndexError::StorageError(e))?;
+
+        self.emit_event(trace_id, "insert_typed_entry", "ok", None);
+        Ok(())
+    }
+
+    /// Get a specialization entry by ID using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.get_typed_by_id() instead of
+    /// generic storage.get() operations.
+    pub fn get_typed_entry_by_id(
+        &mut self,
+        specialization_id: i64,
+        trace_id: &str,
+    ) -> Result<Option<SpecializationIndexEntry>, SpecializationIndexError>
+    where
+        S: TypedStorageAdapterExt,
+    {
+        let ctx = self.make_ctx(trace_id);
+
+        // Use typed operation instead of generic storage.get(STORE, &key, &ctx)
+        let entry = self
+            .storage
+            .get_typed_by_id::<SpecializationIndexEntry>(specialization_id, &ctx)
+            .map_err(|e| SpecializationIndexError::StorageError(e))?;
+
+        self.emit_event(trace_id, "get_typed_entry", "ok", None);
+        Ok(entry)
     }
 }
 
@@ -2380,5 +2434,74 @@ mod tests {
 
         let err = SpecializationIndexError::InvalidContext("no trace id".to_string());
         assert!(err.to_string().contains("no trace id"));
+    }
+
+    fn make_typed_entry(id: i64, proof_artifact: &str) -> SpecializationIndexEntry {
+        SpecializationIndexEntry {
+            specialization_id: id,
+            proof_artifact_id: proof_artifact.to_string(),
+            specialization_type: "optimization".to_string(),
+            specialized_version: "v1.2.3".to_string(),
+            status: "active".to_string(),
+            invalidation_timestamp_ms: None,
+            invalidation_reason: None,
+            security_epoch: 42,
+            created_timestamp_ms: 1700000000000,
+            specialized_content_hash: "abc123def456".to_string(),
+            metadata_json: r#"{"params": {"level": 3}}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn insert_typed_entry_succeeds() {
+        let mut index = make_index();
+        let entry = make_typed_entry(100, "proof-artifact-1");
+
+        let result = index.insert_typed_entry(&entry, "trace-typed-1");
+        assert!(result.is_ok(), "typed entry insertion should succeed");
+
+        // Verify event was emitted
+        let events = index.events();
+        assert!(!events.is_empty());
+        let last_event = &events[events.len() - 1];
+        assert_eq!(last_event.event, "insert_typed_entry");
+        assert_eq!(last_event.outcome, "ok");
+    }
+
+    #[test]
+    fn get_typed_entry_by_id_retrieves_stored_entry() {
+        let mut index = make_index();
+        let entry = make_typed_entry(101, "proof-artifact-2");
+
+        // Insert via typed operation
+        index
+            .insert_typed_entry(&entry, "trace-typed-2")
+            .expect("typed entry insertion should succeed");
+
+        // Retrieve via typed operation
+        let retrieved = index
+            .get_typed_entry_by_id(101, "trace-typed-3")
+            .expect("typed entry retrieval should succeed");
+
+        assert!(retrieved.is_some(), "should retrieve the stored entry");
+        let retrieved_entry = retrieved.unwrap();
+        assert_eq!(retrieved_entry.specialization_id, 101);
+        assert_eq!(retrieved_entry.proof_artifact_id, "proof-artifact-2");
+        assert_eq!(retrieved_entry.specialization_type, "optimization");
+        assert_eq!(retrieved_entry.status, "active");
+    }
+
+    #[test]
+    fn get_typed_entry_by_id_returns_none_for_nonexistent() {
+        let mut index = make_index();
+
+        let retrieved = index
+            .get_typed_entry_by_id(999, "trace-typed-4")
+            .expect("typed entry retrieval should succeed");
+
+        assert!(
+            retrieved.is_none(),
+            "should return None for nonexistent entry"
+        );
     }
 }

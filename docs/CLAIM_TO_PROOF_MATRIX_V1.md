@@ -30,7 +30,7 @@ proof lacks exact downgrade text.
 |---|---|---|---|---|---|
 | `FE-CLAIM-001` | runtime | `README.md:16` | `observed` | allow observed native-runtime wording with release-gate caveat | `bd-1qkrc` |
 | `FE-CLAIM-002` | security | `README.md:38-45` | `observed` | allow observed probabilistic guardplane with live decision artifacts | `bd-1ypps` |
-| `FE-CLAIM-003` | replay | `README.md:46` | `target` | downgrade until replay coverage proof exists | `bd-2488a` |
+| `FE-CLAIM-003` | replay | `README.md:47` | `observed` | allow observed replay coverage, counterfactual replay support, and fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-004` | security | `README.md:47` | `hypothesis` | split receipt, transparency-log, and TEE proof before release | `bd-1qkrc` |
 | `FE-CLAIM-005` | operations | `README.md:49` | `target` | downgrade until live quarantine propagation proof exists | `bd-ls22h` |
 | `FE-CLAIM-006` | security | `README.md:49` | `target` | downgrade until ambient-authority rejection proof exists | `bd-1bao8` |
@@ -40,7 +40,7 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-010` | performance | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
-| `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `target` | downgrade until live end-to-end byte-identical replay proof exists | `bd-2488a` |
+| `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
 | `FE-CLAIM-015` | ifc | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:94` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
 | `FE-CLAIM-016` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |

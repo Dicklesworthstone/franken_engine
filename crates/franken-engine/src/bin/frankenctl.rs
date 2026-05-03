@@ -187,6 +187,7 @@ struct CompileArgs {
     trace_id: String,
     decision_id: String,
     policy_id: String,
+    generated_unix_ns: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1389,6 +1390,7 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut trace_id = "trace-frankenctl-compile".to_string();
     let mut decision_id = "decision-frankenctl-compile".to_string();
     let mut policy_id = "frankenctl.compile.v1".to_string();
+    let mut generated_unix_ns = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1399,6 +1401,12 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
             "--trace-id" => trace_id = next_arg(args, &mut index, "--trace-id")?,
             "--decision-id" => decision_id = next_arg(args, &mut index, "--decision-id")?,
             "--policy-id" => policy_id = next_arg(args, &mut index, "--policy-id")?,
+            "--generated-unix-ns" => {
+                generated_unix_ns = Some(parse_u64(
+                    &next_arg(args, &mut index, "--generated-unix-ns")?,
+                    "--generated-unix-ns",
+                )?)
+            }
             flag => return Err(format!("unknown compile flag `{flag}`")),
         }
         index += 1;
@@ -1414,6 +1422,7 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
         trace_id,
         decision_id,
         policy_id,
+        generated_unix_ns,
     }))
 }
 
@@ -2431,7 +2440,7 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 
     let artifact = CompileArtifact {
         schema_version: COMPILE_ARTIFACT_SCHEMA_VERSION.to_string(),
-        generated_unix_ns: current_unix_ns(),
+        generated_unix_ns: args.generated_unix_ns.unwrap_or_else(current_unix_ns),
         source_path: source_label,
         parse_goal: args.parse_goal.as_str().to_string(),
         source_ingestion: prepared.source_ingestion.clone(),
@@ -5874,6 +5883,7 @@ fn compile_usage() -> String {
         "compile usage:",
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
+        "      [--generated-unix-ns <u64>]  # fixed clock input for byte-identical proof runs",
     ]
     .join("\n")
 }
@@ -6715,6 +6725,7 @@ mod tests {
             trace_id: "trace-compile-artifact-drift".to_string(),
             decision_id: "decision-compile-artifact-drift".to_string(),
             policy_id: "policy-compile-artifact-drift".to_string(),
+            generated_unix_ns: None,
         })
         .expect("compile should succeed");
 
@@ -6871,6 +6882,7 @@ mod tests {
             trace_id: "trace-verify-output".to_string(),
             decision_id: "decision-verify-output".to_string(),
             policy_id: "policy-verify-output".to_string(),
+            generated_unix_ns: None,
         })
         .expect("compile should succeed");
         assert_eq!(compile_exit, 0);

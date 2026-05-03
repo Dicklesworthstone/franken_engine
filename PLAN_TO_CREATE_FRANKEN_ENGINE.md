@@ -57,7 +57,7 @@ Category-defining disruptive floor (non-optional targets):
 - `>= 3x` weighted-geometric-mean throughput on Extension-Heavy Benchmark Suite v1.0 (Section `14` denominator contract) versus both baseline Node and Bun configurations at equivalent behavior. **Target pending live measurement integration.**
 - `>= 10x` reduction in successful red-team host compromise rate versus baseline Node/Bun default posture. **Target pending live red-team scenario implementation.**
 - `<= 250ms` median time from high-risk signal crossing to containment action.
-- `100%` deterministic replay coverage for security-critical allow/deny/escalation decisions. **Target pending live end-to-end byte-identical artifact proof.**
+- `100%` deterministic replay coverage for declared security-critical allow/deny/escalation decisions, backed by fail-closed replay evidence validation and fixed-input byte-identical `frankenctl` artifact proof.
 - At least `3` production features that are impossible by default in standard Node/Bun deployments (for example posterior-explained policy actions, signed policy checkpoints with rollback resistance, autonomous quarantine mesh).
 
 If outcomes are parity-only or incremental, the program is considered off-charter.

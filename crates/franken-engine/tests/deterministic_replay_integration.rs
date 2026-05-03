@@ -20,6 +20,10 @@
     clippy::manual_abs_diff
 )]
 
+use std::fs;
+use std::path::Path;
+use std::process::{Command, Output};
+
 use frankenengine_engine::deterministic_replay::{
     ArtifactKind, DivergenceSeverity, FailoverController, FailoverError, FailoverReason,
     FailoverRecord, FailoverStrategy, IncidentArtifact, IncidentBundle, IncidentBundleBuilder,
@@ -53,6 +57,119 @@ fn make_trace() -> NondeterminismTrace {
     );
     trace.finalise(400);
     trace
+}
+
+fn assert_command_success(output: &Output, command: &str) {
+    assert!(
+        output.status.success(),
+        "{command} failed\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_frankenctl_compile(source_path: &Path, artifact_path: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .arg("compile")
+        .arg("--input")
+        .arg(source_path)
+        .arg("--out")
+        .arg(artifact_path)
+        .arg("--goal")
+        .arg("script")
+        .arg("--trace-id")
+        .arg("trace-byte-identical-proof")
+        .arg("--decision-id")
+        .arg("decision-byte-identical-proof")
+        .arg("--policy-id")
+        .arg("policy-byte-identical-proof")
+        .arg("--generated-unix-ns")
+        .arg("0")
+        .output()
+        .expect("frankenctl compile should execute")
+}
+
+fn run_frankenctl_report(source_path: &Path, report_path: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_frankenctl"))
+        .arg("run")
+        .arg("--input")
+        .arg(source_path)
+        .arg("--extension-id")
+        .arg("byte-identical-proof-ext")
+        .arg("--goal")
+        .arg("script")
+        .arg("--out")
+        .arg(report_path)
+        .output()
+        .expect("frankenctl run should execute")
+}
+
+#[test]
+fn frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs() {
+    let temp = tempfile::tempdir().expect("tempdir should be created");
+    let source_path = temp.path().join("decision.js");
+    let compile_artifact_path = temp.path().join("compile-artifact.json");
+    let run_report_path = temp.path().join("run-report.json");
+    fs::write(&source_path, "const answer = 40 + 2;\nanswer;\n")
+        .expect("source fixture should write");
+
+    let compile_first = run_frankenctl_compile(&source_path, &compile_artifact_path);
+    assert_command_success(&compile_first, "frankenctl compile first");
+    let compile_artifact_first =
+        fs::read(&compile_artifact_path).expect("first compile artifact should exist");
+    let compile_stdout_first = compile_first.stdout;
+
+    let compile_second = run_frankenctl_compile(&source_path, &compile_artifact_path);
+    assert_command_success(&compile_second, "frankenctl compile second");
+    let compile_artifact_second =
+        fs::read(&compile_artifact_path).expect("second compile artifact should exist");
+    assert_eq!(compile_stdout_first, compile_second.stdout);
+    assert_eq!(compile_artifact_first, compile_artifact_second);
+
+    let compile_json: serde_json::Value =
+        serde_json::from_slice(&compile_artifact_first).expect("compile artifact should parse");
+    assert_eq!(compile_json["generated_unix_ns"].as_u64(), Some(0));
+    assert_eq!(
+        compile_json["trace_id"].as_str(),
+        Some("trace-byte-identical-proof")
+    );
+    assert!(compile_json["parse_event_ir"].is_object());
+    assert!(compile_json["ir0"].is_object());
+    assert!(compile_json["lowering"].is_object());
+    for hash_field in ["parse_event_ir", "ir0", "ir1", "ir2", "ir3"] {
+        assert!(
+            compile_json["hashes"][hash_field]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "compile artifact should carry {hash_field} hash"
+        );
+    }
+
+    let run_first = run_frankenctl_report(&source_path, &run_report_path);
+    assert_command_success(&run_first, "frankenctl run first");
+    let run_report_first = fs::read(&run_report_path).expect("first run report should exist");
+    let run_stdout_first = run_first.stdout;
+
+    let run_second = run_frankenctl_report(&source_path, &run_report_path);
+    assert_command_success(&run_second, "frankenctl run second");
+    let run_report_second = fs::read(&run_report_path).expect("second run report should exist");
+    assert_eq!(run_stdout_first, run_second.stdout);
+    assert_eq!(run_report_first, run_report_second);
+
+    let run_json: serde_json::Value =
+        serde_json::from_slice(&run_report_first).expect("run report should parse");
+    assert_eq!(run_json["trace_id"].as_str(), Some("frankenctl-run:0"));
+    assert_eq!(
+        run_json["decision_id"].as_str(),
+        Some("frankenctl-run:decision:0")
+    );
+    assert_eq!(
+        run_json["extension_id"].as_str(),
+        Some("byte-identical-proof-ext")
+    );
+    assert!(run_json["execution_value"].as_str().is_some());
+    assert!(run_json["containment_action"].as_str().is_some());
+    assert!(run_json["expected_loss_millionths"].as_i64().is_some());
 }
 
 // =========================================================================

@@ -36,7 +36,7 @@ cargo build --release -p frankenengine-engine --bin frankenctl
 Node and Bun are fast enough for many workloads, but extension-heavy agent systems need a different default posture: active containment, deterministic forensics, and explicit runtime authority boundaries.
 
 ### The Solution
-FrankenEngine provides one native baseline interpreter with deterministic and throughput execution profiles, a probabilistic guardplane with expected-loss actioning, targeted deterministic replay for high-severity decisions, and signed evidence contracts for every high-impact containment event.
+FrankenEngine provides one native baseline interpreter with deterministic and throughput execution profiles, a probabilistic guardplane with expected-loss actioning, verified deterministic replay coverage for declared high-severity allow/deny/escalation decisions, and signed evidence contracts for every high-impact containment event.
 
 ### Why Use FrankenEngine?
 
@@ -44,7 +44,7 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 |---|---|
 | Native execution profiles | 🟢 OBSERVED (live proof linked) `baseline_deterministic_profile` for conservative control paths, `baseline_throughput_profile` for throughput-heavy paths, and `adaptive_profile_router` when policy routing is enabled |
 | Probabilistic Guardplane | 🟢 OBSERVED (live proof linked) Bayesian risk updates and e-process boundaries that trigger `allow/challenge/sandbox/suspend/terminate/quarantine` |
-| Deterministic replay | 🟡 TARGETED (gate exists but baseline placeholder) Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
+| Deterministic replay | 🟢 OBSERVED (live proof linked) `100%` replay coverage for the declared high-severity allow/deny/escalate inventory with counterfactual policy simulation support, plus byte-identical fixed-input `frankenctl compile` and `frankenctl run` artifact proof |
 | Cryptographic governance | 🔴 HYPOTHESIS (claim not yet provable) Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
 | Fleet immune system | 🟡 TARGETED (provisional example only) Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |
 | Capability-typed execution | 🔴 HYPOTHESIS (end-to-end contract not shipped) Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |
@@ -139,7 +139,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Dimension | FrankenEngine | Node.js | Bun |
 |---|---|---|---|
 | Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime |
-| Deterministic replay for high-severity decisions | Targeted gate with shipped replay APIs; end-to-end byte-identical proof is not yet observed | External tooling only | External tooling only |
+| Deterministic replay for high-severity decisions | Built in for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile` and `frankenctl run` artifacts have byte-identical integration proof | External tooling only | External tooling only |
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
 | Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. **Note**: De-escalation unimplemented - containment operates as permanent ratchet | App-specific integration | App-specific integration |
@@ -1015,7 +1015,7 @@ It enforces shared persistence contracts and conformance behavior across replay,
 Through explicit expected-loss matrices, sequential testing boundaries, calibrated posterior models, and shadow promotion gates.
 
 ### 6. What does deterministic replay guarantee exactly?
-The target contract is identical replay from fixed code, policy, model snapshot, evidence stream, and randomness transcript. Current proof covers replay APIs and a targeted coverage gate; end-to-end byte-identical high-severity execution artifacts remain a tracked target.
+The contract is identical replay from fixed code, policy, model snapshot, evidence stream, and randomness transcript. The replay coverage gate now fails closed unless the declared high-severity allow/deny/escalate inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields. Fixed-input `frankenctl compile` and `frankenctl run` artifacts are byte-identical in the shipped CLI integration test.
 
 ### 7. Can I verify your benchmark claims independently?
 Yes. The benchmark harness, manifests, and artifact bundles are designed for third-party reproduction.

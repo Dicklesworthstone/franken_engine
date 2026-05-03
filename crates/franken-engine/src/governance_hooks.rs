@@ -1389,14 +1389,69 @@ fn serialise_entries(
             })
         }
         AuditExportFormat::CompliancePdf => {
-            // PDF generation is not yet implemented. Return an explicit error instead
-            // of emitting fake plaintext that compliance regulators might mistakenly
-            // accept as valid PDF. This ensures fail-fast behavior.
-            Err(GovernanceError::ExportError {
-                message: "CompliancePdf format is not yet implemented. Real PDF generation requires external PDF library integration. Use JsonLines or Csv formats as alternatives.".to_string(),
-            })
+            // Generate minimal hand-rolled PDF for compliance export
+            generate_compliance_pdf(entries)
         }
     }
+}
+
+/// Generate a minimal hand-rolled PDF for compliance export.
+/// Creates a valid 1-page PDF containing audit evidence entries.
+fn generate_compliance_pdf(entries: &[&EvidenceEntry]) -> Result<Vec<u8>, GovernanceError> {
+    let mut pdf = Vec::new();
+
+    // 1. PDF header
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+
+    // Build content text from entries
+    let content_text = entries
+        .iter()
+        .map(|entry| format!("ID: {} | Kind: {} | Summary: {}",
+                              entry.entry_id, entry.kind, entry.summary))
+        .collect::<Vec<_>>()
+        .join("\\n");
+
+    // Content stream with proper length calculation
+    let content_stream = format!("BT /F1 12 Tf 50 750 Td ({}) Tj ET", content_text);
+    let content_length = content_stream.len();
+
+    // Track byte offsets for xref table
+    let mut offsets = Vec::new();
+
+    // 2. Indirect object 1: Catalog
+    offsets.push(pdf.len());
+    pdf.extend_from_slice(b"1 0 obj\n<</Type /Catalog /Pages 2 0 R>>\nendobj\n");
+
+    // 3. Indirect object 2: Pages
+    offsets.push(pdf.len());
+    pdf.extend_from_slice(b"2 0 obj\n<</Type /Pages /Kids [3 0 R] /Count 1>>\nendobj\n");
+
+    // 4. Indirect object 3: Page
+    offsets.push(pdf.len());
+    pdf.extend_from_slice(b"3 0 obj\n<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources <</Font <</F1 5 0 R>>>>>>\nendobj\n");
+
+    // 5. Indirect object 4: Content stream
+    offsets.push(pdf.len());
+    let content_obj = format!("4 0 obj\n<</Length {}>>\nstream\n{}\nendstream\nendobj\n",
+                              content_length, content_stream);
+    pdf.extend_from_slice(content_obj.as_bytes());
+
+    // 6. Indirect object 5: Font
+    offsets.push(pdf.len());
+    pdf.extend_from_slice(b"5 0 obj\n<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>\nendobj\n");
+
+    // 7. xref table
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+
+    for offset in offsets {
+        pdf.extend_from_slice(format!("{:010} 00000 n \n", offset).as_bytes());
+    }
+
+    // 8. trailer and EOF
+    pdf.extend_from_slice(format!("trailer\n<</Size 6 /Root 1 0 R>>\nstartxref\n{}\n%%EOF", xref_offset).as_bytes());
+
+    Ok(pdf)
 }
 
 /// Produce a JSON-like representation of a single entry (no external crates).

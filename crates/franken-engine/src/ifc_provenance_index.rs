@@ -198,6 +198,17 @@ pub enum ProvenanceError {
     },
     /// Duplicate record.
     DuplicateRecord { key: String },
+    /// Declassified flow references a missing declassification receipt.
+    MissingDeclassificationReceipt {
+        event_id: String,
+        receipt_ref: String,
+    },
+    /// Declassified flow references a receipt that does not authorize it.
+    InvalidDeclassificationReceipt {
+        event_id: String,
+        receipt_ref: String,
+        reason: String,
+    },
     /// Storage backend error.
     StorageError(String),
     /// Serialization failed.
@@ -216,6 +227,21 @@ impl fmt::Display for ProvenanceError {
                 field_name,
             } => write!(f, "{record_type} field {field_name} is empty"),
             Self::DuplicateRecord { key } => write!(f, "duplicate record: {key}"),
+            Self::MissingDeclassificationReceipt {
+                event_id,
+                receipt_ref,
+            } => write!(
+                f,
+                "declassified flow event {event_id} references missing receipt {receipt_ref}"
+            ),
+            Self::InvalidDeclassificationReceipt {
+                event_id,
+                receipt_ref,
+                reason,
+            } => write!(
+                f,
+                "declassified flow event {event_id} references invalid receipt {receipt_ref}: {reason}"
+            ),
             Self::StorageError(msg) => write!(f, "storage: {msg}"),
             Self::SerializationError(msg) => write!(f, "serialization: {msg}"),
         }
@@ -231,6 +257,8 @@ pub fn error_code(err: &ProvenanceError) -> &'static str {
         ProvenanceError::EmptyExtensionId => "PROV_EMPTY_EXTENSION_ID",
         ProvenanceError::EmptyRequiredField { .. } => "PROV_EMPTY_REQUIRED_FIELD",
         ProvenanceError::DuplicateRecord { .. } => "PROV_DUPLICATE",
+        ProvenanceError::MissingDeclassificationReceipt { .. } => "PROV_MISSING_DECLASS_RECEIPT",
+        ProvenanceError::InvalidDeclassificationReceipt { .. } => "PROV_INVALID_DECLASS_RECEIPT",
         ProvenanceError::StorageError(_) => "PROV_STORAGE_ERROR",
         ProvenanceError::SerializationError(_) => "PROV_SERIALIZATION_ERROR",
     }
@@ -279,15 +307,6 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         }
     }
 
-    fn make_ctx(&self, trace_id: &str) -> Result<EventContext, ProvenanceError> {
-        EventContext::new(
-            trace_id,
-            format!("{COMPONENT}:{trace_id}"),
-            COMPONENT.to_string(),
-        )
-        .map_err(ProvenanceError::from)
-    }
-
     // -- Write operations ---------------------------------------------------
 
     /// Insert a flow event record.
@@ -300,19 +319,9 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         stored.event_id = Self::normalize_record_id(&stored.event_id, "flow_event")?;
         stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
         if matches!(stored.decision, FlowDecision::Declassified) {
-            let Some(receipt_ref) = stored.receipt_ref.as_mut() else {
-                return Err(ProvenanceError::EmptyRequiredField {
-                    record_type: "flow_event".to_string(),
-                    field_name: "receipt_ref".to_string(),
-                });
-            };
-            *receipt_ref = receipt_ref.trim().to_string();
-            if receipt_ref.is_empty() {
-                return Err(ProvenanceError::EmptyRequiredField {
-                    record_type: "flow_event".to_string(),
-                    field_name: "receipt_ref".to_string(),
-                });
-            }
+            let receipt_ref = Self::normalize_receipt_ref(stored.receipt_ref.as_deref())?;
+            stored.receipt_ref = Some(receipt_ref.clone());
+            self.validate_declassified_receipt_ref(&stored, &receipt_ref, ctx)?;
         }
         let key = format!("{FLOW_EVENT_PREFIX}{}", stored.event_id);
         self.put_record(&key, &stored, ctx)?;
@@ -394,14 +403,13 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let records = self.query_prefix(FLOW_EVENT_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(mut rec) = serde_json::from_slice::<FlowEventRecord>(&r.value) {
-                rec.extension_id = rec.extension_id.trim().to_string();
-                if rec.extension_id.is_empty() {
-                    continue;
-                }
-                if rec.extension_id == extension_id {
-                    results.push(rec);
-                }
+            let mut rec: FlowEventRecord = Self::decode_aggregate_record(&r, "flow_event")?;
+            rec.extension_id = rec.extension_id.trim().to_string();
+            if rec.extension_id.is_empty() {
+                continue;
+            }
+            if rec.extension_id == extension_id {
+                results.push(rec);
             }
         }
         results.sort();
@@ -421,14 +429,13 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let records = self.query_prefix(FLOW_PROOF_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(mut rec) = serde_json::from_slice::<FlowProofRecord>(&r.value) {
-                rec.extension_id = rec.extension_id.trim().to_string();
-                if rec.extension_id.is_empty() {
-                    continue;
-                }
-                if rec.extension_id == extension_id {
-                    results.push(rec);
-                }
+            let mut rec: FlowProofRecord = Self::decode_aggregate_record(&r, "flow_proof")?;
+            rec.extension_id = rec.extension_id.trim().to_string();
+            if rec.extension_id.is_empty() {
+                continue;
+            }
+            if rec.extension_id == extension_id {
+                results.push(rec);
             }
         }
         results.sort();
@@ -448,14 +455,14 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let records = self.query_prefix(DECLASS_RECEIPT_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(mut rec) = serde_json::from_slice::<DeclassReceiptRecord>(&r.value) {
-                rec.extension_id = rec.extension_id.trim().to_string();
-                if rec.extension_id.is_empty() {
-                    continue;
-                }
-                if rec.extension_id == extension_id {
-                    results.push(rec);
-                }
+            let mut rec: DeclassReceiptRecord =
+                Self::decode_aggregate_record(&r, "declass_receipt")?;
+            rec.extension_id = rec.extension_id.trim().to_string();
+            if rec.extension_id.is_empty() {
+                continue;
+            }
+            if rec.extension_id == extension_id {
+                results.push(rec);
             }
         }
         results.sort();
@@ -475,14 +482,14 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let records = self.query_prefix(CONFINEMENT_CLAIM_PREFIX, ctx)?;
         let mut results = Vec::new();
         for r in records {
-            if let Ok(mut rec) = serde_json::from_slice::<ConfinementClaimRecord>(&r.value) {
-                rec.extension_id = rec.extension_id.trim().to_string();
-                if rec.extension_id.is_empty() {
-                    continue;
-                }
-                if rec.extension_id == extension_id {
-                    results.push(rec);
-                }
+            let mut rec: ConfinementClaimRecord =
+                Self::decode_aggregate_record(&r, "confinement_claim")?;
+            rec.extension_id = rec.extension_id.trim().to_string();
+            if rec.extension_id.is_empty() {
+                continue;
+            }
+            if rec.extension_id == extension_id {
+                results.push(rec);
             }
         }
         results.sort();
@@ -540,6 +547,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         // Direct sources from events.
         for ev in &events {
             if ev.sink_clearance == *sink_clearance {
+                self.validate_declassified_event_if_needed(ev, ctx)?;
                 sources.insert(ev.source_label.clone());
             }
         }
@@ -566,6 +574,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
             for label in &frontier {
                 for ev in &events {
                     if ev.sink_clearance == *label && !sources.contains(&ev.source_label) {
+                        self.validate_declassified_event_if_needed(ev, ctx)?;
                         sources.insert(ev.source_label.clone());
                         next_frontier.push(ev.source_label.clone());
                     }
@@ -704,6 +713,9 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         // serialization instead of Display (which loses Custom label structure).
         let label_key =
             |l: &Label| -> String { serde_json::to_string(l).unwrap_or_else(|_| format!("{l:?}")) };
+        for event in &events {
+            self.validate_declassified_event_if_needed(event, ctx)?;
+        }
         let event_flows: BTreeSet<(String, String)> = events
             .iter()
             .map(|e| (label_key(&e.source_label), label_key(&e.sink_clearance)))
@@ -758,14 +770,21 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
 
         let results: Vec<(FlowEventRecord, Option<DeclassReceiptRecord>)> = events
             .into_iter()
-            .map(|ev| {
-                let receipt = ev
-                    .receipt_ref
-                    .as_ref()
-                    .and_then(|ref_id| receipt_map.get(ref_id.trim()).cloned());
-                (ev, receipt)
+            .map(|mut ev| {
+                if matches!(ev.decision, FlowDecision::Declassified) {
+                    let receipt_ref = Self::normalize_receipt_ref(ev.receipt_ref.as_deref())?;
+                    ev.receipt_ref = Some(receipt_ref.clone());
+                    let receipt = self.validate_declassified_receipt_ref(&ev, &receipt_ref, ctx)?;
+                    Ok((ev, Some(receipt)))
+                } else {
+                    let receipt = ev
+                        .receipt_ref
+                        .as_ref()
+                        .and_then(|ref_id| receipt_map.get(ref_id.trim()).cloned());
+                    Ok((ev, receipt))
+                }
             })
-            .collect();
+            .collect::<Result<Vec<_>, ProvenanceError>>()?;
 
         Ok(results)
     }
@@ -796,6 +815,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
 
         let mut edges = Vec::new();
         for ev in &events {
+            self.validate_declassified_event_if_needed(ev, ctx)?;
             edges.push(LineageHop {
                 source_label: ev.source_label.clone(),
                 sink_clearance: ev.sink_clearance.clone(),
@@ -879,6 +899,18 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         }
     }
 
+    fn decode_aggregate_record<T: serde::de::DeserializeOwned>(
+        record: &StoreRecord,
+        record_type: &str,
+    ) -> Result<T, ProvenanceError> {
+        serde_json::from_slice(&record.value).map_err(|e| {
+            ProvenanceError::SerializationError(format!(
+                "failed to deserialize {record_type} aggregate record at key {}: {e}",
+                record.key
+            ))
+        })
+    }
+
     fn put_record<T: Serialize>(
         &mut self,
         key: &str,
@@ -905,6 +937,80 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         self.store
             .query(STORE, &query, ctx)
             .map_err(ProvenanceError::from)
+    }
+
+    fn normalize_receipt_ref(receipt_ref: Option<&str>) -> Result<String, ProvenanceError> {
+        let Some(receipt_ref) = receipt_ref else {
+            return Err(ProvenanceError::EmptyRequiredField {
+                record_type: "flow_event".to_string(),
+                field_name: "receipt_ref".to_string(),
+            });
+        };
+        let receipt_ref = receipt_ref.trim();
+        if receipt_ref.is_empty() {
+            return Err(ProvenanceError::EmptyRequiredField {
+                record_type: "flow_event".to_string(),
+                field_name: "receipt_ref".to_string(),
+            });
+        }
+        Ok(receipt_ref.to_string())
+    }
+
+    fn validate_declassified_receipt_ref(
+        &mut self,
+        event: &FlowEventRecord,
+        receipt_ref: &str,
+        ctx: &EventContext,
+    ) -> Result<DeclassReceiptRecord, ProvenanceError> {
+        let Some(receipt) = self.get_declass_receipt(receipt_ref, ctx)? else {
+            return Err(ProvenanceError::MissingDeclassificationReceipt {
+                event_id: event.event_id.clone(),
+                receipt_ref: receipt_ref.to_string(),
+            });
+        };
+        Self::validate_declassified_receipt(event, receipt_ref, &receipt)?;
+        Ok(receipt)
+    }
+
+    fn validate_declassified_event_if_needed(
+        &mut self,
+        event: &FlowEventRecord,
+        ctx: &EventContext,
+    ) -> Result<(), ProvenanceError> {
+        if !matches!(event.decision, FlowDecision::Declassified) {
+            return Ok(());
+        }
+        let receipt_ref = Self::normalize_receipt_ref(event.receipt_ref.as_deref())?;
+        self.validate_declassified_receipt_ref(event, &receipt_ref, ctx)?;
+        Ok(())
+    }
+
+    fn validate_declassified_receipt(
+        event: &FlowEventRecord,
+        receipt_ref: &str,
+        receipt: &DeclassReceiptRecord,
+    ) -> Result<(), ProvenanceError> {
+        let invalid = |reason: &str| ProvenanceError::InvalidDeclassificationReceipt {
+            event_id: event.event_id.clone(),
+            receipt_ref: receipt_ref.to_string(),
+            reason: reason.to_string(),
+        };
+        if receipt.receipt_id.trim() != receipt_ref {
+            return Err(invalid("receipt_id does not match receipt_ref"));
+        }
+        if receipt.extension_id.trim() != event.extension_id.as_str() {
+            return Err(invalid("extension_id does not match flow event"));
+        }
+        if receipt.decision != DeclassificationDecision::Allow {
+            return Err(invalid("receipt decision is not Allow"));
+        }
+        if receipt.source_label != event.source_label {
+            return Err(invalid("source_label does not match flow event"));
+        }
+        if receipt.sink_clearance != event.sink_clearance {
+            return Err(invalid("sink_clearance does not match flow event"));
+        }
+        Ok(())
     }
 
     fn push_event(&mut self, trace_id: &str, event: &str, outcome: &str, err_code: Option<&str>) {
@@ -939,7 +1045,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         // Use typed operation instead of generic put_record() or store.put(STORE, key, value, metadata, &ctx)
         let _stored_record = self
             .store
-            .put_typed(entry, &ctx)
+            .put_typed(entry, ctx)
             .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
 
         self.push_event(&ctx.trace_id, "insert_typed_provenance", "ok", None);
@@ -961,7 +1067,7 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         // Use typed operation instead of generic get_record() or store.get(STORE, &key, &ctx)
         let entry = self
             .store
-            .get_typed_by_id::<IfcProvenanceEntry>(provenance_id, &ctx)
+            .get_typed_by_id::<IfcProvenanceEntry>(provenance_id, ctx)
             .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
 
         self.push_event(&ctx.trace_id, "get_typed_provenance", "ok", None);
@@ -1069,6 +1175,35 @@ mod tests {
             claim_strength: strength,
             epoch_id: epoch,
         }
+    }
+
+    fn inject_corrupt_record(
+        idx: &mut IfcProvenanceIndex<InMemoryStorageAdapter>,
+        key: &str,
+        ctx: &EventContext,
+    ) {
+        idx.store_mut()
+            .put(
+                STORE,
+                key.to_string(),
+                b"{not-valid-json".to_vec(),
+                std::collections::BTreeMap::new(),
+                ctx,
+            )
+            .expect("corrupt test record should be stored");
+    }
+
+    fn assert_corrupt_record_error(err: ProvenanceError, record_type: &str, key: &str) {
+        assert_eq!(error_code(&err), "PROV_SERIALIZATION_ERROR");
+        let message = err.to_string();
+        assert!(
+            message.contains(record_type),
+            "error should name record type {record_type}: {message}"
+        );
+        assert!(
+            message.contains(key),
+            "error should include corrupt storage key {key}: {message}"
+        );
     }
 
     // -- insert / query tests -----------------------------------------------
@@ -1517,6 +1652,147 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].event_id, "ev2");
+    }
+
+    // -- corrupt aggregate record regression tests ---------------------------
+
+    #[test]
+    fn corrupt_aggregate_flow_event_fails_closed_in_dependent_queries() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let corrupt_key = format!("{FLOW_EVENT_PREFIX}corrupt");
+        idx.insert_flow_event(
+            &flow_event(
+                "ev1",
+                "ext-a",
+                Label::Public,
+                Label::Internal,
+                FlowDecision::Allowed,
+            ),
+            &ctx,
+        )
+        .expect("valid flow event should insert");
+        inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
+
+        let err = idx.flow_events_by_extension("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+
+        let err = idx
+            .sink_provenance("ext-a", &Label::Internal, &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+
+        let err = idx
+            .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+    }
+
+    #[test]
+    fn corrupt_aggregate_flow_proof_fails_closed_in_dependent_queries() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let corrupt_key = format!("{FLOW_PROOF_PREFIX}corrupt");
+        idx.insert_flow_proof(
+            &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
+            &ctx,
+        )
+        .expect("valid flow proof should insert");
+        inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
+
+        let err = idx.flow_proofs_by_extension("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+
+        let err = idx
+            .sink_provenance("ext-a", &Label::Internal, &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+
+        let err = idx.confinement_status("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+    }
+
+    #[test]
+    fn corrupt_aggregate_declass_receipt_fails_closed_in_dependent_queries() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let corrupt_key = format!("{DECLASS_RECEIPT_PREFIX}corrupt");
+        idx.insert_flow_event(
+            &flow_event(
+                "ev1",
+                "ext-a",
+                Label::Confidential,
+                Label::Public,
+                FlowDecision::Allowed,
+            ),
+            &ctx,
+        )
+        .expect("valid flow event should insert");
+        idx.insert_declass_receipt(
+            &declass_receipt(
+                "r1",
+                "ext-a",
+                Label::Secret,
+                Label::Public,
+                DeclassificationDecision::Allow,
+            ),
+            &ctx,
+        )
+        .expect("valid declassification receipt should insert");
+        inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
+
+        let err = idx
+            .declass_receipts_by_extension("ext-a", &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+
+        let err = idx
+            .sink_provenance("ext-a", &Label::Public, &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+
+        let err = idx.join_events_with_receipts("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+
+        let err = idx
+            .source_to_sink_lineage("ext-a", &Label::Secret, &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+    }
+
+    #[test]
+    fn corrupt_aggregate_confinement_claim_fails_closed_in_dependent_queries() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let corrupt_key = format!("{CONFINEMENT_CLAIM_PREFIX}corrupt");
+        idx.insert_flow_event(
+            &flow_event(
+                "ev1",
+                "ext-a",
+                Label::Public,
+                Label::Internal,
+                FlowDecision::Allowed,
+            ),
+            &ctx,
+        )
+        .expect("valid flow event should insert");
+        idx.insert_confinement_claim(
+            &confinement_claim("c1", "ext-a", ClaimStrength::Partial, 1),
+            &ctx,
+        )
+        .expect("valid confinement claim should insert");
+        inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
+
+        let err = idx
+            .confinement_claims_by_extension("ext-a", &ctx)
+            .unwrap_err();
+        assert_corrupt_record_error(err, "confinement_claim", &corrupt_key);
+
+        let err = idx.confinement_status("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "confinement_claim", &corrupt_key);
+
+        let err = idx.record_counts("ext-a", &ctx).unwrap_err();
+        assert_corrupt_record_error(err, "confinement_claim", &corrupt_key);
     }
 
     // -- lineage queries ----------------------------------------------------

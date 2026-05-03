@@ -2066,7 +2066,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         let _stored_record = self
             .adapter
             .put_typed(entry, context)
-            .map_err(|e| LineageIndexError::Storage(e))?;
+            .map_err(LineageIndexError::Storage)?;
 
         self.emit_event(context, "insert_typed_lineage", "ok", None);
         Ok(())
@@ -2088,7 +2088,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         let entry = self
             .adapter
             .get_typed_by_id::<ReplacementLineageEntry>(sequence_id, context)
-            .map_err(|e| LineageIndexError::Storage(e))?;
+            .map_err(LineageIndexError::Storage)?;
 
         self.emit_event(context, "get_typed_lineage", "ok", None);
         Ok(entry)

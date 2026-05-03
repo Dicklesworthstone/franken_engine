@@ -1,7 +1,9 @@
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
     AuditExportFormat, AuditExportRequest, EvidenceEntry, export_audit_evidence,
 };
-use frankenengine_engine::{ContentHash, DeterministicTimestamp, EngineObjectId};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 /// Integration tests for Parquet export format correctness.
 ///
 /// Tests verify that AuditExportFormat::Parquet emits real Parquet binary format
@@ -15,18 +17,27 @@ fn export_to_parquet(entries: &[EvidenceEntry]) -> Result<Vec<u8>, Box<dyn std::
         start_tick: DeterministicTimestamp(0),
         end_tick: DeterministicTimestamp(u64::MAX),
         format: AuditExportFormat::Parquet,
-        kind_filter: None,
+        evidence_kinds: None,
+        max_entries: None,
+        requester: "parquet-test".to_string(),
+        correlation_id: Some("parquet-export-format".to_string()),
     };
 
     let now = DeterministicTimestamp(2000000);
     let result = export_audit_evidence(request, entries.to_vec(), now)?;
-    Ok(result.payload)
+    Ok(result.payload_bytes)
 }
 
 /// Create a test evidence entry for testing.
 fn create_test_entry(id_suffix: &str, kind: &str, timestamp: u64, summary: &str) -> EvidenceEntry {
-    let entry_id =
-        EngineObjectId::from_hex(&format!("a1b2c3d4e5f6789{}", id_suffix)).expect("Valid hex ID");
+    let schema_id = SchemaId::from_definition(b"parquet-export-test-evidence");
+    let entry_id = derive_id(
+        ObjectDomain::EvidenceRecord,
+        id_suffix,
+        &schema_id,
+        format!("parquet-test-evidence-{id_suffix}").as_bytes(),
+    )
+    .expect("evidence ID should derive from non-empty canonical bytes");
     let evidence_hash = ContentHash::compute(format!("test_evidence_{}", id_suffix).as_bytes());
 
     EvidenceEntry {
@@ -136,8 +147,8 @@ fn test_parquet_determinism() {
     ];
 
     // Export twice
-    let result1 = export_evidence_to_format(&entries, AuditExportFormat::Parquet);
-    let result2 = export_evidence_to_format(&entries, AuditExportFormat::Parquet);
+    let result1 = export_to_parquet(&entries);
+    let result2 = export_to_parquet(&entries);
 
     assert!(
         result1.is_ok() && result2.is_ok(),

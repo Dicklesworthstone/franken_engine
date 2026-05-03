@@ -85,6 +85,9 @@ franken-decision = { version = "0.3.1", optional = true }
 franken-evidence = { version = "0.3.1", optional = true }
 fp-io = { path = "/dp/frankenpandas/crates/fp-io" }
 fp-frame = { path = "/dp/frankenpandas/crates/fp-frame" }
+fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar" }
+fp-index = { path = "/dp/frankenpandas/crates/fp-index" }
+fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
 
 [dev-dependencies]
 frankenengine-test-support = { path = "../franken-engine-test-support" }

@@ -27,9 +27,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use fp_columnar::Column;
+use fp_frame::DataFrame;
+use fp_index::{Index, IndexLabel};
 use fp_io::write_parquet_bytes;
-use fp_frame::{DataFrame, Column, Index, Scalar};
+use fp_types::Scalar;
+use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
@@ -1310,25 +1313,47 @@ fn evidence_entries_to_dataframe(entries: &[&EvidenceEntry]) -> Result<DataFrame
 
     // Populate columns from entries
     for entry in entries {
-        entry_ids.push(Scalar::Str(entry.entry_id.to_string()));
-        kinds.push(Scalar::Str(entry.kind.clone()));
-        timestamps.push(Scalar::Int64(entry.timestamp.0));
-        summaries.push(Scalar::Str(entry.summary.clone()));
-        evidence_hashes.push(Scalar::Str(entry.evidence_hash.to_hex()));
+        entry_ids.push(Scalar::Utf8(entry.entry_id.to_string()));
+        kinds.push(Scalar::Utf8(entry.kind.clone()));
+        timestamps.push(Scalar::Int64(
+            i64::try_from(entry.timestamp.0).unwrap_or(i64::MAX),
+        ));
+        summaries.push(Scalar::Utf8(entry.summary.clone()));
+        evidence_hashes.push(Scalar::Utf8(entry.evidence_hash.to_hex()));
     }
 
     // Create columns
     let mut columns = BTreeMap::new();
-    columns.insert("entry_id".to_string(), Column::from_values(entry_ids).map_err(|e|
-        GovernanceError::ExportError { message: format!("Failed to create entry_id column: {}", e) })?);
-    columns.insert("kind".to_string(), Column::from_values(kinds).map_err(|e|
-        GovernanceError::ExportError { message: format!("Failed to create kind column: {}", e) })?);
-    columns.insert("timestamp".to_string(), Column::from_values(timestamps).map_err(|e|
-        GovernanceError::ExportError { message: format!("Failed to create timestamp column: {}", e) })?);
-    columns.insert("summary".to_string(), Column::from_values(summaries).map_err(|e|
-        GovernanceError::ExportError { message: format!("Failed to create summary column: {}", e) })?);
-    columns.insert("evidence_hash".to_string(), Column::from_values(evidence_hashes).map_err(|e|
-        GovernanceError::ExportError { message: format!("Failed to create evidence_hash column: {}", e) })?);
+    columns.insert(
+        "entry_id".to_string(),
+        Column::from_values(entry_ids).map_err(|e| GovernanceError::ExportError {
+            message: format!("Failed to create entry_id column: {}", e),
+        })?,
+    );
+    columns.insert(
+        "kind".to_string(),
+        Column::from_values(kinds).map_err(|e| GovernanceError::ExportError {
+            message: format!("Failed to create kind column: {}", e),
+        })?,
+    );
+    columns.insert(
+        "timestamp".to_string(),
+        Column::from_values(timestamps).map_err(|e| GovernanceError::ExportError {
+            message: format!("Failed to create timestamp column: {}", e),
+        })?,
+    );
+    columns.insert(
+        "summary".to_string(),
+        Column::from_values(summaries).map_err(|e| GovernanceError::ExportError {
+            message: format!("Failed to create summary column: {}", e),
+        })?,
+    );
+    columns.insert(
+        "evidence_hash".to_string(),
+        Column::from_values(evidence_hashes).map_err(|e| GovernanceError::ExportError {
+            message: format!("Failed to create evidence_hash column: {}", e),
+        })?,
+    );
 
     // Create column order (deterministic)
     let column_order = vec![
@@ -1340,13 +1365,16 @@ fn evidence_entries_to_dataframe(entries: &[&EvidenceEntry]) -> Result<DataFrame
     ];
 
     // Create index (0, 1, 2, ...)
-    let index_values: Vec<Scalar> = (0..entries.len()).map(|i| Scalar::Int64(i as i64)).collect();
+    let index_values: Vec<IndexLabel> = (0..entries.len())
+        .map(|i| IndexLabel::Int64(i as i64))
+        .collect();
     let index = Index::new(index_values);
 
-    DataFrame::new_with_column_order(index, columns, column_order)
-        .map_err(|frame_err| GovernanceError::ExportError {
+    DataFrame::new_with_column_order(index, columns, column_order).map_err(|frame_err| {
+        GovernanceError::ExportError {
             message: format!("Failed to create DataFrame: {}", frame_err),
-        })
+        }
+    })
 }
 
 /// Serialise a slice of evidence entries into the requested format.
@@ -1406,8 +1434,12 @@ fn generate_compliance_pdf(entries: &[&EvidenceEntry]) -> Result<Vec<u8>, Govern
     // Build content text from entries
     let content_text = entries
         .iter()
-        .map(|entry| format!("ID: {} | Kind: {} | Summary: {}",
-                              entry.entry_id, entry.kind, entry.summary))
+        .map(|entry| {
+            format!(
+                "ID: {} | Kind: {} | Summary: {}",
+                entry.entry_id, entry.kind, entry.summary
+            )
+        })
         .collect::<Vec<_>>()
         .join("\\n");
 
@@ -1432,13 +1464,17 @@ fn generate_compliance_pdf(entries: &[&EvidenceEntry]) -> Result<Vec<u8>, Govern
 
     // 5. Indirect object 4: Content stream
     offsets.push(pdf.len());
-    let content_obj = format!("4 0 obj\n<</Length {}>>\nstream\n{}\nendstream\nendobj\n",
-                              content_length, content_stream);
+    let content_obj = format!(
+        "4 0 obj\n<</Length {}>>\nstream\n{}\nendstream\nendobj\n",
+        content_length, content_stream
+    );
     pdf.extend_from_slice(content_obj.as_bytes());
 
     // 6. Indirect object 5: Font
     offsets.push(pdf.len());
-    pdf.extend_from_slice(b"5 0 obj\n<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>\nendobj\n");
+    pdf.extend_from_slice(
+        b"5 0 obj\n<</Type /Font /Subtype /Type1 /BaseFont /Helvetica>>\nendobj\n",
+    );
 
     // 7. xref table
     let xref_offset = pdf.len();
@@ -1449,7 +1485,13 @@ fn generate_compliance_pdf(entries: &[&EvidenceEntry]) -> Result<Vec<u8>, Govern
     }
 
     // 8. trailer and EOF
-    pdf.extend_from_slice(format!("trailer\n<</Size 6 /Root 1 0 R>>\nstartxref\n{}\n%%EOF", xref_offset).as_bytes());
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<</Size 6 /Root 1 0 R>>\nstartxref\n{}\n%%EOF",
+            xref_offset
+        )
+        .as_bytes(),
+    );
 
     Ok(pdf)
 }
@@ -2486,18 +2528,25 @@ mod tests {
     fn test_export_parquet_success() {
         let entries = vec![make_entry("capability_decision", 30)];
         let req = make_export_request(AuditExportFormat::Parquet, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200))
-            .expect("Parquet export should succeed");
+        let result =
+            export_audit_evidence(req, entries, ts(200)).expect("Parquet export should succeed");
         assert_eq!(result.entry_count, 1);
 
         // Verify real Parquet binary format instead of fake plaintext
         let parquet_bytes = &result.payload_bytes;
         assert!(parquet_bytes.len() >= 4, "Parquet should have magic header");
-        assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should start with PAR1 magic");
+        assert_eq!(
+            &parquet_bytes[0..4],
+            b"PAR1",
+            "Should start with PAR1 magic"
+        );
 
         // Verify it's not the old fake format
         if let Ok(text) = std::str::from_utf8(parquet_bytes) {
-            assert!(!text.contains("FRANKEN_PARQUET_V1"), "Should not contain fake header");
+            assert!(
+                !text.contains("FRANKEN_PARQUET_V1"),
+                "Should not contain fake header"
+            );
         }
     }
 

@@ -19237,13 +19237,13 @@ impl InterpreterCore {
 
     /// Capture information about the current executing frame.
     fn capture_current_frame(&self) -> StackFrameInfo {
-        // Try to determine current function name from instruction pointer
+        // Try to determine current function name from call stack
         let function_name = self.get_current_function_name().unwrap_or_else(|| "<anonymous>".to_string());
 
-        // For now, use source label from current execution context
-        let source_file = self.current_module
+        // Use current module specifier as source file
+        let source_file = self.current_module_specifier
             .as_ref()
-            .map(|m| m.header.source_label.clone())
+            .map(|spec| format!("{}.js", spec))
             .unwrap_or_else(|| "<unknown>".to_string());
 
         // Approximate line number based on instruction index
@@ -19258,36 +19258,36 @@ impl InterpreterCore {
     }
 
     /// Capture information about a call frame from the call stack.
-    fn capture_call_frame_info(&self, _call_frame: &CallFrame, frame_index: usize) -> StackFrameInfo {
+    fn capture_call_frame_info(&self, call_frame: &CallFrame, frame_index: usize) -> StackFrameInfo {
         // Extract function name from function index if available
-        let function_name = format!("<frame-{}>", frame_index);
+        let function_name = if let Some(func_idx) = call_frame.function_index {
+            format!("function_{}", func_idx)
+        } else {
+            format!("<frame-{}>", frame_index)
+        };
 
-        // Use source label if available
-        let source_file = self.current_module
+        // Use current module specifier as source file
+        let source_file = self.current_module_specifier
             .as_ref()
-            .map(|m| m.header.source_label.clone())
+            .map(|spec| format!("{}.js", spec))
             .unwrap_or_else(|| "<unknown>".to_string());
+
+        // Use return IP as approximate line number
+        let line_number = (call_frame.return_ip as u32).saturating_add(1);
 
         StackFrameInfo::with_location(
             function_name,
             source_file,
-            frame_index as u32,
+            line_number,
             1,
         )
     }
 
     /// Get the name of the currently executing function.
     fn get_current_function_name(&self) -> Option<String> {
-        // Look up function name in current module's function table
-        self.current_module.as_ref().and_then(|module| {
-            // Find function containing current IP
-            module.function_table.iter()
-                .find(|func| {
-                    // Simple heuristic: if we're in the first 1000 instructions,
-                    // we might be in this function
-                    self.ip < func.instructions.len() + 1000
-                })
-                .map(|func| func.name.clone())
+        // Look up function name from the current call frame
+        self.call_stack.last().and_then(|frame| {
+            frame.function_index.map(|idx| format!("function_{}", idx))
         })
     }
 

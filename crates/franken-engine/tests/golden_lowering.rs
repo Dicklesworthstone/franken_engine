@@ -121,3 +121,12 @@ fn golden_lowering_optional_chaining() {
         goal: ParseGoal::Script,
     });
 }
+
+#[test]
+fn golden_lowering_nullish_coalescing() {
+    assert_lowering_golden(&LoweringGoldenCase {
+        name: "nullish_coalescing",
+        source: "null ?? 42;\n",
+        goal: ParseGoal::Script,
+    });
+}

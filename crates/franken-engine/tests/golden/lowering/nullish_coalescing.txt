@@ -1,0 +1,25 @@
+# franken-engine lowering IR3 golden
+# Update with:
+#   UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_lowering
+# Then review and commit the diff under tests/golden/lowering/.
+case: nullish_coalescing
+goal: Script
+source:
+  null ?? 42;
+
+constant_pool:
+  <empty>
+
+instructions:
+  0000: LoadNull { dst: 0 }
+  0001: Move { dst: 1, src: 0 }
+  0002: Move { dst: 0, src: 1 }
+  0003: Move { dst: 2, src: 1 }
+  0004: JumpIfNullish { cond: 2, target: 6 }
+  0005: Jump { target: 9 }
+  0006: LoadInt { dst: 3, value: 42 }
+  0007: Move { dst: 1, src: 3 }
+  0008: Move { dst: 0, src: 1 }
+  0009: Move { dst: 4, src: 1 }
+  0010: Move { dst: 0, src: 4 }
+  0011: Halt

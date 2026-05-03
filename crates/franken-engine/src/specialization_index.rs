@@ -641,7 +641,7 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         let _stored_record = self
             .storage
             .put_typed(entry, &ctx)
-            .map_err(|e| SpecializationIndexError::StorageError(e))?;
+            .map_err(|e| SpecializationIndexError::Storage(e.to_string()))?;
 
         self.emit_event(trace_id, "insert_typed_entry", "ok", None);
         Ok(())
@@ -665,7 +665,7 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         let entry = self
             .storage
             .get_typed_by_id::<SpecializationIndexEntry>(specialization_id, &ctx)
-            .map_err(|e| SpecializationIndexError::StorageError(e))?;
+            .map_err(|e| SpecializationIndexError::Storage(e.to_string()))?;
 
         self.emit_event(trace_id, "get_typed_entry", "ok", None);
         Ok(entry)

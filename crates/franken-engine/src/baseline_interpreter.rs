@@ -2080,6 +2080,8 @@ pub struct InterpreterCore {
     register_labels: Vec<Label>,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
+    /// GC remembered set for tracking old->young generation references.
+    gc_remembered_set: BTreeSet<ObjectId>,
 }
 
 impl InterpreterCore {
@@ -2140,6 +2142,7 @@ impl InterpreterCore {
             nondeterminism_trace: NondeterminismTrace::new(trace_id),
             register_labels: vec![Label::Public; max_regs],
             weakmap_storage: BTreeMap::new(),
+            gc_remembered_set: BTreeSet::new(),
         }
     }
 
@@ -2183,6 +2186,37 @@ impl InterpreterCore {
     fn propagate_unary_operation_label(&mut self, src: u32, dst: u32) -> Result<(), InterpreterError> {
         let src_label = self.get_register_label(src)?.clone();
         self.set_register_label(dst, src_label)
+    }
+
+    // ---------------------------------------------------------------------------
+    // GC write barrier management
+    // ---------------------------------------------------------------------------
+
+    /// Record an object in the remembered set for generational GC.
+    /// This is called when an older generation object gets a reference to a younger object.
+    fn gc_write_barrier(&mut self, object_id: ObjectId) {
+        self.gc_remembered_set.insert(object_id);
+    }
+
+    /// Check if an object is in the remembered set.
+    pub fn gc_is_remembered(&self, object_id: ObjectId) -> bool {
+        self.gc_remembered_set.contains(&object_id)
+    }
+
+    /// Clear the remembered set (typically called after a GC cycle).
+    pub fn gc_clear_remembered_set(&mut self) {
+        self.gc_remembered_set.clear();
+    }
+
+    /// Get the size of the remembered set (for testing/diagnostics).
+    pub fn gc_remembered_set_size(&self) -> usize {
+        self.gc_remembered_set.len()
+    }
+
+    /// Get a copy of the remembered set for inspection (for testing).
+    #[cfg(test)]
+    pub fn gc_get_remembered_set(&self) -> &BTreeSet<ObjectId> {
+        &self.gc_remembered_set
     }
 
     /// Get the captured console output entries.
@@ -18770,6 +18804,10 @@ impl InterpreterCore {
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
+
+        // Trigger write barrier for GC correctness when setting object properties
+        self.gc_write_barrier(object_id);
+
         Ok(())
     }
 

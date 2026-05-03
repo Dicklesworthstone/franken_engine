@@ -146,7 +146,7 @@ FrankenEngine is the native runtime heart for `franken_node`, with goals:
 - de novo Rust-native execution lanes (no engine bindings for core execution)
 - mathematically explicit runtime security for untrusted extension code
 - deterministic replay and auditable decision artifacts
-- category-defining performance/security posture beyond Node/Bun defaults
+- high-performance runtime with mathematically explicit security guarantees
 
 ### Non-Negotiable Architectural Constraints
 

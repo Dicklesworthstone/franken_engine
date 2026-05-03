@@ -131,6 +131,25 @@ const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 #[cfg(test)]
 const TEST_FUNCTION_ID_OFFSET: u32 = 100_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostcallCapabilityClass {
+    Runtime(RuntimeCapability),
+    InternalAllowed,
+    Unknown,
+}
+
+fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
+    if tag.starts_with("promise:") {
+        HostcallCapabilityClass::InternalAllowed
+    } else if tag == "ifc.check_flow" {
+        HostcallCapabilityClass::InternalAllowed
+    } else if let Some(capability) = RuntimeCapability::from_tag_str(tag) {
+        HostcallCapabilityClass::Runtime(capability)
+    } else {
+        HostcallCapabilityClass::Unknown
+    }
+}
+
 /// Canonical operator-facing label for the deterministic execution profile.
 pub const DETERMINISTIC_PROFILE_LABEL: &str = "baseline_deterministic_profile";
 /// Canonical operator-facing label for the throughput execution profile.
@@ -4714,23 +4733,27 @@ impl InterpreterCore {
                     // Promise hostcalls are always allowed (runtime-internal).
                     let is_promise_cap = capability.0.starts_with("promise:");
 
-                    if !is_promise_cap {
-                        // Map the CapabilityTag string to a typed RuntimeCapability.
-                        // Tags that map to a RuntimeCapability are checked against
-                        // the granted set. Most hostcalls now map to capabilities
-                        // (console, timer, builtin, etc.). Only truly internal
-                        // dispatch tags (ifc.*, hostcall.*) pass through unchecked.
-                        if let Some(required_cap) = RuntimeCapability::from_tag_str(&capability.0)
-                            && !self.config.granted_capabilities.contains(&required_cap)
-                        {
-                            self.emit_witness(
-                                WitnessEventKind::CapabilityChecked,
-                                Some(&format!("denied:{}", capability.0)),
-                            );
-                            return Err(InterpreterError::CapabilityDenied {
-                                capability: capability.0.clone(),
-                            });
+                    let capability_denied = match classify_hostcall_capability(&capability.0) {
+                        HostcallCapabilityClass::Runtime(required_cap) => {
+                            !self.config.granted_capabilities.contains(&required_cap)
                         }
+                        HostcallCapabilityClass::InternalAllowed => false,
+                        HostcallCapabilityClass::Unknown => true,
+                    };
+                    if capability_denied {
+                        self.emit_witness(
+                            WitnessEventKind::CapabilityChecked,
+                            Some(&format!("denied:{}", capability.0)),
+                        );
+                        self.hostcall_decisions.push(HostcallDecisionRecord {
+                            seq: self.hostcall_decisions.len() as u64,
+                            capability: capability.clone(),
+                            allowed: false,
+                            instruction_index: self.ip as u32,
+                        });
+                        return Err(InterpreterError::CapabilityDenied {
+                            capability: capability.0.clone(),
+                        });
                     }
 
                     self.emit_witness(

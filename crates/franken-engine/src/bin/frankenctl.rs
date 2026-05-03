@@ -2537,7 +2537,7 @@ fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
 }
 
 fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
-    let mut capabilities = CapabilityProfile::engine_core().capabilities;
+    let mut capabilities = CapabilityProfile::engine_core().capabilities().clone();
     if parse_goal == ParseGoal::Module {
         capabilities.insert(RuntimeCapability::ModuleLoad);
     }

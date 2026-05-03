@@ -52,7 +52,7 @@ impl TrustZoneClass {
         use RuntimeCapability::*;
 
         match self {
-            Self::Owner => super::CapabilityProfile::full().capabilities,
+            Self::Owner => super::CapabilityProfile::full().capabilities().clone(),
             Self::Private => BTreeSet::from([
                 VmDispatch,
                 GcInvoke,

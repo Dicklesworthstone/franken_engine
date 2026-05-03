@@ -129,6 +129,37 @@ fn hostcall_denied_extracts_capability_name() {
     }
 }
 
+#[test]
+fn unknown_hostcall_tags_fail_closed() {
+    for cap in ["hostcall.invoke", "ifc.declassify", "future.dangerous"] {
+        let m = make_hostcall_module(cap);
+        let config = config_with_execution_caps();
+        let lane = QuickJsLane::with_config(config);
+        let err = lane.execute(&m, "trace-unknown").unwrap_err();
+        match err {
+            InterpreterError::CapabilityDenied { capability } => {
+                assert_eq!(capability, cap);
+            }
+            other => panic!("expected CapabilityDenied for {cap}, got: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn internal_ifc_runtime_guard_is_allowlisted_without_package_grant() {
+    let m = make_hostcall_module("ifc.check_flow");
+    let config = config_with_execution_caps();
+    let lane = QuickJsLane::with_config(config);
+    let result = lane.execute(&m, "trace-ifc-internal").unwrap();
+
+    assert_eq!(result.hostcall_decisions.len(), 1);
+    assert_eq!(
+        result.hostcall_decisions[0].capability,
+        CapabilityTag("ifc.check_flow".to_string())
+    );
+    assert!(result.hostcall_decisions[0].allowed);
+}
+
 // =========================================================================
 // Section 2: Grant semantics — authorized capabilities
 // =========================================================================
@@ -340,7 +371,7 @@ fn both_lanes_grant_authorized_capability() {
 #[test]
 fn capability_profile_full_has_all_capabilities() {
     let profile = CapabilityProfile::full();
-    assert_eq!(profile.kind, ProfileKind::Full);
+    assert_eq!(profile.kind(), ProfileKind::Full);
     assert!(profile.has(RuntimeCapability::VmDispatch));
     assert!(profile.has(RuntimeCapability::NetworkEgress));
     assert!(profile.has(RuntimeCapability::FsWrite));
@@ -354,7 +385,7 @@ fn capability_profile_full_has_all_capabilities() {
 #[test]
 fn capability_profile_compute_only_has_no_capabilities() {
     let profile = CapabilityProfile::compute_only();
-    assert_eq!(profile.kind, ProfileKind::ComputeOnly);
+    assert_eq!(profile.kind(), ProfileKind::ComputeOnly);
     assert!(profile.is_empty());
 }
 
@@ -632,7 +663,7 @@ fn intersect_disjoint_profiles_yields_empty() {
     let inter = ec.intersect(&pol);
     assert!(inter.is_empty());
     assert_eq!(inter.len(), 0);
-    assert_eq!(inter.kind, ProfileKind::ComputeOnly);
+    assert_eq!(inter.kind(), ProfileKind::ComputeOnly);
 }
 
 #[test]
@@ -640,7 +671,7 @@ fn intersect_full_with_engine_core_yields_engine_core_caps() {
     let full = CapabilityProfile::full();
     let ec = CapabilityProfile::engine_core();
     let inter = full.intersect(&ec);
-    assert_eq!(inter.capabilities, ec.capabilities);
+    assert_eq!(inter.capabilities(), ec.capabilities());
     assert_eq!(inter.len(), 7);
     assert!(inter.has(RuntimeCapability::VmDispatch));
     assert!(inter.has(RuntimeCapability::GcInvoke));
@@ -657,7 +688,7 @@ fn intersect_is_commutative() {
     let remote = CapabilityProfile::remote();
     let ab = ec.intersect(&remote);
     let ba = remote.intersect(&ec);
-    assert_eq!(ab.capabilities, ba.capabilities);
+    assert_eq!(ab.capabilities(), ba.capabilities());
     assert!(ab.is_empty());
 }
 
@@ -696,9 +727,10 @@ fn all_profiles_serde_roundtrip() {
         let json = serde_json::to_string(profile).unwrap();
         let back: CapabilityProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            *profile, back,
+            *profile,
+            back,
             "serde roundtrip failed for {}",
-            profile.kind
+            profile.kind()
         );
     }
 }
@@ -833,7 +865,7 @@ fn profile_subsumes_itself() {
         CapabilityProfile::compute_only(),
     ];
     for p in &profiles {
-        assert!(p.subsumes(p), "{} should subsume itself", p.kind);
+        assert!(p.subsumes(p), "{} should subsume itself", p.kind());
     }
 }
 

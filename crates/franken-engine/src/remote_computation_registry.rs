@@ -350,7 +350,7 @@ impl RemoteComputationRegistry {
             return Err(RegistryError::HotRegistrationDenied {
                 reason: format!(
                     "profile {} lacks EvidenceEmit for hot-registration",
-                    profile.kind
+                    profile.kind()
                 ),
             });
         }
@@ -488,7 +488,7 @@ impl RemoteComputationRegistry {
             return Err(RegistryError::CapabilityDenied {
                 computation_name: name.as_str().to_string(),
                 required: capability_required,
-                held: profile.kind,
+                held: profile.kind(),
             });
         }
 

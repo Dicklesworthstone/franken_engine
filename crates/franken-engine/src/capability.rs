@@ -206,10 +206,36 @@ impl fmt::Display for ProfileKind {
 /// A concrete capability profile: a named set of granted capabilities.
 ///
 /// Uses `BTreeSet` for deterministic serialization and iteration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CapabilityProfile {
-    pub kind: ProfileKind,
-    pub capabilities: BTreeSet<RuntimeCapability>,
+    kind: ProfileKind,
+    capabilities: BTreeSet<RuntimeCapability>,
+}
+
+impl<'de> serde::Deserialize<'de> for CapabilityProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct RawProfile {
+            kind: ProfileKind,
+            capabilities: BTreeSet<RuntimeCapability>,
+        }
+
+        let raw = RawProfile::deserialize(deserializer)?;
+        let profile = CapabilityProfile {
+            kind: raw.kind,
+            capabilities: raw.capabilities,
+        };
+
+        // SECURITY: Validate that the profile matches its canonical definition
+        // Prevents capability smuggling where kind and capabilities mismatch
+        profile
+            .validate_canonical()
+            .map_err(serde::de::Error::custom)?;
+        Ok(profile)
+    }
 }
 
 impl CapabilityProfile {
@@ -311,13 +337,13 @@ impl CapabilityProfile {
         // Determine the correct ProfileKind based on the intersection
         let kind = if caps.is_empty() {
             ProfileKind::ComputeOnly
-        } else if caps == CapabilityProfile::full().capabilities {
+        } else if caps == *CapabilityProfile::full().capabilities() {
             ProfileKind::Full
-        } else if caps == CapabilityProfile::engine_core().capabilities {
+        } else if caps == *CapabilityProfile::engine_core().capabilities() {
             ProfileKind::EngineCore
-        } else if caps == CapabilityProfile::policy().capabilities {
+        } else if caps == *CapabilityProfile::policy().capabilities() {
             ProfileKind::Policy
-        } else if caps == CapabilityProfile::remote().capabilities {
+        } else if caps == *CapabilityProfile::remote().capabilities() {
             ProfileKind::Remote
         } else {
             // If no exact match with named profiles, use ComputeOnly as default
@@ -338,6 +364,41 @@ impl CapabilityProfile {
 
     pub fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
+    }
+
+    /// Get the profile kind.
+    pub fn kind(&self) -> ProfileKind {
+        self.kind
+    }
+
+    /// Get the capabilities in this profile.
+    pub fn capabilities(&self) -> &BTreeSet<RuntimeCapability> {
+        &self.capabilities
+    }
+
+    /// Validate that this profile matches its canonical definition.
+    ///
+    /// Prevents capability smuggling by ensuring that deserialized profiles
+    /// have exactly the capabilities they claim to have based on their kind.
+    fn validate_canonical(&self) -> Result<(), String> {
+        let expected = match self.kind {
+            ProfileKind::Full => CapabilityProfile::full(),
+            ProfileKind::EngineCore => CapabilityProfile::engine_core(),
+            ProfileKind::Policy => CapabilityProfile::policy(),
+            ProfileKind::Remote => CapabilityProfile::remote(),
+            ProfileKind::ComputeOnly => CapabilityProfile::compute_only(),
+        };
+
+        if self.capabilities != *expected.capabilities() {
+            return Err(format!(
+                "capability smuggling detected: {} profile has {} capabilities but canonical definition requires {}",
+                self.kind,
+                self.capabilities.len(),
+                expected.capabilities().len()
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -387,7 +448,7 @@ pub fn require_capability(
     } else {
         Err(CapabilityDenied {
             required,
-            held_profile: profile.kind,
+            held_profile: profile.kind(),
             component: component.to_string(),
         })
     }
@@ -406,7 +467,7 @@ pub fn require_all(
         .filter(|cap| !profile.has(**cap))
         .map(|cap| CapabilityDenied {
             required: *cap,
-            held_profile: profile.kind,
+            held_profile: profile.kind(),
             component: component.to_string(),
         })
         .collect();
@@ -528,8 +589,22 @@ mod tests {
 
     #[test]
     fn intersection_produces_common_caps() {
-        let mut custom_a = CapabilityProfile::engine_core();
-        custom_a.capabilities.insert(RuntimeCapability::PolicyRead);
+        // Create a custom profile that has engine_core + policy_read capabilities
+        // We'll simulate this by creating it using the internal constructor
+        use RuntimeCapability::*;
+        let custom_a = CapabilityProfile {
+            kind: ProfileKind::ComputeOnly, // Custom profile gets ComputeOnly kind
+            capabilities: BTreeSet::from([
+                VmDispatch,
+                GcInvoke,
+                IrLowering,
+                HeapAllocate,
+                Console,
+                Timer,
+                Builtin,    // engine_core caps
+                PolicyRead, // additional capability
+            ]),
+        };
 
         let pol = CapabilityProfile::policy();
         let inter = custom_a.intersect(&pol);
@@ -542,7 +617,7 @@ mod tests {
         let full = CapabilityProfile::full();
         let ec = CapabilityProfile::engine_core();
         let inter = full.intersect(&ec);
-        assert_eq!(inter.capabilities, ec.capabilities);
+        assert_eq!(inter.capabilities(), ec.capabilities());
     }
 
     // -- Capability checks --
@@ -762,7 +837,7 @@ mod tests {
     fn intersection_with_self_preserves_capabilities() {
         let ec = CapabilityProfile::engine_core();
         let inter = ec.intersect(&ec);
-        assert_eq!(inter.capabilities, ec.capabilities);
+        assert_eq!(inter.capabilities(), ec.capabilities());
     }
 
     #[test]
@@ -779,7 +854,7 @@ mod tests {
         let pol = CapabilityProfile::policy();
         let ab = ec.intersect(&pol);
         let ba = pol.intersect(&ec);
-        assert_eq!(ab.capabilities, ba.capabilities);
+        assert_eq!(ab.capabilities(), ba.capabilities());
     }
 
     #[test]
@@ -789,7 +864,7 @@ mod tests {
         let inter = full.intersect(&ec);
         // full ∩ engine_core = engine_core capabilities, so kind should be EngineCore
         assert_eq!(inter.kind, ProfileKind::EngineCore);
-        assert_eq!(inter.capabilities, ec.capabilities);
+        assert_eq!(inter.capabilities(), ec.capabilities());
     }
 
     // ── Enrichment: has / len / is_empty ─────────────────────────
@@ -898,10 +973,10 @@ mod tests {
         let pol = CapabilityProfile::policy();
         let rem = CapabilityProfile::remote();
         let mut combined = BTreeSet::new();
-        combined.extend(&ec.capabilities);
-        combined.extend(&pol.capabilities);
-        combined.extend(&rem.capabilities);
-        assert!(combined.is_subset(&full.capabilities));
+        combined.extend(ec.capabilities());
+        combined.extend(pol.capabilities());
+        combined.extend(rem.capabilities());
+        assert!(combined.is_subset(full.capabilities()));
     }
 
     // ── Enrichment: deterministic serialization ──────────────────
@@ -929,7 +1004,7 @@ mod tests {
         let cloned = full.clone();
         assert_eq!(full, cloned);
         assert_eq!(full.kind, cloned.kind);
-        assert_eq!(full.capabilities, cloned.capabilities);
+        assert_eq!(full.capabilities(), cloned.capabilities());
     }
 
     #[test]
@@ -985,7 +1060,7 @@ mod tests {
         let pol = CapabilityProfile::policy();
         let ab_c = full.intersect(&ec).intersect(&pol);
         let a_bc = full.intersect(&ec.intersect(&pol));
-        assert_eq!(ab_c.capabilities, a_bc.capabilities);
+        assert_eq!(ab_c.capabilities(), a_bc.capabilities());
     }
 
     #[test]
@@ -1089,7 +1164,7 @@ mod tests {
         let full1 = CapabilityProfile::full();
         let full2 = CapabilityProfile::full();
         let inter = full1.intersect(&full2);
-        assert_eq!(inter.capabilities, full1.capabilities);
+        assert_eq!(inter.capabilities(), full1.capabilities());
     }
 
     #[test]
@@ -1291,7 +1366,7 @@ mod tests {
         let pol = CapabilityProfile::policy();
         let ab = ec.intersect(&pol);
         let ab_b = ab.intersect(&pol);
-        assert_eq!(ab.capabilities, ab_b.capabilities);
+        assert_eq!(ab.capabilities(), ab_b.capabilities());
     }
 
     #[test]
@@ -1299,7 +1374,7 @@ mod tests {
         let full = CapabilityProfile::full();
         let ec = CapabilityProfile::engine_core();
         let result = full.intersect(&ec);
-        assert_eq!(result.capabilities, ec.capabilities);
+        assert_eq!(result.capabilities(), ec.capabilities());
     }
 
     #[test]
@@ -1309,7 +1384,7 @@ mod tests {
         let result = full.intersect(&ec);
         // full ∩ engine_core should have EngineCore kind since it contains exactly EngineCore capabilities
         assert_eq!(result.kind, ProfileKind::EngineCore);
-        assert_eq!(result.capabilities, ec.capabilities);
+        assert_eq!(result.capabilities(), ec.capabilities());
     }
 
     // -- Capability profile intersection kind correctness tests (bd-3pa1u.4) --
@@ -1320,7 +1395,7 @@ mod tests {
         let full2 = CapabilityProfile::full();
         let result = full1.intersect(&full2);
         assert_eq!(result.kind, ProfileKind::Full);
-        assert_eq!(result.capabilities, full1.capabilities);
+        assert_eq!(result.capabilities(), full1.capabilities());
     }
 
     #[test]
@@ -1370,7 +1445,7 @@ mod tests {
         for profile in &profiles {
             let result = profile.intersect(profile);
             assert_eq!(result.kind, profile.kind);
-            assert_eq!(result.capabilities, profile.capabilities);
+            assert_eq!(result.capabilities(), profile.capabilities());
         }
     }
 
@@ -1381,7 +1456,7 @@ mod tests {
         let result = full.intersect(&ec);
         // This is the key test case from the bead requirements
         assert_eq!(result.kind, ProfileKind::EngineCore);
-        assert_eq!(result.capabilities, ec.capabilities);
+        assert_eq!(result.capabilities(), ec.capabilities());
     }
 
     #[test]
@@ -1693,5 +1768,67 @@ mod tests {
     fn full_profile_includes_module_load() {
         let full = CapabilityProfile::full();
         assert!(full.has(RuntimeCapability::ModuleLoad));
+    }
+
+    // ── Security: capability smuggling prevention ─────────────────
+
+    #[test]
+    fn deserialize_rejects_capability_smuggling_compute_only() {
+        // SECURITY: Verify that malicious JSON claiming ComputeOnly but containing
+        // elevated capabilities is rejected during deserialization
+        let malicious_json = r#"{
+            "kind": "ComputeOnly",
+            "capabilities": ["FsWrite", "ProcessSpawn", "NetworkEgress"]
+        }"#;
+
+        let result: Result<CapabilityProfile, _> = serde_json::from_str(malicious_json);
+        assert!(result.is_err(), "capability smuggling should be rejected");
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains("capability smuggling detected"),
+            "error should mention capability smuggling, got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_capability_smuggling_remote() {
+        // SECURITY: Verify Remote profile with wrong capabilities is rejected
+        let malicious_json = r#"{
+            "kind": "Remote",
+            "capabilities": ["NetworkEgress", "FsWrite", "ProcessSpawn"]
+        }"#;
+
+        let result: Result<CapabilityProfile, _> = serde_json::from_str(malicious_json);
+        assert!(
+            result.is_err(),
+            "Remote with wrong capabilities should be rejected"
+        );
+    }
+
+    #[test]
+    fn deserialize_accepts_canonical_profiles() {
+        // SECURITY: Verify that canonical profiles are still accepted
+        let canonical_profiles = [
+            (CapabilityProfile::full(), "Full"),
+            (CapabilityProfile::engine_core(), "EngineCore"),
+            (CapabilityProfile::policy(), "Policy"),
+            (CapabilityProfile::remote(), "Remote"),
+            (CapabilityProfile::compute_only(), "ComputeOnly"),
+        ];
+
+        for (profile, name) in &canonical_profiles {
+            let json = serde_json::to_string(profile).expect("serialization should succeed");
+            let restored: CapabilityProfile = serde_json::from_str(&json).expect(&format!(
+                "canonical {} profile should deserialize successfully",
+                name
+            ));
+            assert_eq!(
+                *profile, restored,
+                "canonical {} profile should round-trip",
+                name
+            );
+        }
     }
 }

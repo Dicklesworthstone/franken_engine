@@ -171,7 +171,7 @@ impl RemoteOperationGate {
                 epoch_id: self.current_epoch.as_u64(),
                 timestamp_ticks,
                 outcome: "permitted".to_string(),
-                held_profile: profile.kind.to_string(),
+                held_profile: profile.kind().to_string(),
             });
             Ok(())
         } else {
@@ -184,12 +184,12 @@ impl RemoteOperationGate {
                 epoch_id: self.current_epoch.as_u64(),
                 timestamp_ticks,
                 outcome: "denied".to_string(),
-                held_profile: profile.kind.to_string(),
+                held_profile: profile.kind().to_string(),
             });
             Err(RemoteCapabilityDenied {
                 operation,
                 component: component.to_string(),
-                held_profile: profile.kind,
+                held_profile: profile.kind(),
                 required_capabilities: required,
                 trace_id: trace_id.to_string(),
             })

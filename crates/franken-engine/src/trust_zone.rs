@@ -48,7 +48,7 @@ impl TrustZoneClass {
         use RuntimeCapability::*;
 
         match self {
-            Self::Owner => CapabilityProfile::full().capabilities,
+            Self::Owner => CapabilityProfile::full().capabilities().clone(),
             Self::Private => BTreeSet::from([
                 VmDispatch,
                 GcInvoke,
@@ -1364,7 +1364,9 @@ mod tests {
     #[test]
     fn owner_zone_has_full_capabilities() {
         let full_caps = TrustZoneClass::Owner.default_ceiling();
-        let profile_caps = crate::capability::CapabilityProfile::full().capabilities;
+        let profile_caps = crate::capability::CapabilityProfile::full()
+            .capabilities()
+            .clone();
         assert_eq!(
             full_caps, profile_caps,
             "Owner zone ceiling must equal full capability profile"

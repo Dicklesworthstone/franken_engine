@@ -148,3 +148,12 @@ fn golden_lowering_async_function() {
         goal: ParseGoal::Script,
     });
 }
+
+#[test]
+fn golden_lowering_generator_function() {
+    assert_lowering_golden(&LoweringGoldenCase {
+        name: "generator_function",
+        source: "function* gen() { yield 1; }\n",
+        goal: ParseGoal::Script,
+    });
+}

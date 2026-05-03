@@ -138,6 +138,178 @@ derive_artifact_freshness() {
   printf '999\n'
 }
 
+artifact_timestamp_epoch() {
+  local generated_utc="$1"
+  local generated_epoch
+
+  if [[ -z "$generated_utc" || "$generated_utc" == "null" ]]; then
+    return 1
+  fi
+
+  if generated_epoch=$(date -d "$generated_utc" +%s 2>/dev/null); then
+    printf '%s\n' "$generated_epoch"
+    return 0
+  elif [[ "$generated_utc" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})Z$ ]]; then
+    local year="${BASH_REMATCH[1]}"
+    local month="${BASH_REMATCH[2]}"
+    local day="${BASH_REMATCH[3]}"
+    local hour="${BASH_REMATCH[4]}"
+    local minute="${BASH_REMATCH[5]}"
+    local second="${BASH_REMATCH[6]}"
+    local iso_format="${year}-${month}-${day}T${hour}:${minute}:${second}Z"
+
+    if generated_epoch=$(date -d "$iso_format" +%s 2>/dev/null); then
+      printf '%s\n' "$generated_epoch"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+classify_quality_candidate() {
+  local candidate_json="$1"
+  local outcome
+  local verdict
+  local uses_placeholder
+  local outcome_reason
+  local scenario_set
+  local code_revision
+  local verification_commands
+  local text_blob
+
+  outcome="$(jq -r '.overall_outcome // .outcome // ""' <<<"$candidate_json" | tr '[:upper:]' '[:lower:]')"
+  verdict="$(jq -r '.verdict // ""' <<<"$candidate_json" | tr '[:upper:]' '[:lower:]')"
+  uses_placeholder="$(jq -r '.uses_placeholder_baselines // false' <<<"$candidate_json")"
+  outcome_reason="$(jq -r '.outcome_reason // .reason // ""' <<<"$candidate_json")"
+  scenario_set="$(jq -r '.scenario_set // ""' <<<"$candidate_json")"
+  code_revision="$(jq -r '.code_revision // ""' <<<"$candidate_json")"
+  verification_commands="$(jq -r '[.verification_commands[]?, .verification_command?] | map(select(. != null)) | join(" ")' <<<"$candidate_json")"
+  text_blob="$(printf '%s %s %s %s' "$outcome_reason" "$scenario_set" "$code_revision" "$verification_commands" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ "$outcome" == "targeted" ]]; then
+    printf 'targeted\n'
+  elif [[ -n "$outcome" && "$outcome" != "pass" ]]; then
+    printf 'failed\n'
+  elif [[ -n "$verdict" && "$verdict" != "pass" ]]; then
+    printf 'failed\n'
+  elif [[ "$uses_placeholder" == "true" || "$text_blob" == *"placeholder"* ]]; then
+    printf 'placeholder\n'
+  else
+    printf 'ok\n'
+  fi
+}
+
+quality_status_rank() {
+  case "$1" in
+    ok) printf '0\n' ;;
+    placeholder) printf '1\n' ;;
+    targeted) printf '2\n' ;;
+    failed) printf '3\n' ;;
+    *) printf '1\n' ;;
+  esac
+}
+
+inspect_observed_artifact_quality() {
+  local artifact_path="$1"
+  artifact_quality_status="ok"
+  artifact_quality_reason=""
+  artifact_quality_report_path=""
+
+  local candidates=()
+  if [[ -f "$artifact_path" && "$artifact_path" == *.json ]]; then
+    candidates+=("$artifact_path")
+  elif [[ -d "$artifact_path" ]]; then
+    while IFS= read -r candidate; do
+      candidates+=("$candidate")
+    done < <(find "$artifact_path" -type f -name "*.json" | sort)
+  fi
+
+  local latest_epoch=-1
+  local latest_path=""
+  local latest_json=""
+  local latest_status="ok"
+
+  for candidate in "${candidates[@]}"; do
+    local candidate_json
+    if ! candidate_json="$(jq -c 'select(type == "object") | {
+      overall_outcome: (.overall_outcome // ""),
+      outcome: (.outcome // ""),
+      verdict: (.verdict // ""),
+      uses_placeholder_baselines: (.uses_placeholder_baselines // false),
+      outcome_reason: (.outcome_reason // .reason // ""),
+      scenario_set: (.scenario_set // ""),
+      code_revision: (.code_revision // ""),
+      verification_command: (.verification_command // ""),
+      verification_commands: ([.verification_commands[]?] | map(tostring)),
+      generated_utc: (.freshness.generated_utc // .generated_utc // .generated_at_utc // "")
+    }' "$candidate" 2>/dev/null)"; then
+      continue
+    fi
+
+    local has_quality_fields
+    has_quality_fields="$(jq -r '
+      (.overall_outcome != "")
+      or (.outcome != "")
+      or (.verdict != "")
+      or (.uses_placeholder_baselines == true)
+      or ((.outcome_reason | ascii_downcase) | contains("placeholder"))
+      or ((.scenario_set | ascii_downcase) | contains("placeholder"))
+      or ((.code_revision | ascii_downcase) | contains("placeholder"))
+      or ((.verification_command | ascii_downcase) | contains("placeholder"))
+      or ((.verification_commands | join(" ") | ascii_downcase) | contains("placeholder"))
+    ' <<<"$candidate_json")"
+    if [[ "$has_quality_fields" != "true" ]]; then
+      continue
+    fi
+
+    local generated_utc
+    local candidate_epoch
+    generated_utc="$(jq -r '.generated_utc // ""' <<<"$candidate_json")"
+    if ! candidate_epoch="$(artifact_timestamp_epoch "$generated_utc")"; then
+      if ! candidate_epoch="$(stat -c %Y "$candidate" 2>/dev/null)"; then
+        candidate_epoch=0
+      fi
+    fi
+
+    local candidate_status
+    candidate_status="$(classify_quality_candidate "$candidate_json")"
+    local candidate_rank
+    local latest_rank
+    candidate_rank="$(quality_status_rank "$candidate_status")"
+    latest_rank="$(quality_status_rank "$latest_status")"
+
+    if [[ "$candidate_epoch" -gt "$latest_epoch" ||
+          ( "$candidate_epoch" -eq "$latest_epoch" && "$candidate_rank" -gt "$latest_rank" ) ]]; then
+      latest_epoch="$candidate_epoch"
+      latest_path="$candidate"
+      latest_json="$candidate_json"
+      latest_status="$candidate_status"
+    fi
+  done
+
+  if [[ -z "$latest_path" || "$latest_status" == "ok" ]]; then
+    return 0
+  fi
+
+  artifact_quality_status="$latest_status"
+  artifact_quality_report_path="$latest_path"
+
+  local outcome
+  local verdict
+  local uses_placeholder
+  local outcome_reason
+  outcome="$(jq -r '.overall_outcome // .outcome // ""' <<<"$latest_json")"
+  verdict="$(jq -r '.verdict // ""' <<<"$latest_json")"
+  uses_placeholder="$(jq -r '.uses_placeholder_baselines // false' <<<"$latest_json")"
+  outcome_reason="$(jq -r '.outcome_reason // ""' <<<"$latest_json")"
+
+  artifact_quality_reason="observed claim artifact is not promotable: artifact_quality_status=${artifact_quality_status}, overall_outcome=${outcome:-none}, verdict=${verdict:-none}, uses_placeholder_baselines=${uses_placeholder}, report=${artifact_quality_report_path}"
+  if [[ -n "$outcome_reason" ]]; then
+    artifact_quality_reason="${artifact_quality_reason}, outcome_reason=${outcome_reason}"
+  fi
+}
+
 emit_event() {
   local claim_id="$1"
   local claim_scope="$2"
@@ -155,6 +327,9 @@ emit_event() {
   local downgrade_text="${14}"
   local actual_freshness_days="${15}"
   local freshness_status="${16}"
+  local artifact_quality_status="${17}"
+  local artifact_quality_reason="${18}"
+  local artifact_quality_report_path="${19}"
 
   jq -nc \
     --arg claim_id "$claim_id" \
@@ -173,6 +348,9 @@ emit_event() {
     --arg downgrade_text "$downgrade_text" \
     --arg actual_freshness_days "$actual_freshness_days" \
     --arg freshness_status "$freshness_status" \
+    --arg artifact_quality_status "$artifact_quality_status" \
+    --arg artifact_quality_reason "$artifact_quality_reason" \
+    --arg artifact_quality_report_path "$artifact_quality_report_path" \
     '{
       schema_version: "'"$PROOF_ARTIFACT_EVENT_SCHEMA_VERSION"'",
       event_name: "claim_to_proof_matrix.claim_checked",
@@ -192,6 +370,9 @@ emit_event() {
       freshness_days: (if $freshness_days == "" then null else ($freshness_days | tonumber) end),
       actual_freshness_days: (if $actual_freshness_days == "" then null else ($actual_freshness_days | tonumber) end),
       freshness_status: (if $freshness_status == "" then null else $freshness_status end),
+      artifact_quality_status: (if $artifact_quality_status == "" then null else $artifact_quality_status end),
+      artifact_quality_reason: (if $artifact_quality_reason == "" then null else $artifact_quality_reason end),
+      artifact_quality_report_path: (if $artifact_quality_report_path == "" then null else $artifact_quality_report_path end),
       decision: $decision,
       reason: $reason,
       owning_bead: $owning_bead,
@@ -257,6 +438,9 @@ while IFS= read -r claim; do
 
   actual_freshness_days=""
   freshness_status="ok"
+  artifact_quality_status="ok"
+  artifact_quality_reason=""
+  artifact_quality_report_path=""
 
   if [[ "$allowed_state" == "observed" ]]; then
     if [[ -z "$artifact_path" || ! -e "$artifact_path" ]]; then
@@ -299,6 +483,14 @@ while IFS= read -r claim; do
         printf "WARNING: %s: Cannot determine proof freshness from artifact manifest - assuming fresh\n" \
           "$claim_id" >&2
       fi
+
+      if [[ "$claim_scope" == "performance" && "$status" == "pass" ]]; then
+        inspect_observed_artifact_quality "$artifact_path"
+        if [[ "$artifact_quality_status" != "ok" ]]; then
+          status="fail"
+          local_reason="$artifact_quality_reason"
+        fi
+      fi
     fi
   else
     if [[ -n "$artifact_path" && ! -e "$artifact_path" ]]; then
@@ -327,7 +519,10 @@ while IFS= read -r claim; do
     "$status" \
     "$downgrade_text" \
     "$actual_freshness_days" \
-    "$freshness_status"
+    "$freshness_status" \
+    "$artifact_quality_status" \
+    "$artifact_quality_reason" \
+    "$artifact_quality_report_path"
 
   if [[ "$status" != "pass" ]]; then
     failures=$((failures + 1))

@@ -37,7 +37,7 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-007` | operations | `README.md:55-92` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:922-955` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
 | `FE-CLAIM-009` | evidence | `README.md:51` | `target` | policy exists; complete publication enforcement remains target | `bd-1qkrc` |
-| `FE-CLAIM-010` | performance | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `observed` | allow observed throughput comparison with live Node/Bun baseline measurements | `bd-y6v8s` |
+| `FE-CLAIM-010` | performance | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed 100% replay coverage with security-critical decision enumeration | `bd-2488a` |

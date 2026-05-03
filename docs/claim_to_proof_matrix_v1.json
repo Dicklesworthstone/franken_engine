@@ -52,8 +52,8 @@
       "claim_text": "Deterministic replay for high-severity decisions with counterfactual policy simulation.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 46,
-        "end_line": 46,
+        "start_line": 47,
+        "end_line": 47,
         "must_contain": "counterfactual policy simulation"
       },
       "allowed_state": "target",
@@ -72,8 +72,8 @@
       "claim_text": "Signed decision receipts with transparency-log proofs and optional TEE attestation bindings.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 47,
-        "end_line": 47,
+        "start_line": 48,
+        "end_line": 48,
         "must_contain": "optional TEE attestation bindings"
       },
       "allowed_state": "hypothesis",
@@ -152,8 +152,8 @@
       "claim_text": "Unsupported surfaces and support contract language are explicitly documented.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 922,
-        "end_line": 955,
+        "start_line": 975,
+        "end_line": 977,
         "must_contain": "Unsupported surface usage voids reproduction assistance"
       },
       "allowed_state": "observed",
@@ -172,8 +172,8 @@
       "claim_text": "Every published performance and security claim ships with reproducible artifact bundles.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 51,
-        "end_line": 51,
+        "start_line": 52,
+        "end_line": 52,
         "must_contain": "Every published performance and security claim"
       },
       "allowed_state": "target",
@@ -196,13 +196,13 @@
         "end_line": 58,
         "must_contain": ">= 3x"
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
+      "allowed_state": "target",
+      "actual_wording_state": "target",
       "artifact_path": "artifacts/throughput_disruptive_floor_metric/",
       "verification_command": "./scripts/run_throughput_disruptive_floor_metric_gate.sh ci",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Throughput disruptive-floor metric gate (bd-y6v8s) with live Node/Bun baseline measurements (bd-16ch6) produces actual performance comparison artifacts with denominator-matched benchmarks.",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_baselines",
+      "reason": "Latest checked-in throughput disruptive-floor artifact is targeted placeholder evidence, not observed Node/Bun denominator proof.",
       "owning_bead": "bd-y6v8s",
       "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract."
     },
@@ -292,8 +292,8 @@
       "claim_text": "Deterministic information-flow confinement with signed declassification receipts and replay-verifiable data-provenance artifacts.",
       "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 94,
-        "end_line": 94,
+        "start_line": 96,
+        "end_line": 96,
         "must_contain": "signed declassification receipts"
       },
       "allowed_state": "observed",
@@ -332,8 +332,8 @@
       "claim_text": "Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.",
       "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 588,
-        "end_line": 588,
+        "start_line": 590,
+        "end_line": 590,
         "must_contain": "proof-carrying compilation contract"
       },
       "allowed_state": "hypothesis",
@@ -352,8 +352,8 @@
       "claim_text": "Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.",
       "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 606,
-        "end_line": 606,
+        "start_line": 608,
+        "end_line": 608,
         "must_contain": "formal semantics with explicit monotonicity"
       },
       "allowed_state": "hypothesis",
@@ -372,8 +372,8 @@
       "claim_text": "Mathematically equivalent fast paths behind isomorphism proof notes.",
       "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 631,
-        "end_line": 631,
+        "start_line": 633,
+        "end_line": 633,
         "must_contain": "isomorphism proof notes"
       },
       "allowed_state": "hypothesis",
@@ -392,8 +392,8 @@
       "claim_text": "Theorem-backed compiler for high-assurance policy governance.",
       "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 739,
-        "end_line": 739,
+        "start_line": 741,
+        "end_line": 741,
         "must_contain": "theorem-backed compiler"
       },
       "allowed_state": "hypothesis",

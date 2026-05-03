@@ -2093,14 +2093,14 @@ impl InterpreterCore {
     // ---------------------------------------------------------------------------
 
     /// Get the IFC label for a register.
-    fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
+    pub fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
         self.register_labels
             .get(reg as usize)
             .ok_or_else(|| InterpreterError::InvalidRegister { register: reg })
     }
 
     /// Set the IFC label for a register.
-    fn set_register_label(&mut self, reg: u32, label: Label) -> Result<(), InterpreterError> {
+    pub fn set_register_label(&mut self, reg: u32, label: Label) -> Result<(), InterpreterError> {
         if reg as usize >= self.register_labels.len() {
             return Err(InterpreterError::InvalidRegister { register: reg });
         }

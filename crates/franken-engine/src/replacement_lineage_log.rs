@@ -21,6 +21,7 @@ use crate::security_epoch::SecurityEpoch;
 use crate::self_replacement::{ReplacementReceipt, ValidationArtifactKind};
 use crate::slot_registry::SlotId;
 use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
+use crate::typed_persistence_models::{ReplacementLineageEntry, TypedStorageAdapterExt};
 
 // ---------------------------------------------------------------------------
 // Replacement types
@@ -2041,6 +2042,57 @@ fn evidence_key(
         ordinal,
         artifact_digest
     )
+}
+
+impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
+    // -----------------------------------------------------------------------
+    // Typed Store Operations (Demonstration of TypedStorageAdapterExt)
+    // -----------------------------------------------------------------------
+
+    /// Insert a replacement lineage entry using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.put_typed() instead of the generic
+    /// adapter.put() method. The domain mapping is explicit and lossless since
+    /// ReplacementLineageEntry is the exact typed model for this store.
+    pub fn insert_typed_lineage_entry(
+        &mut self,
+        entry: &ReplacementLineageEntry,
+        context: &EventContext,
+    ) -> Result<(), LineageIndexError>
+    where
+        A: TypedStorageAdapterExt,
+    {
+        // Use typed operation instead of generic adapter.put(StoreKind::ReplacementLineage, key, value, metadata, context)
+        let _stored_record = self
+            .adapter
+            .put_typed(entry, context)
+            .map_err(|e| LineageIndexError::Storage(e))?;
+
+        self.emit_event(context, "insert_typed_lineage", "ok", None);
+        Ok(())
+    }
+
+    /// Get a replacement lineage entry by ID using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.get_typed_by_id() instead of
+    /// the generic adapter.get() method.
+    pub fn get_typed_lineage_entry_by_id(
+        &mut self,
+        sequence_id: i64,
+        context: &EventContext,
+    ) -> Result<Option<ReplacementLineageEntry>, LineageIndexError>
+    where
+        A: TypedStorageAdapterExt,
+    {
+        // Use typed operation instead of generic adapter.get(StoreKind::ReplacementLineage, &key, context)
+        let entry = self
+            .adapter
+            .get_typed_by_id::<ReplacementLineageEntry>(sequence_id, context)
+            .map_err(|e| LineageIndexError::Storage(e))?;
+
+        self.emit_event(context, "get_typed_lineage", "ok", None);
+        Ok(entry)
+    }
 }
 
 fn decode_replacement_records(
@@ -4116,5 +4168,79 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(log.len(), 1);
         assert!(!log.is_empty());
+    }
+
+    fn make_typed_lineage_entry(id: i64, slot: &str, operation: &str) -> ReplacementLineageEntry {
+        ReplacementLineageEntry {
+            sequence_id: id,
+            slot_id: slot.to_string(),
+            operation_type: operation.to_string(),
+            source_state: format!("source-{}", id),
+            target_state: format!("target-{}", id),
+            receipt_artifact_id: format!("receipt-{}", id),
+            receipt_signature: r#"{"signature": "test-sig"}"#.to_string(),
+            timestamp_ms: 1700000000000 + id,
+            metadata_json: r#"{"replacement": "test"}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn insert_typed_lineage_entry_succeeds() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let entry = make_typed_lineage_entry(300, "slot-typed", "replacement");
+        let ctx = test_context();
+
+        let result = idx.insert_typed_lineage_entry(&entry, &ctx);
+        assert!(
+            result.is_ok(),
+            "typed lineage entry insertion should succeed"
+        );
+
+        // Verify event was emitted
+        let events = idx.events();
+        assert!(!events.is_empty());
+        let last_event = &events[events.len() - 1];
+        assert_eq!(last_event.event, "insert_typed_lineage");
+        assert_eq!(last_event.outcome, "ok");
+    }
+
+    #[test]
+    fn get_typed_lineage_entry_by_id_retrieves_stored_entry() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let entry = make_typed_lineage_entry(301, "slot-typed-2", "demotion");
+        let ctx = test_context();
+
+        // Insert via typed operation
+        idx.insert_typed_lineage_entry(&entry, &ctx)
+            .expect("typed lineage entry insertion should succeed");
+
+        // Retrieve via typed operation
+        let retrieved = idx
+            .get_typed_lineage_entry_by_id(301, &ctx)
+            .expect("typed lineage entry retrieval should succeed");
+
+        assert!(retrieved.is_some(), "should retrieve the stored entry");
+        let retrieved_entry = retrieved.unwrap();
+        assert_eq!(retrieved_entry.sequence_id, 301);
+        assert_eq!(retrieved_entry.slot_id, "slot-typed-2");
+        assert_eq!(retrieved_entry.operation_type, "demotion");
+    }
+
+    #[test]
+    fn get_typed_lineage_entry_by_id_returns_none_for_nonexistent() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let ctx = test_context();
+
+        let retrieved = idx
+            .get_typed_lineage_entry_by_id(999, &ctx)
+            .expect("typed lineage entry retrieval should succeed");
+
+        assert!(
+            retrieved.is_none(),
+            "should return None for nonexistent entry"
+        );
     }
 }

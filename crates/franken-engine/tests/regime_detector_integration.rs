@@ -23,7 +23,8 @@ use std::collections::BTreeMap;
 
 use frankenengine_engine::regime_detector::{
     ConstantHazard, DetectorConfig, DetectorError, HazardFunction, MultiStreamDetector,
-    NormalStats, Regime, RegimeChangeEvent, RegimeClassifier, RegimeDetector,
+    NormalStats, Regime, RegimeChangeEvent, RegimeClassificationEvidenceKind, RegimeClassifier,
+    RegimeDetector,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -225,6 +226,18 @@ fn classifier_default_thresholds() {
 }
 
 #[test]
+fn classifier_evidence_kind_is_threshold_heuristic_only() {
+    let c = RegimeClassifier::default();
+    let evidence_kind = c.evidence_kind();
+
+    assert_eq!(
+        evidence_kind,
+        RegimeClassificationEvidenceKind::ThresholdHeuristic
+    );
+    assert!(!evidence_kind.establishes_formal_security_boundary());
+}
+
+#[test]
 fn classifier_normal_range() {
     let c = RegimeClassifier::default();
     assert_eq!(c.classify(0), Regime::Normal);
@@ -247,6 +260,14 @@ fn classifier_attack_range() {
     assert_eq!(c.classify(900_000), Regime::Attack);
     assert_eq!(c.classify(1_000_000), Regime::Attack);
     assert_eq!(c.classify(10_000_000), Regime::Attack);
+}
+
+#[test]
+fn classifier_attack_result_does_not_establish_formal_security_boundary() {
+    let c = RegimeClassifier::default();
+
+    assert_eq!(c.classify(10_000_000), Regime::Attack);
+    assert!(!c.evidence_kind().establishes_formal_security_boundary());
 }
 
 #[test]

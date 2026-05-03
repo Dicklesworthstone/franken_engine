@@ -226,12 +226,15 @@ impl fmt::Display for DetectorError {
 impl std::error::Error for DetectorError {}
 
 // ---------------------------------------------------------------------------
-// RegimeClassifier — maps statistics to regime labels
+// RegimeClassifier - maps statistics to regime labels
 // ---------------------------------------------------------------------------
 
 /// Maps observation statistics to regime categories.
 ///
-/// Uses configurable thresholds on the recent mean observation level.
+/// Uses configurable thresholds on the recent mean observation level. These
+/// thresholds are operational risk-routing heuristics, not formal proofs that
+/// the classifier distinguishes attacks from normal traffic with security
+/// guarantees.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegimeClassifier {
     /// Threshold between Normal and Elevated (millionths).
@@ -242,8 +245,28 @@ pub struct RegimeClassifier {
     pub degraded_threshold: i64,
 }
 
+/// Evidence kind behind a [`RegimeClassifier`] decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegimeClassificationEvidenceKind {
+    /// Configured mean-observation thresholds. This can route policy actions
+    /// conservatively, but does not prove the security boundary.
+    ThresholdHeuristic,
+}
+
+impl RegimeClassificationEvidenceKind {
+    /// Whether this evidence kind establishes a formal security boundary.
+    pub fn establishes_formal_security_boundary(self) -> bool {
+        false
+    }
+}
+
 impl RegimeClassifier {
     /// Classify a mean observation level into a regime.
+    ///
+    /// The returned regime is a threshold-based operational estimate. Treat it
+    /// as input to conservative policy routing, not as proof of an attack or
+    /// proof of normality.
     pub fn classify(&self, mean_millionths: i64) -> Regime {
         if mean_millionths <= self.degraded_threshold {
             Regime::Degraded
@@ -254,6 +277,11 @@ impl RegimeClassifier {
         } else {
             Regime::Normal
         }
+    }
+
+    /// Evidence classification for decisions made by this classifier.
+    pub fn evidence_kind(&self) -> RegimeClassificationEvidenceKind {
+        RegimeClassificationEvidenceKind::ThresholdHeuristic
     }
 }
 

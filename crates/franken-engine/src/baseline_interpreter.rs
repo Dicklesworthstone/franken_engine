@@ -5486,9 +5486,12 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.proxy_aware_delete_property(Some(module), oid, &key_str, 0)?;
-                            self.mark_deleted_for_in_iterators(oid, &key_str);
-                            self.write_reg(dst, Value::Bool(true))?;
+                            let deleted =
+                                self.proxy_aware_delete_property(Some(module), oid, &key_str, 0)?;
+                            if deleted {
+                                self.mark_deleted_for_in_iterators(oid, &key_str);
+                            }
+                            self.write_reg(dst, Value::Bool(deleted))?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -14978,11 +14981,14 @@ impl InterpreterCore {
                 // Snapshot the property value under an immutable borrow,
                 // then allocate + populate the descriptor under a fresh
                 // &mut self context.
-                let value_snapshot: Option<Value> = self
-                    .heap
-                    .get(obj_id.0 as usize)
-                    .and_then(|obj| obj.properties.get(&prop_name).cloned());
-                if let Some(value) = value_snapshot {
+                let descriptor_source: Option<(Value, bool)> =
+                    self.heap.get(obj_id.0 as usize).and_then(|obj| {
+                        obj.properties
+                            .get(&prop_name)
+                            .cloned()
+                            .map(|value| (value, obj.is_frozen))
+                    });
+                if let Some((value, is_frozen)) = descriptor_source {
                     {
                         // Create property descriptor object
                         let descriptor_id = self.alloc_object_with_prototype(None)?;
@@ -14996,7 +15002,7 @@ impl InterpreterCore {
                         self.set_object_property(
                             descriptor_id,
                             "writable".to_string(),
-                            Value::Bool(true),
+                            Value::Bool(!is_frozen),
                         )?;
                         self.set_object_property(
                             descriptor_id,
@@ -15006,7 +15012,7 @@ impl InterpreterCore {
                         self.set_object_property(
                             descriptor_id,
                             "configurable".to_string(),
-                            Value::Bool(true),
+                            Value::Bool(!is_frozen),
                         )?;
 
                         Ok(Value::Object(descriptor_id))
@@ -19235,6 +19241,13 @@ impl InterpreterCore {
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
 
+            if object.is_frozen {
+                return Err(InterpreterError::TypeError {
+                    expected: "mutable object".to_string(),
+                    got: "frozen object".to_string(),
+                });
+            }
+
             // Check if setting this property would make array sparse
             if object.is_array && key != "length" && object.cached_dense_length.is_some() {
                 if let Ok(index) = key.parse::<u32>() {
@@ -19281,6 +19294,10 @@ impl InterpreterCore {
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+
+            if object.is_frozen {
+                return Ok(false);
+            }
 
             // Removing properties from arrays makes them sparse
             if object.is_array && key != "length" && object.cached_dense_length.is_some() {

@@ -20,6 +20,7 @@ use crate::ifc_artifacts::{ClaimStrength, DeclassificationDecision, Label, Proof
 use crate::storage_adapter::{
     EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
 };
+use crate::typed_persistence_models::{IfcProvenanceEntry, TypedStorageAdapterExt};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -907,6 +908,59 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
             extension_id: None,
             record_count: None,
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // Typed Store Operations (Demonstration of TypedStorageAdapterExt)
+    // -----------------------------------------------------------------------
+
+    /// Insert an IFC provenance entry using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.put_typed() instead of the generic
+    /// put_record() method. The domain mapping is explicit and lossless since
+    /// IfcProvenanceEntry is the exact typed model for this store.
+    pub fn insert_typed_provenance_entry(
+        &mut self,
+        entry: &IfcProvenanceEntry,
+        trace_id: &str,
+    ) -> Result<(), ProvenanceError>
+    where
+        S: TypedStorageAdapterExt,
+    {
+        let ctx = self.make_ctx(trace_id);
+
+        // Use typed operation instead of generic put_record() or store.put(STORE, key, value, metadata, &ctx)
+        let _stored_record = self
+            .store
+            .put_typed(entry, &ctx)
+            .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
+
+        self.push_event(trace_id, "insert_typed_provenance", "ok", None);
+        Ok(())
+    }
+
+    /// Get an IFC provenance entry by ID using typed store operations.
+    ///
+    /// This demonstrates using TypedStorageAdapterExt.get_typed_by_id() instead of
+    /// the generic get_record() method.
+    pub fn get_typed_provenance_entry_by_id(
+        &mut self,
+        provenance_id: i64,
+        trace_id: &str,
+    ) -> Result<Option<IfcProvenanceEntry>, ProvenanceError>
+    where
+        S: TypedStorageAdapterExt,
+    {
+        let ctx = self.make_ctx(trace_id);
+
+        // Use typed operation instead of generic get_record() or store.get(STORE, &key, &ctx)
+        let entry = self
+            .store
+            .get_typed_by_id::<IfcProvenanceEntry>(provenance_id, &ctx)
+            .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
+
+        self.push_event(trace_id, "get_typed_provenance", "ok", None);
+        Ok(entry)
     }
 }
 
@@ -3552,6 +3606,77 @@ mod tests {
             status.latest_proof_epoch,
             Some(7),
             "should select the maximum epoch"
+        );
+    }
+
+    fn make_typed_provenance_entry(id: i64, source: &str, event_type: &str) -> IfcProvenanceEntry {
+        IfcProvenanceEntry {
+            provenance_id: id,
+            source_artifact_id: source.to_string(),
+            target_artifact_id: format!("target-{}", source),
+            event_type: event_type.to_string(),
+            event_artifact_id: format!("event-{}", id),
+            label_source: "public".to_string(),
+            label_target: "internal".to_string(),
+            security_epoch: 42,
+            timestamp_ms: 1700000000000,
+            declassification_ref: None,
+            metadata_json: r#"{"flow": "test"}"#.to_string(),
+        }
+    }
+
+    #[test]
+    fn insert_typed_provenance_entry_succeeds() {
+        let mut idx = make_index();
+        let entry = make_typed_provenance_entry(200, "source-artifact", "data_flow");
+
+        let result = idx.insert_typed_provenance_entry(&entry, "trace-typed-prov-1");
+        assert!(
+            result.is_ok(),
+            "typed provenance entry insertion should succeed"
+        );
+
+        // Verify event was emitted
+        let events = idx.events();
+        assert!(!events.is_empty());
+        let last_event = &events[events.len() - 1];
+        assert_eq!(last_event.event, "insert_typed_provenance");
+        assert_eq!(last_event.outcome, "ok");
+    }
+
+    #[test]
+    fn get_typed_provenance_entry_by_id_retrieves_stored_entry() {
+        let mut idx = make_index();
+        let entry = make_typed_provenance_entry(201, "source-artifact-2", "computation");
+
+        // Insert via typed operation
+        idx.insert_typed_provenance_entry(&entry, "trace-typed-prov-2")
+            .expect("typed provenance entry insertion should succeed");
+
+        // Retrieve via typed operation
+        let retrieved = idx
+            .get_typed_provenance_entry_by_id(201, "trace-typed-prov-3")
+            .expect("typed provenance entry retrieval should succeed");
+
+        assert!(retrieved.is_some(), "should retrieve the stored entry");
+        let retrieved_entry = retrieved.unwrap();
+        assert_eq!(retrieved_entry.provenance_id, 201);
+        assert_eq!(retrieved_entry.source_artifact_id, "source-artifact-2");
+        assert_eq!(retrieved_entry.event_type, "computation");
+        assert_eq!(retrieved_entry.security_epoch, 42);
+    }
+
+    #[test]
+    fn get_typed_provenance_entry_by_id_returns_none_for_nonexistent() {
+        let mut idx = make_index();
+
+        let retrieved = idx
+            .get_typed_provenance_entry_by_id(999, "trace-typed-prov-4")
+            .expect("typed provenance entry retrieval should succeed");
+
+        assert!(
+            retrieved.is_none(),
+            "should return None for nonexistent entry"
         );
     }
 }

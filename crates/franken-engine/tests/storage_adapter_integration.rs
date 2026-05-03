@@ -7,7 +7,7 @@
 //! - StoreRecord, StoreQuery, BatchPutEntry, MigrationReceipt, StorageEvent structs
 //! - StorageError variant coverage, Display formatting, error codes
 //! - InMemoryStorageAdapter CRUD operations (put, get, delete, query, put_batch)
-//! - FrankensqliteStorageAdapter via mock backend
+//! - FrankensqliteStorageAdapter via mock backend and real in-memory FrankenSQLite
 //! - Migration paths (upgrade, downgrade rejection, skip rejection)
 //! - Failure injection via with_fail_writes
 //! - Event recording and structured field validation
@@ -34,6 +34,8 @@ use frankenengine_engine::storage_adapter::{
     InMemoryStorageAdapter, MigrationReceipt, STORAGE_SCHEMA_VERSION, StorageAdapter, StorageError,
     StorageEvent, StoreKind, StoreQuery, StoreRecord,
 };
+use sqlmodel::{Row, Value};
+use sqlmodel_frankensqlite::FrankenConnection;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -211,6 +213,278 @@ impl FrankensqliteBackend for MockBackend {
         }
         self.stores.insert(store, staged);
         Ok(out)
+    }
+}
+
+struct RealFrankensqliteBackend {
+    conn: FrankenConnection,
+}
+
+impl RealFrankensqliteBackend {
+    fn open_memory() -> Result<Self, String> {
+        Ok(Self {
+            conn: FrankenConnection::open_memory().map_err(|err| err.to_string())?,
+        })
+    }
+
+    fn query_rows(&self, sql: &str, params: &[Value]) -> Result<Vec<Row>, String> {
+        self.conn
+            .query_sync(sql, params)
+            .map_err(|err| err.to_string())
+    }
+
+    fn execute(&self, sql: &str, params: &[Value]) -> Result<u64, String> {
+        self.conn
+            .execute_sync(sql, params)
+            .map_err(|err| err.to_string())
+    }
+
+    fn apply_schema(&self) -> Result<(), String> {
+        self.conn
+            .execute_raw("PRAGMA foreign_keys = ON;")
+            .map_err(|err| err.to_string())?;
+        self.conn
+            .execute_raw(
+                "CREATE TABLE IF NOT EXISTS storage_schema (
+                    id TEXT PRIMARY KEY,
+                    version INTEGER NOT NULL
+                );",
+            )
+            .map_err(|err| err.to_string())?;
+        self.conn
+            .execute_raw(
+                "CREATE TABLE IF NOT EXISTS storage_records (
+                    store_name TEXT NOT NULL,
+                    record_key TEXT NOT NULL,
+                    value BLOB NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    PRIMARY KEY (store_name, record_key)
+                );",
+            )
+            .map_err(|err| err.to_string())?;
+        self.execute(
+            "INSERT OR IGNORE INTO storage_schema (id, version) VALUES (?1, ?2);",
+            &[
+                Value::Text("current".to_string()),
+                Value::BigInt(i64::from(STORAGE_SCHEMA_VERSION)),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn record_from_row(store: StoreKind, row: &Row) -> Result<StoreRecord, String> {
+        let key = text_column(row, "record_key")?;
+        let value = bytes_column(row, "value")?;
+        let metadata_json = text_column(row, "metadata_json")?;
+        let metadata = serde_json::from_str(&metadata_json)
+            .map_err(|err| format!("invalid metadata_json for `{key}`: {err}"))?;
+        let revision = u64_column(row, "revision")?;
+        Ok(StoreRecord {
+            store,
+            key,
+            value,
+            metadata,
+            revision,
+        })
+    }
+}
+
+impl FrankensqliteBackend for RealFrankensqliteBackend {
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        self.apply_schema()
+    }
+
+    fn current_schema_version(&self) -> Result<u32, String> {
+        let rows = self.query_rows(
+            "SELECT version FROM storage_schema WHERE id = ?1;",
+            &[Value::Text("current".to_string())],
+        )?;
+        let Some(row) = rows.first() else {
+            return Ok(STORAGE_SCHEMA_VERSION);
+        };
+        let version = u64_column(row, "version")?;
+        u32::try_from(version).map_err(|_| format!("schema version {version} overflows u32"))
+    }
+
+    fn migrate_to(&mut self, target_version: u32) -> Result<(), String> {
+        self.execute(
+            "UPDATE storage_schema SET version = ?1 WHERE id = ?2;",
+            &[
+                Value::BigInt(i64::from(target_version)),
+                Value::Text("current".to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn put_record(
+        &mut self,
+        store: StoreKind,
+        key: &str,
+        value: &[u8],
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<StoreRecord, String> {
+        let revision_rows = self.query_rows(
+            "SELECT revision FROM storage_records WHERE store_name = ?1 AND record_key = ?2;",
+            &[
+                Value::Text(store.as_str().to_string()),
+                Value::Text(key.to_string()),
+            ],
+        )?;
+        let revision = match revision_rows.first() {
+            Some(row) => u64_column(row, "revision")?.saturating_add(1),
+            None => 1,
+        };
+        let metadata_json =
+            serde_json::to_string(metadata).map_err(|err| format!("metadata json: {err}"))?;
+        self.execute(
+            "INSERT OR REPLACE INTO storage_records
+                (store_name, record_key, value, metadata_json, revision)
+             VALUES (?1, ?2, ?3, ?4, ?5);",
+            &[
+                Value::Text(store.as_str().to_string()),
+                Value::Text(key.to_string()),
+                Value::Bytes(value.to_vec()),
+                Value::Text(metadata_json),
+                Value::BigInt(
+                    i64::try_from(revision)
+                        .map_err(|_| format!("revision {revision} cannot be represented as i64"))?,
+                ),
+            ],
+        )?;
+        Ok(StoreRecord {
+            store,
+            key: key.to_string(),
+            value: value.to_vec(),
+            metadata: metadata.clone(),
+            revision,
+        })
+    }
+
+    fn get_record(&self, store: StoreKind, key: &str) -> Result<Option<StoreRecord>, String> {
+        let rows = self.query_rows(
+            "SELECT record_key, value, metadata_json, revision
+             FROM storage_records
+             WHERE store_name = ?1 AND record_key = ?2;",
+            &[
+                Value::Text(store.as_str().to_string()),
+                Value::Text(key.to_string()),
+            ],
+        )?;
+        rows.first()
+            .map(|row| Self::record_from_row(store, row))
+            .transpose()
+    }
+
+    fn query_records(
+        &self,
+        store: StoreKind,
+        query: &StoreQuery,
+    ) -> Result<Vec<StoreRecord>, String> {
+        let rows = self.query_rows(
+            "SELECT record_key, value, metadata_json, revision
+             FROM storage_records
+             WHERE store_name = ?1
+             ORDER BY record_key ASC, revision ASC;",
+            &[Value::Text(store.as_str().to_string())],
+        )?;
+        let mut records = Vec::new();
+        for row in &rows {
+            let record = Self::record_from_row(store, row)?;
+            if let Some(prefix) = &query.key_prefix
+                && !record.key.starts_with(prefix)
+            {
+                continue;
+            }
+            if !query
+                .metadata_filters
+                .iter()
+                .all(|(k, v)| record.metadata.get(k) == Some(v))
+            {
+                continue;
+            }
+            records.push(record);
+        }
+        if let Some(limit) = query.limit {
+            records.truncate(limit);
+        }
+        Ok(records)
+    }
+
+    fn delete_record(&mut self, store: StoreKind, key: &str) -> Result<bool, String> {
+        let changed = self.execute(
+            "DELETE FROM storage_records WHERE store_name = ?1 AND record_key = ?2;",
+            &[
+                Value::Text(store.as_str().to_string()),
+                Value::Text(key.to_string()),
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn put_batch(
+        &mut self,
+        store: StoreKind,
+        entries: &[BatchPutEntry],
+    ) -> Result<Vec<StoreRecord>, String> {
+        self.conn
+            .execute_raw("BEGIN;")
+            .map_err(|err| err.to_string())?;
+        let result = entries
+            .iter()
+            .map(|entry| self.put_record(store, &entry.key, &entry.value, &entry.metadata))
+            .collect::<Result<Vec<_>, _>>();
+        match result {
+            Ok(records) => {
+                self.conn
+                    .execute_raw("COMMIT;")
+                    .map_err(|err| err.to_string())?;
+                Ok(records)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_raw("ROLLBACK;");
+                Err(err)
+            }
+        }
+    }
+}
+
+fn text_column(row: &Row, name: &str) -> Result<String, String> {
+    match row.get_by_name(name) {
+        Some(Value::Text(value)) => Ok(value.clone()),
+        Some(other) => Err(format!(
+            "column `{name}` expected TEXT, got {}",
+            other.type_name()
+        )),
+        None => Err(format!("missing column `{name}`")),
+    }
+}
+
+fn bytes_column(row: &Row, name: &str) -> Result<Vec<u8>, String> {
+    match row.get_by_name(name) {
+        Some(Value::Bytes(value)) => Ok(value.clone()),
+        Some(other) => Err(format!(
+            "column `{name}` expected BLOB, got {}",
+            other.type_name()
+        )),
+        None => Err(format!("missing column `{name}`")),
+    }
+}
+
+fn u64_column(row: &Row, name: &str) -> Result<u64, String> {
+    match row.get_by_name(name) {
+        Some(Value::BigInt(value)) => {
+            u64::try_from(*value).map_err(|_| format!("column `{name}` is negative: {value}"))
+        }
+        Some(Value::Int(value)) => {
+            u64::try_from(*value).map_err(|_| format!("column `{name}` is negative: {value}"))
+        }
+        Some(other) => Err(format!(
+            "column `{name}` expected integer, got {}",
+            other.type_name()
+        )),
+        None => Err(format!("missing column `{name}`")),
     }
 }
 
@@ -1637,10 +1911,23 @@ fn frankensqlite_adapter_schema_version_failure() {
 
 #[test]
 fn frankensqlite_put_get_delete_cycle() {
-    let backend = MockBackend::default();
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "frankensqlite_put_get_delete_cycle",
+        phase = "setup",
+        backend = "real_frankensqlite_memory",
+        "opening real in-memory FrankenSQLite backend"
+    );
+    let backend = RealFrankensqliteBackend::open_memory().expect("real backend");
     let mut adapter = FrankensqliteStorageAdapter::new(backend).unwrap();
     let context = ctx();
 
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "frankensqlite_put_get_delete_cycle",
+        phase = "act",
+        "running CRUD lifecycle through FrankensqliteStorageAdapter"
+    );
     let record = adapter
         .put(
             StoreKind::EvidenceIndex,
@@ -1668,6 +1955,14 @@ fn frankensqlite_put_get_delete_cycle() {
         .get(StoreKind::EvidenceIndex, "ev/1", &context)
         .unwrap();
     assert!(gone.is_none());
+
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "frankensqlite_put_get_delete_cycle",
+        phase = "assert",
+        event_count = adapter.events().len(),
+        "verified real driver CRUD lifecycle and adapter event emission"
+    );
 }
 
 #[test]
@@ -2284,10 +2579,23 @@ fn cross_concern_batch_then_query_with_filters() {
 
 #[test]
 fn cross_concern_frankensqlite_put_then_query_prefix_with_limit() {
-    let backend = MockBackend::default();
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "cross_concern_frankensqlite_put_then_query_prefix_with_limit",
+        phase = "setup",
+        backend = "real_frankensqlite_memory",
+        "opening real in-memory FrankenSQLite backend"
+    );
+    let backend = RealFrankensqliteBackend::open_memory().expect("real backend");
     let mut adapter = FrankensqliteStorageAdapter::new(backend).unwrap();
     let context = ctx();
 
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "cross_concern_frankensqlite_put_then_query_prefix_with_limit",
+        phase = "act",
+        "writing evidence rows and querying by prefix through real driver"
+    );
     for i in 0..10u8 {
         adapter
             .put(
@@ -2313,6 +2621,15 @@ fn cross_concern_frankensqlite_put_then_query_prefix_with_limit() {
     assert_eq!(rows[0].key, "ev/000");
     assert_eq!(rows[1].key, "ev/001");
     assert_eq!(rows[2].key, "ev/002");
+
+    tracing::info!(
+        suite = "storage_adapter_integration",
+        test = "cross_concern_frankensqlite_put_then_query_prefix_with_limit",
+        phase = "assert",
+        row_count = rows.len(),
+        event_count = adapter.events().len(),
+        "verified real driver prefix query and canonical limit behavior"
+    );
 }
 
 #[test]

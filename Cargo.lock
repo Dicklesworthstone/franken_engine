@@ -888,6 +888,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "tracing",
  "unicode-normalization",
  "uuid",
  "wait-timeout",

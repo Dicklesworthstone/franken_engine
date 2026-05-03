@@ -4829,13 +4829,41 @@ pub fn lower_ir2_to_ir3(
                         "ExportBinding operations should only appear at module level, not in function bodies"
                     );
                 }
-                // Control flow operations not yet supported in function bodies
-                Ir1Op::JumpIfNullish { .. } => {
-                    unreachable!("JumpIfNullish not yet implemented in function body lowering");
+                Ir1Op::JumpIfNullish { label_id } => {
+                    let cond = pop_lowering_value(&mut fn_value_stack)?;
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions
+                        .push(Ir3Instruction::JumpIfNullish { cond, target: 0 });
+                    fn_pending_jumps.push(PendingJump::Conditional {
+                        instruction_index,
+                        label_id: *label_id,
+                    });
                 }
-                // Property operations not yet supported
-                Ir1Op::DeleteProperty { .. } => {
-                    unreachable!("DeleteProperty not yet implemented in function body lowering");
+                Ir1Op::DeleteProperty { key } => {
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(key) => {
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            let key_reg = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant(&mut ir3.constant_pool, key);
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: key_reg,
+                                pool_index,
+                            });
+                            (obj, key_reg)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let key_reg = pop_lowering_value(&mut fn_value_stack)?;
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            (obj, key_reg)
+                        }
+                    };
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::DeleteProperty {
+                        obj,
+                        key: key_reg,
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::TemplateLiteral { quasi_count } => {
                     let total = if *quasi_count == 0 {
@@ -4875,9 +4903,43 @@ pub fn lower_ir2_to_ir3(
                     }
                     fn_value_stack.push(dst);
                 }
-                // Constructor calls not yet supported
-                Ir1Op::Construct { .. } => {
-                    unreachable!("Construct not yet implemented in function body lowering");
+                Ir1Op::Construct { arg_count } => {
+                    // Pop callee + arg_count args from fn_value_stack; push result.
+                    let count = *arg_count as usize;
+                    // We need `count` args + 1 callee.
+                    if count
+                        .checked_add(1)
+                        .is_none_or(|needed| needed > fn_value_stack.len())
+                    {
+                        return Err(LoweringPipelineError::ValueStackUnderflow);
+                    }
+                    let mut arg_regs = Vec::with_capacity(count.min(1024));
+                    for _ in 0..count {
+                        arg_regs.push(pop_lowering_value(&mut fn_value_stack)?);
+                    }
+                    arg_regs.reverse();
+                    let callee = pop_lowering_value(&mut fn_value_stack)?;
+                    let dst = alloc_register(&mut fn_reg);
+                    // Copy args into contiguous registers so RegRange is valid.
+                    let args = if arg_regs.is_empty() {
+                        RegRange { start: 0, count: 0 }
+                    } else {
+                        let start_reg = fn_reg;
+                        for &src in &arg_regs {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        RegRange {
+                            start: start_reg,
+                            count: arg_regs.len() as u32,
+                        }
+                    };
+                    ir3.instructions
+                        .push(Ir3Instruction::Construct { callee, args, dst });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::BeginTry {
                     catch_label,

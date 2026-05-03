@@ -2128,6 +2128,14 @@ pub struct InterpreterCore {
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
     /// GC remembered set for tracking old->young generation references.
     gc_remembered_set: BTreeSet<ObjectId>,
+    /// JIT hot path detection counters for function calls.
+    jit_function_call_counts: BTreeMap<u32, u64>,
+    /// JIT hot path detection counters for loop backedges.
+    jit_loop_iteration_counts: BTreeMap<usize, u64>,
+    /// Configurable threshold for tier promotion (default: 10,000).
+    jit_hot_threshold: u64,
+    /// Cold function eviction counter to implement decay policy.
+    jit_eviction_counter: u64,
 }
 
 impl InterpreterCore {
@@ -2189,6 +2197,10 @@ impl InterpreterCore {
             register_labels: vec![Label::Public; max_regs],
             weakmap_storage: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
+            jit_function_call_counts: BTreeMap::new(),
+            jit_loop_iteration_counts: BTreeMap::new(),
+            jit_hot_threshold: 10_000, // Default threshold
+            jit_eviction_counter: 0,
         }
     }
 
@@ -2263,6 +2275,216 @@ impl InterpreterCore {
     #[cfg(test)]
     pub fn gc_get_remembered_set(&self) -> &BTreeSet<ObjectId> {
         &self.gc_remembered_set
+    }
+
+    // ---------------------------------------------------------------------------
+    // JIT hot path detection and tier promotion
+    // ---------------------------------------------------------------------------
+
+    /// Record a function call and check if it should be promoted to hot tier.
+    fn jit_record_function_call(&mut self, function_id: u32) -> bool {
+        let count = self.jit_function_call_counts.entry(function_id).or_insert(0);
+        *count += 1;
+
+        // Check if threshold crossed for tier promotion
+        if *count == self.jit_hot_threshold {
+            self.emit_tier_promotion_event(function_id, *count);
+            true // Function is now hot
+        } else {
+            false
+        }
+    }
+
+    /// Record a loop iteration at backedge and check for hot loop promotion.
+    fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
+        let count = self.jit_loop_iteration_counts.entry(instruction_index).or_insert(0);
+        *count += 1;
+
+        // Check if threshold crossed for hot loop tier promotion
+        *count >= self.jit_hot_threshold
+    }
+
+    /// Get the current call count for a function.
+    pub fn jit_get_function_call_count(&self, function_id: u32) -> u64 {
+        self.jit_function_call_counts.get(&function_id).copied().unwrap_or(0)
+    }
+
+    /// Get the current iteration count for a loop backedge.
+    pub fn jit_get_loop_iteration_count(&self, instruction_index: usize) -> u64 {
+        self.jit_loop_iteration_counts.get(&instruction_index).copied().unwrap_or(0)
+    }
+
+    /// Configure the hot threshold for tier promotion.
+    pub fn jit_set_hot_threshold(&mut self, threshold: u64) {
+        self.jit_hot_threshold = threshold.max(1); // Minimum threshold of 1
+    }
+
+    /// Get the current hot threshold.
+    pub fn jit_get_hot_threshold(&self) -> u64 {
+        self.jit_hot_threshold
+    }
+
+    /// Check if a function is considered hot (above threshold).
+    pub fn jit_is_function_hot(&self, function_id: u32) -> bool {
+        self.jit_get_function_call_count(function_id) >= self.jit_hot_threshold
+    }
+
+    /// Check if a loop is considered hot (above threshold).
+    pub fn jit_is_loop_hot(&self, instruction_index: usize) -> bool {
+        self.jit_get_loop_iteration_count(instruction_index) >= self.jit_hot_threshold
+    }
+
+    /// Evict cold functions to implement decay policy (called periodically).
+    pub fn jit_evict_cold_functions(&mut self) {
+        const EVICTION_FREQUENCY: u64 = 50_000; // Evict every 50k calls
+        const COLD_THRESHOLD: u64 = 10; // Functions with <= 10 calls are cold
+
+        self.jit_eviction_counter += 1;
+        if self.jit_eviction_counter % EVICTION_FREQUENCY == 0 {
+            // Remove functions that haven't crossed the cold threshold
+            self.jit_function_call_counts.retain(|_function_id, count| *count > COLD_THRESHOLD);
+
+            // Also evict cold loops
+            self.jit_loop_iteration_counts.retain(|_index, count| *count > COLD_THRESHOLD);
+        }
+    }
+
+    /// Emit a tier promotion event when a function or loop crosses the hot threshold.
+    fn emit_tier_promotion_event(&mut self, function_id: u32, call_count: u64) {
+        // Emit witness event for tier promotion
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched, // Reuse existing event type
+            Some(&format!("tier_promotion:function_{}:count_{}", function_id, call_count)),
+        );
+
+        // Could also emit console log for debugging
+        self.push_console_output(
+            ConsoleLevel::Info,
+            format!("JIT: Function {} promoted to hot tier (count: {})", function_id, call_count),
+        );
+    }
+
+    /// Get JIT statistics for testing and debugging.
+    pub fn jit_get_statistics(&self) -> (usize, usize, u64, u64) {
+        (
+            self.jit_function_call_counts.len(),
+            self.jit_loop_iteration_counts.len(),
+            self.jit_hot_threshold,
+            self.jit_eviction_counter,
+        )
+    }
+
+    /// Clear all JIT counters (for testing).
+    pub fn jit_clear_counters(&mut self) {
+        self.jit_function_call_counts.clear();
+        self.jit_loop_iteration_counts.clear();
+        self.jit_eviction_counter = 0;
+    }
+
+    // ---------------------------------------------------------------------------
+    // JIT hot path detection and tier promotion
+    // ---------------------------------------------------------------------------
+
+    /// Record a function call and check if it should be promoted to hot tier.
+    fn jit_record_function_call(&mut self, function_id: u32) -> bool {
+        let count = self.jit_function_call_counts.entry(function_id).or_insert(0);
+        *count += 1;
+
+        // Check if threshold crossed for tier promotion
+        if *count == self.jit_hot_threshold {
+            self.emit_tier_promotion_event(function_id, *count);
+            true // Function is now hot
+        } else {
+            false
+        }
+    }
+
+    /// Record a loop iteration at backedge and check for hot loop promotion.
+    fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
+        let count = self.jit_loop_iteration_counts.entry(instruction_index).or_insert(0);
+        *count += 1;
+
+        // Check if threshold crossed for hot loop tier promotion
+        *count >= self.jit_hot_threshold
+    }
+
+    /// Get the current call count for a function.
+    pub fn jit_get_function_call_count(&self, function_id: u32) -> u64 {
+        self.jit_function_call_counts.get(&function_id).copied().unwrap_or(0)
+    }
+
+    /// Get the current iteration count for a loop backedge.
+    pub fn jit_get_loop_iteration_count(&self, instruction_index: usize) -> u64 {
+        self.jit_loop_iteration_counts.get(&instruction_index).copied().unwrap_or(0)
+    }
+
+    /// Configure the hot threshold for tier promotion.
+    pub fn jit_set_hot_threshold(&mut self, threshold: u64) {
+        self.jit_hot_threshold = threshold.max(1); // Minimum threshold of 1
+    }
+
+    /// Get the current hot threshold.
+    pub fn jit_get_hot_threshold(&self) -> u64 {
+        self.jit_hot_threshold
+    }
+
+    /// Check if a function is considered hot (above threshold).
+    pub fn jit_is_function_hot(&self, function_id: u32) -> bool {
+        self.jit_get_function_call_count(function_id) >= self.jit_hot_threshold
+    }
+
+    /// Check if a loop is considered hot (above threshold).
+    pub fn jit_is_loop_hot(&self, instruction_index: usize) -> bool {
+        self.jit_get_loop_iteration_count(instruction_index) >= self.jit_hot_threshold
+    }
+
+    /// Evict cold functions to implement decay policy (called periodically).
+    pub fn jit_evict_cold_functions(&mut self) {
+        const EVICTION_FREQUENCY: u64 = 50_000; // Evict every 50k calls
+        const COLD_THRESHOLD: u64 = 10; // Functions with <= 10 calls are cold
+
+        self.jit_eviction_counter += 1;
+        if self.jit_eviction_counter % EVICTION_FREQUENCY == 0 {
+            // Remove functions that haven't crossed the cold threshold
+            self.jit_function_call_counts.retain(|_function_id, count| *count > COLD_THRESHOLD);
+
+            // Also evict cold loops
+            self.jit_loop_iteration_counts.retain(|_index, count| *count > COLD_THRESHOLD);
+        }
+    }
+
+    /// Emit a tier promotion event when a function or loop crosses the hot threshold.
+    fn emit_tier_promotion_event(&mut self, function_id: u32, call_count: u64) {
+        // Emit witness event for tier promotion
+        self.emit_witness(
+            WitnessEventKind::HostcallDispatched, // Reuse existing event type
+            Some(&format!("tier_promotion:function_{}:count_{}", function_id, call_count)),
+        );
+
+        // Could also emit console log for debugging
+        self.push_console_output(
+            ConsoleLevel::Info,
+            format!("JIT: Function {} promoted to hot tier (count: {})", function_id, call_count),
+        );
+    }
+
+    /// Get JIT statistics for testing and debugging.
+    #[cfg(test)]
+    pub fn jit_get_statistics(&self) -> (usize, usize, u64, u64) {
+        (
+            self.jit_function_call_counts.len(),
+            self.jit_loop_iteration_counts.len(),
+            self.jit_hot_threshold,
+            self.jit_eviction_counter,
+        )
+    }
+
+    /// Clear all JIT counters (for testing).
+    #[cfg(test)]
+    pub fn jit_clear_counters(&mut self) {
+        self.jit_function_call_counts.clear();
+        self.jit_loop_iteration_counts.clear();
+        self.jit_eviction_counter = 0;
     }
 
     /// Get the captured console output entries.
@@ -4383,12 +4605,32 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
-                    self.ip = target as usize;
+                    let target_ip = target as usize;
+
+                    // JIT: Record loop iteration if this is a backedge (backward jump)
+                    if target_ip < self.ip {
+                        if self.jit_record_loop_iteration(self.ip) {
+                            let iteration_count = self.jit_get_loop_iteration_count(self.ip);
+                            self.emit_tier_promotion_event(0, iteration_count); // 0 = loop context, not function-specific
+                        }
+                    }
+
+                    self.ip = target_ip;
                 }
                 Ir3Instruction::JumpIf { cond, target } => {
                     let val = self.read_reg(cond)?;
                     if val.is_truthy() {
-                        self.ip = target as usize;
+                        let target_ip = target as usize;
+
+                        // JIT: Record loop iteration if this is a backedge (backward jump)
+                        if target_ip < self.ip {
+                            if self.jit_record_loop_iteration(self.ip) {
+                                let iteration_count = self.jit_get_loop_iteration_count(self.ip);
+                                self.emit_tier_promotion_event(0, iteration_count); // 0 = loop context, not function-specific
+                            }
+                        }
+
+                        self.ip = target_ip;
                     } else {
                         self.ip += 1;
                     }
@@ -4396,7 +4638,17 @@ impl InterpreterCore {
                 Ir3Instruction::JumpIfNullish { cond, target } => {
                     let val = self.read_reg(cond)?;
                     if val.is_nullish() {
-                        self.ip = target as usize;
+                        let target_ip = target as usize;
+
+                        // JIT: Record loop iteration if this is a backedge (backward jump)
+                        if target_ip < self.ip {
+                            if self.jit_record_loop_iteration(self.ip) {
+                                let iteration_count = self.jit_get_loop_iteration_count(self.ip);
+                                self.emit_tier_promotion_event(0, iteration_count); // 0 = loop context, not function-specific
+                            }
+                        }
+
+                        self.ip = target_ip;
                     } else {
                         self.ip += 1;
                     }
@@ -4452,6 +4704,12 @@ impl InterpreterCore {
                             });
                         }
                     };
+
+                    // JIT: Record function call for hot path detection
+                    if self.jit_record_function_call(func_idx) {
+                        let call_count = self.jit_get_function_call_count(func_idx);
+                        self.emit_tier_promotion_event(func_idx, call_count);
+                    }
 
                     // Generator function call: create a suspended GeneratorObject.
                     if let Value::GeneratorFunction(cid) = &callee_val {

@@ -256,15 +256,15 @@
         "end_line": 60,
         "must_contain": "`100%` deterministic replay coverage"
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "artifacts/replay_coverage_metric/",
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
       "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Replay coverage metric gate (bd-2488a) enumerates security-critical decision classes with 100% deterministic replay validation and coverage artifacts.",
+      "freshness_days": null,
+      "decision": "downgrade_until_byte_identical_replay_proof",
+      "reason": "Replay coverage metric gate artifacts currently report targeted placeholder-backed coverage, not observed end-to-end byte-identical execution proof.",
       "owning_bead": "bd-2488a",
-      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions."
+      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions with live end-to-end byte-identical artifact proof."
     },
     {
       "claim_id": "FE-CLAIM-014",

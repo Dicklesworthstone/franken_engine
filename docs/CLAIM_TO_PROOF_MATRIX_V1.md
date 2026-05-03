@@ -40,7 +40,7 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-010` | performance | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
-| `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed 100% replay coverage with security-critical decision enumeration | `bd-2488a` |
+| `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `target` | downgrade until live end-to-end byte-identical replay proof exists | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
 | `FE-CLAIM-015` | ifc | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:94` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
 | `FE-CLAIM-016` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |

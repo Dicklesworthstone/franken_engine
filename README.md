@@ -36,7 +36,7 @@ cargo build --release -p frankenengine-engine --bin frankenctl
 Node and Bun are fast enough for many workloads, but extension-heavy agent systems need a different default posture: active containment, deterministic forensics, and explicit runtime authority boundaries.
 
 ### The Solution
-FrankenEngine provides one native baseline interpreter with deterministic and throughput execution profiles, a probabilistic guardplane with expected-loss actioning, deterministic replay for high-severity decisions, and signed evidence contracts for every high-impact containment event.
+FrankenEngine provides one native baseline interpreter with deterministic and throughput execution profiles, a probabilistic guardplane with expected-loss actioning, targeted deterministic replay for high-severity decisions, and signed evidence contracts for every high-impact containment event.
 
 ### Why Use FrankenEngine?
 
@@ -139,7 +139,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Dimension | FrankenEngine | Node.js | Bun |
 |---|---|---|---|
 | Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime |
-| Deterministic replay for high-severity decisions | Built in, mandatory release gate | External tooling only | External tooling only |
+| Deterministic replay for high-severity decisions | Targeted gate with shipped replay APIs; end-to-end byte-identical proof is not yet observed | External tooling only | External tooling only |
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
 | Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. **Note**: De-escalation unimplemented - containment operates as permanent ratchet | App-specific integration | App-specific integration |
@@ -1015,7 +1015,7 @@ It enforces shared persistence contracts and conformance behavior across replay,
 Through explicit expected-loss matrices, sequential testing boundaries, calibrated posterior models, and shadow promotion gates.
 
 ### 6. What does deterministic replay guarantee exactly?
-Given fixed code, policy, model snapshot, evidence stream, and randomness transcript, high-severity decision execution replays identically.
+The target contract is identical replay from fixed code, policy, model snapshot, evidence stream, and randomness transcript. Current proof covers replay APIs and a targeted coverage gate; end-to-end byte-identical high-severity execution artifacts remain a tracked target.
 
 ### 7. Can I verify your benchmark claims independently?
 Yes. The benchmark harness, manifests, and artifact bundles are designed for third-party reproduction.

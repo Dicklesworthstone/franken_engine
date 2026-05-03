@@ -4,7 +4,7 @@
 **Date**: April 2026  
 **Bead**: bd-axlvk.1
 
-FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically explicit security and deterministic replay capabilities. This document provides a high-level architectural overview for developers getting oriented in the Rust module graph. Generated module, gate, export, and binary counts are tracked in [ARCHITECTURE_INVENTORY.md](ARCHITECTURE_INVENTORY.md).
+FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically explicit security, shipped replay APIs, and deterministic replay targets. This document provides a high-level architectural overview for developers getting oriented in the Rust module graph. Generated module, gate, export, and binary counts are tracked in [ARCHITECTURE_INVENTORY.md](ARCHITECTURE_INVENTORY.md).
 
 ---
 
@@ -129,7 +129,7 @@ FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically ex
 
 #### Security Epochs
 - **Temporal Isolation**: Prevents confusion attacks across time boundaries  
-- **Replay Consistency**: Ensures deterministic replay across epochs
+- **Replay Consistency**: Constrains epoch artifacts so deterministic replay can be proven against fixed traces
 - **Upgrade Safety**: Safe transitions between security policy versions
 - **Audit Integration**: Epoch boundaries create natural audit checkpoints
 
@@ -144,7 +144,7 @@ FrankenEngine is a de novo Rust-native JavaScript runtime with mathematically ex
 - **Audit Trails**: Cryptographically verifiable execution logs
 - **Rollback Points**: Safe recovery points for error conditions
 - **Verification Proofs**: Mathematical proofs of execution correctness
-- **Replay Guarantees**: Bit-for-bit deterministic replay capability
+- **Replay Guarantees**: Targeted bit-for-bit replay proof backed by fixed traces and evidence artifacts
 
 ### Key Innovation: De Novo Security
 

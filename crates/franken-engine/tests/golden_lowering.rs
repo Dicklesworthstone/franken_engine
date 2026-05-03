@@ -139,3 +139,12 @@ fn golden_lowering_try_catch() {
         goal: ParseGoal::Script,
     });
 }
+
+#[test]
+fn golden_lowering_async_function() {
+    assert_lowering_golden(&LoweringGoldenCase {
+        name: "async_function",
+        source: "async function load() { return 1; }\n",
+        goal: ParseGoal::Script,
+    });
+}

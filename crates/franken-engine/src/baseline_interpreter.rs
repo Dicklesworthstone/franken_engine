@@ -68,6 +68,7 @@ use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 use crate::stdlib::normalize_unicode_string;
+use crate::ifc_artifacts::Label;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -2015,6 +2016,8 @@ pub struct InterpreterCore {
     decision_receipts: EvidenceLog,
     /// Nondeterminism trace for deterministic replay.
     nondeterminism_trace: NondeterminismTrace,
+    /// IFC labels for each register (same indexing as registers vec).
+    register_labels: Vec<Label>,
 }
 
 impl InterpreterCore {
@@ -2073,6 +2076,7 @@ impl InterpreterCore {
             containment_evidence: Vec::new(),
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace: NondeterminismTrace::new(trace_id),
+            register_labels: vec![Label::Public; max_regs],
         }
     }
 
@@ -2082,6 +2086,40 @@ impl InterpreterCore {
 
     pub fn clear_hook(&mut self) {
         self.hook = None;
+    }
+
+    // ---------------------------------------------------------------------------
+    // IFC label management
+    // ---------------------------------------------------------------------------
+
+    /// Get the IFC label for a register.
+    fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
+        self.register_labels
+            .get(reg as usize)
+            .ok_or_else(|| InterpreterError::InvalidRegister { register: reg })
+    }
+
+    /// Set the IFC label for a register.
+    fn set_register_label(&mut self, reg: u32, label: Label) -> Result<(), InterpreterError> {
+        if reg as usize >= self.register_labels.len() {
+            return Err(InterpreterError::InvalidRegister { register: reg });
+        }
+        self.register_labels[reg as usize] = label;
+        Ok(())
+    }
+
+    /// Propagate IFC labels through binary operations (join of operand labels).
+    fn propagate_binary_operation_label(&mut self, lhs: u32, rhs: u32, dst: u32) -> Result<(), InterpreterError> {
+        let lhs_label = self.get_register_label(lhs)?.clone();
+        let rhs_label = self.get_register_label(rhs)?.clone();
+        let result_label = lhs_label.join(&rhs_label);
+        self.set_register_label(dst, result_label)
+    }
+
+    /// Propagate IFC labels through unary operations (preserve operand label).
+    fn propagate_unary_operation_label(&mut self, src: u32, dst: u32) -> Result<(), InterpreterError> {
+        let src_label = self.get_register_label(src)?.clone();
+        self.set_register_label(dst, src_label)
     }
 
     /// Get the captured console output entries.
@@ -4131,21 +4169,25 @@ impl InterpreterCore {
                 Ir3Instruction::Add { dst, lhs, rhs } => {
                     let result = self.eval_add(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Sub { dst, lhs, rhs } => {
                     let result = self.eval_arith(lhs, rhs, "sub")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Mul { dst, lhs, rhs } => {
                     let result = self.eval_arith(lhs, rhs, "mul")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Div { dst, lhs, rhs } => {
                     let result = self.eval_div(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ForInInit { src, dst } => {
@@ -4194,6 +4236,7 @@ impl InterpreterCore {
                 Ir3Instruction::Move { dst, src } => {
                     let val = self.read_reg(src)?;
                     self.write_reg(dst, val)?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Jump { target } => {
@@ -5241,121 +5284,145 @@ impl InterpreterCore {
                 Ir3Instruction::Mod { dst, lhs, rhs } => {
                     let result = self.eval_mod(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Exp { dst, lhs, rhs } => {
                     let result = self.eval_exp(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::UnaryNeg { dst, src } => {
                     let result = self.eval_unary_neg(src)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::UnaryPlus { dst, src } => {
                     let result = self.eval_unary_plus(src)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LogicalNot { dst, src } => {
                     let val = self.read_reg(src)?;
                     self.write_reg(dst, Value::Bool(!val.is_truthy()))?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitNot { dst, src } => {
                     let result = self.eval_bit_not(src)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
                     let val = self.read_reg(src)?;
                     self.write_reg(dst, Value::Str(val.typeof_name().to_string()))?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Void { dst, src } => {
                     let _ = self.read_reg(src)?;
                     self.write_reg(dst, Value::Undefined)?;
+                    self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Lt { dst, lhs, rhs } => {
                     let result = self.eval_relational(lhs, rhs, "<")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Lte { dst, lhs, rhs } => {
                     let result = self.eval_relational(lhs, rhs, "<=")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Gt { dst, lhs, rhs } => {
                     let result = self.eval_relational(lhs, rhs, ">")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Gte { dst, lhs, rhs } => {
                     let result = self.eval_relational(lhs, rhs, ">=")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Eq { dst, lhs, rhs } => {
                     let result = self.eval_equality(lhs, rhs, false, false)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StrictEq { dst, lhs, rhs } => {
                     let result = self.eval_equality(lhs, rhs, true, false)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::NotEq { dst, lhs, rhs } => {
                     let result = self.eval_equality(lhs, rhs, false, true)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::StrictNotEq { dst, lhs, rhs } => {
                     let result = self.eval_equality(lhs, rhs, true, true)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitAnd { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, "&")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitOr { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, "|")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::BitXor { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, "^")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Shl { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, "<<")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Shr { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, ">>")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Ushr { dst, lhs, rhs } => {
                     let result = self.eval_bitwise(lhs, rhs, ">>>")?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InstanceOf { dst, lhs, rhs } => {
                     let result = self.eval_instanceof(lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::InOp { dst, lhs, rhs } => {
                     let result = self.eval_in_operator(module, lhs, rhs)?;
                     self.write_reg(dst, result)?;
+                    self.propagate_binary_operation_label(lhs, rhs, dst)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Construct { callee, args, dst } => {
@@ -29202,4 +29269,3 @@ mod tests {
             "burst writes must not introduce drift"
         );
     }
-}

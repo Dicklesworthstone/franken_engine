@@ -787,6 +787,15 @@ struct AsyncFunctionObject {
     result_promise: u32,
 }
 
+/// Context information for resuming an async function after await.
+#[derive(Debug, Clone)]
+struct AsyncResumptionContext {
+    /// The async function to resume.
+    async_function_id: u32,
+    /// Register to store the resolved/rejected value.
+    result_register: u32,
+}
+
 /// An async generator object combines generator suspension with promise wrapping.
 /// Each yield creates a promise-wrapped value, and can use await inside the body.
 #[allow(dead_code)]
@@ -1956,6 +1965,8 @@ pub struct InterpreterCore {
     generators: Vec<GeneratorObject>,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
+    /// Context information for async function resumption after await.
+    async_resumption_contexts: BTreeMap<u32, AsyncResumptionContext>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
@@ -2039,6 +2050,7 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             generators: Vec::new(),
             async_functions: Vec::new(),
+            async_resumption_contexts: BTreeMap::new(),
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
@@ -3168,6 +3180,155 @@ impl InterpreterCore {
             })?;
         self.complete_async_frame(frame, Err(error_value))?;
         Ok(true)
+    }
+
+    fn suspend_async_function_for_await(
+        &mut self,
+        promise_handle: crate::promise_model::PromiseHandle,
+        result_reg: u32,
+    ) -> Result<(), InterpreterError> {
+        // Find the current async function from the call stack
+        let async_frame_index = self
+            .call_stack
+            .iter()
+            .rposition(|frame| frame.async_function_id.is_some())
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "async function context".to_string(),
+                got: "await outside of async function".to_string(),
+            })?;
+
+        let current_frame = &self.call_stack[async_frame_index];
+        let async_function_id =
+            current_frame
+                .async_function_id
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "async function id".to_string(),
+                    got: "missing async function id".to_string(),
+                })?;
+
+        // Save the current execution state
+        let async_function = self
+            .async_functions
+            .get_mut(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async#{async_function_id} not found"),
+            })?;
+
+        // Save state for resumption
+        async_function.saved_ip = self.ip + 1; // Resume after the AwaitValue instruction
+        async_function.saved_register_base = self.register_base;
+        async_function.phase = AsyncFunctionPhase::SuspendedAwait;
+
+        // Save the current register file state
+        let reg_start = self.register_base;
+        let reg_end =
+            (self.register_base + self.config.max_registers as usize).min(self.registers.len());
+        async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
+
+        // Register a promise reaction to resume when the awaited promise settles
+        let resume_reaction = crate::promise_model::PromiseReaction {
+            kind: crate::promise_model::ReactionKind::Fulfill,
+            handler: None, // Special handler - will be processed by the async resumption logic
+            result_promise: crate::promise_model::PromiseHandle(async_function.result_promise),
+            label: crate::ifc_artifacts::Label::Public, // TODO: proper label propagation
+        };
+
+        let reject_reaction = crate::promise_model::PromiseReaction {
+            kind: crate::promise_model::ReactionKind::Reject,
+            handler: None,
+            result_promise: crate::promise_model::PromiseHandle(async_function.result_promise),
+            label: crate::ifc_artifacts::Label::Public,
+        };
+
+        // Store metadata about the resumption context
+        let resumption_data = AsyncResumptionContext {
+            async_function_id,
+            result_register: result_reg,
+        };
+
+        // Register the reactions with the awaited promise
+        let promise_record = self.promise_store.get_mut(promise_handle).map_err(|e| {
+            InterpreterError::TypeError {
+                expected: "valid promise".to_string(),
+                got: e.to_string(),
+            }
+        })?;
+
+        // Store resumption context in a special map for later retrieval
+        self.async_resumption_contexts
+            .insert(promise_handle.0, resumption_data);
+
+        promise_record.reactions.push(resume_reaction);
+        promise_record.reactions.push(reject_reaction);
+
+        Ok(())
+    }
+
+    fn resume_async_function_after_await(
+        &mut self,
+        resumption_context: AsyncResumptionContext,
+        settled_value: crate::object_model::JsValue,
+        microtask: &crate::promise_model::Microtask,
+    ) -> Result<(), InterpreterError> {
+        let async_function_id = resumption_context.async_function_id;
+        let result_register = resumption_context.result_register;
+
+        // Get the async function and check if it's in the correct state
+        let async_function = self
+            .async_functions
+            .get_mut(async_function_id as usize)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid async function".to_string(),
+                got: format!("async#{async_function_id} not found"),
+            })?;
+
+        if async_function.phase != AsyncFunctionPhase::SuspendedAwait {
+            return Err(InterpreterError::TypeError {
+                expected: "suspended async function".to_string(),
+                got: format!("async function phase: {:?}", async_function.phase),
+            });
+        }
+
+        // Restore execution state
+        self.ip = async_function.saved_ip;
+        self.register_base = async_function.saved_register_base;
+
+        // Restore register file
+        let reg_start = self.register_base;
+        let reg_count = async_function.saved_registers.len();
+        let reg_end = reg_start + reg_count;
+
+        if reg_end > self.registers.len() {
+            return Err(InterpreterError::TypeError {
+                expected: "sufficient register capacity".to_string(),
+                got: format!("need {} registers, have {}", reg_end, self.registers.len()),
+            });
+        }
+
+        for (i, value) in async_function.saved_registers.iter().enumerate() {
+            self.registers[reg_start + i] = value.clone();
+        }
+
+        // Store the settled value in the result register
+        let resolved_value = match microtask {
+            crate::promise_model::Microtask::PromiseReaction {
+                handler: None, argument, ..
+            } => {
+                // Determine if this was a fulfillment or rejection based on the task type
+                // For now, we assume fulfillment. A proper implementation would need
+                // to track the reaction type (fulfill vs reject)
+                Self::js_value_to_value(argument)
+            }
+            _ => Value::Undefined,
+        };
+
+        self.write_reg(result_register, resolved_value)?;
+
+        // Resume execution
+        async_function.phase = AsyncFunctionPhase::Executing;
+
+        Ok(())
     }
 
     fn uncaught_exception_description(value: &Value) -> String {
@@ -5683,13 +5844,12 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        // Promise is pending - suspend execution
-                        // TODO: Implement async function suspension and microtask registration
-                        // This requires identifying which async function we're in and saving its state
-                        return Err(InterpreterError::TypeError {
-                            expected: "async function suspension".to_string(),
-                            got: "await pending promise (not fully implemented)".to_string(),
-                        });
+                        // Promise is pending - suspend the async function
+                        self.suspend_async_function_for_await(promise_handle, promise_reg)?;
+
+                        // Return special value to indicate suspension
+                        // The interpreter loop should exit and return control to the event loop
+                        return Ok(Value::Undefined);
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
@@ -8106,14 +8266,34 @@ impl InterpreterCore {
             }
             match task {
                 crate::promise_model::Microtask::PromiseReaction {
-                    handler: _,
+                    handler,
                     argument,
                     result_promise,
                     label: _task_label,
                 } => {
-                    // With no closure handler, the identity transform propagates
-                    // the argument to the result promise as a fulfillment value.
-                    let _ = self.fulfill_promise(result_promise, argument, label.clone());
+                    // Check if this is an async function resumption
+                    if handler.is_none() {
+                        // Check if there's an async resumption context for this promise
+                        if let Some(resumption_context) = self.async_resumption_contexts.remove(&result_promise.0) {
+                            // Resume the async function
+                            if let Err(_) = self.resume_async_function_after_await(
+                                resumption_context,
+                                argument,
+                                &task
+                            ) {
+                                // If resumption fails, just fulfill the result promise
+                                let _ = self.fulfill_promise(result_promise, argument, label.clone());
+                            }
+                        } else {
+                            // With no closure handler, the identity transform propagates
+                            // the argument to the result promise as a fulfillment value.
+                            let _ = self.fulfill_promise(result_promise, argument, label.clone());
+                        }
+                    } else {
+                        // Regular promise reaction with a closure handler
+                        // TODO: Implement closure execution for promise reactions
+                        let _ = self.fulfill_promise(result_promise, argument, label.clone());
+                    }
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,

@@ -95,6 +95,7 @@ pub enum BuiltinId {
     ObjectEntries,
     ObjectAssign,
     ObjectFreeze,
+    ObjectIsFrozen,
     ObjectSeal,
     ObjectCreate,
     ObjectDefineProperty,
@@ -326,6 +327,7 @@ impl BuiltinId {
             Self::ObjectEntries => "Object.entries",
             Self::ObjectAssign => "Object.assign",
             Self::ObjectFreeze => "Object.freeze",
+            Self::ObjectIsFrozen => "Object.isFrozen",
             Self::ObjectSeal => "Object.seal",
             Self::ObjectCreate => "Object.create",
             Self::ObjectDefineProperty => "Object.defineProperty",
@@ -4173,6 +4175,7 @@ fn install_object_builtins(
     install_builtin_fn(heap, registry, ctor, "entries", BuiltinId::ObjectEntries);
     install_builtin_fn(heap, registry, ctor, "assign", BuiltinId::ObjectAssign);
     install_builtin_fn(heap, registry, ctor, "freeze", BuiltinId::ObjectFreeze);
+    install_builtin_fn(heap, registry, ctor, "isFrozen", BuiltinId::ObjectIsFrozen);
     install_builtin_fn(heap, registry, ctor, "seal", BuiltinId::ObjectSeal);
     install_builtin_fn(heap, registry, ctor, "create", BuiltinId::ObjectCreate);
     install_builtin_fn(

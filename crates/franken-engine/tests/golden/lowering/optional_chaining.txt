@@ -1,0 +1,30 @@
+# franken-engine lowering IR3 golden
+# Update with:
+#   UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_lowering
+# Then review and commit the diff under tests/golden/lowering/.
+case: optional_chaining
+goal: Script
+source:
+  null?.value;
+
+constant_pool:
+  [0000] "value"
+
+instructions:
+  0000: LoadNull { dst: 0 }
+  0001: Move { dst: 1, src: 0 }
+  0002: Move { dst: 0, src: 1 }
+  0003: Move { dst: 2, src: 1 }
+  0004: JumpIfNullish { cond: 2, target: 11 }
+  0005: Move { dst: 3, src: 1 }
+  0006: LoadStr { dst: 4, pool_index: 0 }
+  0007: GetProperty { obj: 3, key: 4, dst: 5 }
+  0008: Move { dst: 6, src: 5 }
+  0009: Move { dst: 0, src: 6 }
+  0010: Jump { target: 14 }
+  0011: LoadUndefined { dst: 7 }
+  0012: Move { dst: 6, src: 7 }
+  0013: Move { dst: 0, src: 6 }
+  0014: Move { dst: 8, src: 6 }
+  0015: Move { dst: 0, src: 8 }
+  0016: Halt

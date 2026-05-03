@@ -153,7 +153,7 @@ FrankenEngine is the native runtime heart for `franken_node`, with goals:
 - No `rusty_v8`, `rquickjs`, or equivalent binding-led core execution path.
 - `legacy_quickjs/` and `legacy_v8/` are reference corpora only.
 - Adaptive systems require deterministic safe-mode fallback.
-- Significant claims require reproducible artifacts.
+- Significant claims require reproducible artifacts (see `scripts/reproduce.sh`).
 
 ---
 

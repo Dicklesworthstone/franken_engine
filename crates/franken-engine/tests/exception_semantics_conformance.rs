@@ -97,7 +97,7 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
 
 fn engine_core_lane() -> QuickJsLane {
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = CapabilityProfile::engine_core().capabilities;
+    config.granted_capabilities = CapabilityProfile::engine_core().capabilities().clone();
     QuickJsLane::with_config(config)
 }
 

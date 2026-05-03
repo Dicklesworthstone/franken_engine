@@ -81,7 +81,7 @@ fn profile_kind_display() {
 fn full_caps_contains_all() {
     let full = CapabilityProfile::full();
     assert_eq!(full.len(), all_runtime_capabilities().len());
-    assert_eq!(full.kind, ProfileKind::Full);
+    assert_eq!(full.kind(), ProfileKind::Full);
     for capability in all_runtime_capabilities() {
         assert!(full.has(*capability), "full missing {capability:?}");
     }
@@ -91,7 +91,7 @@ fn full_caps_contains_all() {
 fn engine_core_caps() {
     let ec = CapabilityProfile::engine_core();
     assert_eq!(ec.len(), 7);
-    assert_eq!(ec.kind, ProfileKind::EngineCore);
+    assert_eq!(ec.kind(), ProfileKind::EngineCore);
     assert!(ec.has(RuntimeCapability::VmDispatch));
     assert!(ec.has(RuntimeCapability::GcInvoke));
     assert!(ec.has(RuntimeCapability::IrLowering));
@@ -107,7 +107,7 @@ fn engine_core_caps() {
 fn policy_caps() {
     let pol = CapabilityProfile::policy();
     assert_eq!(pol.len(), 4);
-    assert_eq!(pol.kind, ProfileKind::Policy);
+    assert_eq!(pol.kind(), ProfileKind::Policy);
     assert!(pol.has(RuntimeCapability::PolicyRead));
     assert!(pol.has(RuntimeCapability::PolicyWrite));
     assert!(pol.has(RuntimeCapability::EvidenceEmit));
@@ -119,7 +119,7 @@ fn policy_caps() {
 fn remote_caps() {
     let rem = CapabilityProfile::remote();
     assert_eq!(rem.len(), 3);
-    assert_eq!(rem.kind, ProfileKind::Remote);
+    assert_eq!(rem.kind(), ProfileKind::Remote);
     assert!(rem.has(RuntimeCapability::NetworkEgress));
     assert!(rem.has(RuntimeCapability::LeaseManagement));
     assert!(rem.has(RuntimeCapability::IdempotencyDerive));
@@ -131,7 +131,7 @@ fn compute_only_caps() {
     let co = CapabilityProfile::compute_only();
     assert!(co.is_empty());
     assert_eq!(co.len(), 0);
-    assert_eq!(co.kind, ProfileKind::ComputeOnly);
+    assert_eq!(co.kind(), ProfileKind::ComputeOnly);
     assert!(!co.has(RuntimeCapability::VmDispatch));
 }
 
@@ -200,17 +200,19 @@ fn intersection_with_full_preserves_profile() {
     let full = CapabilityProfile::full();
     let ec = CapabilityProfile::engine_core();
     let inter = full.intersect(&ec);
-    assert_eq!(inter.capabilities, ec.capabilities);
+    assert_eq!(inter.capabilities(), ec.capabilities());
 }
 
 #[test]
 fn intersection_produces_common_caps() {
-    let mut custom = CapabilityProfile::engine_core();
-    custom.capabilities.insert(RuntimeCapability::PolicyRead);
+    let custom = CapabilityProfile::full();
     let pol = CapabilityProfile::policy();
     let inter = custom.intersect(&pol);
-    assert_eq!(inter.len(), 1);
+    assert_eq!(inter.capabilities(), pol.capabilities());
     assert!(inter.has(RuntimeCapability::PolicyRead));
+    assert!(inter.has(RuntimeCapability::PolicyWrite));
+    assert!(inter.has(RuntimeCapability::EvidenceEmit));
+    assert!(inter.has(RuntimeCapability::DecisionInvoke));
 }
 
 #[test]
@@ -218,7 +220,7 @@ fn intersection_result_is_compute_only_kind() {
     let full = CapabilityProfile::full();
     let ec = CapabilityProfile::engine_core();
     let inter = full.intersect(&ec);
-    assert_eq!(inter.kind, ProfileKind::EngineCore);
+    assert_eq!(inter.kind(), ProfileKind::EngineCore);
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +436,7 @@ fn intersection_is_symmetric() {
     let full = CapabilityProfile::full();
     let a = ec.intersect(&full);
     let b = full.intersect(&ec);
-    assert_eq!(a.capabilities, b.capabilities);
+    assert_eq!(a.capabilities(), b.capabilities());
     assert_eq!(a.len(), b.len());
 }
 
@@ -442,7 +444,7 @@ fn intersection_is_symmetric() {
 fn intersection_with_self_preserves_capabilities() {
     let pol = CapabilityProfile::policy();
     let inter = pol.intersect(&pol);
-    assert_eq!(inter.capabilities, pol.capabilities);
+    assert_eq!(inter.capabilities(), pol.capabilities());
     assert_eq!(inter.len(), pol.len());
 }
 
@@ -499,7 +501,7 @@ fn capability_profile_clone_equals_original() {
     for p in &profiles {
         let cloned = p.clone();
         assert_eq!(*p, cloned);
-        assert_eq!(p.kind, cloned.kind);
+        assert_eq!(p.kind(), cloned.kind());
         assert_eq!(p.len(), cloned.len());
     }
 }

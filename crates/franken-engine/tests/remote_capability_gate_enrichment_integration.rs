@@ -1173,9 +1173,11 @@ fn test_event_held_profile_string_for_all_profile_kinds() {
         );
         let events = gate.drain_events();
         assert_eq!(
-            events[0].held_profile, *expected_kind_str,
+            events[0].held_profile,
+            *expected_kind_str,
             "held_profile for {:?} should be {}",
-            profile.kind, expected_kind_str
+            profile.kind(),
+            expected_kind_str
         );
     }
 }

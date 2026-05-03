@@ -91,7 +91,7 @@ fn trust_zone_class_serde_uses_snake_case() {
 #[test]
 fn owner_default_ceiling_is_full() {
     let owner_ceiling = TrustZoneClass::Owner.default_ceiling();
-    let full = CapabilityProfile::full().capabilities;
+    let full = CapabilityProfile::full().capabilities().clone();
     assert_eq!(owner_ceiling, full);
 }
 

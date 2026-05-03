@@ -279,6 +279,15 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         }
     }
 
+    fn make_ctx(&self, trace_id: &str) -> Result<EventContext, ProvenanceError> {
+        EventContext::new(
+            trace_id,
+            format!("{COMPONENT}:{trace_id}"),
+            COMPONENT.to_string(),
+        )
+        .map_err(ProvenanceError::from)
+    }
+
     // -- Write operations ---------------------------------------------------
 
     /// Insert a flow event record.
@@ -922,20 +931,18 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
     pub fn insert_typed_provenance_entry(
         &mut self,
         entry: &IfcProvenanceEntry,
-        trace_id: &str,
+        ctx: &EventContext,
     ) -> Result<(), ProvenanceError>
     where
         S: TypedStorageAdapterExt,
     {
-        let ctx = self.make_ctx(trace_id);
-
         // Use typed operation instead of generic put_record() or store.put(STORE, key, value, metadata, &ctx)
         let _stored_record = self
             .store
             .put_typed(entry, &ctx)
             .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
 
-        self.push_event(trace_id, "insert_typed_provenance", "ok", None);
+        self.push_event(&ctx.trace_id, "insert_typed_provenance", "ok", None);
         Ok(())
     }
 
@@ -946,20 +953,18 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
     pub fn get_typed_provenance_entry_by_id(
         &mut self,
         provenance_id: i64,
-        trace_id: &str,
+        ctx: &EventContext,
     ) -> Result<Option<IfcProvenanceEntry>, ProvenanceError>
     where
         S: TypedStorageAdapterExt,
     {
-        let ctx = self.make_ctx(trace_id);
-
         // Use typed operation instead of generic get_record() or store.get(STORE, &key, &ctx)
         let entry = self
             .store
             .get_typed_by_id::<IfcProvenanceEntry>(provenance_id, &ctx)
             .map_err(|e| ProvenanceError::StorageError(e.to_string()))?;
 
-        self.push_event(trace_id, "get_typed_provenance", "ok", None);
+        self.push_event(&ctx.trace_id, "get_typed_provenance", "ok", None);
         Ok(entry)
     }
 }
@@ -3630,7 +3635,7 @@ mod tests {
         let mut idx = make_index();
         let entry = make_typed_provenance_entry(200, "source-artifact", "data_flow");
 
-        let result = idx.insert_typed_provenance_entry(&entry, "trace-typed-prov-1");
+        let result = idx.insert_typed_provenance_entry(&entry, &test_ctx());
         assert!(
             result.is_ok(),
             "typed provenance entry insertion should succeed"
@@ -3650,12 +3655,12 @@ mod tests {
         let entry = make_typed_provenance_entry(201, "source-artifact-2", "computation");
 
         // Insert via typed operation
-        idx.insert_typed_provenance_entry(&entry, "trace-typed-prov-2")
+        idx.insert_typed_provenance_entry(&entry, &test_ctx())
             .expect("typed provenance entry insertion should succeed");
 
         // Retrieve via typed operation
         let retrieved = idx
-            .get_typed_provenance_entry_by_id(201, "trace-typed-prov-3")
+            .get_typed_provenance_entry_by_id(201, &test_ctx())
             .expect("typed provenance entry retrieval should succeed");
 
         assert!(retrieved.is_some(), "should retrieve the stored entry");
@@ -3671,7 +3676,7 @@ mod tests {
         let mut idx = make_index();
 
         let retrieved = idx
-            .get_typed_provenance_entry_by_id(999, "trace-typed-prov-4")
+            .get_typed_provenance_entry_by_id(999, &test_ctx())
             .expect("typed provenance entry retrieval should succeed");
 
         assert!(

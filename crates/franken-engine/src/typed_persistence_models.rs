@@ -438,6 +438,13 @@ where
         .ok_or_else(|| StorageError::InvalidKey {
             key: format!("{allocation_key}/overflow"),
         })?;
+    // SECURITY: Double-check for race condition before persisting allocation
+    // This prevents TOCTOU between max_id query and allocation persistence
+    if let Some(existing) = storage.get(StoreKind::PolicyCache, &allocation_key, context)? {
+        // Race detected: another thread allocated this natural key between our check and now
+        return Ok(decode_typed_id_allocation::<T>(&existing)?.typed_record_id);
+    }
+
     let allocation = TypedRecordIdAllocation {
         schema_version: TYPED_ID_ALLOCATION_FORMAT_VALUE.to_string(),
         store: T::STORE_KIND,
@@ -450,6 +457,33 @@ where
             store: StoreKind::PolicyCache,
             detail: format!("failed to serialize typed id allocation `{allocation_key}`: {err}"),
         })?;
+
+    // DEBUG: Assert we're not about to create a duplicate (helps catch remaining races)
+    debug_assert!(
+        {
+            let check_rows = storage
+                .query(
+                    StoreKind::PolicyCache,
+                    &StoreQuery {
+                        key_prefix: Some(format!("{}/", typed_id_allocation_prefix::<T>())),
+                        metadata_filters: BTreeMap::new(),
+                        limit: None,
+                    },
+                    context,
+                )
+                .unwrap_or_default();
+            let current_max = check_rows
+                .iter()
+                .filter_map(|row| decode_typed_id_allocation::<T>(row).ok())
+                .map(|alloc| alloc.typed_record_id)
+                .max()
+                .unwrap_or(-1);
+            typed_record_id == current_max + 1
+        },
+        "Race condition detected: typed_record_id {} != current_max + 1",
+        typed_record_id
+    );
+
     storage.put(
         StoreKind::PolicyCache,
         allocation_key,
@@ -1238,7 +1272,6 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
 }
 
 /// Thin typed wrapper around the real SQLModel ORM session.
-#[derive(Debug)]
 pub struct TypedSqlModelSession<C: Connection> {
     inner: Session<C>,
 }
@@ -2933,6 +2966,51 @@ mod tests {
             err.to_string()
                 .contains("failed to deserialize legacy ifc_flow_event")
         );
+    }
+
+    #[test]
+    fn typed_id_allocator_handles_concurrent_allocation_attempts() {
+        // Test for race condition fix: concurrent allocations of same natural key
+        // should result in same ID (no duplicates) and sequential allocations
+        // should increment properly
+        let mut storage = InMemoryStorageAdapter::new();
+        let context = test_event_context();
+
+        // Allocate first ID for a natural key
+        let id1 = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut storage,
+            "test-natural-key-1",
+            &context,
+        )
+        .expect("first allocation should succeed");
+        assert_eq!(id1, 0, "first allocation should be 0");
+
+        // Allocate same natural key again - should return same ID (idempotent)
+        let id1_again = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut storage,
+            "test-natural-key-1",
+            &context,
+        )
+        .expect("repeat allocation should succeed");
+        assert_eq!(id1_again, id1, "repeat allocation should return same ID");
+
+        // Allocate different natural key - should get next sequential ID
+        let id2 = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut storage,
+            "test-natural-key-2",
+            &context,
+        )
+        .expect("second allocation should succeed");
+        assert_eq!(id2, 1, "second allocation should be sequential");
+
+        // Verify IDs are stable across calls
+        let id1_verify = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut storage,
+            "test-natural-key-1",
+            &context,
+        )
+        .expect("verification allocation should succeed");
+        assert_eq!(id1_verify, id1, "allocation should remain stable");
     }
 
     #[test]

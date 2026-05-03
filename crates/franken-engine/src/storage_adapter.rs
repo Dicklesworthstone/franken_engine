@@ -639,7 +639,6 @@ pub trait FrankensqliteBackend {
 }
 
 /// Adapter implementation backed by a frankensqlite integration backend.
-#[derive(Debug)]
 pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     backend: B,
     schema_version: u32,
@@ -647,6 +646,20 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     /// Optional typed SQLModel session for ReplacementLineage, IfcProvenance, SpecializationIndex stores.
     /// When present, typed operations use SQLModel boundaries instead of generic record operations.
     typed_session: Option<TypedFrankenSqliteSession>,
+}
+
+impl<B> fmt::Debug for FrankensqliteStorageAdapter<B>
+where
+    B: FrankensqliteBackend + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FrankensqliteStorageAdapter")
+            .field("backend", &self.backend)
+            .field("schema_version", &self.schema_version)
+            .field("events", &self.events)
+            .field("typed_session_present", &self.typed_session.is_some())
+            .finish()
+    }
 }
 
 impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {

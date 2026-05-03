@@ -1,16 +1,13 @@
+use frankenengine_engine::governance_hooks::{
+    AuditExportFormat, AuditExportRequest, EvidenceEntry, export_audit_evidence,
+};
+use frankenengine_engine::{ContentHash, DeterministicTimestamp, EngineObjectId};
 /// Integration tests for Parquet export format correctness.
 ///
 /// Tests verify that AuditExportFormat::Parquet emits real Parquet binary format
 /// instead of the previous fake plaintext format, addressing the compliance bug
 /// where tools expecting real Parquet would reject the fake exports.
-
 use std::collections::BTreeMap;
-use frankenengine_engine::governance_hooks::{
-    AuditExportFormat, EvidenceEntry, AuditExportRequest, export_audit_evidence,
-};
-use frankenengine_engine::{
-    EngineObjectId, DeterministicTimestamp, ContentHash,
-};
 
 /// Export entries to Parquet format for testing.
 fn export_to_parquet(entries: &[EvidenceEntry]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -27,14 +24,9 @@ fn export_to_parquet(entries: &[EvidenceEntry]) -> Result<Vec<u8>, Box<dyn std::
 }
 
 /// Create a test evidence entry for testing.
-fn create_test_entry(
-    id_suffix: &str,
-    kind: &str,
-    timestamp: u64,
-    summary: &str,
-) -> EvidenceEntry {
-    let entry_id = EngineObjectId::from_hex(&format!("a1b2c3d4e5f6789{}", id_suffix))
-        .expect("Valid hex ID");
+fn create_test_entry(id_suffix: &str, kind: &str, timestamp: u64, summary: &str) -> EvidenceEntry {
+    let entry_id =
+        EngineObjectId::from_hex(&format!("a1b2c3d4e5f6789{}", id_suffix)).expect("Valid hex ID");
     let evidence_hash = ContentHash::compute(format!("test_evidence_{}", id_suffix).as_bytes());
 
     EvidenceEntry {
@@ -102,7 +94,10 @@ fn test_parquet_empty_audit_log() {
     let parquet_bytes = result.unwrap();
 
     // Should still be valid Parquet (with schema but no data)
-    assert!(parquet_bytes.len() >= 4, "Even empty Parquet should have header");
+    assert!(
+        parquet_bytes.len() >= 4,
+        "Even empty Parquet should have header"
+    );
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 }
 
@@ -126,7 +121,10 @@ fn test_parquet_multi_row_preserves_count() {
     // The row count verification would require parsing the Parquet file,
     // which is complex. For now, we verify the export succeeds and produces
     // valid-looking Parquet binary format.
-    assert!(parquet_bytes.len() > 100, "Multi-row Parquet should be substantial");
+    assert!(
+        parquet_bytes.len() > 100,
+        "Multi-row Parquet should be substantial"
+    );
 }
 
 #[test]
@@ -141,7 +139,10 @@ fn test_parquet_determinism() {
     let result1 = export_evidence_to_format(&entries, AuditExportFormat::Parquet);
     let result2 = export_evidence_to_format(&entries, AuditExportFormat::Parquet);
 
-    assert!(result1.is_ok() && result2.is_ok(), "Both exports should succeed");
+    assert!(
+        result1.is_ok() && result2.is_ok(),
+        "Both exports should succeed"
+    );
 
     let bytes1 = result1.unwrap();
     let bytes2 = result2.unwrap();
@@ -167,7 +168,10 @@ fn test_parquet_schema_preservation() {
 
     // Schema preservation verification would require Parquet parsing.
     // For now, verify the export produces valid binary format.
-    assert!(parquet_bytes.len() > 50, "Schema should add substantial metadata");
+    assert!(
+        parquet_bytes.len() > 50,
+        "Schema should add substantial metadata"
+    );
 }
 
 #[test]
@@ -218,5 +222,9 @@ fn test_parquet_vs_old_format_rejection() {
     );
 
     // Verify it has real Parquet structure
-    assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have real Parquet header");
+    assert_eq!(
+        &parquet_bytes[0..4],
+        b"PAR1",
+        "Should have real Parquet header"
+    );
 }

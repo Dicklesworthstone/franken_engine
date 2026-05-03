@@ -142,8 +142,8 @@ fn test_nested_optional_chaining() {
     };
 
     let func_decl = create_function_with_expression(nested_optional);
-    let instructions =
-        lower_function_to_ir3(func_decl).expect("Nested optional chaining should lower successfully");
+    let instructions = lower_function_to_ir3(func_decl)
+        .expect("Nested optional chaining should lower successfully");
 
     // Should contain multiple JumpIfNullish instructions for each ?. in the chain
     let nullish_count = instructions
@@ -243,8 +243,8 @@ fn test_delete_computed_property() {
     };
 
     let func_decl = create_function_with_expression(delete_computed);
-    let instructions =
-        lower_function_to_ir3(func_decl).expect("Delete computed property should lower successfully");
+    let instructions = lower_function_to_ir3(func_decl)
+        .expect("Delete computed property should lower successfully");
 
     // Should contain DeleteProperty instruction
     assert!(
@@ -301,7 +301,9 @@ fn test_property_operations_deterministic_lowering() {
         operator: UnaryOperator::Delete,
         argument: Box::new(Expression::Member {
             object: Box::new(Expression::Identifier("target".to_string())),
-            property: Box::new(Expression::Literal(Literal::String("dynamicKey".to_string()))),
+            property: Box::new(Expression::Literal(Literal::String(
+                "dynamicKey".to_string(),
+            ))),
             computed: true,
             optional: false,
         }),

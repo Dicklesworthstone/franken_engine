@@ -6,8 +6,8 @@ use frankenengine_engine::lowering_pipeline::{
     lower_ir2_to_ir3,
 };
 use frankenengine_engine::object_model::{
-    BindingPattern, Expression, Literal, Statement, VariableDeclaration, VariableDeclarator,
-    DeclarationKind,
+    BindingPattern, DeclarationKind, Expression, Literal, Statement, VariableDeclaration,
+    VariableDeclarator,
 };
 use std::collections::BTreeMap;
 
@@ -252,7 +252,9 @@ fn test_rest_destructuring_deterministic_lowering() {
     let pattern = BindingPattern::Array {
         elements: vec![
             BindingPattern::Identifier("first".to_string()),
-            BindingPattern::Rest(Box::new(BindingPattern::Identifier("remaining".to_string()))),
+            BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+                "remaining".to_string(),
+            ))),
         ],
     };
 

@@ -1,9 +1,9 @@
-use frankenengine_engine::governance_hooks::{
-    export_audit_evidence, AuditExportFormat, AuditExportRequest, EvidenceEntry, GovernanceError,
-};
 use frankenengine_engine::content_hash::ContentHash;
 use frankenengine_engine::deterministic_timestamp::DeterministicTimestamp;
 use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain};
+use frankenengine_engine::governance_hooks::{
+    AuditExportFormat, AuditExportRequest, EvidenceEntry, GovernanceError, export_audit_evidence,
+};
 use frankenengine_engine::schema_id::SchemaId;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +21,8 @@ fn create_test_evidence_entry(
         id,
         &schema_id,
         format!("evidence-{}", id).as_bytes(),
-    ).expect("Failed to derive EngineObjectId");
+    )
+    .expect("Failed to derive EngineObjectId");
 
     EvidenceEntry {
         entry_id,
@@ -72,7 +73,10 @@ fn test_pdf_compliance_export_returns_not_implemented_error() {
     // Attempt to export as CompliancePdf - should fail with ExportError
     let result = test_pdf_export_with_entries(entries);
 
-    assert!(result.is_err(), "CompliancePdf export should return an error");
+    assert!(
+        result.is_err(),
+        "CompliancePdf export should return an error"
+    );
 
     match result.unwrap_err() {
         GovernanceError::ExportError { message } => {
@@ -92,10 +96,7 @@ fn test_pdf_compliance_export_returns_not_implemented_error() {
                 message
             );
         }
-        other => panic!(
-            "Expected ExportError variant, got: {:?}",
-            other
-        ),
+        other => panic!("Expected ExportError variant, got: {:?}", other),
     }
 }
 
@@ -106,14 +107,10 @@ fn test_pdf_export_error_deterministic() {
         "det-001",
         "compliance_check",
         "Policy validation passed",
-        1640995200
+        1640995200,
     );
-    let entry2 = create_test_evidence_entry(
-        "det-002",
-        "audit_log",
-        "System access recorded",
-        1640995260
-    );
+    let entry2 =
+        create_test_evidence_entry("det-002", "audit_log", "System access recorded", 1640995260);
 
     let entries_clone1 = vec![entry1.clone(), entry2.clone()];
     let entries_clone2 = vec![entry1.clone(), entry2.clone()];
@@ -154,10 +151,7 @@ fn test_pdf_export_error_with_empty_entries() {
         GovernanceError::ExportError { .. } => {
             // Expected error type
         }
-        other => panic!(
-            "Expected ExportError for empty entries, got: {:?}",
-            other
-        ),
+        other => panic!("Expected ExportError for empty entries, got: {:?}", other),
     }
 }
 
@@ -189,10 +183,7 @@ fn test_pdf_export_error_with_large_entries() {
                 "Error message should be consistent regardless of entry count"
             );
         }
-        other => panic!(
-            "Expected ExportError for large entries, got: {:?}",
-            other
-        ),
+        other => panic!("Expected ExportError for large entries, got: {:?}", other),
     }
 }
 
@@ -226,7 +217,10 @@ fn test_other_formats_still_work() {
         json_result.err()
     );
     let json_output = json_result.unwrap().payload;
-    assert!(!json_output.is_empty(), "JsonLines output should not be empty");
+    assert!(
+        !json_output.is_empty(),
+        "JsonLines output should not be empty"
+    );
 
     // CSV should work
     let csv_request = AuditExportRequest {
@@ -323,7 +317,10 @@ fn test_compliance_pdf_vs_fake_pdf_behavior() {
     let result = test_pdf_export_with_entries(entries);
 
     // NEW behavior: should fail with ExportError
-    assert!(result.is_err(), "Should fail instead of returning fake content");
+    assert!(
+        result.is_err(),
+        "Should fail instead of returning fake content"
+    );
 
     if let Ok(output) = result {
         // If it somehow succeeds, it MUST NOT contain the old fake content
@@ -344,10 +341,7 @@ fn test_compliance_pdf_vs_fake_pdf_behavior() {
             GovernanceError::ExportError { .. } => {
                 // This is the expected behavior - fail loud instead of fake
             }
-            other => panic!(
-                "If PDF fails, it should be ExportError, got: {:?}",
-                other
-            ),
+            other => panic!("If PDF fails, it should be ExportError, got: {:?}", other),
         }
     }
 }

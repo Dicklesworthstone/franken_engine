@@ -880,7 +880,7 @@ impl ParseEventIr {
         decision_id: String,
         started_payload: Option<(String, String)>,
     ) -> Self {
-        let mut events = Vec::new();
+        let mut events = Vec::with_capacity(32);
         events.push(ParseEvent {
             sequence: 0,
             kind: ParseEventKind::ParseStarted,
@@ -1957,7 +1957,7 @@ where
     R: Read,
 {
     fn into_source(mut self) -> ParseResult<ParserSource> {
-        let mut bytes = Vec::new();
+        let mut bytes = Vec::with_capacity(1024);
         self.reader.read_to_end(&mut bytes).map_err(|error| {
             ParseError::new(
                 ParseErrorCode::IoReadFailed,
@@ -2206,7 +2206,7 @@ fn merge_logical_lines_requires_continuation(
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(16);
     let mut current_text = String::new();
     let mut current_byte_offset: u64 = 0;
     let mut current_start_line: u64 = 0;
@@ -2479,7 +2479,7 @@ fn parse_source(
     }
 
     let logical_lines = merge_logical_lines(text);
-    let mut statements = Vec::new();
+    let mut statements = Vec::with_capacity(8);
 
     // Check for "use strict" directive in the first statement of global scripts
     if !logical_lines.is_empty() {
@@ -2664,7 +2664,7 @@ fn line_count(source: &str) -> u64 {
 }
 
 fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(4);
     let mut segment_start = 0usize;
     let mut in_quote: Option<char> = None;
     let mut escaped = false;
@@ -3155,7 +3155,7 @@ fn parse_named_import_specifiers(
         return Ok(Vec::new());
     }
 
-    let mut specifiers = Vec::new();
+    let mut specifiers = Vec::with_capacity(4);
     let mut seen_local = BTreeSet::new();
 
     for specifier in inner.split(',') {
@@ -3655,7 +3655,7 @@ fn parse_array_binding_pattern(
 
 /// Split pattern elements on commas at the top level.
 fn split_pattern_elements(source: &str) -> Vec<&str> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(4);
     let mut start = 0;
     let mut depth = 0usize;
     let mut in_quote: Option<char> = None;
@@ -3797,7 +3797,7 @@ fn parse_variable_declaration(
 }
 
 fn split_var_declarator_segments(source: &str) -> Vec<&str> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(4);
     let mut segment_start = 0usize;
     let mut in_quote: Option<char> = None;
     let mut escaped = false;
@@ -4457,8 +4457,8 @@ fn parse_template_literal(
     // Strip outer backticks.
     let inner = &expression[1..expression.len() - 1];
     let bytes = inner.as_bytes();
-    let mut quasis = Vec::new();
-    let mut expressions = Vec::new();
+    let mut quasis = Vec::with_capacity(4);
+    let mut expressions = Vec::with_capacity(4);
     let mut current_quasi = String::new();
     let mut i = 0;
     let mut in_quote: Option<u8> = None;
@@ -5826,7 +5826,7 @@ fn parse_array_literal(
         return Ok(Expression::ArrayLiteral(Vec::new()));
     }
     let parts = split_top_level_commas(trimmed);
-    let mut elements = Vec::new();
+    let mut elements = Vec::with_capacity(4);
     for part in &parts {
         let p = part.trim();
         if p.is_empty() {
@@ -5859,7 +5859,7 @@ fn parse_object_literal(
         return Ok(Expression::ObjectLiteral(Vec::new()));
     }
     let parts = split_top_level_commas(trimmed);
-    let mut properties = Vec::new();
+    let mut properties = Vec::with_capacity(8);
     for part in &parts {
         let p = part.trim();
         if p.is_empty() {
@@ -5915,7 +5915,7 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
     let mut depth_brace: i64 = 0;
     let mut in_quote: Option<u8> = None;
     let mut escaped = false;
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(4);
     let mut start = 0;
 
     for (i, &b) in bytes.iter().enumerate() {
@@ -5985,7 +5985,7 @@ fn parse_comma_separated_exprs(
         return Ok(Vec::new());
     }
     let parts = split_top_level_commas(trimmed);
-    let mut exprs = Vec::new();
+    let mut exprs = Vec::with_capacity(4);
     for part in &parts {
         let p = part.trim();
         if p.is_empty() {
@@ -7059,7 +7059,7 @@ fn parse_body_statements(
         return Ok(Vec::new());
     }
     let logical_lines = merge_logical_lines(trimmed);
-    let mut stmts = Vec::new();
+    let mut stmts = Vec::with_capacity(8);
 
     // Save the current strict mode state to restore later for nested scopes
     let saved_strict_mode = context.strict_mode;
@@ -7767,7 +7767,7 @@ fn parse_switch_statement(
     })?;
 
     // Parse case/default clauses.
-    let mut cases = Vec::new();
+    let mut cases = Vec::with_capacity(4);
     let mut remaining = body_src.trim();
     while !remaining.is_empty() {
         if remaining.starts_with("case ") {
@@ -8056,7 +8056,7 @@ fn parse_class_body(
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Vec<MethodDefinition>> {
-    let mut methods = Vec::new();
+    let mut methods = Vec::with_capacity(8);
     let body = body.trim();
     if body.is_empty() {
         return Ok(methods);
@@ -8154,7 +8154,7 @@ fn parse_class_body(
 
 /// Split class body into individual method segments.
 fn split_class_members(body: &str) -> Vec<&str> {
-    let mut segments = Vec::new();
+    let mut segments = Vec::with_capacity(8);
     let mut start = 0;
     let mut brace_depth = 0usize;
     let mut paren_depth = 0usize;

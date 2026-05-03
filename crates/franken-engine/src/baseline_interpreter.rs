@@ -69,6 +69,66 @@ use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 use crate::stdlib::normalize_unicode_string;
 use crate::ifc_artifacts::Label;
+use crate::gc::{GcCollector, GcConfig};
+
+// ---------------------------------------------------------------------------
+// WeakMap Storage - Weak Reference Implementation
+// ---------------------------------------------------------------------------
+
+/// Weak reference storage for WeakMap entries.
+/// Keys are stored as weak references and automatically cleaned up on GC.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WeakMapStorage {
+    /// Map from object ID to stored value. The object ID itself acts as a weak reference.
+    entries: BTreeMap<u32, Value>,
+    /// Track which objects are referenced as keys for GC integration
+    weak_key_objects: BTreeSet<u32>,
+}
+
+impl WeakMapStorage {
+    pub fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            weak_key_objects: BTreeSet::new(),
+        }
+    }
+
+    pub fn set(&mut self, key_object_id: u32, value: Value) {
+        self.entries.insert(key_object_id, value);
+        self.weak_key_objects.insert(key_object_id);
+    }
+
+    pub fn get(&self, key_object_id: u32) -> Option<&Value> {
+        self.entries.get(&key_object_id)
+    }
+
+    pub fn has(&self, key_object_id: u32) -> bool {
+        self.entries.contains_key(&key_object_id)
+    }
+
+    pub fn delete(&mut self, key_object_id: u32) -> bool {
+        let existed = self.entries.remove(&key_object_id).is_some();
+        self.weak_key_objects.remove(&key_object_id);
+        existed
+    }
+
+    /// Remove entries for objects that have been garbage collected.
+    /// This is called by the GC system when objects become unreachable.
+    pub fn cleanup_collected_objects(&mut self, collected_object_ids: &BTreeSet<u32>) {
+        for &object_id in collected_object_ids {
+            if self.weak_key_objects.contains(&object_id) {
+                self.entries.remove(&object_id);
+                self.weak_key_objects.remove(&object_id);
+            }
+        }
+    }
+
+    /// Get all object IDs that this WeakMap is holding as keys.
+    /// Used by GC system to determine weak references.
+    pub fn get_weak_key_objects(&self) -> &BTreeSet<u32> {
+        &self.weak_key_objects
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -2018,6 +2078,8 @@ pub struct InterpreterCore {
     nondeterminism_trace: NondeterminismTrace,
     /// IFC labels for each register (same indexing as registers vec).
     register_labels: Vec<Label>,
+    /// WeakMap storage with weak reference semantics.
+    weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
 }
 
 impl InterpreterCore {
@@ -2077,6 +2139,7 @@ impl InterpreterCore {
             decision_receipts: EvidenceLog::new(),
             nondeterminism_trace: NondeterminismTrace::new(trace_id),
             register_labels: vec![Label::Public; max_regs],
+            weakmap_storage: BTreeMap::new(),
         }
     }
 
@@ -7269,6 +7332,92 @@ impl InterpreterCore {
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
             format!("property_not_found:key={},final_depth={}", key, depth).into_bytes(),
+            self.instructions_executed,
+            "baseline_interpreter",
+        );
+        Ok(Value::Undefined)
+    }
+
+    /// Walk the prototype chain to find a property descriptor.
+    /// Unlike getOwnPropertyDescriptor, this traverses the entire prototype chain.
+    fn prototype_chain_get_property_descriptor(
+        &mut self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                // Capture descriptor resolution decision for deterministic replay
+                self.nondeterminism_trace.capture(
+                    NondeterminismSource::PropertyResolution,
+                    format!("descriptor_chain_limit_reached:key={},depth={}", key, depth).into_bytes(),
+                    self.instructions_executed,
+                    "baseline_interpreter",
+                );
+                return Ok(Value::Undefined);
+            }
+
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+
+            if let Some(value) = object.properties.get(key) {
+                // Found the property - create and return a property descriptor
+                let descriptor_id = self.alloc_object_with_prototype(None)?;
+
+                // Check if object is frozen to set correct writable/configurable flags
+                let is_frozen = object.is_frozen;
+
+                // Set descriptor properties
+                self.set_object_property(
+                    descriptor_id,
+                    "value".to_string(),
+                    value.clone(),
+                )?;
+                self.set_object_property(
+                    descriptor_id,
+                    "writable".to_string(),
+                    Value::Bool(!is_frozen), // Frozen objects have non-writable properties
+                )?;
+                self.set_object_property(
+                    descriptor_id,
+                    "enumerable".to_string(),
+                    Value::Bool(true), // Default enumerable for now
+                )?;
+                self.set_object_property(
+                    descriptor_id,
+                    "configurable".to_string(),
+                    Value::Bool(!is_frozen), // Frozen objects have non-configurable properties
+                )?;
+
+                // Capture successful descriptor resolution
+                self.nondeterminism_trace.capture(
+                    NondeterminismSource::PropertyResolution,
+                    format!(
+                        "descriptor_found:key={},object_id={},depth={}",
+                        key, id.0, depth
+                    )
+                    .into_bytes(),
+                    self.instructions_executed,
+                    "baseline_interpreter",
+                );
+
+                return Ok(Value::Object(descriptor_id));
+            }
+
+            current = object.prototype;
+            depth += 1;
+        }
+
+        // Property not found in the entire prototype chain
+        self.nondeterminism_trace.capture(
+            NondeterminismSource::PropertyResolution,
+            format!("descriptor_not_found:key={},final_depth={}", key, depth).into_bytes(),
             self.instructions_executed,
             "baseline_interpreter",
         );
@@ -13067,23 +13216,20 @@ impl InterpreterCore {
             }
             "builtin:WeakMap" => {
                 let weakmap_id = self.alloc_object_with_prototype(None)?;
-                let entries_id = self.alloc_object_with_prototype(None)?;
 
                 self.set_object_property(
                     weakmap_id,
                     "__type".to_string(),
                     Value::Str("WeakMap".to_string()),
                 )?;
-                self.set_object_property(
-                    weakmap_id,
-                    "__entries".to_string(),
-                    Value::Object(entries_id),
-                )?;
 
-                // Note: In a full implementation, WeakMap would use weak references
+                // Initialize weak reference storage for this WeakMap
+                self.weakmap_storage.insert(weakmap_id, WeakMapStorage::new());
+
+                // Handle iterable initialization for WeakMap
                 if args.count > 0 {
                     let iterable = self.read_reg(args.start)?;
-                    self.seed_map_entries_from_iterable(entries_id, None, iterable, true)?;
+                    self.seed_weakmap_from_iterable(weakmap_id, iterable)?;
                 }
 
                 Ok(Value::Object(weakmap_id))
@@ -14429,6 +14575,29 @@ impl InterpreterCore {
                 } else {
                     Ok(Value::Undefined)
                 }
+            }
+
+            "builtin:ObjectGetPropertyDescriptor" => {
+                // Object.getPropertyDescriptor(obj, prop) implementation
+                // Similar to getOwnPropertyDescriptor but walks the prototype chain
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let obj_val = self.read_reg(args.start)?;
+                let obj_id = match obj_val {
+                    Value::Object(id) => id,
+                    _ => return Ok(Value::Undefined), // Non-objects don't have properties
+                };
+
+                let prop_val = self.read_reg(args.start + 1)?;
+                let prop_key = match prop_val {
+                    Value::String(s) => s,
+                    _ => return Ok(Value::Undefined), // Non-string property keys not supported yet
+                };
+
+                // Use our prototype chain descriptor lookup
+                self.prototype_chain_get_property_descriptor(obj_id, &prop_key)
             }
 
             // Removed duplicate MathClz32 - implementation at line ~12775 has better type conversion
@@ -16331,22 +16500,25 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                let entries_id = self.weakmap_entries_id(this_val)?;
+                let weakmap_id = self.validate_weakmap_receiver(this_val)?;
                 let key = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::Undefined
                 };
-                let Some(key_str) = Self::weakmap_object_key(key) else {
+
+                // WeakMap only accepts object keys
+                let Value::Object(key_object_id) = key else {
                     return Ok(Value::Bool(false));
                 };
 
-                Ok(Value::Bool(
-                    self.heap
-                        .get(entries_id.0 as usize)
-                        .map(|entries_obj| entries_obj.properties.contains_key(&key_str))
-                        .unwrap_or(false),
-                ))
+                let has_key = self
+                    .weakmap_storage
+                    .get(&weakmap_id)
+                    .map(|storage| storage.has(key_object_id.0))
+                    .unwrap_or(false);
+
+                Ok(Value::Bool(has_key))
             }
 
             "builtin:StringPrototypeBlink" => {
@@ -16401,21 +16573,26 @@ impl InterpreterCore {
                 } else {
                     Value::Undefined
                 };
-                let entries_id = self.weakmap_entries_id(this_val)?;
+                let weakmap_id = self.validate_weakmap_receiver(this_val)?;
                 let key = if args.count > 1 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::Undefined
                 };
-                let Some(key_str) = Self::weakmap_object_key(key) else {
+
+                // WeakMap only accepts object keys
+                let Value::Object(key_object_id) = key else {
                     return Ok(Value::Undefined);
                 };
 
-                Ok(self
-                    .heap
-                    .get(entries_id.0 as usize)
-                    .and_then(|entries_obj| entries_obj.properties.get(&key_str).cloned())
-                    .unwrap_or(Value::Undefined))
+                let value = self
+                    .weakmap_storage
+                    .get(&weakmap_id)
+                    .and_then(|storage| storage.get(key_object_id.0))
+                    .cloned()
+                    .unwrap_or(Value::Undefined);
+
+                Ok(value)
             }
 
             // ArrayPrototypeReverse: Removed duplicate dispatch arm (use first occurrence instead)
@@ -17265,6 +17442,73 @@ impl InterpreterCore {
         }
 
         Ok(())
+    }
+
+    fn seed_weakmap_from_iterable(
+        &mut self,
+        weakmap_id: ObjectId,
+        iterable: Value,
+    ) -> Result<(), InterpreterError> {
+        let Ok(entries) = self.collect_for_of_values(&iterable) else {
+            return Ok(());
+        };
+
+        for entry in entries {
+            let Ok(pair) = self.collect_for_of_values(&entry) else {
+                continue;
+            };
+            let Some(key) = pair.first().cloned() else {
+                continue;
+            };
+            let value = pair.get(1).cloned().unwrap_or(Value::Undefined);
+
+            // WeakMap only accepts object keys
+            let Value::Object(key_object_id) = key else {
+                continue; // Skip non-object keys
+            };
+
+            // Store in weak reference storage
+            if let Some(storage) = self.weakmap_storage.get_mut(&weakmap_id) {
+                storage.set(key_object_id.0, value);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_weakmap_receiver(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
+        let weakmap_id = match receiver {
+            Value::Object(object_id) => object_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "WeakMap".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+
+        // Validate that this is actually a WeakMap object
+        let weakmap_obj = self
+            .heap
+            .get(weakmap_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
+
+        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap") {
+            return Err(InterpreterError::TypeError {
+                expected: "WeakMap".to_string(),
+                got: "object".to_string(),
+            });
+        }
+
+        // Ensure we have storage for this WeakMap
+        if !self.weakmap_storage.contains_key(&weakmap_id) {
+            return Err(InterpreterError::TypeError {
+                expected: "WeakMap".to_string(),
+                got: "uninitialized WeakMap".to_string(),
+            });
+        }
+
+        Ok(weakmap_id)
     }
 
     fn weakmap_entries_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {

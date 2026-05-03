@@ -28,6 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use fp_io::write_parquet_bytes;
+use fp_frame::{DataFrame, Column, Index, Scalar};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
@@ -785,6 +787,8 @@ pub enum GovernanceError {
     },
     /// Serialisation failed during export.
     SerialisationFailed { reason: String },
+    /// Export to specific format failed.
+    ExportError { message: String },
 }
 
 impl fmt::Display for GovernanceError {
@@ -818,6 +822,9 @@ impl fmt::Display for GovernanceError {
             }
             Self::SerialisationFailed { reason } => {
                 write!(f, "serialisation failed: {reason}")
+            }
+            Self::ExportError { message } => {
+                write!(f, "export failed: {message}")
             }
         }
     }
@@ -1292,6 +1299,56 @@ fn parse_and_normalise_policy(bytes: &[u8], format: &str) -> Result<Vec<u8>, Str
     }
 }
 
+/// Convert evidence entries to a DataFrame for Parquet export.
+fn evidence_entries_to_dataframe(entries: &[&EvidenceEntry]) -> Result<DataFrame, GovernanceError> {
+    // Create column vectors
+    let mut entry_ids = Vec::new();
+    let mut kinds = Vec::new();
+    let mut timestamps = Vec::new();
+    let mut summaries = Vec::new();
+    let mut evidence_hashes = Vec::new();
+
+    // Populate columns from entries
+    for entry in entries {
+        entry_ids.push(Scalar::Str(entry.entry_id.to_string()));
+        kinds.push(Scalar::Str(entry.kind.clone()));
+        timestamps.push(Scalar::Int64(entry.timestamp.0));
+        summaries.push(Scalar::Str(entry.summary.clone()));
+        evidence_hashes.push(Scalar::Str(entry.evidence_hash.to_hex()));
+    }
+
+    // Create columns
+    let mut columns = BTreeMap::new();
+    columns.insert("entry_id".to_string(), Column::from_values(entry_ids).map_err(|e|
+        GovernanceError::ExportError { message: format!("Failed to create entry_id column: {}", e) })?);
+    columns.insert("kind".to_string(), Column::from_values(kinds).map_err(|e|
+        GovernanceError::ExportError { message: format!("Failed to create kind column: {}", e) })?);
+    columns.insert("timestamp".to_string(), Column::from_values(timestamps).map_err(|e|
+        GovernanceError::ExportError { message: format!("Failed to create timestamp column: {}", e) })?);
+    columns.insert("summary".to_string(), Column::from_values(summaries).map_err(|e|
+        GovernanceError::ExportError { message: format!("Failed to create summary column: {}", e) })?);
+    columns.insert("evidence_hash".to_string(), Column::from_values(evidence_hashes).map_err(|e|
+        GovernanceError::ExportError { message: format!("Failed to create evidence_hash column: {}", e) })?);
+
+    // Create column order (deterministic)
+    let column_order = vec![
+        "entry_id".to_string(),
+        "kind".to_string(),
+        "timestamp".to_string(),
+        "summary".to_string(),
+        "evidence_hash".to_string(),
+    ];
+
+    // Create index (0, 1, 2, ...)
+    let index_values: Vec<Scalar> = (0..entries.len()).map(|i| Scalar::Int64(i as i64)).collect();
+    let index = Index::new(index_values);
+
+    DataFrame::new_with_column_order(index, columns, column_order)
+        .map_err(|frame_err| GovernanceError::ExportError {
+            message: format!("Failed to create DataFrame: {}", frame_err),
+        })
+}
+
 /// Serialise a slice of evidence entries into the requested format.
 fn serialise_entries(
     entries: &[&EvidenceEntry],
@@ -1325,38 +1382,19 @@ fn serialise_entries(
             Ok(buf)
         }
         AuditExportFormat::Parquet => {
-            // Parquet is a binary columnar format.  We emit a deterministic
-            // placeholder encoding (column-major newline-delimited records)
-            // rather than a full Parquet implementation which would require
-            // external crates.
-            let mut buf = Vec::new();
-            buf.extend_from_slice(b"FRANKEN_PARQUET_V1\n");
-            for entry in entries {
-                let record = format!(
-                    "{}\t{}\t{}\t{}\n",
-                    entry.entry_id,
-                    entry.kind,
-                    entry.timestamp.0,
-                    entry.evidence_hash.to_hex(),
-                );
-                buf.extend_from_slice(record.as_bytes());
-            }
-            Ok(buf)
+            // Convert evidence entries to DataFrame and export as real Parquet binary format
+            let df = evidence_entries_to_dataframe(entries)?;
+            write_parquet_bytes(&df).map_err(|io_err| GovernanceError::ExportError {
+                message: format!("Failed to write Parquet: {}", io_err),
+            })
         }
         AuditExportFormat::CompliancePdf => {
-            // PDF generation requires external libraries; emit a structured
-            // text report as a deterministic stand-in.
-            let mut buf = Vec::new();
-            buf.extend_from_slice(b"FRANKEN_COMPLIANCE_REPORT_V1\n");
-            buf.extend_from_slice(format!("total_entries: {}\n", entries.len()).as_bytes());
-            for entry in entries {
-                let line = format!(
-                    "entry: {} | {} | {} | {}\n",
-                    entry.entry_id, entry.kind, entry.timestamp.0, entry.summary,
-                );
-                buf.extend_from_slice(line.as_bytes());
-            }
-            Ok(buf)
+            // PDF generation is not yet implemented. Return an explicit error instead
+            // of emitting fake plaintext that compliance regulators might mistakenly
+            // accept as valid PDF. This ensures fail-fast behavior.
+            Err(GovernanceError::ExportError {
+                message: "CompliancePdf format is not yet implemented. Real PDF generation requires external PDF library integration. Use JsonLines or Csv formats as alternatives.".to_string(),
+            })
         }
     }
 }

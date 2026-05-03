@@ -18783,7 +18783,13 @@ impl InterpreterCore {
             // The new slots are `Value::Undefined`. `estimate_value_bytes`
             // returns 0 for non-string values, so the resize itself does
             // not change the running memory total.
-            self.registers.resize(actual_reg + 1, Value::Undefined);
+            let new_len = actual_reg + 1;
+            // Pre-allocate capacity to avoid O(n log n) reallocations during
+            // repeated register writes. Reserve 25% growth buffer for subsequent
+            // calls within the same function frame.
+            let growth_capacity = new_len + (new_len >> 2);
+            self.registers.reserve(growth_capacity.saturating_sub(self.registers.capacity()));
+            self.registers.resize(new_len, Value::Undefined);
         }
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,

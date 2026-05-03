@@ -14,6 +14,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::typed_persistence_models::{
+    TypedFrankenSqliteSession, open_typed_frankensqlite_memory_session,
+};
+
 /// Current schema version for storage-adapter contracts.
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -640,6 +644,9 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     backend: B,
     schema_version: u32,
     events: Vec<StorageEvent>,
+    /// Optional typed SQLModel session for ReplacementLineage, IfcProvenance, SpecializationIndex stores.
+    /// When present, typed operations use SQLModel boundaries instead of generic record operations.
+    typed_session: Option<TypedFrankenSqliteSession>,
 }
 
 impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
@@ -662,7 +669,59 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
             backend,
             schema_version,
             events: Vec::new(),
+            typed_session: None,
         })
+    }
+
+    /// Create a new storage adapter with typed SQLModel session enabled for ReplacementLineage operations.
+    ///
+    /// This enables typed operations for ReplacementLineage, IfcProvenance, and SpecializationIndex stores
+    /// using SQLModel boundaries instead of generic record operations. Uses in-memory typed session
+    /// for development/testing; production callers should extend this to use file-backed sessions.
+    pub fn new_with_typed_session(mut backend: B) -> Result<Self, StorageError> {
+        backend.apply_control_plane_profile().map_err(|detail| {
+            StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail,
+            }
+        })?;
+
+        let schema_version = backend.current_schema_version().map_err(|detail| {
+            StorageError::BackendUnavailable {
+                backend: "frankensqlite".to_string(),
+                detail,
+            }
+        })?;
+
+        // Initialize typed session for SQLModel operations
+        let typed_session = open_typed_frankensqlite_memory_session().map_err(|err| {
+            StorageError::BackendUnavailable {
+                backend: "frankensqlite_typed".to_string(),
+                detail: format!("failed to initialize typed SQLModel session: {}", err),
+            }
+        })?;
+
+        Ok(Self {
+            backend,
+            schema_version,
+            events: Vec::new(),
+            typed_session: Some(typed_session),
+        })
+    }
+
+    /// Check if typed SQLModel session is available for typed store operations.
+    pub fn has_typed_session(&self) -> bool {
+        self.typed_session.is_some()
+    }
+
+    /// Get immutable reference to typed session if available.
+    pub fn typed_session(&self) -> Option<&TypedFrankenSqliteSession> {
+        self.typed_session.as_ref()
+    }
+
+    /// Get mutable reference to typed session if available.
+    pub fn typed_session_mut(&mut self) -> Option<&mut TypedFrankenSqliteSession> {
+        self.typed_session.as_mut()
     }
 
     fn map_backend_error(detail: String) -> StorageError {
@@ -2893,5 +2952,23 @@ mod tests {
         deduped.sort();
         deduped.dedup();
         assert_eq!(codes.len(), deduped.len());
+    }
+
+    #[test]
+    fn frankensqlite_adapter_new_creates_no_typed_session() {
+        let backend = MockBackend::default();
+        let adapter = FrankensqliteStorageAdapter::new(backend).expect("should create adapter");
+        assert!(!adapter.has_typed_session());
+        assert!(adapter.typed_session().is_none());
+    }
+
+    #[test]
+    fn frankensqlite_adapter_new_with_typed_session_enables_typed_operations() {
+        let backend = MockBackend::default();
+        let mut adapter = FrankensqliteStorageAdapter::new_with_typed_session(backend)
+            .expect("should create adapter with typed session");
+        assert!(adapter.has_typed_session());
+        assert!(adapter.typed_session().is_some());
+        assert!(adapter.typed_session_mut().is_some());
     }
 }

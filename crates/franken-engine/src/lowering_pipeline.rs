@@ -2385,7 +2385,9 @@ fn lower_statement_to_ir1_with_flow(
                 .iter()
                 .filter_map(|p| p.name().map(String::from))
                 .collect();
-            let mut body_ops = Vec::new();
+            // perf: pre-size body_ops Vec based on function body statement count
+            let estimated_body_ops = func.body.body.len().saturating_mul(2).max(8);
+            let mut body_ops = Vec::with_capacity(estimated_body_ops);
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
@@ -2459,7 +2461,11 @@ fn lower_statement_to_ir1_with_flow(
                         .collect()
                 })
                 .unwrap_or_default();
-            let mut body_ops = Vec::new();
+            // perf: pre-size body_ops Vec based on constructor body statement count
+            let estimated_body_ops = constructor
+                .map(|c| c.body.body.len().saturating_mul(2).max(8))
+                .unwrap_or(8);
+            let mut body_ops = Vec::with_capacity(estimated_body_ops);
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
@@ -2958,10 +2964,15 @@ pub fn lower_ir2_to_ir3(
 
     let ir2_hash = ir2.content_hash();
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
+    // perf: pre-size instruction Vec based on IR2 ops count to avoid reallocations
+    // Heuristic: ~2-3 IR3 instructions per IR2 op on average
+    let estimated_instruction_count = ir2.ops.len().saturating_mul(3).max(64);
+    ir3.instructions.reserve(estimated_instruction_count);
     let mut register_cursor: Reg = 0;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
-    let mut value_stack: Vec<Reg> = Vec::new();
+    // perf: pre-size value stack based on estimated expression nesting depth
+    let mut value_stack: Vec<Reg> = Vec::with_capacity(32);
     let mut label_targets = BTreeMap::<u32, u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
@@ -4195,7 +4206,8 @@ pub fn lower_ir2_to_ir3(
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
-        let mut fn_value_stack: Vec<Reg> = Vec::new();
+        // perf: pre-size function value stack for expression nesting
+        let mut fn_value_stack: Vec<Reg> = Vec::with_capacity(16);
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();

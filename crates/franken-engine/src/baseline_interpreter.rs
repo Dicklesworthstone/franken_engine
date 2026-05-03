@@ -55,9 +55,10 @@ use crate::checkpoint::{
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
+use crate::ifc_artifacts::Label;
 use crate::ir_contract::{
-    CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
-    WitnessEvent, WitnessEventKind,
+    CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
+    IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
@@ -68,8 +69,6 @@ use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
 use crate::stdlib::normalize_unicode_string;
-use crate::ifc_artifacts::Label;
-use crate::gc::{GcCollector, GcConfig};
 
 // ---------------------------------------------------------------------------
 // WeakMap Storage - Weak Reference Implementation
@@ -214,14 +213,15 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
 /// Shared capability gate logic for both Call and HostCall instructions.
 /// Checks if the given capability is allowed and records witness events/decisions.
 fn check_hostcall_capability_gate(
-    interpreter: &mut BaselineInterpreter,
+    interpreter: &mut InterpreterCore,
     capability_tag: &str,
     instruction_index: u32,
 ) -> Result<(), InterpreterError> {
     let capability_denied = match classify_hostcall_capability(capability_tag) {
-        HostcallCapabilityClass::Runtime(required_cap) => {
-            !interpreter.config.granted_capabilities.contains(&required_cap)
-        }
+        HostcallCapabilityClass::Runtime(required_cap) => !interpreter
+            .config
+            .granted_capabilities
+            .contains(&required_cap),
         HostcallCapabilityClass::InternalAllowed => false,
         HostcallCapabilityClass::Unknown => true, // fail-closed on unknown tags
     };
@@ -2011,11 +2011,21 @@ enum PromiseSettlement {
 pub struct JitStatistics(pub usize, pub usize, pub u64, pub u64, pub u64);
 
 impl JitStatistics {
-    pub fn function_counts_len(&self) -> usize { self.0 }
-    pub fn loop_counts_len(&self) -> usize { self.1 }
-    pub fn hot_threshold(&self) -> u64 { self.2 }
-    pub fn eviction_counter(&self) -> u64 { self.3 }
-    pub fn total_function_calls(&self) -> u64 { self.4 }
+    pub fn function_counts_len(&self) -> usize {
+        self.0
+    }
+    pub fn loop_counts_len(&self) -> usize {
+        self.1
+    }
+    pub fn hot_threshold(&self) -> u64 {
+        self.2
+    }
+    pub fn eviction_counter(&self) -> u64 {
+        self.3
+    }
+    pub fn total_function_calls(&self) -> u64 {
+        self.4
+    }
 }
 
 // Allow destructuring as (usize, usize, u64, u64)
@@ -2246,29 +2256,46 @@ impl InterpreterCore {
 
     /// Get the IFC label for a register.
     pub fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
-        self.register_labels
-            .get(reg as usize)
-            .ok_or_else(|| InterpreterError::InvalidRegister { register: reg })
+        self.register_labels.get(reg as usize).ok_or_else(|| {
+            InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.register_labels.len() as u32,
+            }
+        })
     }
 
     /// Set the IFC label for a register.
     pub fn set_register_label(&mut self, reg: u32, label: Label) -> Result<(), InterpreterError> {
         if reg as usize >= self.register_labels.len() {
-            return Err(InterpreterError::InvalidRegister { register: reg });
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.register_labels.len() as u32,
+            });
         }
         self.register_labels[reg as usize] = label;
         Ok(())
     }
 
     /// Propagate IFC labels through binary operations (join of operand labels).
-    fn propagate_binary_operation_label(&mut self, lhs: u32, rhs: u32, dst: u32) -> Result<(), InterpreterError> {
+    fn propagate_binary_operation_label(
+        &mut self,
+        lhs: u32,
+        rhs: u32,
+        dst: u32,
+    ) -> Result<(), InterpreterError> {
         // perf: hot path - avoid cloning labels, join() already clones internally
-        let result_label = self.get_register_label(lhs)?.join(self.get_register_label(rhs)?);
+        let result_label = self
+            .get_register_label(lhs)?
+            .join(self.get_register_label(rhs)?);
         self.set_register_label(dst, result_label)
     }
 
     /// Propagate IFC labels through unary operations (preserve operand label).
-    fn propagate_unary_operation_label(&mut self, src: u32, dst: u32) -> Result<(), InterpreterError> {
+    fn propagate_unary_operation_label(
+        &mut self,
+        src: u32,
+        dst: u32,
+    ) -> Result<(), InterpreterError> {
         // perf: hot path - clone only when setting, not for intermediate variable
         self.set_register_label(dst, self.get_register_label(src)?.clone())
     }
@@ -2298,8 +2325,7 @@ impl InterpreterCore {
         self.gc_remembered_set.len()
     }
 
-    /// Get a copy of the remembered set for inspection (for testing).
-    #[cfg(test)]
+    /// Get a copy of the remembered set for inspection and diagnostics.
     pub fn gc_get_remembered_set(&self) -> &BTreeSet<ObjectId> {
         &self.gc_remembered_set
     }
@@ -2310,12 +2336,18 @@ impl InterpreterCore {
 
     /// Record a function call and check if it should be promoted to hot tier.
     fn jit_record_function_call(&mut self, function_id: u32) -> bool {
-        let count = self.jit_function_call_counts.entry(function_id).or_insert(0);
-        *count += 1;
+        let count = {
+            let count = self
+                .jit_function_call_counts
+                .entry(function_id)
+                .or_insert(0);
+            *count += 1;
+            *count
+        };
 
         // Check if threshold crossed for tier promotion
-        if *count == self.jit_hot_threshold {
-            self.emit_tier_promotion_event(function_id, *count);
+        if count == self.jit_hot_threshold {
+            self.emit_tier_promotion_event(function_id, count);
             true // Function is now hot
         } else {
             false
@@ -2324,7 +2356,10 @@ impl InterpreterCore {
 
     /// Record a loop iteration at backedge and check for hot loop promotion.
     fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
-        let count = self.jit_loop_iteration_counts.entry(instruction_index).or_insert(0);
+        let count = self
+            .jit_loop_iteration_counts
+            .entry(instruction_index)
+            .or_insert(0);
         *count += 1;
 
         // Check if threshold crossed for hot loop tier promotion
@@ -2333,12 +2368,18 @@ impl InterpreterCore {
 
     /// Get the current call count for a function.
     pub fn jit_get_function_call_count(&self, function_id: u32) -> u64 {
-        self.jit_function_call_counts.get(&function_id).copied().unwrap_or(0)
+        self.jit_function_call_counts
+            .get(&function_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Get the current iteration count for a loop backedge.
     pub fn jit_get_loop_iteration_count(&self, instruction_index: usize) -> u64 {
-        self.jit_loop_iteration_counts.get(&instruction_index).copied().unwrap_or(0)
+        self.jit_loop_iteration_counts
+            .get(&instruction_index)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Configure the hot threshold for tier promotion.
@@ -2369,10 +2410,12 @@ impl InterpreterCore {
         self.jit_eviction_counter += 1;
         if self.jit_eviction_counter % EVICTION_FREQUENCY == 0 {
             // Remove functions that haven't crossed the cold threshold
-            self.jit_function_call_counts.retain(|_function_id, count| *count > COLD_THRESHOLD);
+            self.jit_function_call_counts
+                .retain(|_function_id, count| *count > COLD_THRESHOLD);
 
             // Also evict cold loops
-            self.jit_loop_iteration_counts.retain(|_index, count| *count > COLD_THRESHOLD);
+            self.jit_loop_iteration_counts
+                .retain(|_index, count| *count > COLD_THRESHOLD);
         }
     }
 
@@ -2381,13 +2424,19 @@ impl InterpreterCore {
         // Emit witness event for tier promotion
         self.emit_witness(
             WitnessEventKind::HostcallDispatched, // Reuse existing event type
-            Some(&format!("tier_promotion:function_{}:count_{}", function_id, call_count)),
+            Some(&format!(
+                "tier_promotion:function_{}:count_{}",
+                function_id, call_count
+            )),
         );
 
         // Could also emit console log for debugging
         self.push_console_output(
             ConsoleLevel::Info,
-            format!("JIT: Function {} promoted to hot tier (count: {})", function_id, call_count),
+            format!(
+                "JIT: Function {} promoted to hot tier (count: {})",
+                function_id, call_count
+            ),
         );
     }
 
@@ -2403,100 +2452,6 @@ impl InterpreterCore {
     }
 
     /// Clear all JIT counters (for testing).
-    pub fn jit_clear_counters(&mut self) {
-        self.jit_function_call_counts.clear();
-        self.jit_loop_iteration_counts.clear();
-        self.jit_eviction_counter = 0;
-    }
-
-    /// Get the captured console output entries.
-    pub fn console_output(&self) -> &[ConsoleEntry] {
-        &self.console_output
-    }
-
-
-    /// Record a loop iteration at backedge and check for hot loop promotion.
-    fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
-        let count = self.jit_loop_iteration_counts.entry(instruction_index).or_insert(0);
-        *count += 1;
-
-        // Check if threshold crossed for hot loop tier promotion
-        *count >= self.jit_hot_threshold
-    }
-
-    /// Get the current call count for a function.
-    pub fn jit_get_function_call_count(&self, function_id: u32) -> u64 {
-        self.jit_function_call_counts.get(&function_id).copied().unwrap_or(0)
-    }
-
-    /// Get the current iteration count for a loop backedge.
-    pub fn jit_get_loop_iteration_count(&self, instruction_index: usize) -> u64 {
-        self.jit_loop_iteration_counts.get(&instruction_index).copied().unwrap_or(0)
-    }
-
-    /// Configure the hot threshold for tier promotion.
-    pub fn jit_set_hot_threshold(&mut self, threshold: u64) {
-        self.jit_hot_threshold = threshold.max(1); // Minimum threshold of 1
-    }
-
-    /// Get the current hot threshold.
-    pub fn jit_get_hot_threshold(&self) -> u64 {
-        self.jit_hot_threshold
-    }
-
-    /// Check if a function is considered hot (above threshold).
-    pub fn jit_is_function_hot(&self, function_id: u32) -> bool {
-        self.jit_get_function_call_count(function_id) >= self.jit_hot_threshold
-    }
-
-    /// Check if a loop is considered hot (above threshold).
-    pub fn jit_is_loop_hot(&self, instruction_index: usize) -> bool {
-        self.jit_get_loop_iteration_count(instruction_index) >= self.jit_hot_threshold
-    }
-
-    /// Evict cold functions to implement decay policy (called periodically).
-    pub fn jit_evict_cold_functions(&mut self) {
-        const EVICTION_FREQUENCY: u64 = 50_000; // Evict every 50k calls
-        const COLD_THRESHOLD: u64 = 10; // Functions with <= 10 calls are cold
-
-        self.jit_eviction_counter += 1;
-        if self.jit_eviction_counter % EVICTION_FREQUENCY == 0 {
-            // Remove functions that haven't crossed the cold threshold
-            self.jit_function_call_counts.retain(|_function_id, count| *count > COLD_THRESHOLD);
-
-            // Also evict cold loops
-            self.jit_loop_iteration_counts.retain(|_index, count| *count > COLD_THRESHOLD);
-        }
-    }
-
-    /// Emit a tier promotion event when a function or loop crosses the hot threshold.
-    fn emit_tier_promotion_event(&mut self, function_id: u32, call_count: u64) {
-        // Emit witness event for tier promotion
-        self.emit_witness(
-            WitnessEventKind::HostcallDispatched, // Reuse existing event type
-            Some(&format!("tier_promotion:function_{}:count_{}", function_id, call_count)),
-        );
-
-        // Could also emit console log for debugging
-        self.push_console_output(
-            ConsoleLevel::Info,
-            format!("JIT: Function {} promoted to hot tier (count: {})", function_id, call_count),
-        );
-    }
-
-    /// Get JIT statistics for testing and debugging.
-    #[cfg(test)]
-    pub fn jit_get_statistics(&self) -> (usize, usize, u64, u64) {
-        (
-            self.jit_function_call_counts.len(),
-            self.jit_loop_iteration_counts.len(),
-            self.jit_hot_threshold,
-            self.jit_eviction_counter,
-        )
-    }
-
-    /// Clear all JIT counters (for testing).
-    #[cfg(test)]
     pub fn jit_clear_counters(&mut self) {
         self.jit_function_call_counts.clear();
         self.jit_loop_iteration_counts.clear();
@@ -2594,7 +2549,7 @@ impl InterpreterCore {
 
         self.push_event("execution_started", "ok", None);
 
-        Ok(entry_specifier)
+        Ok(module.header.source_label.clone())
     }
 
     fn run_top_level_execution(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -3649,21 +3604,6 @@ impl InterpreterCore {
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
         async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
 
-        // Register a promise reaction to resume when the awaited promise settles
-        let resume_reaction = crate::promise_model::PromiseReaction {
-            kind: crate::promise_model::ReactionKind::Fulfill,
-            handler: None, // Special handler - will be processed by the async resumption logic
-            result_promise: crate::promise_model::PromiseHandle(async_function.result_promise),
-            label: crate::ifc_artifacts::Label::Public, // TODO: proper label propagation
-        };
-
-        let reject_reaction = crate::promise_model::PromiseReaction {
-            kind: crate::promise_model::ReactionKind::Reject,
-            handler: None,
-            result_promise: crate::promise_model::PromiseHandle(async_function.result_promise),
-            label: crate::ifc_artifacts::Label::Public,
-        };
-
         // Store metadata about the resumption context
         let resumption_data = AsyncResumptionContext {
             async_function_id,
@@ -3675,18 +3615,19 @@ impl InterpreterCore {
             .insert(promise_handle.0, resumption_data);
 
         // Register the reactions with the awaited promise using the public then method
-        let _result_promise = self.promise_store.then(
-            promise_handle,
-            None, // on_fulfilled - use None to trigger async resumption path
-            None, // on_rejected - use None to trigger async resumption path
-            crate::ifc_artifacts::Label::Public,
-            &mut self.event_loop.microtasks,
-        ).map_err(|e| {
-            InterpreterError::TypeError {
+        let _result_promise = self
+            .promise_store
+            .then(
+                promise_handle,
+                None, // on_fulfilled - use None to trigger async resumption path
+                None, // on_rejected - use None to trigger async resumption path
+                crate::ifc_artifacts::Label::Public,
+                &mut self.event_loop.microtasks,
+            )
+            .map_err(|e| InterpreterError::TypeError {
                 expected: "valid promise".to_string(),
                 got: e.to_string(),
-            }
-        })?;
+            })?;
 
         Ok(())
     }
@@ -3748,7 +3689,9 @@ impl InterpreterCore {
         // Store the settled value in the result register
         let resolved_value = match microtask {
             crate::promise_model::Microtask::PromiseReaction {
-                handler: None, argument, ..
+                handler: None,
+                argument,
+                ..
             } => {
                 // Determine if this was a fulfillment or rejection based on the task type
                 // For now, we assume fulfillment. A proper implementation would need
@@ -5390,6 +5333,7 @@ impl InterpreterCore {
                     );
 
                     // Dispatch promise hostcalls to the promise subsystem.
+                    let is_promise_cap = capability.0.starts_with("promise:");
                     let result = if is_promise_cap {
                         self.dispatch_promise_hostcall(&capability.0, args)?
                     } else if capability.0 == "module:require" {
@@ -5600,6 +5544,77 @@ impl InterpreterCore {
                             }
                         }
                     }
+                    self.ip += 1;
+                }
+                Ir3Instruction::ArraySlice { array, start, dst } => {
+                    let arr_val = self.read_reg(array)?;
+                    let start_val = self.read_reg(start)?;
+                    let Value::Object(arr_id) = arr_val else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "array object".to_string(),
+                            got: arr_val.type_name().to_string(),
+                        });
+                    };
+
+                    let elements: Vec<Value> = {
+                        let obj = self
+                            .heap
+                            .get(arr_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: arr_id.0 })?;
+                        let length = obj
+                            .properties
+                            .get("length")
+                            .and_then(|value| match value {
+                                Value::Int(n) if *n > 0 => usize::try_from(*n).ok(),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                obj.properties
+                                    .keys()
+                                    .filter_map(|key| key.parse::<usize>().ok())
+                                    .max()
+                                    .map_or(0, |index| index.saturating_add(1))
+                            });
+                        (0..length)
+                            .map(|index| {
+                                obj.properties
+                                    .get(&index.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            })
+                            .collect()
+                    };
+
+                    let length = elements.len();
+                    let start_idx = match start_val {
+                        Value::Undefined | Value::Null => 0,
+                        Value::Bool(false) => 0,
+                        Value::Bool(true) => 1usize.min(length),
+                        Value::Int(n) if n < 0 => {
+                            usize::try_from((length as i64).saturating_add(n).max(0)).unwrap_or(0)
+                        }
+                        Value::Int(n) => usize::try_from(n).unwrap_or(usize::MAX).min(length),
+                        Value::Float(f) => {
+                            let value = f.inner();
+                            if !value.is_finite() {
+                                0
+                            } else if value < 0.0 {
+                                ((length as f64) + value).max(0.0) as usize
+                            } else {
+                                (value as usize).min(length)
+                            }
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "integer-compatible array slice start".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    };
+
+                    let result_values: Vec<Value> = elements.into_iter().skip(start_idx).collect();
+                    let result_id = self.alloc_array_from_values(&result_values)?;
+                    self.write_reg(dst, Value::Object(result_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
@@ -7683,31 +7698,35 @@ impl InterpreterCore {
                 // Capture descriptor resolution decision for deterministic replay
                 self.nondeterminism_trace.capture(
                     NondeterminismSource::PropertyResolution,
-                    format!("descriptor_chain_limit_reached:key={},depth={}", key, depth).into_bytes(),
+                    format!("descriptor_chain_limit_reached:key={},depth={}", key, depth)
+                        .into_bytes(),
                     self.instructions_executed,
                     "baseline_interpreter",
                 );
                 return Ok(Value::Undefined);
             }
 
-            let object = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            let (descriptor_source, next_prototype) = {
+                let object = self
+                    .heap
+                    .get(id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                (
+                    object
+                        .properties
+                        .get(key)
+                        .cloned()
+                        .map(|value| (value, object.is_frozen)),
+                    object.prototype,
+                )
+            };
 
-            if let Some(value) = object.properties.get(key) {
+            if let Some((value, is_frozen)) = descriptor_source {
                 // Found the property - create and return a property descriptor
                 let descriptor_id = self.alloc_object_with_prototype(None)?;
 
-                // Check if object is frozen to set correct writable/configurable flags
-                let is_frozen = object.is_frozen;
-
                 // Set descriptor properties
-                self.set_object_property(
-                    descriptor_id,
-                    "value".to_string(),
-                    value.clone(),
-                )?;
+                self.set_object_property(descriptor_id, "value".to_string(), value)?;
                 self.set_object_property(
                     descriptor_id,
                     "writable".to_string(),
@@ -7739,7 +7758,7 @@ impl InterpreterCore {
                 return Ok(Value::Object(descriptor_id));
             }
 
-            current = object.prototype;
+            current = next_prototype;
             depth += 1;
         }
 
@@ -8834,30 +8853,41 @@ impl InterpreterCore {
                     handler,
                     argument,
                     result_promise,
-                    label: ref _task_label,
+                    label: _task_label,
                 } => {
                     // Check if this is an async function resumption
                     if handler.is_none() {
                         // Check if there's an async resumption context for this promise
-                        if let Some(resumption_context) = self.async_resumption_contexts.remove(&result_promise.0) {
+                        if let Some(resumption_context) =
+                            self.async_resumption_contexts.remove(&result_promise.0)
+                        {
                             // Resume the async function
                             if let Err(_) = self.resume_async_function_after_await(
                                 resumption_context,
                                 argument.clone(),
-                                &task
+                                &task,
                             ) {
                                 // If resumption fails, just fulfill the result promise
-                                let _ = self.fulfill_promise(*result_promise, argument.clone(), label.clone());
+                                let _ = self.fulfill_promise(
+                                    *result_promise,
+                                    argument.clone(),
+                                    label.clone(),
+                                );
                             }
                         } else {
                             // With no closure handler, the identity transform propagates
                             // the argument to the result promise as a fulfillment value.
-                            let _ = self.fulfill_promise(*result_promise, argument.clone(), label.clone());
+                            let _ = self.fulfill_promise(
+                                *result_promise,
+                                argument.clone(),
+                                label.clone(),
+                            );
                         }
                     } else {
                         // Regular promise reaction with a closure handler
                         // TODO: Implement closure execution for promise reactions
-                        let _ = self.fulfill_promise(*result_promise, argument.clone(), label.clone());
+                        let _ =
+                            self.fulfill_promise(*result_promise, argument.clone(), label.clone());
                     }
                 }
                 crate::promise_model::Microtask::ResolveThenable {
@@ -8932,52 +8962,14 @@ impl InterpreterCore {
         use crate::ir_contract::WitnessEventKind;
         self.emit_witness(
             WitnessEventKind::ExecutionCompleted,
-            Some(&format!("timer_closure_{}_simplified", closure.function_index)),
+            Some(&format!(
+                "timer_closure_{}_simplified",
+                closure.function_index
+            )),
         );
 
         // Timer callbacks return undefined by convention
         Ok(Value::Undefined)
-    }
-
-        // Restore execution state regardless of success/failure
-        self.ip = saved_ip;
-
-        // Handle the result and clean up the call frame
-        match execution_result {
-            Ok(return_value) => {
-                // Pop the timer callback frame
-                if let Some(frame) = self.call_stack.pop() {
-                    self.restore_call_frame_state(&frame);
-                }
-
-                // Emit witness event for successful timer execution
-                use crate::ir_contract::WitnessEventKind;
-                self.emit_witness(
-                    WitnessEventKind::ExecutionCompleted,
-                    Some(&format!("timer_closure_{}", closure.function_index)),
-                );
-
-                Ok(return_value)
-            }
-            Err(err) => {
-                // Pop the timer callback frame even on error
-                if let Some(frame) = self.call_stack.pop() {
-                    self.restore_call_frame_state(&frame);
-                }
-
-                // Emit witness event for failed timer execution
-                use crate::ir_contract::WitnessEventKind;
-                self.emit_witness(
-                    WitnessEventKind::ExceptionRaised,
-                    Some(&format!("timer_closure_{}_error", closure.function_index)),
-                );
-
-                // Timer callback exceptions should not propagate - log and continue
-                // This matches browser behavior where timer callback errors are logged but don't crash
-                eprintln!("Timer callback execution failed: {err:?}");
-                Ok(Value::Undefined)
-            }
-        }
     }
 
     fn property_key(value: &Value) -> String {
@@ -8989,15 +8981,18 @@ impl InterpreterCore {
     }
 
     fn property_key_from_value(&self, value: &Value) -> String {
-        if let Value::Object(object_id) = value
-            && let Some(object) = self.heap.get(object_id.0 as usize)
-            && matches!(
-                object.properties.get("__type"),
-                Some(Value::Str(kind)) if kind == "Symbol"
-            )
-            && let Some(Value::Str(key)) = object.properties.get("__key")
-        {
-            return key.clone();
+        if let Value::Object(object_id) = value {
+            if let Some(object) = self.heap.get(object_id.0 as usize) {
+                let is_symbol = matches!(
+                    object.properties.get("__type"),
+                    Some(Value::Str(kind)) if kind == "Symbol"
+                );
+                if is_symbol {
+                    if let Some(Value::Str(key)) = object.properties.get("__key") {
+                        return key.clone();
+                    }
+                }
+            }
         }
 
         Self::property_key(value)
@@ -11333,12 +11328,14 @@ impl InterpreterCore {
                 let obj_val = self.read_reg(args.start)?;
                 match obj_val {
                     Value::Object(obj_id) => {
-                        let is_frozen = self.heap.get(obj_id.0 as usize)
+                        let is_frozen = self
+                            .heap
+                            .get(obj_id.0 as usize)
                             .map(|obj| obj.is_frozen)
                             .ok_or_else(|| InterpreterError::TypeError {
-                                expected: "valid object".to_string(),
-                                got: "object not found".to_string(),
-                            })?;
+                            expected: "valid object".to_string(),
+                            got: "object not found".to_string(),
+                        })?;
                         Ok(Value::Bool(is_frozen))
                     }
                     _ => {
@@ -12762,11 +12759,7 @@ impl InterpreterCore {
 
                 // Generate and set stack trace property (bd-2fx18)
                 let stack_trace = self.format_stack_trace();
-                self.set_object_property(
-                    error_id,
-                    "stack".to_string(),
-                    Value::Str(stack_trace)
-                )?;
+                self.set_object_property(error_id, "stack".to_string(), Value::Str(stack_trace))?;
 
                 Ok(Value::Object(error_id))
             }
@@ -13607,7 +13600,8 @@ impl InterpreterCore {
                 )?;
 
                 // Initialize weak reference storage for this WeakMap
-                self.weakmap_storage.insert(weakmap_id, WeakMapStorage::new());
+                self.weakmap_storage
+                    .insert(weakmap_id, WeakMapStorage::new());
 
                 // Handle iterable initialization for WeakMap
                 if args.count > 0 {
@@ -14676,7 +14670,11 @@ impl InterpreterCore {
                     if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
                         if type_val == "Date" {
                             // Use locale-aware formatting with default en-US locale
-                            return self.format_date_with_locale(this_val, "en-US", DateFormatType::DateTime);
+                            return self.format_date_with_locale(
+                                this_val,
+                                "en-US",
+                                DateFormatType::DateTime,
+                            );
                         }
                     }
                 }
@@ -15014,7 +15012,7 @@ impl InterpreterCore {
 
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_key = match prop_val {
-                    Value::String(s) => s,
+                    Value::Str(s) => s,
                     _ => return Ok(Value::Undefined), // Non-string property keys not supported yet
                 };
 
@@ -16724,33 +16722,6 @@ impl InterpreterCore {
                 Ok(Value::Object(array_id))
             }
 
-            "builtin:ObjectIsFrozen" => {
-                // Object.isFrozen(obj) implementation (simplified)
-                if args.count < 2 {
-                    return Ok(Value::Bool(true)); // Default to true for missing argument
-                }
-
-                let obj_val = self.read_reg(args.start + 1)?;
-                match obj_val {
-                    Value::Object(obj_id) => {
-                        // Simplified implementation: check if object has frozen marker
-                        if let Some(obj) = self.heap.get(obj_id.0 as usize) {
-                            if let Some(Value::Bool(frozen)) = obj.properties.get("__frozen__") {
-                                Ok(Value::Bool(*frozen))
-                            } else {
-                                Ok(Value::Bool(false)) // Not frozen by default
-                            }
-                        } else {
-                            Ok(Value::Bool(false))
-                        }
-                    }
-                    _ => {
-                        // Primitives are considered frozen
-                        Ok(Value::Bool(true))
-                    }
-                }
-            }
-
             "builtin:StringPrototypeAnchor" => {
                 // String.prototype.anchor(name) implementation (deprecated HTML wrapper)
                 let this_val = self.read_reg(args.start)?;
@@ -17281,11 +17252,7 @@ impl InterpreterCore {
                     };
 
                     // Set result in new array
-                    self.set_object_property(
-                        result_array_id,
-                        index.to_string(),
-                        mapped_result,
-                    )?;
+                    self.set_object_property(result_array_id, index.to_string(), mapped_result)?;
                 }
 
                 // Set result array length
@@ -17992,7 +17959,8 @@ impl InterpreterCore {
             .get(weakmap_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
 
-        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap") {
+        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap")
+        {
             return Err(InterpreterError::TypeError {
                 expected: "WeakMap".to_string(),
                 got: "object".to_string(),
@@ -18010,6 +17978,7 @@ impl InterpreterCore {
         Ok(weakmap_id)
     }
 
+    #[allow(dead_code)]
     fn weakmap_entries_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
         let weakmap_id = match receiver {
             Value::Object(object_id) => object_id,
@@ -18788,7 +18757,8 @@ impl InterpreterCore {
             // repeated register writes. Reserve 25% growth buffer for subsequent
             // calls within the same function frame.
             let growth_capacity = new_len + (new_len >> 2);
-            self.registers.reserve(growth_capacity.saturating_sub(self.registers.capacity()));
+            self.registers
+                .reserve(growth_capacity.saturating_sub(self.registers.capacity()));
             self.registers.resize(new_len, Value::Undefined);
         }
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
@@ -19234,7 +19204,7 @@ impl InterpreterCore {
         }
     }
 
-    fn set_object_property(
+    pub fn set_object_property(
         &mut self,
         object_id: ObjectId,
         key: String,
@@ -19606,7 +19576,10 @@ impl StackFrameInfo {
         }
 
         let location = if self.line_number > 0 && self.column_number > 0 {
-            format!("{}:{}:{}", self.file_name, self.line_number, self.column_number)
+            format!(
+                "{}:{}:{}",
+                self.file_name, self.line_number, self.column_number
+            )
         } else if self.line_number > 0 {
             format!("{}:{}", self.file_name, self.line_number)
         } else {
@@ -19630,7 +19603,10 @@ impl InterpreterCore {
     }
 
     /// Capture current call stack frames.
-    fn capture_stack_frames(&self, config: &StackTraceConfig) -> std::collections::BTreeSet<(usize, StackFrameInfo)> {
+    fn capture_stack_frames(
+        &self,
+        config: &StackTraceConfig,
+    ) -> std::collections::BTreeSet<(usize, StackFrameInfo)> {
         let mut frames = std::collections::BTreeSet::new();
 
         // Add current frame based on IP
@@ -19649,7 +19625,8 @@ impl InterpreterCore {
             // Add async boundary if this is an async function frame
             if config.include_async_frames && call_frame.async_function_id.is_some() {
                 if frames.len() < config.max_frames {
-                    let async_frame = StackFrameInfo::new("<async>".to_string()).as_async_boundary();
+                    let async_frame =
+                        StackFrameInfo::new("<async>".to_string()).as_async_boundary();
                     frames.insert((index + 2, async_frame));
                 }
             }
@@ -19661,10 +19638,13 @@ impl InterpreterCore {
     /// Capture information about the current executing frame.
     fn capture_current_frame(&self) -> StackFrameInfo {
         // Try to determine current function name from call stack
-        let function_name = self.get_current_function_name().unwrap_or_else(|| "<anonymous>".to_string());
+        let function_name = self
+            .get_current_function_name()
+            .unwrap_or_else(|| "<anonymous>".to_string());
 
         // Use current module specifier as source file
-        let source_file = self.current_module_specifier
+        let source_file = self
+            .current_module_specifier
             .as_ref()
             .map(|spec| format!("{}.js", spec))
             .unwrap_or_else(|| "<unknown>".to_string());
@@ -19681,7 +19661,11 @@ impl InterpreterCore {
     }
 
     /// Capture information about a call frame from the call stack.
-    fn capture_call_frame_info(&self, call_frame: &CallFrame, frame_index: usize) -> StackFrameInfo {
+    fn capture_call_frame_info(
+        &self,
+        call_frame: &CallFrame,
+        frame_index: usize,
+    ) -> StackFrameInfo {
         // Extract function name from function index if available
         let function_name = if let Some(func_idx) = call_frame.function_index {
             format!("function_{}", func_idx)
@@ -19690,7 +19674,8 @@ impl InterpreterCore {
         };
 
         // Use current module specifier as source file
-        let source_file = self.current_module_specifier
+        let source_file = self
+            .current_module_specifier
             .as_ref()
             .map(|spec| format!("{}.js", spec))
             .unwrap_or_else(|| "<unknown>".to_string());
@@ -19698,27 +19683,22 @@ impl InterpreterCore {
         // Use return IP as approximate line number
         let line_number = (call_frame.return_ip as u32).saturating_add(1);
 
-        StackFrameInfo::with_location(
-            function_name,
-            source_file,
-            line_number,
-            1,
-        )
+        StackFrameInfo::with_location(function_name, source_file, line_number, 1)
     }
 
     /// Get the name of the currently executing function.
     fn get_current_function_name(&self) -> Option<String> {
         // Look up function name from the current call frame
-        self.call_stack.last().and_then(|frame| {
-            frame.function_index.map(|idx| format!("function_{}", idx))
-        })
+        self.call_stack
+            .last()
+            .and_then(|frame| frame.function_index.map(|idx| format!("function_{}", idx)))
     }
 
     /// Format captured frames into a complete stack trace string.
     fn format_captured_frames(
         &self,
         frames: &std::collections::BTreeSet<(usize, StackFrameInfo)>,
-        config: &StackTraceConfig
+        config: &StackTraceConfig,
     ) -> String {
         let mut result = String::new();
         let mut frame_count = 0;
@@ -20125,48 +20105,83 @@ impl InterpreterCore {
         match locale {
             "en-US" => LocaleData {
                 month_names: &[
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
                 ],
                 month_names_short: &[
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
                 ],
                 day_names: &[
-                    "Sunday", "Monday", "Tuesday", "Wednesday",
-                    "Thursday", "Friday", "Saturday"
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
                 ],
                 day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
                 date_order: DateOrder::MDY,
             },
             "en-GB" => LocaleData {
                 month_names: &[
-                    "January", "February", "March", "April", "May", "June",
-                    "July", "August", "September", "October", "November", "December"
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
                 ],
                 month_names_short: &[
-                    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+                    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                    "Dec",
                 ],
                 day_names: &[
-                    "Sunday", "Monday", "Tuesday", "Wednesday",
-                    "Thursday", "Friday", "Saturday"
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
                 ],
                 day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
                 date_order: DateOrder::DMY,
             },
             "ja-JP" => LocaleData {
                 month_names: &[
-                    "1月", "2月", "3月", "4月", "5月", "6月",
-                    "7月", "8月", "9月", "10月", "11月", "12月"
+                    "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
+                    "12月",
                 ],
                 month_names_short: &[
-                    "1月", "2月", "3月", "4月", "5月", "6月",
-                    "7月", "8月", "9月", "10月", "11月", "12月"
+                    "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月",
+                    "12月",
                 ],
                 day_names: &[
-                    "日曜日", "月曜日", "火曜日", "水曜日",
-                    "木曜日", "金曜日", "土曜日"
+                    "日曜日",
+                    "月曜日",
+                    "火曜日",
+                    "水曜日",
+                    "木曜日",
+                    "金曜日",
+                    "土曜日",
                 ],
                 day_names_short: &["日", "月", "火", "水", "木", "金", "土"],
                 date_order: DateOrder::YMD,
@@ -20179,7 +20194,12 @@ impl InterpreterCore {
     }
 
     /// Format a date object according to locale-specific rules
-    fn format_date_with_locale(&self, date_val: Value, locale: &str, format_type: DateFormatType) -> Result<Value, InterpreterError> {
+    fn format_date_with_locale(
+        &self,
+        date_val: Value,
+        locale: &str,
+        format_type: DateFormatType,
+    ) -> Result<Value, InterpreterError> {
         let date_id = match date_val {
             Value::Object(id) => id,
             _ => return Ok(Value::Str("Invalid Date".to_string())),
@@ -20189,16 +20209,21 @@ impl InterpreterCore {
         if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
             if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
                 if type_val == "Date" {
-                    let timestamp = if let Some(Value::Float(timestamp)) = date_obj.properties.get("__timestamp") {
+                    let timestamp = if let Some(Value::Float(timestamp)) =
+                        date_obj.properties.get("__timestamp")
+                    {
                         timestamp.inner() as i64
-                    } else if let Some(Value::Int(timestamp)) = date_obj.properties.get("__timestamp") {
+                    } else if let Some(Value::Int(timestamp)) =
+                        date_obj.properties.get("__timestamp")
+                    {
                         *timestamp
                     } else {
                         return Ok(Value::Str("Invalid Date".to_string()));
                     };
 
                     let locale_data = Self::get_locale_data(locale);
-                    let formatted = self.format_timestamp_with_locale(timestamp, locale_data, format_type);
+                    let formatted =
+                        self.format_timestamp_with_locale(timestamp, locale_data, format_type);
                     return Ok(Value::Str(formatted));
                 }
             }
@@ -20208,7 +20233,12 @@ impl InterpreterCore {
     }
 
     /// Format a Unix timestamp (milliseconds) according to locale rules
-    fn format_timestamp_with_locale(&self, timestamp_ms: i64, locale_data: LocaleData, format_type: DateFormatType) -> String {
+    fn format_timestamp_with_locale(
+        &self,
+        timestamp_ms: i64,
+        locale_data: LocaleData,
+        format_type: DateFormatType,
+    ) -> String {
         // Convert timestamp to date components
         // Simplified date calculation for demonstration (real implementation would use proper date arithmetic)
         let days_since_epoch = timestamp_ms / (1000 * 60 * 60 * 24);
@@ -20230,7 +20260,11 @@ impl InterpreterCore {
         }
 
         // Simplified month/day calculation
-        let month = if remaining_days >= 31 { (remaining_days / 30).min(11) } else { 0 };
+        let month = if remaining_days >= 31 {
+            (remaining_days / 30).min(11)
+        } else {
+            0
+        };
         let day = (remaining_days % 30) + 1;
 
         let day_of_week = (days_since_epoch + 4) % 7; // January 1, 1970 was Thursday (4)
@@ -20243,7 +20277,13 @@ impl InterpreterCore {
                 format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
             }
             DateFormatType::DateTime => {
-                let date_part = self.format_date_part(year, month as usize, day, day_of_week as usize, locale_data);
+                let date_part = self.format_date_part(
+                    year,
+                    month as usize,
+                    day,
+                    day_of_week as usize,
+                    locale_data,
+                );
                 let time_part = format!("{:02}:{:02}:{:02}", hours, minutes, seconds);
                 format!("{} {}", date_part, time_part)
             }
@@ -20251,8 +20291,17 @@ impl InterpreterCore {
     }
 
     /// Format the date part according to locale ordering and month names
-    fn format_date_part(&self, year: i64, month: usize, day: i64, day_of_week: usize, locale_data: LocaleData) -> String {
-        let month_name = locale_data.month_names_short[month.min(11)];
+    fn format_date_part(
+        &self,
+        year: i64,
+        month: usize,
+        day: i64,
+        day_of_week: usize,
+        locale_data: LocaleData,
+    ) -> String {
+        let _long_month_name = locale_data.month_names[month.min(11)];
+        let _month_name = locale_data.month_names_short[month.min(11)];
+        let _long_day_name = locale_data.day_names[day_of_week % 7];
         let day_name = locale_data.day_names_short[day_of_week % 7];
 
         match locale_data.date_order {
@@ -30419,3 +30468,4 @@ mod tests {
             "burst writes must not introduce drift"
         );
     }
+}

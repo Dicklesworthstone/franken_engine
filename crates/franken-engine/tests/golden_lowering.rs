@@ -157,3 +157,12 @@ fn golden_lowering_generator_function() {
         goal: ParseGoal::Script,
     });
 }
+
+#[test]
+fn golden_lowering_for_of_destructuring() {
+    assert_lowering_golden(&LoweringGoldenCase {
+        name: "for_of_destructuring",
+        source: "for (const [first] of pairs) { first; }\n",
+        goal: ParseGoal::Script,
+    });
+}

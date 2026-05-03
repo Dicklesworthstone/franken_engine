@@ -2974,7 +2974,8 @@ mod tests {
         // should result in same ID (no duplicates) and sequential allocations
         // should increment properly
         let mut storage = InMemoryStorageAdapter::new();
-        let context = test_event_context();
+        let context = EventContext::new("trace-alloc", "decision-alloc", "policy-alloc")
+            .expect("test context should be valid");
 
         // Allocate first ID for a natural key
         let id1 = allocate_typed_record_id::<ReplacementLineageEntry, _>(

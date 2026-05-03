@@ -118,38 +118,14 @@ fn test_ambient_authority_rejection() {
     let compute_only = CapabilityProfile::compute_only();
 
     // Verify the profile doesn't include filesystem access
-    assert!(
-        !compute_only
-            .capabilities
-            .contains(&RuntimeCapability::FsRead)
-    );
-    assert!(
-        !compute_only
-            .capabilities
-            .contains(&RuntimeCapability::FsWrite)
-    );
-    assert!(
-        !compute_only
-            .capabilities
-            .contains(&RuntimeCapability::NetworkEgress)
-    );
-    assert!(
-        !compute_only
-            .capabilities
-            .contains(&RuntimeCapability::ProcessSpawn)
-    );
+    assert!(!compute_only.has(RuntimeCapability::FsRead));
+    assert!(!compute_only.has(RuntimeCapability::FsWrite));
+    assert!(!compute_only.has(RuntimeCapability::NetworkEgress));
+    assert!(!compute_only.has(RuntimeCapability::ProcessSpawn));
 
     // But does include pure computation capabilities
-    assert!(
-        compute_only
-            .capabilities
-            .contains(&RuntimeCapability::VmDispatch)
-    );
-    assert!(
-        compute_only
-            .capabilities
-            .contains(&RuntimeCapability::Builtin)
-    );
+    assert!(compute_only.has(RuntimeCapability::VmDispatch));
+    assert!(compute_only.has(RuntimeCapability::Builtin));
 }
 
 #[test]
@@ -158,38 +134,14 @@ fn test_declared_capability_allowed() {
     let engine_core = CapabilityProfile::engine_core();
 
     // Verify the profile includes core engine capabilities
-    assert!(
-        engine_core
-            .capabilities
-            .contains(&RuntimeCapability::VmDispatch)
-    );
-    assert!(
-        engine_core
-            .capabilities
-            .contains(&RuntimeCapability::GcInvoke)
-    );
-    assert!(
-        engine_core
-            .capabilities
-            .contains(&RuntimeCapability::IrLowering)
-    );
-    assert!(
-        engine_core
-            .capabilities
-            .contains(&RuntimeCapability::HeapAllocate)
-    );
+    assert!(engine_core.has(RuntimeCapability::VmDispatch));
+    assert!(engine_core.has(RuntimeCapability::GcInvoke));
+    assert!(engine_core.has(RuntimeCapability::IrLowering));
+    assert!(engine_core.has(RuntimeCapability::HeapAllocate));
 
     // But doesn't include dangerous capabilities
-    assert!(
-        !engine_core
-            .capabilities
-            .contains(&RuntimeCapability::ProcessSpawn)
-    );
-    assert!(
-        !engine_core
-            .capabilities
-            .contains(&RuntimeCapability::PolicyWrite)
-    );
+    assert!(!engine_core.has(RuntimeCapability::ProcessSpawn));
+    assert!(!engine_core.has(RuntimeCapability::PolicyWrite));
 }
 
 #[test]
@@ -200,12 +152,12 @@ fn test_capability_profile_discrimination() {
     let full = CapabilityProfile::full();
 
     // ComputeOnly has the most restrictive set
-    assert!(compute_only.capabilities.len() < engine_core.capabilities.len());
-    assert!(compute_only.capabilities.len() < full.capabilities.len());
+    assert!(compute_only.capabilities().len() < engine_core.capabilities().len());
+    assert!(compute_only.capabilities().len() < full.capabilities().len());
 
     // Full has all capabilities
-    assert!(full.capabilities.len() > engine_core.capabilities.len());
-    assert_eq!(full.capabilities.len(), RuntimeCapability::ALL.len());
+    assert!(full.capabilities().len() > engine_core.capabilities().len());
+    assert_eq!(full.capabilities().len(), RuntimeCapability::ALL.len());
 }
 
 #[test]
@@ -421,9 +373,9 @@ fn test_capability_profile_kinds() {
     let remote = CapabilityProfile::remote();
     let full = CapabilityProfile::full();
 
-    assert_eq!(compute_only.kind, ProfileKind::ComputeOnly);
-    assert_eq!(engine_core.kind, ProfileKind::EngineCore);
-    assert_eq!(policy.kind, ProfileKind::Policy);
-    assert_eq!(remote.kind, ProfileKind::Remote);
-    assert_eq!(full.kind, ProfileKind::Full);
+    assert_eq!(compute_only.kind(), ProfileKind::ComputeOnly);
+    assert_eq!(engine_core.kind(), ProfileKind::EngineCore);
+    assert_eq!(policy.kind(), ProfileKind::Policy);
+    assert_eq!(remote.kind(), ProfileKind::Remote);
+    assert_eq!(full.kind(), ProfileKind::Full);
 }

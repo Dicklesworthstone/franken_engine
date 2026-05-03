@@ -2969,7 +2969,7 @@ mod tests {
 
     #[test]
     fn frankensqlite_adapter_new_creates_no_typed_session() {
-        let backend = MockBackend::default();
+        let backend = MockFrankenSqlite::default();
         let adapter = FrankensqliteStorageAdapter::new(backend).expect("should create adapter");
         assert!(!adapter.has_typed_session());
         assert!(adapter.typed_session().is_none());
@@ -2977,7 +2977,7 @@ mod tests {
 
     #[test]
     fn frankensqlite_adapter_new_with_typed_session_enables_typed_operations() {
-        let backend = MockBackend::default();
+        let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new_with_typed_session(backend)
             .expect("should create adapter with typed session");
         assert!(adapter.has_typed_session());

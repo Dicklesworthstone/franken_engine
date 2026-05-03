@@ -3893,15 +3893,14 @@ mod tests {
     fn make_typed_provenance_entry(id: i64, source: &str, event_type: &str) -> IfcProvenanceEntry {
         IfcProvenanceEntry {
             provenance_id: id,
-            source_artifact_id: source.to_string(),
-            target_artifact_id: format!("target-{}", source),
-            event_type: event_type.to_string(),
-            event_artifact_id: format!("event-{}", id),
-            label_source: "public".to_string(),
-            label_target: "internal".to_string(),
-            security_epoch: 42,
+            source_label: source.to_string(),
+            target_label: format!("target-{}", source),
+            edge_type: "flow_event".to_string(),
+            flow_operation: event_type.to_string(),
+            security_level: "internal".to_string(),
             timestamp_ms: 1700000000000,
             declassification_ref: None,
+            trace_id: format!("trace-{id}"),
             metadata_json: r#"{"flow": "test"}"#.to_string(),
         }
     }
@@ -3942,9 +3941,9 @@ mod tests {
         assert!(retrieved.is_some(), "should retrieve the stored entry");
         let retrieved_entry = retrieved.unwrap();
         assert_eq!(retrieved_entry.provenance_id, 201);
-        assert_eq!(retrieved_entry.source_artifact_id, "source-artifact-2");
-        assert_eq!(retrieved_entry.event_type, "computation");
-        assert_eq!(retrieved_entry.security_epoch, 42);
+        assert_eq!(retrieved_entry.source_label, "source-artifact-2");
+        assert_eq!(retrieved_entry.flow_operation, "computation");
+        assert_eq!(retrieved_entry.security_level, "internal");
     }
 
     #[test]

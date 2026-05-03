@@ -431,13 +431,8 @@ impl CanonicalGuard {
                 detail: "input too short for schema prefix".to_string(),
             };
             // Cannot determine domain from insufficient input. Use the first
-            // registered domain as a reasonable default.
-            let inferred_domain = self
-                .class_registry
-                .keys()
-                .next()
-                .copied()
-                .unwrap_or(ObjectDomain::PolicyObject);
+            // registered domain as a reasonable default, or PolicyObject if none registered.
+            let inferred_domain = self.determine_error_domain(None);
 
             return Err(NonCanonicalError {
                 object_class: inferred_domain,
@@ -465,15 +460,8 @@ impl CanonicalGuard {
                 Ok((d, value))
             }
             None => {
-                // Schema hash not found in registry. Since we can't determine the
-                // intended domain from the unregistered schema, pick the first
-                // registered domain as a reasonable default, or use a fallback.
-                let inferred_domain = self
-                    .class_registry
-                    .keys()
-                    .next()
-                    .copied()
-                    .unwrap_or(ObjectDomain::PolicyObject);
+                // Schema hash not found in registry. Try to determine best domain for error reporting.
+                let inferred_domain = self.determine_error_domain(Some(schema_hash));
 
                 Err(NonCanonicalError {
                     object_class: inferred_domain,
@@ -492,6 +480,34 @@ impl CanonicalGuard {
 
     fn emit_event(&mut self, event: GuardEvent) {
         self.events.push(event);
+    }
+
+    /// Determine the most appropriate ObjectDomain for error reporting.
+    ///
+    /// When validation fails, we want to report the correct domain in the error
+    /// rather than always defaulting to PolicyObject. This method implements
+    /// the domain determination logic for error paths.
+    fn determine_error_domain(&self, schema_hash: Option<SchemaHash>) -> ObjectDomain {
+        // If we have a schema hash, try to find a matching domain even if the exact schema isn't registered
+        if let Some(hash) = schema_hash {
+            // First try exact match
+            if let Some((domain, _)) = self.class_registry.iter().find(|(_, sh)| **sh == hash) {
+                return *domain;
+            }
+
+            // Could potentially add fuzzy matching or domain inference logic here in the future
+            // For now, fall through to the general heuristics
+        }
+
+        // Use the first registered domain as a reasonable default
+        // This is better than hardcoding PolicyObject since it reflects the actual usage
+        if let Some(domain) = self.class_registry.keys().next().copied() {
+            return domain;
+        }
+
+        // If no domains are registered at all, PolicyObject is a reasonable fallback
+        // since it's the most common domain in the codebase
+        ObjectDomain::PolicyObject
     }
 }
 

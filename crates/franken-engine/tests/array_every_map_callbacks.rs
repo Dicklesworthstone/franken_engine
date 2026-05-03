@@ -7,11 +7,11 @@ use frankenengine_engine::baseline_interpreter::{
     BaselineInterpreter, InterpreterConfig, InterpreterError, RuntimeCapability,
 };
 use frankenengine_engine::capability_witness::CapabilityProfile;
+use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, RegRange};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::{
     ExecutionBounds, ExecutionProfile, LoadModuleRequest, Module, ModuleSource,
 };
-use frankenengine_engine::ir_contract::{Ir3Instruction, CapabilityTag, RegRange};
 use std::collections::BTreeSet;
 
 /// Test helper to create a baseline interpreter with array manipulation capabilities
@@ -38,7 +38,10 @@ fn create_basic_array_every_module() -> Module {
         // Create array
         Ir3Instruction::NewArray { dst: 0 },
         Ir3Instruction::LoadInt { dst: 3, value: 0 }, // length = 0 (empty array)
-        Ir3Instruction::LoadStr { dst: 4, pool_index: 0 }, // "length"
+        Ir3Instruction::LoadStr {
+            dst: 4,
+            pool_index: 0,
+        }, // "length"
         Ir3Instruction::SetProperty {
             obj: 0,
             key: 4,
@@ -75,7 +78,10 @@ fn create_basic_array_map_module() -> Module {
         // Create array
         Ir3Instruction::NewArray { dst: 0 },
         Ir3Instruction::LoadInt { dst: 3, value: 0 }, // length = 0 (empty array)
-        Ir3Instruction::LoadStr { dst: 4, pool_index: 0 }, // "length"
+        Ir3Instruction::LoadStr {
+            dst: 4,
+            pool_index: 0,
+        }, // "length"
         Ir3Instruction::SetProperty {
             obj: 0,
             key: 4,
@@ -125,7 +131,10 @@ fn test_array_every_empty_array() {
         Ok(execution_result) => {
             // We expect the method to complete successfully
             // The actual return value validation can be enhanced once the implementation is complete
-            println!("Array.every execution completed: {:?}", execution_result.value);
+            println!(
+                "Array.every execution completed: {:?}",
+                execution_result.value
+            );
         }
         Err(e) => panic!("Array.every execution failed: {:?}", e),
     }
@@ -150,7 +159,10 @@ fn test_array_map_empty_array() {
         Ok(execution_result) => {
             // We expect the method to complete successfully
             // The actual return value validation can be enhanced once the implementation is complete
-            println!("Array.map execution completed: {:?}", execution_result.value);
+            println!(
+                "Array.map execution completed: {:?}",
+                execution_result.value
+            );
         }
         Err(e) => panic!("Array.map execution failed: {:?}", e),
     }
@@ -249,7 +261,10 @@ fn test_array_every_non_function_callback() {
         // Create array
         Ir3Instruction::NewArray { dst: 0 },
         // Non-function callback (string)
-        Ir3Instruction::LoadStr { dst: 1, pool_index: 0 },
+        Ir3Instruction::LoadStr {
+            dst: 1,
+            pool_index: 0,
+        },
         // Call Array.prototype.every
         Ir3Instruction::HostCall {
             capability: CapabilityTag("builtin:ArrayPrototypeEvery".to_string()),
@@ -343,7 +358,10 @@ fn test_array_methods_deterministic_behavior() {
         };
 
         let result = interpreter.execute_module(request);
-        assert!(matches!(result, Ok(_)), "Array.every should execute deterministically");
+        assert!(
+            matches!(result, Ok(_)),
+            "Array.every should execute deterministically"
+        );
     }
 
     // Run Array.map multiple times with same input
@@ -357,7 +375,10 @@ fn test_array_methods_deterministic_behavior() {
         };
 
         let result = interpreter.execute_module(request);
-        assert!(matches!(result, Ok(_)), "Array.map should execute deterministically");
+        assert!(
+            matches!(result, Ok(_)),
+            "Array.map should execute deterministically"
+        );
     }
 }
 

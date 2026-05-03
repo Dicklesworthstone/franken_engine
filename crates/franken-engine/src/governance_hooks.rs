@@ -2432,11 +2432,18 @@ mod tests {
         let entries = vec![make_entry("capability_decision", 30)];
         let req = make_export_request(AuditExportFormat::Parquet, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("Parquet export should succeed");
         assert_eq!(result.entry_count, 1);
-        let text = std::str::from_utf8(&result.payload_bytes)
-            .expect("serde deserialization should succeed");
-        assert!(text.starts_with("FRANKEN_PARQUET_V1"));
+
+        // Verify real Parquet binary format instead of fake plaintext
+        let parquet_bytes = &result.payload_bytes;
+        assert!(parquet_bytes.len() >= 4, "Parquet should have magic header");
+        assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should start with PAR1 magic");
+
+        // Verify it's not the old fake format
+        if let Ok(text) = std::str::from_utf8(parquet_bytes) {
+            assert!(!text.contains("FRANKEN_PARQUET_V1"), "Should not contain fake header");
+        }
     }
 
     #[test]

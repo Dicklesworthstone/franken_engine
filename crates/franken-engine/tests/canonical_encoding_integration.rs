@@ -1650,76 +1650,131 @@ fn error_paths_report_correct_object_domain_policy_object() {
 
     // Test 1: Input too short for schema prefix
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-policy").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "Short input error should report PolicyObject domain");
+    let err = guard
+        .validate_from_registry(short_input, "test-policy")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "Short input error should report PolicyObject domain"
+    );
 
     // Test 2: Unregistered schema hash
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-policy").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "Unregistered schema error should report PolicyObject domain");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-policy")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "Unregistered schema error should report PolicyObject domain"
+    );
 }
 
 #[test]
 fn error_paths_report_correct_object_domain_evidence_record() {
     // Test: Error messages should report EvidenceRecord domain when that's the registered class
     let mut guard = CanonicalGuard::new();
-    let _schema = guard.register_class(ObjectDomain::EvidenceRecord, "Evidence", 1, b"evidence-schema");
+    let _schema = guard.register_class(
+        ObjectDomain::EvidenceRecord,
+        "Evidence",
+        1,
+        b"evidence-schema",
+    );
 
     // Test 1: Input too short for schema prefix
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-evidence").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::EvidenceRecord,
-        "Short input error should report EvidenceRecord domain");
+    let err = guard
+        .validate_from_registry(short_input, "test-evidence")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::EvidenceRecord,
+        "Short input error should report EvidenceRecord domain"
+    );
 
     // Test 2: Unregistered schema hash
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-evidence").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::EvidenceRecord,
-        "Unregistered schema error should report EvidenceRecord domain");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-evidence")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::EvidenceRecord,
+        "Unregistered schema error should report EvidenceRecord domain"
+    );
 }
 
 #[test]
 fn error_paths_report_correct_object_domain_revocation() {
     // Test: Error messages should report Revocation domain when that's the registered class
     let mut guard = CanonicalGuard::new();
-    let _schema = guard.register_class(ObjectDomain::Revocation, "Revocation", 1, b"revocation-schema");
+    let _schema = guard.register_class(
+        ObjectDomain::Revocation,
+        "Revocation",
+        1,
+        b"revocation-schema",
+    );
 
     // Test 1: Input too short for schema prefix
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-revocation").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::Revocation,
-        "Short input error should report Revocation domain");
+    let err = guard
+        .validate_from_registry(short_input, "test-revocation")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::Revocation,
+        "Short input error should report Revocation domain"
+    );
 
     // Test 2: Unregistered schema hash
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-revocation").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::Revocation,
-        "Unregistered schema error should report Revocation domain");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-revocation")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::Revocation,
+        "Unregistered schema error should report Revocation domain"
+    );
 }
 
 #[test]
 fn error_paths_report_correct_object_domain_signed_manifest() {
     // Test: Error messages should report SignedManifest domain when that's the registered class
     let mut guard = CanonicalGuard::new();
-    let _schema = guard.register_class(ObjectDomain::SignedManifest, "Manifest", 1, b"manifest-schema");
+    let _schema = guard.register_class(
+        ObjectDomain::SignedManifest,
+        "Manifest",
+        1,
+        b"manifest-schema",
+    );
 
     // Test 1: Input too short for schema prefix
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-manifest").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::SignedManifest,
-        "Short input error should report SignedManifest domain");
+    let err = guard
+        .validate_from_registry(short_input, "test-manifest")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::SignedManifest,
+        "Short input error should report SignedManifest domain"
+    );
 
     // Test 2: Unregistered schema hash
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-manifest").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::SignedManifest,
-        "Unregistered schema error should report SignedManifest domain");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-manifest")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::SignedManifest,
+        "Unregistered schema error should report SignedManifest domain"
+    );
 }
 
 #[test]
@@ -1728,22 +1783,43 @@ fn error_paths_report_first_registered_domain_when_multiple() {
     let mut guard = CanonicalGuard::new();
 
     // Register multiple domains - first one should be used for error reporting
-    let _policy_schema = guard.register_class(ObjectDomain::PolicyObject, "Policy", 1, b"policy-schema");
-    let _evidence_schema = guard.register_class(ObjectDomain::EvidenceRecord, "Evidence", 1, b"evidence-schema");
-    let _revocation_schema = guard.register_class(ObjectDomain::Revocation, "Revocation", 1, b"revocation-schema");
+    let _policy_schema =
+        guard.register_class(ObjectDomain::PolicyObject, "Policy", 1, b"policy-schema");
+    let _evidence_schema = guard.register_class(
+        ObjectDomain::EvidenceRecord,
+        "Evidence",
+        1,
+        b"evidence-schema",
+    );
+    let _revocation_schema = guard.register_class(
+        ObjectDomain::Revocation,
+        "Revocation",
+        1,
+        b"revocation-schema",
+    );
 
     // Test input too short - should use first registered domain (PolicyObject)
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-multi").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "Multiple domains: short input error should report first registered domain (PolicyObject)");
+    let err = guard
+        .validate_from_registry(short_input, "test-multi")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "Multiple domains: short input error should report first registered domain (PolicyObject)"
+    );
 
     // Test unregistered schema - should use first registered domain (PolicyObject)
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-multi").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "Multiple domains: unregistered schema error should report first registered domain (PolicyObject)");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-multi")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "Multiple domains: unregistered schema error should report first registered domain (PolicyObject)"
+    );
 }
 
 #[test]
@@ -1753,16 +1829,26 @@ fn error_paths_fallback_to_policy_object_when_no_domains_registered() {
 
     // Test input too short - should fallback to PolicyObject
     let short_input = b"short";
-    let err = guard.validate_from_registry(short_input, "test-empty").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "No domains registered: short input error should fallback to PolicyObject");
+    let err = guard
+        .validate_from_registry(short_input, "test-empty")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "No domains registered: short input error should fallback to PolicyObject"
+    );
 
     // Test unregistered schema - should fallback to PolicyObject
     let fake_schema = SchemaHash([0xFF; 32]);
     let fake_payload = serialize_with_schema(&fake_schema, &CanonicalValue::Null);
-    let err = guard.validate_from_registry(&fake_payload, "test-empty").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::PolicyObject,
-        "No domains registered: unregistered schema error should fallback to PolicyObject");
+    let err = guard
+        .validate_from_registry(&fake_payload, "test-empty")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::PolicyObject,
+        "No domains registered: unregistered schema error should fallback to PolicyObject"
+    );
 }
 
 #[test]
@@ -1771,17 +1857,30 @@ fn error_domain_determination_with_exact_schema_match() {
     let mut guard = CanonicalGuard::new();
 
     // Register multiple domains
-    let policy_schema = guard.register_class(ObjectDomain::PolicyObject, "Policy", 1, b"policy-schema");
-    let evidence_schema = guard.register_class(ObjectDomain::EvidenceRecord, "Evidence", 1, b"evidence-schema");
+    let policy_schema =
+        guard.register_class(ObjectDomain::PolicyObject, "Policy", 1, b"policy-schema");
+    let evidence_schema = guard.register_class(
+        ObjectDomain::EvidenceRecord,
+        "Evidence",
+        1,
+        b"evidence-schema",
+    );
 
     // Create valid payload with evidence schema but make it invalid (trailing bytes)
     let mut evidence_payload = serialize_with_schema(&evidence_schema, &CanonicalValue::Null);
     evidence_payload.push(0xAA); // Add trailing byte to make it invalid
 
     // Error should report EvidenceRecord domain since we can match the schema hash
-    let err = guard.validate_from_registry(&evidence_payload, "test-match").unwrap_err();
-    assert_eq!(err.object_class, ObjectDomain::EvidenceRecord,
-        "Schema hash match: error should report EvidenceRecord domain based on schema match");
-    assert!(matches!(err.violation, CanonicalViolation::TrailingBytes { .. }),
-        "Should be trailing bytes violation");
+    let err = guard
+        .validate_from_registry(&evidence_payload, "test-match")
+        .unwrap_err();
+    assert_eq!(
+        err.object_class,
+        ObjectDomain::EvidenceRecord,
+        "Schema hash match: error should report EvidenceRecord domain based on schema match"
+    );
+    assert!(
+        matches!(err.violation, CanonicalViolation::TrailingBytes { .. }),
+        "Should be trailing bytes violation"
+    );
 }

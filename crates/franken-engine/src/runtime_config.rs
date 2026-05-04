@@ -21,6 +21,12 @@ use serde::{Deserialize, Serialize};
 
 /// One million — the unit for fixed-point millionths (1_000_000 = 1.0).
 pub const MILLION: i64 = 1_000_000;
+/// Default orchestrator saga concurrency for conservative control-plane execution.
+pub const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
+/// Threshold where operator guidance should treat the orchestrator as a high-core deployment.
+pub const HIGH_CORE_CONCURRENCY_SAGAS_FLOOR: usize = 64;
+/// Hard ceiling for validated orchestrator concurrency envelopes.
+pub const MAX_CONCURRENT_SAGAS_LIMIT: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // ConfigError
@@ -133,7 +139,7 @@ impl Default for OrchestratorConfig {
             stopping_cusum_reference_millionths: 500_000,
             cell_close_budget_ms: 10_000,
             drain_deadline_ticks: 10_000,
-            max_concurrent_sagas: 4,
+            max_concurrent_sagas: DEFAULT_MAX_CONCURRENT_SAGAS,
         }
     }
 }
@@ -541,6 +547,13 @@ impl RuntimeConfig {
                 message: "must be > 0".to_string(),
             });
         }
+        if o.max_concurrent_sagas > MAX_CONCURRENT_SAGAS_LIMIT {
+            errors.push(ConfigValidationError {
+                section: s.to_string(),
+                field: "max_concurrent_sagas".to_string(),
+                message: format!("must be <= {MAX_CONCURRENT_SAGAS_LIMIT}"),
+            });
+        }
     }
 
     fn validate_guardplane(&self, errors: &mut Vec<ConfigValidationError>) {
@@ -872,7 +885,7 @@ mod tests {
         assert_eq!(o.stopping_cusum_reference_millionths, 500_000);
         assert_eq!(o.cell_close_budget_ms, 10_000);
         assert_eq!(o.drain_deadline_ticks, 10_000);
-        assert_eq!(o.max_concurrent_sagas, 4);
+        assert_eq!(o.max_concurrent_sagas, DEFAULT_MAX_CONCURRENT_SAGAS);
     }
 
     #[test]
@@ -1182,6 +1195,24 @@ grace_period_ns = 1000000000
         let err = config.validate().unwrap_err();
         if let ConfigError::ValidationFailed { errors } = &err {
             assert!(errors.iter().any(|e| e.field == "max_concurrent_sagas"));
+        } else {
+            panic!("expected ValidationFailed");
+        }
+    }
+
+    #[test]
+    fn validation_rejects_absurd_concurrent_sagas() {
+        let mut config = RuntimeConfig::default();
+        config.orchestrator.max_concurrent_sagas = MAX_CONCURRENT_SAGAS_LIMIT + 1;
+        let err = config.validate().unwrap_err();
+        if let ConfigError::ValidationFailed { errors } = &err {
+            assert!(
+                errors.iter().any(|e| {
+                    e.field == "max_concurrent_sagas"
+                        && e.message.contains(&MAX_CONCURRENT_SAGAS_LIMIT.to_string())
+                }),
+                "expected max_concurrent_sagas upper-bound error, got {errors:?}"
+            );
         } else {
             panic!("expected ValidationFailed");
         }

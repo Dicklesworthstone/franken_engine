@@ -64,7 +64,9 @@ use crate::regret_bounded_router::{
     LaneArm as AdaptiveLaneArm, RegretBoundedRouter, RewardSignal as AdaptiveRewardSignal,
     RouterSummary,
 };
-use crate::runtime_config::RuntimeConfig;
+use crate::runtime_config::{
+    HIGH_CORE_CONCURRENCY_SAGAS_FLOOR, MAX_CONCURRENT_SAGAS_LIMIT, RuntimeConfig,
+};
 use crate::saga_orchestrator::{
     SagaError, SagaOrchestrator, SagaType, eviction_saga_steps, quarantine_saga_steps,
     revocation_saga_steps,
@@ -321,6 +323,11 @@ pub enum OrchestratorError {
     EvidenceCompressionKraft {
         detail: String,
     },
+    InvalidConcurrencyEnvelope {
+        requested: usize,
+        min: usize,
+        max: usize,
+    },
     EmptySource,
     EmptyExtensionId,
     PreparedExecutionContextMismatch {
@@ -358,6 +365,14 @@ impl fmt::Display for OrchestratorError {
             Self::EvidenceCompressionKraft { detail } => {
                 write!(f, "evidence compression Kraft verification: {detail}")
             }
+            Self::InvalidConcurrencyEnvelope {
+                requested,
+                min,
+                max,
+            } => write!(
+                f,
+                "orchestrator max_concurrent_sagas must be in [{min}, {max}], got {requested}"
+            ),
             Self::EmptySource => f.write_str("extension source is empty"),
             Self::EmptyExtensionId => f.write_str("extension_id is empty"),
             Self::PreparedExecutionContextMismatch {
@@ -449,7 +464,13 @@ pub struct ExecutionOrchestrator {
 impl ExecutionOrchestrator {
     /// Create a new orchestrator with the given configuration.
     pub fn new(config: OrchestratorConfig) -> Self {
-        Self::new_with_runtime_config(config, RuntimeConfig::default())
+        Self::try_new(config).expect("orchestrator configuration must be valid")
+    }
+
+    /// Create a new orchestrator with the given configuration, returning a validation error
+    /// when the concurrency envelope is outside the supported range.
+    pub fn try_new(config: OrchestratorConfig) -> Result<Self, OrchestratorError> {
+        Self::try_new_with_runtime_config(config, RuntimeConfig::default())
     }
 
     /// Create a new orchestrator with both orchestrator and runtime configs.
@@ -457,6 +478,17 @@ impl ExecutionOrchestrator {
         config: OrchestratorConfig,
         runtime_config: RuntimeConfig,
     ) -> Self {
+        Self::try_new_with_runtime_config(config, runtime_config)
+            .expect("orchestrator configuration must be valid")
+    }
+
+    /// Create a new orchestrator with both orchestrator and runtime configs, returning a
+    /// validation error when the concurrency envelope is outside the supported range.
+    pub fn try_new_with_runtime_config(
+        config: OrchestratorConfig,
+        runtime_config: RuntimeConfig,
+    ) -> Result<Self, OrchestratorError> {
+        Self::validate_concurrency_envelope(config.max_concurrent_sagas)?;
         let loss_matrix = config.loss_matrix_preset.to_loss_matrix();
         let prior = Posterior::default_prior();
         let gamma = runtime_config.orchestrator.adaptive_router_gamma_millionths;
@@ -474,7 +506,7 @@ impl ExecutionOrchestrator {
             gamma,
         )
         .expect("adaptive router configuration must be valid");
-        Self {
+        Ok(Self {
             parser: CanonicalEs2020Parser,
             adaptive_router,
             stopping_policies: BTreeMap::new(),
@@ -491,7 +523,7 @@ impl ExecutionOrchestrator {
             execution_counter: 0,
             config,
             runtime_config,
-        }
+        })
     }
 
     /// Create an orchestrator with default configuration.
@@ -502,6 +534,28 @@ impl ExecutionOrchestrator {
     /// Access the runtime configuration.
     pub fn runtime_config(&self) -> &RuntimeConfig {
         &self.runtime_config
+    }
+
+    fn validate_concurrency_envelope(max_concurrent_sagas: usize) -> Result<(), OrchestratorError> {
+        if (1..=MAX_CONCURRENT_SAGAS_LIMIT).contains(&max_concurrent_sagas) {
+            Ok(())
+        } else {
+            Err(OrchestratorError::InvalidConcurrencyEnvelope {
+                requested: max_concurrent_sagas,
+                min: 1,
+                max: MAX_CONCURRENT_SAGAS_LIMIT,
+            })
+        }
+    }
+
+    fn concurrency_envelope_tier(max_concurrent_sagas: usize) -> &'static str {
+        if max_concurrent_sagas >= HIGH_CORE_CONCURRENCY_SAGAS_FLOOR {
+            "high-core"
+        } else if max_concurrent_sagas > DEFAULT_MAX_CONCURRENT_SAGAS {
+            "scaled"
+        } else {
+            "default"
+        }
     }
 
     fn new_stopping_policy(&self) -> EscalationPolicy {
@@ -1212,6 +1266,18 @@ impl ExecutionOrchestrator {
         builder = builder.meta(
             "capabilities_count".to_string(),
             package.capabilities.len().to_string(),
+        );
+        builder = builder.meta(
+            "max_concurrent_sagas".to_string(),
+            self.config.max_concurrent_sagas.to_string(),
+        );
+        builder = builder.meta(
+            "max_concurrent_sagas_tier".to_string(),
+            Self::concurrency_envelope_tier(self.config.max_concurrent_sagas).to_string(),
+        );
+        builder = builder.meta(
+            "max_concurrent_sagas_limit".to_string(),
+            MAX_CONCURRENT_SAGAS_LIMIT.to_string(),
         );
 
         if let Some(cost) = ir3_schedule_cost {
@@ -2797,6 +2863,78 @@ mod tests {
         assert_eq!(policy.cusum.reference_millionths, 200_000);
     }
 
+    #[test]
+    fn try_new_rejects_zero_concurrency_envelope() {
+        let err = ExecutionOrchestrator::try_new(OrchestratorConfig {
+            max_concurrent_sagas: 0,
+            ..OrchestratorConfig::default()
+        })
+        .expect_err("zero-concurrency envelope should fail closed");
+
+        assert!(matches!(
+            err,
+            OrchestratorError::InvalidConcurrencyEnvelope {
+                requested: 0,
+                min: 1,
+                max: MAX_CONCURRENT_SAGAS_LIMIT,
+            }
+        ));
+    }
+
+    #[test]
+    fn try_new_rejects_absurdly_high_concurrency_envelope() {
+        let requested = MAX_CONCURRENT_SAGAS_LIMIT + 1;
+        let err = ExecutionOrchestrator::try_new(OrchestratorConfig {
+            max_concurrent_sagas: requested,
+            ..OrchestratorConfig::default()
+        })
+        .expect_err("absurd concurrency envelope should fail closed");
+
+        assert!(matches!(
+            err,
+            OrchestratorError::InvalidConcurrencyEnvelope {
+                requested,
+                min: 1,
+                max: MAX_CONCURRENT_SAGAS_LIMIT,
+            } if requested == MAX_CONCURRENT_SAGAS_LIMIT + 1
+        ));
+    }
+
+    #[test]
+    fn high_core_concurrency_envelope_executes_and_records_evidence() {
+        let mut orch = ExecutionOrchestrator::try_new(OrchestratorConfig {
+            max_concurrent_sagas: HIGH_CORE_CONCURRENCY_SAGAS_FLOOR,
+            ..OrchestratorConfig::default()
+        })
+        .expect("high-core envelope should be accepted");
+
+        let result = orch
+            .execute(&simple_package())
+            .expect("high-core envelope should execute");
+        let entry = &result.evidence_entries[0];
+        assert_eq!(
+            entry
+                .metadata
+                .get("max_concurrent_sagas")
+                .map(String::as_str),
+            Some("64")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("max_concurrent_sagas_tier")
+                .map(String::as_str),
+            Some("high-core")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("max_concurrent_sagas_limit")
+                .map(String::as_str),
+            Some("1024")
+        );
+    }
+
     // -- OrchestratorError Display --------------------------------------------
 
     #[test]
@@ -3142,6 +3280,20 @@ mod tests {
             .get("capabilities_count")
             .expect("serde deserialization should succeed");
         assert_eq!(cap_count, "4");
+        assert_eq!(
+            entry
+                .metadata
+                .get("max_concurrent_sagas")
+                .map(String::as_str),
+            Some("4")
+        );
+        assert_eq!(
+            entry
+                .metadata
+                .get("max_concurrent_sagas_tier")
+                .map(String::as_str),
+            Some("default")
+        );
     }
 
     // -- action_to_saga_type coverage (via different risk scenarios) -----------

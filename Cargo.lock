@@ -1090,6 +1090,7 @@ dependencies = [
  "fastapi-router",
  "fastapi-types",
  "futures-executor",
+ "getrandom 0.3.4",
  "parking_lot",
  "serde",
  "serde_json",

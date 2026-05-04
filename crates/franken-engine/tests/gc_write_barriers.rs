@@ -298,7 +298,7 @@ fn write_barrier_with_different_value_types() {
     // Test different value types that could contain object references
     let test_values = vec![
         Value::Int(42),
-        Value::Float(Float64::new(3.14)),
+        Value::Float(Float64::new(std::f64::consts::PI)),
         Value::Str("string_value".to_string()),
         Value::Bool(true),
         Value::Null,
@@ -377,12 +377,12 @@ fn write_barrier_with_complex_object_graphs() {
     core.set_object_property(child2, "back_ref".to_string(), Value::Object(root))
         .unwrap();
 
-    // All objects involved in writes should be remembered
-    assert_eq!(core.gc_remembered_set_size(), 4);
+    // The write barrier remembers mutated objects, not every referenced object.
+    assert_eq!(core.gc_remembered_set_size(), 3);
     assert!(core.gc_is_remembered(root));
     assert!(core.gc_is_remembered(child1));
     assert!(core.gc_is_remembered(child2));
-    assert!(core.gc_is_remembered(grandchild));
+    assert!(!core.gc_is_remembered(grandchild));
 }
 
 // =========================================================================

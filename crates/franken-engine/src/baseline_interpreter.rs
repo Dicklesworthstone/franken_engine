@@ -2029,9 +2029,9 @@ impl JitStatistics {
 }
 
 // Allow destructuring as (usize, usize, u64, u64)
-impl Into<(usize, usize, u64, u64)> for JitStatistics {
-    fn into(self) -> (usize, usize, u64, u64) {
-        (self.0, self.1, self.2, self.3)
+impl From<JitStatistics> for (usize, usize, u64, u64) {
+    fn from(value: JitStatistics) -> Self {
+        (value.0, value.1, value.2, value.3)
     }
 }
 
@@ -2256,7 +2256,7 @@ impl InterpreterCore {
 
     /// Get the IFC label for a register.
     pub fn get_register_label(&self, reg: u32) -> Result<&Label, InterpreterError> {
-        self.register_labels.get(reg as usize).ok_or_else(|| {
+        self.register_labels.get(reg as usize).ok_or({
             InterpreterError::RegisterOutOfBounds {
                 register: reg,
                 max: self.register_labels.len() as u32,
@@ -2408,7 +2408,7 @@ impl InterpreterCore {
         const COLD_THRESHOLD: u64 = 10; // Functions with <= 10 calls are cold
 
         self.jit_eviction_counter += 1;
-        if self.jit_eviction_counter % EVICTION_FREQUENCY == 0 {
+        if self.jit_eviction_counter.is_multiple_of(EVICTION_FREQUENCY) {
             // Remove functions that haven't crossed the cold threshold
             self.jit_function_call_counts
                 .retain(|_function_id, count| *count > COLD_THRESHOLD);
@@ -8884,11 +8884,14 @@ impl InterpreterCore {
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
                             // Resume the async function
-                            if let Err(_) = self.resume_async_function_after_await(
-                                resumption_context,
-                                argument.clone(),
-                                &task,
-                            ) {
+                            if self
+                                .resume_async_function_after_await(
+                                    resumption_context,
+                                    argument.clone(),
+                                    &task,
+                                )
+                                .is_err()
+                            {
                                 // If resumption fails, just fulfill the result promise
                                 let _ = self.fulfill_promise(
                                     *result_promise,
@@ -19600,7 +19603,7 @@ impl StackFrameInfo {
     }
 
     /// Mark this frame as an async boundary.
-    fn as_async_boundary(mut self) -> Self {
+    fn into_async_boundary(mut self) -> Self {
         self.is_async_boundary = true;
         self
     }
@@ -19662,7 +19665,7 @@ impl InterpreterCore {
             if config.include_async_frames && call_frame.async_function_id.is_some() {
                 if frames.len() < config.max_frames {
                     let async_frame =
-                        StackFrameInfo::new("<async>".to_string()).as_async_boundary();
+                        StackFrameInfo::new("<async>".to_string()).into_async_boundary();
                     frames.insert((index + 2, async_frame));
                 }
             }
@@ -19737,9 +19740,7 @@ impl InterpreterCore {
         config: &StackTraceConfig,
     ) -> String {
         let mut result = String::new();
-        let mut frame_count = 0;
-
-        for (_index, frame_info) in frames.iter() {
+        for (frame_count, (_index, frame_info)) in frames.iter().enumerate() {
             if frame_count >= config.max_frames {
                 break;
             }
@@ -19748,7 +19749,6 @@ impl InterpreterCore {
                 result.push('\n');
             }
             result.push_str(&frame_info.format());
-            frame_count += 1;
         }
 
         // Add truncation message if there are more frames
@@ -20130,9 +20130,9 @@ struct LocaleData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DateOrder {
-    MDY, // MM/DD/YYYY (en-US)
-    DMY, // DD/MM/YYYY (en-GB)
-    YMD, // YYYY-MM-DD (ja-JP)
+    Mdy, // MM/DD/YYYY (en-US)
+    Dmy, // DD/MM/YYYY (en-GB)
+    Ymd, // YYYY-MM-DD (ja-JP)
 }
 
 impl InterpreterCore {
@@ -20168,7 +20168,7 @@ impl InterpreterCore {
                     "Saturday",
                 ],
                 day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-                date_order: DateOrder::MDY,
+                date_order: DateOrder::Mdy,
             },
             "en-GB" => LocaleData {
                 month_names: &[
@@ -20199,7 +20199,7 @@ impl InterpreterCore {
                     "Saturday",
                 ],
                 day_names_short: &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-                date_order: DateOrder::DMY,
+                date_order: DateOrder::Dmy,
             },
             "ja-JP" => LocaleData {
                 month_names: &[
@@ -20220,7 +20220,7 @@ impl InterpreterCore {
                     "土曜日",
                 ],
                 day_names_short: &["日", "月", "火", "水", "木", "金", "土"],
-                date_order: DateOrder::YMD,
+                date_order: DateOrder::Ymd,
             },
             _ => {
                 // Fallback to en-US for unsupported locales
@@ -20341,15 +20341,15 @@ impl InterpreterCore {
         let day_name = locale_data.day_names_short[day_of_week % 7];
 
         match locale_data.date_order {
-            DateOrder::MDY => {
+            DateOrder::Mdy => {
                 // MM/DD/YYYY format (en-US)
                 format!("{} {:02}/{:02}/{}", day_name, month + 1, day, year)
             }
-            DateOrder::DMY => {
+            DateOrder::Dmy => {
                 // DD/MM/YYYY format (en-GB)
                 format!("{} {:02}/{:02}/{}", day_name, day, month + 1, year)
             }
-            DateOrder::YMD => {
+            DateOrder::Ymd => {
                 // YYYY-MM-DD format (ja-JP)
                 format!("{} {:04}-{:02}-{:02}", day_name, year, month + 1, day)
             }

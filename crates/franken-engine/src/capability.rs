@@ -1923,10 +1923,9 @@ mod tests {
 
         for (profile, name) in &canonical_profiles {
             let json = serde_json::to_string(profile).expect("serialization should succeed");
-            let restored: CapabilityProfile = serde_json::from_str(&json).expect(&format!(
-                "canonical {} profile should deserialize successfully",
-                name
-            ));
+            let restored: CapabilityProfile = serde_json::from_str(&json).unwrap_or_else(|_| {
+                panic!("canonical {name} profile should deserialize successfully")
+            });
             assert_eq!(
                 *profile, restored,
                 "canonical {} profile should round-trip",

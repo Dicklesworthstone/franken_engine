@@ -1070,6 +1070,266 @@ mod tests {
             .expect("lane snapshot should be present")
     }
 
+    #[derive(Debug, Clone)]
+    struct SchedulerReplayFixture {
+        name: &'static str,
+        config: LaneConfig,
+        submissions: Vec<SchedulerReplaySubmission>,
+        rounds: Vec<SchedulerReplayRound>,
+        final_snapshot_ticks: u64,
+    }
+
+    #[derive(Debug, Clone)]
+    struct SchedulerReplaySubmission {
+        label: TaskLabel,
+        deadline_tick: u64,
+        submitted_at: u64,
+        payload_id: String,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct SchedulerReplayRound {
+        batch_size: usize,
+        current_ticks: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct SchedulerReplayLedger {
+        fixture: String,
+        initial_snapshot: LanePressureSnapshot,
+        rounds: Vec<SchedulerReplayRoundLedger>,
+        final_snapshot: LanePressureSnapshot,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct SchedulerReplayRoundLedger {
+        round_index: usize,
+        batch_size: usize,
+        current_ticks: u64,
+        scheduled: Vec<SchedulerReplayTaskObservation>,
+        snapshot_after: LanePressureSnapshot,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    struct SchedulerReplayTaskObservation {
+        task_id: u64,
+        lane: String,
+        task_type: String,
+        trace_id: String,
+        deadline_tick: u64,
+        submitted_at: u64,
+        payload_id: String,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct SchedulerReplayRng {
+        state: u64,
+    }
+
+    impl SchedulerReplayRng {
+        fn seeded(seed: u64) -> Self {
+            Self {
+                state: if seed == 0 {
+                    0x9E37_79B9_7F4A_7C15
+                } else {
+                    seed
+                },
+            }
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.state;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.state = x;
+            x
+        }
+
+        fn next_usize(&mut self, modulo: usize) -> usize {
+            (self.next_u64() as usize) % modulo
+        }
+    }
+
+    fn replay_submission(
+        task_type: TaskType,
+        trace_id: impl Into<String>,
+        deadline_tick: u64,
+        submitted_at: u64,
+        payload_id: impl Into<String>,
+    ) -> SchedulerReplaySubmission {
+        SchedulerReplaySubmission {
+            label: TaskLabel {
+                lane: task_type.required_lane(),
+                task_type,
+                trace_id: trace_id.into(),
+                priority_sub_band: 0,
+            },
+            deadline_tick,
+            submitted_at,
+            payload_id: payload_id.into(),
+        }
+    }
+
+    fn observe_replay_task(task: &ScheduledTask) -> SchedulerReplayTaskObservation {
+        SchedulerReplayTaskObservation {
+            task_id: task.task_id.0,
+            lane: task.label.lane.to_string(),
+            task_type: task.label.task_type.to_string(),
+            trace_id: task.label.trace_id.clone(),
+            deadline_tick: task.deadline_tick,
+            submitted_at: task.submitted_at,
+            payload_id: task.payload_id.clone(),
+        }
+    }
+
+    fn run_scheduler_replay_fixture(fixture: &SchedulerReplayFixture) -> SchedulerReplayLedger {
+        let mut scheduler = LaneScheduler::new(fixture.config.clone());
+        for submission in &fixture.submissions {
+            scheduler
+                .submit(
+                    submission.label.clone(),
+                    submission.deadline_tick,
+                    &submission.payload_id,
+                    submission.submitted_at,
+                )
+                .expect("replay fixture submission should be valid");
+        }
+
+        let initial_snapshot = scheduler.pressure_snapshot(0);
+        let mut rounds = Vec::new();
+        for (round_index, round) in fixture.rounds.iter().enumerate() {
+            let scheduled = scheduler.schedule_batch(round.batch_size, round.current_ticks);
+            rounds.push(SchedulerReplayRoundLedger {
+                round_index,
+                batch_size: round.batch_size,
+                current_ticks: round.current_ticks,
+                scheduled: scheduled.iter().map(observe_replay_task).collect(),
+                snapshot_after: scheduler.pressure_snapshot(round.current_ticks),
+            });
+        }
+
+        SchedulerReplayLedger {
+            fixture: fixture.name.to_string(),
+            initial_snapshot,
+            rounds,
+            final_snapshot: scheduler.pressure_snapshot(fixture.final_snapshot_ticks),
+        }
+    }
+
+    fn replay_table_fixtures() -> Vec<SchedulerReplayFixture> {
+        vec![
+            SchedulerReplayFixture {
+                name: "cancel_priority",
+                config: LaneConfig::default(),
+                submissions: vec![
+                    replay_submission(TaskType::ExtensionDispatch, "ready-a", 0, 0, "ready-a"),
+                    replay_submission(TaskType::LeaseRenewal, "timed-a", 10, 0, "timed-a"),
+                    replay_submission(TaskType::CancelCleanup, "cancel-a", 0, 0, "cancel-a"),
+                ],
+                rounds: vec![SchedulerReplayRound {
+                    batch_size: 3,
+                    current_ticks: 10,
+                }],
+                final_snapshot_ticks: 10,
+            },
+            SchedulerReplayFixture {
+                name: "ready_antistarvation_under_timed_backlog",
+                config: LaneConfig {
+                    ready_min_throughput: 2,
+                    ..Default::default()
+                },
+                submissions: vec![
+                    replay_submission(TaskType::LeaseRenewal, "timed-0", 100, 0, "timed-0"),
+                    replay_submission(TaskType::MonitoringProbe, "timed-1", 100, 1, "timed-1"),
+                    replay_submission(TaskType::EvidenceFlush, "timed-2", 100, 2, "timed-2"),
+                    replay_submission(TaskType::EpochBarrierTimeout, "timed-3", 100, 3, "timed-3"),
+                    replay_submission(TaskType::ExtensionDispatch, "ready-0", 0, 4, "ready-0"),
+                    replay_submission(TaskType::GcCycle, "ready-1", 0, 5, "ready-1"),
+                    replay_submission(TaskType::RemoteSync, "ready-2", 0, 6, "ready-2"),
+                ],
+                rounds: vec![SchedulerReplayRound {
+                    batch_size: 2,
+                    current_ticks: 100,
+                }],
+                final_snapshot_ticks: 100,
+            },
+            SchedulerReplayFixture {
+                name: "timed_timeout",
+                config: LaneConfig {
+                    ready_min_throughput: 0,
+                    ..Default::default()
+                },
+                submissions: vec![
+                    replay_submission(TaskType::LeaseRenewal, "timed-earliest", 5, 0, "timed-5"),
+                    replay_submission(TaskType::MonitoringProbe, "timed-late", 10, 1, "timed-10"),
+                ],
+                rounds: vec![SchedulerReplayRound {
+                    batch_size: 1,
+                    current_ticks: 20,
+                }],
+                final_snapshot_ticks: 20,
+            },
+        ]
+    }
+
+    fn high_core_seeded_replay_fixture(seed: u64, task_count: usize) -> SchedulerReplayFixture {
+        let mut rng = SchedulerReplayRng::seeded(seed);
+        let mut submissions = Vec::with_capacity(task_count);
+        for i in 0..task_count {
+            let task_type = match rng.next_usize(12) {
+                0 => TaskType::CancelCleanup,
+                1 => TaskType::QuarantineExec,
+                2 => TaskType::ForcedDrain,
+                3 => TaskType::LeaseRenewal,
+                4 => TaskType::MonitoringProbe,
+                5 => TaskType::EvidenceFlush,
+                6 => TaskType::EpochBarrierTimeout,
+                7 => TaskType::ExtensionDispatch,
+                8 => TaskType::GcCycle,
+                9 => TaskType::PolicyIteration,
+                10 => TaskType::RemoteSync,
+                _ => TaskType::SagaStepExec,
+            };
+            let deadline_tick = if task_type.required_lane() == SchedulerLane::Timed {
+                64 + rng.next_u64() % 192
+            } else {
+                0
+            };
+            submissions.push(replay_submission(
+                task_type,
+                format!("swarm-{seed:x}-{i:03}"),
+                deadline_tick,
+                (i % 64) as u64,
+                format!("payload-{i:03}"),
+            ));
+        }
+
+        SchedulerReplayFixture {
+            name: "seeded_high_core_swarm",
+            config: LaneConfig {
+                ready_min_throughput: 8,
+                ..Default::default()
+            },
+            submissions,
+            rounds: vec![
+                SchedulerReplayRound {
+                    batch_size: 64,
+                    current_ticks: 96,
+                },
+                SchedulerReplayRound {
+                    batch_size: 64,
+                    current_ticks: 160,
+                },
+                SchedulerReplayRound {
+                    batch_size: 64,
+                    current_ticks: 256,
+                },
+            ],
+            final_snapshot_ticks: 256,
+        }
+    }
+
     // -- SchedulerLane --
 
     #[test]
@@ -1831,6 +2091,134 @@ mod tests {
         let order1 = run();
         let order2 = run();
         assert_eq!(order1, order2);
+    }
+
+    #[test]
+    fn scheduler_replay_table_fixtures_pin_lane_contracts() {
+        for fixture in replay_table_fixtures() {
+            let first = run_scheduler_replay_fixture(&fixture);
+            let second = run_scheduler_replay_fixture(&fixture);
+            assert_eq!(
+                first, second,
+                "fixture {} must replay to an identical ledger",
+                fixture.name
+            );
+
+            match fixture.name {
+                "cancel_priority" => {
+                    let lanes: Vec<_> = first.rounds[0]
+                        .scheduled
+                        .iter()
+                        .map(|task| task.lane.as_str())
+                        .collect();
+                    assert_eq!(lanes, vec!["cancel", "timed", "ready"]);
+                    assert_eq!(first.final_snapshot.total_queue_depth, 0);
+                }
+                "ready_antistarvation_under_timed_backlog" => {
+                    let scheduled: Vec<_> = first.rounds[0]
+                        .scheduled
+                        .iter()
+                        .map(|task| (task.lane.as_str(), task.trace_id.as_str()))
+                        .collect();
+                    assert_eq!(
+                        scheduled,
+                        vec![
+                            ("timed", "timed-0"),
+                            ("timed", "timed-1"),
+                            ("ready", "ready-0"),
+                            ("ready", "ready-1"),
+                        ]
+                    );
+                    let final_timed = snapshot_lane(&first.final_snapshot, "timed");
+                    let final_ready = snapshot_lane(&first.final_snapshot, "ready");
+                    assert_eq!(final_timed.queue_depth, 2);
+                    assert_eq!(final_ready.queue_depth, 1);
+                    assert_eq!(first.final_snapshot.event_counts.get("timeout"), None);
+                }
+                "timed_timeout" => {
+                    assert_eq!(first.rounds[0].scheduled.len(), 1);
+                    assert_eq!(first.rounds[0].scheduled[0].trace_id, "timed-earliest");
+                    assert_eq!(first.final_snapshot.total_queue_depth, 0);
+                    assert_eq!(first.final_snapshot.event_counts.get("schedule"), Some(&1));
+                    assert_eq!(first.final_snapshot.event_counts.get("timeout"), Some(&1));
+                    let final_timed = snapshot_lane(&first.final_snapshot, "timed");
+                    assert_eq!(final_timed.tasks_scheduled, 1);
+                    assert_eq!(final_timed.tasks_timed_out, 1);
+                }
+                unexpected => panic!("unhandled scheduler replay fixture {unexpected}"),
+            }
+
+            let json =
+                serde_json::to_string(&first).expect("replay ledger serialization should succeed");
+            let restored: SchedulerReplayLedger =
+                serde_json::from_str(&json).expect("replay ledger restore should succeed");
+            assert_eq!(first, restored);
+        }
+    }
+
+    #[test]
+    fn scheduler_replay_seeded_high_core_workload_is_exactly_stable() {
+        let fixture = high_core_seeded_replay_fixture(0x5EED_64C0_0A11_u64, 192);
+
+        let first = run_scheduler_replay_fixture(&fixture);
+        let second = run_scheduler_replay_fixture(&fixture);
+
+        assert_eq!(
+            first, second,
+            "seeded high-core scheduler workload must replay exactly"
+        );
+        assert_eq!(first.initial_snapshot.total_queue_depth, 192);
+        assert_eq!(first.final_snapshot.event_counts.get("submit"), Some(&192));
+        assert!(first.final_snapshot.event_counts.contains_key("schedule"));
+        assert_eq!(first.rounds.len(), 3);
+        assert!(
+            first
+                .rounds
+                .iter()
+                .flat_map(|round| round.scheduled.iter())
+                .any(|task| task.lane == "cancel"),
+            "high-core replay should exercise cancel-lane priority"
+        );
+        assert!(
+            first
+                .rounds
+                .iter()
+                .flat_map(|round| round.scheduled.iter())
+                .any(|task| task.lane == "ready"),
+            "high-core replay should exercise ready-lane anti-starvation"
+        );
+        assert!(
+            first
+                .rounds
+                .iter()
+                .flat_map(|round| round.scheduled.iter())
+                .any(|task| task.lane == "timed"),
+            "high-core replay should exercise timed-lane deadline scheduling"
+        );
+
+        let round_payloads: Vec<Vec<_>> = first
+            .rounds
+            .iter()
+            .map(|round| {
+                round
+                    .scheduled
+                    .iter()
+                    .map(|task| task.payload_id.as_str())
+                    .collect()
+            })
+            .collect();
+        let replayed_round_payloads: Vec<Vec<_>> = second
+            .rounds
+            .iter()
+            .map(|round| {
+                round
+                    .scheduled
+                    .iter()
+                    .map(|task| task.payload_id.as_str())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(round_payloads, replayed_round_payloads);
     }
 
     // -- Total queue depth --

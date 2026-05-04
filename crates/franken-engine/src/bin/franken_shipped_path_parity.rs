@@ -1411,6 +1411,7 @@ fn classify_orchestrator_error(error: &OrchestratorError) -> FailureClass {
         | OrchestratorError::EvidenceCompressionCoder { .. }
         | OrchestratorError::EvidenceCompressionEncode { .. }
         | OrchestratorError::EvidenceCompressionKraft { .. }
+        | OrchestratorError::InvalidConcurrencyEnvelope { .. }
         | OrchestratorError::EmptyExtensionId
         | OrchestratorError::PreparedExecutionContextMismatch { .. } => FailureClass::Runtime,
     }

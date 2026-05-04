@@ -12,7 +12,9 @@
 //! - `CertificateEvidence` captures measured vs certified budget utilisation.
 //! - `RegressionEntry` records budget regression between versions.
 //! - `TailRiskEntry` records p99/p50 ratio drift on resource dimensions.
-//! - `PublicationPolicy` configures thresholds for publishing resource claims.
+//! - `PublicationPolicy` configures threshold-based publication gates for
+//!   resource claims. These gates are operational governance checks, not formal
+//!   proofs that a resource certificate is mathematically valid.
 //! - `GovernanceVerdict` is the top-level gate output.
 //! - `GovernanceReceipt` is a content-hashed audit trail.
 //!
@@ -53,7 +55,7 @@ pub const DEFAULT_MAX_REGRESSION_MILLIONTHS: u64 = 50_000;
 /// Default maximum tail-risk ratio increase (millionths). 100_000 = 10%.
 pub const DEFAULT_MAX_TAIL_RISK_MILLIONTHS: u64 = 100_000;
 
-/// Default minimum samples for statistical validity.
+/// Default minimum samples for publication-gate sufficiency.
 pub const DEFAULT_MIN_SAMPLES: u64 = 30;
 
 /// Default minimum observability coverage (millionths). 800_000 = 80%.
@@ -326,6 +328,10 @@ impl TailRiskEntry {
 // ---------------------------------------------------------------------------
 
 /// Configurable thresholds for publishing resource certificate claims.
+///
+/// Sample counts and observability coverage thresholds are governance
+/// heuristics for publication sufficiency. They can block or caveat a claim,
+/// but they do not establish formal resource-budget validity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublicationPolicy {
     /// Maximum budget regression (millionths).
@@ -334,12 +340,28 @@ pub struct PublicationPolicy {
     pub max_tail_risk_millionths: u64,
     /// Maximum utilisation before warning (millionths).
     pub max_utilisation_millionths: u64,
-    /// Minimum samples for validity.
+    /// Minimum samples for publication-gate sufficiency.
     pub min_samples: u64,
     /// Minimum observability coverage (millionths).
     pub min_observability_coverage: u64,
     /// Required dimensions (empty = all).
     pub required_dimensions: BTreeSet<ResourceDimension>,
+}
+
+/// Evidence kind behind resource certificate governance decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CertificateGovernanceEvidenceKind {
+    /// Threshold and sample-count governance. This is operational publication
+    /// support, not a formal proof of resource-budget validity.
+    ThresholdAndSampleHeuristic,
+}
+
+impl CertificateGovernanceEvidenceKind {
+    /// Whether this evidence kind establishes formal resource-budget validity.
+    pub fn establishes_formal_resource_validity(self) -> bool {
+        false
+    }
 }
 
 impl PublicationPolicy {
@@ -366,6 +388,11 @@ impl PublicationPolicy {
             required_dimensions: BTreeSet::new(),
         }
     }
+
+    /// Evidence classification for decisions made under this policy.
+    pub fn evidence_kind(&self) -> CertificateGovernanceEvidenceKind {
+        CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic
+    }
 }
 
 impl Default for PublicationPolicy {
@@ -382,7 +409,7 @@ impl Default for PublicationPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GovernanceVerdict {
-    /// All checks pass.
+    /// All threshold governance checks pass.
     Approved,
     /// Budget utilisation too high.
     UtilisationExceeded,
@@ -918,6 +945,18 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_thresholds_do_not_establish_formal_resource_validity() {
+        let p = PublicationPolicy::strict();
+        let evidence_kind = p.evidence_kind();
+
+        assert_eq!(
+            evidence_kind,
+            CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic
+        );
+        assert!(!evidence_kind.establishes_formal_resource_validity());
+    }
+
+    #[test]
     fn test_verdict_blocks_publication() {
         assert!(!GovernanceVerdict::Approved.blocks_publication());
         assert!(GovernanceVerdict::RegressionDetected.blocks_publication());
@@ -941,6 +980,28 @@ mod tests {
         eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
         let receipt = eval.evaluate(epoch());
         assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    }
+
+    #[test]
+    fn test_approved_receipt_does_not_establish_formal_resource_validity() {
+        let policy = PublicationPolicy::relaxed();
+        let mut eval = GovernanceEvaluator::new(policy.clone());
+        eval.add_certificate(
+            ResourceDimension::CpuTime,
+            "heuristic-only".into(),
+            1000,
+            500,
+            policy.min_samples,
+        );
+
+        let receipt = eval.evaluate(epoch());
+
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+        assert!(
+            !policy
+                .evidence_kind()
+                .establishes_formal_resource_validity()
+        );
     }
 
     #[test]

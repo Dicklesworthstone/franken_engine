@@ -129,29 +129,51 @@ fn multi_call_module() -> Ir3Module {
 }
 
 fn loop_module(loop_bound: i64) -> Ir3Module {
-    test_module(
-        "jit-loop",
-        vec![
-            Ir3Instruction::LoadInt { dst: 0, value: 0 },
-            Ir3Instruction::LoadInt {
-                dst: 1,
-                value: loop_bound,
-            },
-            Ir3Instruction::LoadInt { dst: 2, value: 1 },
-            Ir3Instruction::Add {
-                dst: 0,
-                lhs: 0,
-                rhs: 2,
-            },
-            Ir3Instruction::Lt {
-                dst: 3,
-                lhs: 0,
-                rhs: 1,
-            },
-            Ir3Instruction::JumpIf { cond: 3, target: 3 },
-            Ir3Instruction::Halt,
-        ],
-        Vec::new(),
+    loop_module_with_padding("jit-loop", 0, loop_bound).0
+}
+
+fn loop_module_with_padding(
+    source_label: &str,
+    padding_instructions: usize,
+    loop_bound: i64,
+) -> (Ir3Module, usize) {
+    let mut instructions = Vec::new();
+    for index in 0..padding_instructions {
+        instructions.push(Ir3Instruction::LoadInt {
+            dst: 7,
+            value: index as i64,
+        });
+    }
+
+    let loop_start = instructions.len() + 3;
+    instructions.extend([
+        Ir3Instruction::LoadInt { dst: 0, value: 0 },
+        Ir3Instruction::LoadInt {
+            dst: 1,
+            value: loop_bound,
+        },
+        Ir3Instruction::LoadInt { dst: 2, value: 1 },
+        Ir3Instruction::Add {
+            dst: 0,
+            lhs: 0,
+            rhs: 2,
+        },
+        Ir3Instruction::Lt {
+            dst: 3,
+            lhs: 0,
+            rhs: 1,
+        },
+        Ir3Instruction::JumpIf {
+            cond: 3,
+            target: loop_start as u32,
+        },
+        Ir3Instruction::Halt,
+    ]);
+
+    let backedge_ip = loop_start + 2;
+    (
+        test_module(source_label, instructions, Vec::new()),
+        backedge_ip,
     )
 }
 
@@ -316,6 +338,48 @@ fn jit_statistics_track_function_and_loop_surfaces() {
         interpreter.jit_get_loop_iteration_count(LOOP_BACKEDGE_IP),
         3
     );
+}
+
+#[test]
+fn jit_loop_iteration_counters_track_many_distinct_backedges() {
+    let mut interpreter = test_interpreter("jit-many-loop-sites");
+
+    for padding in 0..=12 {
+        let (module, backedge_ip) =
+            loop_module_with_padding(&format!("jit-loop-site-{padding}"), padding, 3);
+        let result = interpreter
+            .execute(&module)
+            .expect("padded loop should execute");
+        assert_eq!(result.value, Value::Int(3));
+        assert_eq!(interpreter.jit_get_loop_iteration_count(backedge_ip), 2);
+    }
+
+    assert_eq!(interpreter.jit_get_statistics().loop_counts_len(), 13);
+}
+
+#[test]
+fn jit_eviction_removes_cold_loop_counts_after_many_loop_sites() {
+    let mut interpreter = test_interpreter("jit-loop-eviction-many-sites");
+
+    for padding in 0..=12 {
+        let (module, backedge_ip) =
+            loop_module_with_padding(&format!("jit-loop-evict-{padding}"), padding, 4);
+        interpreter
+            .execute(&module)
+            .expect("padded loop should execute before eviction");
+        assert_eq!(interpreter.jit_get_loop_iteration_count(backedge_ip), 3);
+    }
+    assert_eq!(interpreter.jit_get_statistics().loop_counts_len(), 13);
+
+    for _ in 0..50_000 {
+        interpreter.jit_evict_cold_functions();
+    }
+
+    assert_eq!(interpreter.jit_get_statistics().loop_counts_len(), 0);
+    for padding in 0..=12 {
+        let (_, backedge_ip) = loop_module_with_padding("jit-loop-evict-check", padding, 4);
+        assert_eq!(interpreter.jit_get_loop_iteration_count(backedge_ip), 0);
+    }
 }
 
 #[test]

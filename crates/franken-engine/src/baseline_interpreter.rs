@@ -19,7 +19,8 @@
 //! difference is in policy (instruction budget, register limit, dispatch
 //! strategy), not in a second engine backend.
 //!
-//! `BTreeMap`/`BTreeSet` for deterministic ordering.
+//! `BTreeMap`/`BTreeSet` for deterministic ordering; hot-path JIT counters use
+//! private non-observable storage where iteration order is never exposed.
 //! `#![forbid(unsafe_code)]` — no unsafe anywhere.
 //!
 //! Plan reference: Section 10.2 item 8, bd-2f8.
@@ -35,7 +36,7 @@
 )]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -190,6 +191,8 @@ const MEMORY_ESTIMATE_GENERATOR_BASE_BYTES: u64 = 48;
 /// Offset for test-only synthetic function IDs to avoid production table IDs.
 #[cfg(test)]
 const TEST_FUNCTION_ID_OFFSET: u32 = 100_000;
+/// Keep the common one-to-few loop-site case allocation-light and deterministic.
+const JIT_LOOP_COUNTER_INLINE_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostcallCapabilityClass {
@@ -2028,6 +2031,110 @@ impl JitStatistics {
     }
 }
 
+#[derive(Debug, Clone)]
+struct LoopIterationCounters {
+    storage: LoopIterationCounterStorage,
+}
+
+#[derive(Debug, Clone)]
+enum LoopIterationCounterStorage {
+    Inline(Vec<(usize, u64)>),
+    Hashed(HashMap<usize, u64>),
+}
+
+impl Default for LoopIterationCounters {
+    fn default() -> Self {
+        Self {
+            storage: LoopIterationCounterStorage::Inline(Vec::new()),
+        }
+    }
+}
+
+impl LoopIterationCounters {
+    fn increment(&mut self, instruction_index: usize) -> u64 {
+        match &mut self.storage {
+            LoopIterationCounterStorage::Inline(entries) => {
+                if let Some((_, count)) = entries
+                    .iter_mut()
+                    .find(|(index, _)| *index == instruction_index)
+                {
+                    *count += 1;
+                    return *count;
+                }
+
+                if entries.len() < JIT_LOOP_COUNTER_INLINE_CAPACITY {
+                    entries.push((instruction_index, 1));
+                    return 1;
+                }
+
+                let mut promoted = HashMap::with_capacity(entries.len() + 1);
+                for (index, count) in entries.drain(..) {
+                    promoted.insert(index, count);
+                }
+                let count = promoted.entry(instruction_index).or_insert(0);
+                *count += 1;
+                let updated = *count;
+                self.storage = LoopIterationCounterStorage::Hashed(promoted);
+                updated
+            }
+            LoopIterationCounterStorage::Hashed(entries) => {
+                let count = entries.entry(instruction_index).or_insert(0);
+                *count += 1;
+                *count
+            }
+        }
+    }
+
+    fn get(&self, instruction_index: usize) -> u64 {
+        match &self.storage {
+            LoopIterationCounterStorage::Inline(entries) => entries
+                .iter()
+                .find_map(|(index, count)| (*index == instruction_index).then_some(*count))
+                .unwrap_or(0),
+            LoopIterationCounterStorage::Hashed(entries) => {
+                entries.get(&instruction_index).copied().unwrap_or(0)
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match &self.storage {
+            LoopIterationCounterStorage::Inline(entries) => entries.len(),
+            LoopIterationCounterStorage::Hashed(entries) => entries.len(),
+        }
+    }
+
+    fn retain_above(&mut self, threshold: u64) {
+        match &mut self.storage {
+            LoopIterationCounterStorage::Inline(entries) => {
+                entries.retain(|(_, count)| *count > threshold);
+            }
+            LoopIterationCounterStorage::Hashed(entries) => {
+                entries.retain(|_, count| *count > threshold);
+                if entries.len() <= JIT_LOOP_COUNTER_INLINE_CAPACITY {
+                    let inline = entries
+                        .iter()
+                        .map(|(index, count)| (*index, *count))
+                        .collect();
+                    self.storage = LoopIterationCounterStorage::Inline(inline);
+                }
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        match &mut self.storage {
+            LoopIterationCounterStorage::Inline(entries) => entries.clear(),
+            LoopIterationCounterStorage::Hashed(entries) => entries.clear(),
+        }
+    }
+
+    #[cfg(test)]
+    fn is_hashed(&self) -> bool {
+        matches!(self.storage, LoopIterationCounterStorage::Hashed(_))
+    }
+}
+
 // Allow destructuring as (usize, usize, u64, u64)
 impl From<JitStatistics> for (usize, usize, u64, u64) {
     fn from(value: JitStatistics) -> Self {
@@ -2039,6 +2146,46 @@ impl From<JitStatistics> for (usize, usize, u64, u64) {
 impl JitStatistics {
     pub fn destructure(self) -> (usize, usize, u64, u64) {
         (self.0, self.1, self.2, self.3)
+    }
+}
+
+#[cfg(test)]
+mod loop_iteration_counter_tests {
+    use super::*;
+
+    #[test]
+    fn loop_iteration_counters_stay_inline_for_common_small_loop_sets() {
+        let mut counters = LoopIterationCounters::default();
+
+        for index in 0..JIT_LOOP_COUNTER_INLINE_CAPACITY {
+            assert_eq!(counters.increment(index), 1);
+        }
+        assert_eq!(counters.increment(3), 2);
+
+        assert_eq!(counters.len(), JIT_LOOP_COUNTER_INLINE_CAPACITY);
+        assert_eq!(counters.get(3), 2);
+        assert_eq!(counters.get(999), 0);
+        assert!(!counters.is_hashed());
+    }
+
+    #[test]
+    fn loop_iteration_counters_promote_and_retain_counts() {
+        let mut counters = LoopIterationCounters::default();
+
+        for index in 0..=JIT_LOOP_COUNTER_INLINE_CAPACITY {
+            assert_eq!(counters.increment(index), 1);
+        }
+        assert!(counters.is_hashed());
+
+        for _ in 0..11 {
+            counters.increment(2);
+        }
+        counters.retain_above(10);
+
+        assert_eq!(counters.len(), 1);
+        assert_eq!(counters.get(2), 12);
+        assert_eq!(counters.get(1), 0);
+        assert!(!counters.is_hashed());
     }
 }
 
@@ -2167,7 +2314,7 @@ pub struct InterpreterCore {
     /// JIT hot path detection counters for function calls.
     jit_function_call_counts: BTreeMap<u32, u64>,
     /// JIT hot path detection counters for loop backedges.
-    jit_loop_iteration_counts: BTreeMap<usize, u64>,
+    jit_loop_iteration_counts: LoopIterationCounters,
     /// Configurable threshold for tier promotion (default: 10,000).
     jit_hot_threshold: u64,
     /// Cold function eviction counter to implement decay policy.
@@ -2236,7 +2383,7 @@ impl InterpreterCore {
             weakmap_storage: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
             jit_function_call_counts: BTreeMap::new(),
-            jit_loop_iteration_counts: BTreeMap::new(),
+            jit_loop_iteration_counts: LoopIterationCounters::default(),
             jit_hot_threshold: 10_000, // Default threshold
             jit_eviction_counter: 0,
         }
@@ -2356,14 +2503,10 @@ impl InterpreterCore {
 
     /// Record a loop iteration at backedge and check for hot loop promotion.
     fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
-        let count = self
-            .jit_loop_iteration_counts
-            .entry(instruction_index)
-            .or_insert(0);
-        *count += 1;
+        let count = self.jit_loop_iteration_counts.increment(instruction_index);
 
         // Check if threshold crossed for hot loop tier promotion
-        *count >= self.jit_hot_threshold
+        count >= self.jit_hot_threshold
     }
 
     /// Get the current call count for a function.
@@ -2376,10 +2519,7 @@ impl InterpreterCore {
 
     /// Get the current iteration count for a loop backedge.
     pub fn jit_get_loop_iteration_count(&self, instruction_index: usize) -> u64 {
-        self.jit_loop_iteration_counts
-            .get(&instruction_index)
-            .copied()
-            .unwrap_or(0)
+        self.jit_loop_iteration_counts.get(instruction_index)
     }
 
     /// Configure the hot threshold for tier promotion.
@@ -2414,8 +2554,7 @@ impl InterpreterCore {
                 .retain(|_function_id, count| *count > COLD_THRESHOLD);
 
             // Also evict cold loops
-            self.jit_loop_iteration_counts
-                .retain(|_index, count| *count > COLD_THRESHOLD);
+            self.jit_loop_iteration_counts.retain_above(COLD_THRESHOLD);
         }
     }
 

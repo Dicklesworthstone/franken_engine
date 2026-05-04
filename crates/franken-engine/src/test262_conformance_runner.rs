@@ -588,18 +588,55 @@ fn path_matches_pattern(path: &Path, pattern: &str) -> bool {
     if pattern.is_empty() || pattern == "*.js" || pattern == "**/*.js" {
         return true;
     }
-    if !pattern.contains('*') {
-        return normalized_path.contains(&pattern);
+
+    let pattern_components: Vec<_> = pattern.split('/').collect();
+    let path_components: Vec<_> = normalized_path.split('/').collect();
+    path_components_match(&pattern_components, &path_components)
+}
+
+fn path_components_match(pattern_components: &[&str], path_components: &[&str]) -> bool {
+    let Some((pattern_head, pattern_tail)) = pattern_components.split_first() else {
+        return path_components.is_empty();
+    };
+
+    if *pattern_head == "**" {
+        return (0..=path_components.len())
+            .any(|skip| path_components_match(pattern_tail, &path_components[skip..]));
     }
 
-    let mut cursor = 0;
-    for fragment in pattern.split('*').filter(|fragment| !fragment.is_empty()) {
-        let Some(offset) = normalized_path[cursor..].find(fragment) else {
-            return false;
-        };
-        cursor += offset + fragment.len();
+    let Some((path_head, path_tail)) = path_components.split_first() else {
+        return false;
+    };
+
+    segment_matches(pattern_head, path_head) && path_components_match(pattern_tail, path_tail)
+}
+
+fn segment_matches(pattern: &str, value: &str) -> bool {
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    let value_chars: Vec<char> = value.chars().collect();
+    let mut matches = vec![vec![false; value_chars.len() + 1]; pattern_chars.len() + 1];
+    matches[0][0] = true;
+
+    for (pattern_index, pattern_char) in pattern_chars.iter().enumerate() {
+        if *pattern_char == '*' {
+            matches[pattern_index + 1][0] = matches[pattern_index][0];
+        }
+
+        for value_index in 0..value_chars.len() {
+            matches[pattern_index + 1][value_index + 1] = match *pattern_char {
+                '*' => {
+                    matches[pattern_index][value_index + 1]
+                        || matches[pattern_index + 1][value_index]
+                }
+                '?' => matches[pattern_index][value_index],
+                literal => {
+                    matches[pattern_index][value_index] && literal == value_chars[value_index]
+                }
+            };
+        }
     }
-    true
+
+    matches[pattern_chars.len()][value_chars.len()]
 }
 
 fn parse_test262_metadata(source: &str) -> TestMetadata {
@@ -846,6 +883,30 @@ mod tests {
             PathBuf::from("test/language/positive.js")
         );
         assert!(!report.test_records[0].is_negative);
+    }
+
+    #[test]
+    fn test_path_pattern_globs_respect_component_boundaries() {
+        assert!(path_matches_pattern(
+            Path::new("test/language/direct.js"),
+            "test/language/*.js"
+        ));
+        assert!(!path_matches_pattern(
+            Path::new("test/language/nested/case.js"),
+            "test/language/*.js"
+        ));
+        assert!(path_matches_pattern(
+            Path::new("test/language/nested/case.js"),
+            "test/language/**/*.js"
+        ));
+        assert!(path_matches_pattern(
+            Path::new("test/language/expr-01.js"),
+            "test/language/expr-??.js"
+        ));
+        assert!(!path_matches_pattern(
+            Path::new("test/built-ins/Array/case.js"),
+            "test/language/**/*.js"
+        ));
     }
 }
 

@@ -554,6 +554,64 @@ fn test_runner_unlimited_tests() {
 }
 
 #[test]
+fn test_runner_glob_pattern_excludes_nested_paths_without_double_star() {
+    let root = fixture_test262_root(&[
+        ("test/language/direct.js", "1"),
+        ("test/language/nested/case.js", "2"),
+        ("test/built-ins/Array/direct.js", "3"),
+    ]);
+    let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
+        max_tests: 0,
+        pattern: Some("test/language/*.js".to_string()),
+        ..RunnerConfig::default()
+    };
+    let runner = Test262Runner::new(config);
+
+    let report = runner.run_conformance(SecurityEpoch::from_raw(1)).unwrap();
+
+    assert_eq!(report.total_discovered, 1);
+    assert_eq!(report.overall.total_tests, 1);
+    assert_eq!(
+        report.test_records[0].path,
+        PathBuf::from("test/language/direct.js")
+    );
+}
+
+#[test]
+fn test_runner_glob_pattern_double_star_includes_nested_paths() {
+    let root = fixture_test262_root(&[
+        ("test/language/direct.js", "1"),
+        ("test/language/nested/case.js", "2"),
+        ("test/built-ins/Array/direct.js", "3"),
+    ]);
+    let config = RunnerConfig {
+        test262_path: root.path().to_path_buf(),
+        max_tests: 0,
+        pattern: Some("test/language/**/*.js".to_string()),
+        ..RunnerConfig::default()
+    };
+    let runner = Test262Runner::new(config);
+
+    let report = runner.run_conformance(SecurityEpoch::from_raw(1)).unwrap();
+
+    assert_eq!(report.total_discovered, 2);
+    assert_eq!(report.overall.total_tests, 2);
+    let paths: Vec<_> = report
+        .test_records
+        .iter()
+        .map(|record| record.path.clone())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("test/language/direct.js"),
+            PathBuf::from("test/language/nested/case.js")
+        ]
+    );
+}
+
+#[test]
 fn test_serde_roundtrip_test_result() {
     let results = [
         TestResult::Pass,

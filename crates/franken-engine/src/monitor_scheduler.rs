@@ -219,6 +219,86 @@ pub struct ScheduleResult {
     pub decisions: Vec<ScheduleDecision>,
 }
 
+/// Version marker for monitor-scheduler evidence reports.
+pub const MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION: &str = "monitor_scheduler_voi_evidence.v1";
+
+// ---------------------------------------------------------------------------
+// ScheduleEvidenceReport — operator-facing scheduling evidence
+// ---------------------------------------------------------------------------
+
+/// Compact, stable evidence report for a single monitor-scheduler interval.
+///
+/// This intentionally mirrors the fields operators need during swarm incidents
+/// without exposing mutable scheduler state. Decision ordering is inherited from
+/// [`ScheduleResult::decisions`], which is deterministically sorted by VOI score
+/// and probe identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleEvidenceReport {
+    /// Stable schema version for downstream evidence consumers.
+    pub schema_version: String,
+    /// Scheduler identifier.
+    pub scheduler_id: String,
+    /// Scheduling interval number.
+    pub interval: u64,
+    /// Regime label at scheduling time.
+    pub regime: String,
+    /// Total budget for this interval (millionths).
+    pub budget_total: i64,
+    /// Budget consumed by scheduled probes (millionths).
+    pub budget_used: i64,
+    /// Number of probes scheduled.
+    pub probes_scheduled: usize,
+    /// Number of probes deferred.
+    pub probes_deferred: usize,
+    /// Per-probe evidence rows in deterministic decision order.
+    pub decisions: Vec<ScheduleDecisionEvidence>,
+}
+
+/// Compact evidence row for a single probe scheduling decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleDecisionEvidence {
+    /// Probe identifier.
+    pub probe_id: String,
+    /// Stable probe-kind label.
+    pub kind: String,
+    /// Computed VOI score (millionths).
+    pub voi_score: i64,
+    /// Effective cost charged to the interval budget (millionths).
+    pub cost: i64,
+    /// Whether the probe was scheduled.
+    pub scheduled: bool,
+    /// Reason if the probe was deferred.
+    pub skip_reason: Option<String>,
+}
+
+impl ScheduleResult {
+    /// Build the compact operator-facing evidence report for this interval.
+    pub fn evidence_report(&self) -> ScheduleEvidenceReport {
+        ScheduleEvidenceReport {
+            schema_version: MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION.to_string(),
+            scheduler_id: self.scheduler_id.clone(),
+            interval: self.interval,
+            regime: self.regime.to_string(),
+            budget_total: self.budget_total,
+            budget_used: self.budget_used,
+            probes_scheduled: self.probes_scheduled,
+            probes_deferred: self.probes_deferred,
+            decisions: self
+                .decisions
+                .iter()
+                .map(|decision| ScheduleDecisionEvidence {
+                    probe_id: decision.probe_id.clone(),
+                    kind: decision.kind.to_string(),
+                    voi_score: decision.voi_score,
+                    cost: decision.cost,
+                    scheduled: decision.scheduled,
+                    skip_reason: decision.skip_reason.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SchedulerError
 // ---------------------------------------------------------------------------
@@ -317,6 +397,19 @@ impl MonitorScheduler {
     /// Scheduling history.
     pub fn history(&self) -> &[ScheduleResult] {
         &self.history
+    }
+
+    /// Evidence reports for every completed scheduling interval.
+    pub fn evidence_reports(&self) -> Vec<ScheduleEvidenceReport> {
+        self.history
+            .iter()
+            .map(ScheduleResult::evidence_report)
+            .collect()
+    }
+
+    /// Evidence report for the most recent scheduling interval, if any.
+    pub fn latest_evidence_report(&self) -> Option<ScheduleEvidenceReport> {
+        self.history.last().map(ScheduleResult::evidence_report)
     }
 
     /// Get probe state by ID.
@@ -2004,5 +2097,114 @@ mod tests {
             .find(|d| d.probe_id == "integrity-1")
             .expect("serde deserialization should succeed");
         assert_eq!(integrity_dec.kind, ProbeKind::IntegrityAudit);
+    }
+
+    // -- Enrichment: operator-facing VOI evidence reports --
+
+    fn evidence_report_scheduler() -> MonitorScheduler {
+        let config = SchedulerConfig {
+            scheduler_id: "evidence-scheduler".to_string(),
+            base_budget_millionths: 1,
+            regime_budgets: BTreeMap::new(),
+            relevance_overrides: BTreeMap::new(),
+        };
+        let mut sched = MonitorScheduler::new(config);
+        sched
+            .register_probe(ProbeConfig {
+                probe_id: "zero-cost".to_string(),
+                kind: ProbeKind::HealthCheck,
+                cost_millionths: 0,
+                information_gain_millionths: 2_000_000,
+                base_relevance_millionths: 1_000_000,
+            })
+            .expect("zero-cost probe registration");
+        sched
+            .register_probe(health_probe("deferred-health"))
+            .expect("deferred probe registration");
+        sched
+    }
+
+    #[test]
+    fn monitor_schedule_evidence_report_contains_operator_fields() {
+        let mut sched = evidence_report_scheduler();
+        let result = sched.schedule(Regime::Normal);
+        let report = result.evidence_report();
+
+        assert_eq!(
+            report.schema_version,
+            MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION
+        );
+        assert_eq!(report.scheduler_id, "evidence-scheduler");
+        assert_eq!(report.interval, 1);
+        assert_eq!(report.regime, "normal");
+        assert_eq!(report.budget_total, 1);
+        assert_eq!(report.budget_used, 1);
+        assert_eq!(report.probes_scheduled, 1);
+        assert_eq!(report.probes_deferred, 1);
+        assert_eq!(report.decisions.len(), 2);
+
+        let zero_cost = &report.decisions[0];
+        assert_eq!(zero_cost.probe_id, "zero-cost");
+        assert_eq!(zero_cost.kind, "health_check");
+        assert_eq!(zero_cost.cost, 1);
+        assert!(zero_cost.scheduled);
+        assert!(zero_cost.skip_reason.is_none());
+
+        let deferred = &report.decisions[1];
+        assert_eq!(deferred.probe_id, "deferred-health");
+        assert_eq!(deferred.kind, "health_check");
+        assert_eq!(deferred.cost, 100_000);
+        assert!(!deferred.scheduled);
+        assert!(
+            deferred
+                .skip_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("budget exhausted")
+        );
+    }
+
+    #[test]
+    fn monitor_schedule_evidence_report_serde_roundtrip() {
+        let mut sched = evidence_report_scheduler();
+        let report = sched.schedule(Regime::Normal).evidence_report();
+
+        let json = serde_json::to_string(&report).expect("evidence report serializes");
+        let restored: ScheduleEvidenceReport =
+            serde_json::from_str(&json).expect("evidence report deserializes");
+
+        assert_eq!(report, restored);
+        assert!(json.contains("\"schema_version\""));
+        assert!(json.contains("\"budget_total\""));
+        assert!(json.contains("\"skip_reason\""));
+    }
+
+    #[test]
+    fn monitor_schedule_evidence_report_is_stable_for_equal_inputs() {
+        let run = || {
+            let mut sched = evidence_report_scheduler();
+            serde_json::to_string(&sched.schedule(Regime::Normal).evidence_report())
+                .expect("evidence report serializes")
+        };
+
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn monitor_scheduler_history_evidence_reports_preserve_interval_order() {
+        let mut sched = test_scheduler();
+        let first = sched.schedule(Regime::Normal).evidence_report();
+        let second = sched.schedule(Regime::Attack).evidence_report();
+
+        let reports = sched.evidence_reports();
+        assert_eq!(reports, vec![first.clone(), second.clone()]);
+        assert_eq!(reports[0].interval, 1);
+        assert_eq!(reports[1].interval, 2);
+        assert_eq!(
+            sched
+                .latest_evidence_report()
+                .expect("latest report should exist"),
+            second
+        );
     }
 }

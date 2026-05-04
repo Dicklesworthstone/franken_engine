@@ -21,8 +21,9 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::monitor_scheduler::{
-    MonitorScheduler, ProbeConfig, ProbeKind, ProbeState, ScheduleDecision, ScheduleResult,
-    SchedulerConfig, SchedulerError,
+    MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION, MonitorScheduler, ProbeConfig, ProbeKind,
+    ProbeState, ScheduleDecision, ScheduleEvidenceReport, ScheduleResult, SchedulerConfig,
+    SchedulerError,
 };
 use frankenengine_engine::regime_detector::Regime;
 
@@ -957,6 +958,30 @@ fn schedule_result_serde_round_trip() {
     let json = serde_json::to_string(&result).unwrap();
     let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
     assert_eq!(result, restored);
+}
+
+#[test]
+fn schedule_evidence_report_public_api_contains_budget_fields() {
+    let mut sched = base_scheduler();
+    let report = sched.schedule(Regime::Normal).evidence_report();
+
+    assert_eq!(
+        report.schema_version,
+        MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION
+    );
+    assert_eq!(report.scheduler_id, "sched-int");
+    assert_eq!(report.interval, 1);
+    assert_eq!(report.regime, "normal");
+    assert_eq!(report.budget_total, 3_000_000);
+    assert!(report.budget_used <= report.budget_total);
+    assert_eq!(
+        report.probes_scheduled + report.probes_deferred,
+        report.decisions.len()
+    );
+
+    let json = serde_json::to_string(&report).unwrap();
+    let restored: ScheduleEvidenceReport = serde_json::from_str(&json).unwrap();
+    assert_eq!(report, restored);
 }
 
 #[test]

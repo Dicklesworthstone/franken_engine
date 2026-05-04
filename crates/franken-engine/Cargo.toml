@@ -34,6 +34,11 @@ path = "src/bin/franken_quarantine_mesh_demo.rs"
 name = "live_ifc_declassification_example"
 path = "../../examples/live_ifc_declassification_example.rs"
 
+[[bench]]
+name = "comparative_node"
+path = "benches/comparative_node.rs"
+harness = false
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

@@ -21,7 +21,7 @@
 //! Cross-refs: bd-6pk (disruption scorecard), bd-mhz4 (benchmark harness),
 //! bd-3gsv (third-party verifier toolkit).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -39,12 +39,20 @@ pub const GATE_COMPONENT: &str = "runtime_comparison_gate";
 /// Schema version for gate evidence.
 pub const GATE_SCHEMA_VERSION: &str = "franken-engine.runtime-comparison-gate.v1";
 
+/// Schema version for runtime-comparison workload drift reports.
+pub const WORKLOAD_DRIFT_SCHEMA_VERSION: &str =
+    "franken-engine.runtime-comparison-workload-drift.v1";
+
 /// Default maximum coefficient of variation (CV) in millionths.
 /// 30_000 = 3%.
 pub const DEFAULT_MAX_CV_MILLIONTHS: u64 = 30_000;
 
 /// Default minimum runs per benchmark for statistical validity.
 pub const DEFAULT_MIN_RUNS_PER_BENCHMARK: u64 = 30;
+
+/// Default maximum live/operator workload summary age before broad performance
+/// claims must be held.
+pub const DEFAULT_MAX_LIVE_SUMMARY_AGE_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Required benchmark categories for a complete harness.
 pub const REQUIRED_CATEGORIES: &[BenchmarkCategory] = &[
@@ -457,6 +465,142 @@ pub struct ReproducibilityResult {
 }
 
 // ---------------------------------------------------------------------------
+// RuntimeComparisonWorkloadManifest and live workload drift gate
+// ---------------------------------------------------------------------------
+
+/// Fairness policy from the runtime-comparison manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeComparisonFairnessPolicy {
+    pub warmup_runs: u64,
+    pub sample_count: u64,
+    pub case_timeout_ms: u64,
+}
+
+/// A benchmark case from the runtime-comparison manifest.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RuntimeComparisonWorkloadCase {
+    pub benchmark_id: String,
+    pub category: String,
+    pub program_path: String,
+    pub args: Vec<String>,
+}
+
+/// The benchmark workload manifest shape used by
+/// `benchmarks/runtime_comparison/manifest.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeComparisonWorkloadManifest {
+    pub schema_version: String,
+    pub runtime_pins: BTreeMap<String, String>,
+    pub runtime_commands: BTreeMap<String, String>,
+    pub fairness_policy: RuntimeComparisonFairnessPolicy,
+    pub cases: Vec<RuntimeComparisonWorkloadCase>,
+}
+
+/// A live/operator workload observation summarized outside the benchmark suite.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LiveOperatorWorkload {
+    pub workload_id: String,
+    pub category: String,
+    pub sample_count: u64,
+}
+
+/// Live/operator workload summary used to decide whether performance claims are
+/// tied to fresh workload evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveOperatorWorkloadSummary {
+    pub schema_version: String,
+    pub generated_at_epoch_seconds: u64,
+    pub observation_window_seconds: u64,
+    pub workloads: Vec<LiveOperatorWorkload>,
+}
+
+/// Specific reason the workload drift gate failed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum WorkloadDriftBlocker {
+    MissingBenchmarkManifest,
+    MissingLiveSummary,
+    EmptyBenchmarkManifest,
+    EmptyLiveSummary,
+    StaleLiveSummary {
+        generated_at_epoch_seconds: u64,
+        evaluated_at_epoch_seconds: u64,
+        age_seconds: u64,
+        max_age_seconds: u64,
+    },
+    UnrepresentedLiveCategory {
+        category: String,
+        live_sample_count: u64,
+    },
+    UnrepresentedLiveWorkload {
+        workload_id: String,
+        category: String,
+    },
+    NonPositiveLiveSampleCount {
+        workload_id: String,
+    },
+}
+
+impl fmt::Display for WorkloadDriftBlocker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingBenchmarkManifest => f.write_str("missing benchmark workload manifest"),
+            Self::MissingLiveSummary => f.write_str("missing live workload summary"),
+            Self::EmptyBenchmarkManifest => f.write_str("benchmark workload manifest has no cases"),
+            Self::EmptyLiveSummary => f.write_str("live workload summary has no workloads"),
+            Self::StaleLiveSummary {
+                age_seconds,
+                max_age_seconds,
+                ..
+            } => write!(
+                f,
+                "live workload summary is stale: age {age_seconds}s exceeds {max_age_seconds}s"
+            ),
+            Self::UnrepresentedLiveCategory {
+                category,
+                live_sample_count,
+            } => write!(
+                f,
+                "live workload category is unrepresented: {category} ({live_sample_count} samples)"
+            ),
+            Self::UnrepresentedLiveWorkload {
+                workload_id,
+                category,
+            } => write!(
+                f,
+                "live workload is unrepresented: {workload_id} in {category}"
+            ),
+            Self::NonPositiveLiveSampleCount { workload_id } => {
+                write!(f, "live workload has no positive samples: {workload_id}")
+            }
+        }
+    }
+}
+
+/// Input to the runtime-comparison workload drift gate.
+#[derive(Debug, Clone)]
+pub struct WorkloadDriftInput<'a> {
+    pub benchmark_manifest: Option<&'a RuntimeComparisonWorkloadManifest>,
+    pub live_summary: Option<&'a LiveOperatorWorkloadSummary>,
+    pub evaluated_at_epoch_seconds: u64,
+    pub max_live_summary_age_seconds: u64,
+}
+
+/// Deterministic report describing whether broad performance claims are allowed
+/// by live workload freshness and coverage evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadDriftReport {
+    pub schema_version: String,
+    pub outcome: GateOutcome,
+    pub blockers: Vec<WorkloadDriftBlocker>,
+    pub benchmark_case_count: u64,
+    pub live_workload_count: u64,
+    pub matched_live_workload_count: u64,
+    pub live_sample_count: u64,
+    pub evaluated_at_epoch_seconds: u64,
+    pub max_live_summary_age_seconds: u64,
+}
+
+// ---------------------------------------------------------------------------
 // GateEvidenceBundle
 // ---------------------------------------------------------------------------
 
@@ -856,6 +1000,121 @@ fn compute_overall_deltas(results: &[BenchmarkResult]) -> (i64, i64) {
 /// Check if a gate evidence bundle passes the release gate.
 pub fn passes_release_gate(bundle: &GateEvidenceBundle) -> bool {
     bundle.outcome.is_pass()
+}
+
+/// Check whether a runtime-comparison bundle and workload drift report together
+/// allow a broad performance claim.
+pub fn passes_broad_performance_claim_gate(
+    bundle: &GateEvidenceBundle,
+    drift_report: &WorkloadDriftReport,
+) -> bool {
+    bundle.outcome.is_pass() && drift_report.outcome.is_pass()
+}
+
+/// Evaluate whether a runtime-comparison workload manifest still matches fresh
+/// live/operator workload evidence.
+pub fn evaluate_workload_drift(input: &WorkloadDriftInput<'_>) -> WorkloadDriftReport {
+    let mut blockers = Vec::new();
+    let mut benchmark_case_count = 0;
+    let mut live_workload_count = 0;
+    let mut matched_live_workload_count = 0;
+    let mut live_sample_count = 0;
+
+    let mut manifest_categories = BTreeSet::new();
+    let mut manifest_case_ids = BTreeSet::new();
+
+    match input.benchmark_manifest {
+        Some(manifest) => {
+            benchmark_case_count = manifest.cases.len() as u64;
+            if manifest.cases.is_empty() {
+                blockers.push(WorkloadDriftBlocker::EmptyBenchmarkManifest);
+            }
+            for case in &manifest.cases {
+                manifest_case_ids.insert(normalize_workload_key(&case.benchmark_id));
+                manifest_categories.insert(normalize_workload_key(&case.category));
+            }
+        }
+        None => blockers.push(WorkloadDriftBlocker::MissingBenchmarkManifest),
+    }
+
+    match input.live_summary {
+        Some(summary) => {
+            live_workload_count = summary.workloads.len() as u64;
+            if summary.workloads.is_empty() {
+                blockers.push(WorkloadDriftBlocker::EmptyLiveSummary);
+            }
+
+            let age_seconds = input
+                .evaluated_at_epoch_seconds
+                .saturating_sub(summary.generated_at_epoch_seconds);
+            if age_seconds > input.max_live_summary_age_seconds {
+                blockers.push(WorkloadDriftBlocker::StaleLiveSummary {
+                    generated_at_epoch_seconds: summary.generated_at_epoch_seconds,
+                    evaluated_at_epoch_seconds: input.evaluated_at_epoch_seconds,
+                    age_seconds,
+                    max_age_seconds: input.max_live_summary_age_seconds,
+                });
+            }
+
+            let mut live_category_sample_counts: BTreeMap<String, u64> = BTreeMap::new();
+            for workload in &summary.workloads {
+                let workload_id = normalize_workload_key(&workload.workload_id);
+                let category = normalize_workload_key(&workload.category);
+                live_sample_count = live_sample_count.saturating_add(workload.sample_count);
+                live_category_sample_counts
+                    .entry(category.clone())
+                    .and_modify(|count| *count = count.saturating_add(workload.sample_count))
+                    .or_insert(workload.sample_count);
+
+                if workload.sample_count == 0 {
+                    blockers.push(WorkloadDriftBlocker::NonPositiveLiveSampleCount {
+                        workload_id: workload.workload_id.clone(),
+                    });
+                }
+                if manifest_case_ids.contains(&workload_id) {
+                    matched_live_workload_count += 1;
+                } else {
+                    blockers.push(WorkloadDriftBlocker::UnrepresentedLiveWorkload {
+                        workload_id: workload.workload_id.clone(),
+                        category: workload.category.clone(),
+                    });
+                }
+            }
+
+            for (category, count) in live_category_sample_counts {
+                if !manifest_categories.contains(&category) {
+                    blockers.push(WorkloadDriftBlocker::UnrepresentedLiveCategory {
+                        category,
+                        live_sample_count: count,
+                    });
+                }
+            }
+        }
+        None => blockers.push(WorkloadDriftBlocker::MissingLiveSummary),
+    }
+
+    blockers.sort();
+    let outcome = if blockers.is_empty() {
+        GateOutcome::Pass
+    } else {
+        GateOutcome::Fail
+    };
+
+    WorkloadDriftReport {
+        schema_version: WORKLOAD_DRIFT_SCHEMA_VERSION.to_string(),
+        outcome,
+        blockers,
+        benchmark_case_count,
+        live_workload_count,
+        matched_live_workload_count,
+        live_sample_count,
+        evaluated_at_epoch_seconds: input.evaluated_at_epoch_seconds,
+        max_live_summary_age_seconds: input.max_live_summary_age_seconds,
+    }
+}
+
+fn normalize_workload_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 /// Generate structured log entries for a gate evaluation.

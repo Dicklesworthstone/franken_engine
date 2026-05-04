@@ -21,10 +21,13 @@ use std::collections::BTreeMap;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_comparison_gate::{
     ArtifactBundleAudit, BenchmarkCategory, BenchmarkResult, DEFAULT_MAX_CV_MILLIONTHS,
-    DEFAULT_MIN_RUNS_PER_BENCHMARK, EnvironmentFingerprint, GATE_COMPONENT, GATE_SCHEMA_VERSION,
-    GateBlocker, GateError, GateEvidenceBundle, GateInput, GateOutcome, MethodologyAudit,
-    REQUIRED_CATEGORIES, ReproducibilityResult, RuntimeId, evaluate_gate, generate_log_entries,
-    passes_release_gate,
+    DEFAULT_MAX_LIVE_SUMMARY_AGE_SECONDS, DEFAULT_MIN_RUNS_PER_BENCHMARK, EnvironmentFingerprint,
+    GATE_COMPONENT, GATE_SCHEMA_VERSION, GateBlocker, GateError, GateEvidenceBundle, GateInput,
+    GateOutcome, LiveOperatorWorkload, LiveOperatorWorkloadSummary, MethodologyAudit,
+    REQUIRED_CATEGORIES, ReproducibilityResult, RuntimeComparisonFairnessPolicy,
+    RuntimeComparisonWorkloadCase, RuntimeComparisonWorkloadManifest, RuntimeId,
+    WorkloadDriftBlocker, WorkloadDriftInput, evaluate_gate, evaluate_workload_drift,
+    generate_log_entries, passes_broad_performance_claim_gate, passes_release_gate,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -132,6 +135,70 @@ fn passing_input<'a>(
         min_runs_per_benchmark: DEFAULT_MIN_RUNS_PER_BENCHMARK,
         benchmark_sniffing_check_passed: true,
         benchmark_sniffing_detail: "",
+    }
+}
+
+fn workload_manifest(cases: &[(&str, &str)]) -> RuntimeComparisonWorkloadManifest {
+    RuntimeComparisonWorkloadManifest {
+        schema_version: "franken-engine.benchmark-comparison-manifest.v1".to_string(),
+        runtime_pins: BTreeMap::from([
+            (
+                "franken_engine".to_string(),
+                "franken-engine-local".to_string(),
+            ),
+            ("node_lts".to_string(), "22.13.1".to_string()),
+            ("bun_stable".to_string(), "1.1.43".to_string()),
+        ]),
+        runtime_commands: BTreeMap::from([
+            ("frankenctl".to_string(), "frankenctl".to_string()),
+            ("node".to_string(), "node".to_string()),
+            ("bun".to_string(), "bun".to_string()),
+        ]),
+        fairness_policy: RuntimeComparisonFairnessPolicy {
+            warmup_runs: 2,
+            sample_count: 30,
+            case_timeout_ms: 30_000,
+        },
+        cases: cases
+            .iter()
+            .map(|(id, category)| RuntimeComparisonWorkloadCase {
+                benchmark_id: (*id).to_string(),
+                category: (*category).to_string(),
+                program_path: format!("programs/{id}.js"),
+                args: Vec::new(),
+            })
+            .collect(),
+    }
+}
+
+fn live_summary(
+    generated_at_epoch_seconds: u64,
+    workloads: &[(&str, &str, u64)],
+) -> LiveOperatorWorkloadSummary {
+    LiveOperatorWorkloadSummary {
+        schema_version: "franken-engine.live-operator-workload-summary.v1".to_string(),
+        generated_at_epoch_seconds,
+        observation_window_seconds: 86_400,
+        workloads: workloads
+            .iter()
+            .map(|(id, category, sample_count)| LiveOperatorWorkload {
+                workload_id: (*id).to_string(),
+                category: (*category).to_string(),
+                sample_count: *sample_count,
+            })
+            .collect(),
+    }
+}
+
+fn drift_input<'a>(
+    manifest: Option<&'a RuntimeComparisonWorkloadManifest>,
+    summary: Option<&'a LiveOperatorWorkloadSummary>,
+) -> WorkloadDriftInput<'a> {
+    WorkloadDriftInput {
+        benchmark_manifest: manifest,
+        live_summary: summary,
+        evaluated_at_epoch_seconds: 1_700_000_000,
+        max_live_summary_age_seconds: DEFAULT_MAX_LIVE_SUMMARY_AGE_SECONDS,
     }
 }
 
@@ -624,6 +691,149 @@ fn release_gate_fail() {
     let input = passing_input(&results, &method, &artifacts, &[], &env);
     let bundle = evaluate_gate(&input).unwrap();
     assert!(!passes_release_gate(&bundle));
+}
+
+// ---------------------------------------------------------------------------
+// workload drift gate
+// ---------------------------------------------------------------------------
+
+#[test]
+fn workload_drift_gate_passes_matching_live_summary() {
+    let manifest = workload_manifest(&[
+        ("micro-arithmetic-loop", "micro"),
+        ("macro-tree-traversal", "macro"),
+    ]);
+    let summary = live_summary(
+        1_699_990_000,
+        &[
+            ("micro-arithmetic-loop", "micro", 120),
+            ("macro-tree-traversal", "macro", 80),
+        ],
+    );
+
+    let report = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&summary)));
+
+    assert!(report.outcome.is_pass());
+    assert!(report.blockers.is_empty());
+    assert_eq!(report.benchmark_case_count, 2);
+    assert_eq!(report.live_workload_count, 2);
+    assert_eq!(report.matched_live_workload_count, 2);
+    assert_eq!(report.live_sample_count, 200);
+}
+
+#[test]
+fn workload_drift_gate_fails_stale_live_summary() {
+    let manifest = workload_manifest(&[("micro-arithmetic-loop", "micro")]);
+    let summary = live_summary(1_699_000_000, &[("micro-arithmetic-loop", "micro", 120)]);
+
+    let report = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&summary)));
+
+    assert!(!report.outcome.is_pass());
+    assert!(report.blockers.iter().any(|blocker| matches!(
+        blocker,
+        WorkloadDriftBlocker::StaleLiveSummary {
+            age_seconds,
+            max_age_seconds,
+            ..
+        } if *age_seconds == 1_000_000
+            && *max_age_seconds == DEFAULT_MAX_LIVE_SUMMARY_AGE_SECONDS
+    )));
+}
+
+#[test]
+fn workload_drift_gate_fails_missing_live_summary() {
+    let manifest = workload_manifest(&[("micro-arithmetic-loop", "micro")]);
+
+    let report = evaluate_workload_drift(&drift_input(Some(&manifest), None));
+
+    assert!(!report.outcome.is_pass());
+    assert_eq!(
+        report.blockers,
+        vec![WorkloadDriftBlocker::MissingLiveSummary]
+    );
+}
+
+#[test]
+fn workload_drift_gate_reports_unrepresented_live_workloads_deterministically() {
+    let manifest = workload_manifest(&[("micro-arithmetic-loop", "micro")]);
+    let summary = live_summary(
+        1_699_990_000,
+        &[
+            ("macro-tree-traversal", "macro", 80),
+            ("micro-arithmetic-loop", "micro", 120),
+            ("startup-bootstrap", "startup", 10),
+        ],
+    );
+
+    let first = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&summary)));
+    let second = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&summary)));
+
+    assert_eq!(first, second);
+    assert!(!first.outcome.is_pass());
+    assert_eq!(first.matched_live_workload_count, 1);
+    assert!(first.blockers.iter().any(|blocker| matches!(
+        blocker,
+        WorkloadDriftBlocker::UnrepresentedLiveWorkload { workload_id, .. }
+            if workload_id == "macro-tree-traversal"
+    )));
+    assert!(first.blockers.iter().any(|blocker| matches!(
+        blocker,
+        WorkloadDriftBlocker::UnrepresentedLiveCategory { category, .. }
+            if category == "macro"
+    )));
+}
+
+#[test]
+fn workload_drift_gate_structured_report_serde_roundtrip() {
+    let manifest = workload_manifest(&[("micro-arithmetic-loop", "micro")]);
+    let summary = live_summary(1_699_990_000, &[("micro-arithmetic-loop", "micro", 120)]);
+    let report = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&summary)));
+
+    let json = serde_json::to_string(&report).unwrap();
+    let roundtrip = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(report, roundtrip);
+}
+
+#[test]
+fn broad_performance_claim_gate_requires_release_and_fresh_workload_evidence() {
+    let results = full_benchmark_results();
+    let method = passing_methodology();
+    let artifacts = passing_artifacts();
+    let env = passing_environment();
+    let gate_input = passing_input(&results, &method, &artifacts, &[], &env);
+    let bundle = evaluate_gate(&gate_input).unwrap();
+    let manifest = workload_manifest(&[("micro-arithmetic-loop", "micro")]);
+    let fresh_summary = live_summary(1_699_990_000, &[("micro-arithmetic-loop", "micro", 120)]);
+    let missing_summary_report = evaluate_workload_drift(&drift_input(Some(&manifest), None));
+    let fresh_report = evaluate_workload_drift(&drift_input(Some(&manifest), Some(&fresh_summary)));
+
+    assert!(passes_broad_performance_claim_gate(&bundle, &fresh_report));
+    assert!(!passes_broad_performance_claim_gate(
+        &bundle,
+        &missing_summary_report
+    ));
+}
+
+#[test]
+fn runtime_comparison_manifest_shape_parses_documented_json() {
+    let manifest: RuntimeComparisonWorkloadManifest = serde_json::from_str(include_str!(
+        "../../../benchmarks/runtime_comparison/manifest.json"
+    ))
+    .unwrap();
+
+    assert_eq!(
+        manifest.schema_version,
+        "franken-engine.benchmark-comparison-manifest.v1"
+    );
+    assert!(manifest.runtime_pins.contains_key("franken_engine"));
+    assert_eq!(manifest.fairness_policy.sample_count, 30);
+    assert!(
+        manifest
+            .cases
+            .iter()
+            .any(|case| case.benchmark_id == "micro-arithmetic-loop")
+    );
 }
 
 // ---------------------------------------------------------------------------

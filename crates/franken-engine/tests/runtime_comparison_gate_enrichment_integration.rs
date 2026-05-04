@@ -26,7 +26,8 @@ use frankenengine_engine::runtime_comparison_gate::{
     ArtifactBundleAudit, BenchmarkCategory, BenchmarkResult, CategorySummary,
     DEFAULT_MAX_CV_MILLIONTHS, DEFAULT_MIN_RUNS_PER_BENCHMARK, GATE_COMPONENT, GATE_SCHEMA_VERSION,
     GateBlocker, GateError, GateLogEntry, GateOutcome, MethodologyAudit, REQUIRED_CATEGORIES,
-    ReproducibilityResult, RuntimeId,
+    ReproducibilityResult, RuntimeId, WORKLOAD_DRIFT_SCHEMA_VERSION, WorkloadDriftBlocker,
+    WorkloadDriftReport,
 };
 
 // ===========================================================================
@@ -314,6 +315,39 @@ fn json_fields_gate_log_entry() {
     }
 }
 
+#[test]
+fn json_fields_workload_drift_report() {
+    let report = WorkloadDriftReport {
+        schema_version: WORKLOAD_DRIFT_SCHEMA_VERSION.into(),
+        outcome: GateOutcome::Fail,
+        blockers: vec![WorkloadDriftBlocker::MissingLiveSummary],
+        benchmark_case_count: 1,
+        live_workload_count: 0,
+        matched_live_workload_count: 0,
+        live_sample_count: 0,
+        evaluated_at_epoch_seconds: 1_700_000_000,
+        max_live_summary_age_seconds: 604_800,
+    };
+    let v: serde_json::Value = serde_json::to_value(&report).unwrap();
+    let obj = v.as_object().unwrap();
+    for key in [
+        "schema_version",
+        "outcome",
+        "blockers",
+        "benchmark_case_count",
+        "live_workload_count",
+        "matched_live_workload_count",
+        "live_sample_count",
+        "evaluated_at_epoch_seconds",
+        "max_live_summary_age_seconds",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "WorkloadDriftReport missing field: {key}"
+        );
+    }
+}
+
 // ===========================================================================
 // 11) JSON field-name stability — MethodologyAudit
 // ===========================================================================
@@ -542,6 +576,39 @@ fn serde_roundtrip_gate_blocker_all_variants() {
         let json = serde_json::to_string(blocker).unwrap();
         let rt: GateBlocker = serde_json::from_str(&json).unwrap();
         assert_eq!(*blocker, rt);
+    }
+}
+
+#[test]
+fn serde_roundtrip_workload_drift_blocker_variants() {
+    let blockers = vec![
+        WorkloadDriftBlocker::MissingBenchmarkManifest,
+        WorkloadDriftBlocker::MissingLiveSummary,
+        WorkloadDriftBlocker::EmptyBenchmarkManifest,
+        WorkloadDriftBlocker::EmptyLiveSummary,
+        WorkloadDriftBlocker::StaleLiveSummary {
+            generated_at_epoch_seconds: 1,
+            evaluated_at_epoch_seconds: 10,
+            age_seconds: 9,
+            max_age_seconds: 7,
+        },
+        WorkloadDriftBlocker::UnrepresentedLiveCategory {
+            category: "macro".into(),
+            live_sample_count: 10,
+        },
+        WorkloadDriftBlocker::UnrepresentedLiveWorkload {
+            workload_id: "macro-tree-traversal".into(),
+            category: "macro".into(),
+        },
+        WorkloadDriftBlocker::NonPositiveLiveSampleCount {
+            workload_id: "startup-bootstrap".into(),
+        },
+    ];
+
+    for blocker in blockers {
+        let json = serde_json::to_string(&blocker).unwrap();
+        let roundtrip: WorkloadDriftBlocker = serde_json::from_str(&json).unwrap();
+        assert_eq!(blocker, roundtrip);
     }
 }
 

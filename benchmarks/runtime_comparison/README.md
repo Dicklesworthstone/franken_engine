@@ -41,6 +41,59 @@ through `frankenctl run` and the peer runtime, verifies matching observable
 output before timing, and lets Criterion report per-runtime wall-clock
 distributions inside the same benchmark group.
 
+## Drift Gate Inputs
+
+Broad performance claims must be paired with fresh operator workload evidence.
+The drift gate accepts this benchmark manifest shape:
+
+```json
+{
+  "schema_version": "franken-engine.benchmark-comparison-manifest.v1",
+  "runtime_pins": {
+    "franken_engine": "franken-engine-local",
+    "node_lts": "22.13.1",
+    "bun_stable": "1.1.43"
+  },
+  "runtime_commands": {
+    "frankenctl": "frankenctl",
+    "node": "node",
+    "bun": "bun"
+  },
+  "fairness_policy": {
+    "warmup_runs": 2,
+    "sample_count": 30,
+    "case_timeout_ms": 30000
+  },
+  "cases": [
+    {
+      "benchmark_id": "micro-arithmetic-loop",
+      "category": "micro",
+      "program_path": "programs/micro_arithmetic_loop.js",
+      "args": []
+    }
+  ]
+}
+```
+
+It is compared to a live/operator summary where `workload_id` matches a
+benchmark `benchmark_id`, `category` uses the same lower-case category labels,
+and `generated_at_epoch_seconds` must be inside the accepted freshness window:
+
+```json
+{
+  "schema_version": "franken-engine.live-operator-workload-summary.v1",
+  "generated_at_epoch_seconds": 1700000000,
+  "observation_window_seconds": 86400,
+  "workloads": [
+    {
+      "workload_id": "micro-arithmetic-loop",
+      "category": "micro",
+      "sample_count": 120
+    }
+  ]
+}
+```
+
 ## Methodology
 
 - Workloads are standalone JavaScript programs so each runtime receives the same

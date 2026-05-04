@@ -44,6 +44,7 @@ fn enrichment_serde_governance_verdict_all_roundtrip() {
         GovernanceVerdict::TailRiskExceeded,
         GovernanceVerdict::InsufficientCoverage,
         GovernanceVerdict::InsufficientSamples,
+        GovernanceVerdict::UnprovenCertificate,
         GovernanceVerdict::MultipleViolations,
     ];
     for v in &verdicts {
@@ -169,6 +170,7 @@ fn enrichment_display_governance_verdict_all_unique() {
         GovernanceVerdict::TailRiskExceeded,
         GovernanceVerdict::InsufficientCoverage,
         GovernanceVerdict::InsufficientSamples,
+        GovernanceVerdict::UnprovenCertificate,
         GovernanceVerdict::MultipleViolations,
     ];
     let displays: BTreeSet<String> = verdicts.iter().map(|v| v.to_string()).collect();
@@ -287,6 +289,36 @@ fn enrichment_lifecycle_strict_all_dimensions_satisfied() {
     assert!(receipt.dimensions_missing.is_empty());
     assert_eq!(receipt.dimensions_evaluated.len(), 10);
     assert_eq!(receipt.certificates.len(), 10);
+}
+
+#[test]
+fn enrichment_lifecycle_formal_policy_requires_valid_bound_proofs() {
+    let mut missing = GovernanceEvaluator::new(PublicationPolicy::formal());
+    for dim in ResourceDimension::all() {
+        missing.add_certificate(*dim, "formal_missing".into(), 10_000, 5_000, 200);
+    }
+    let missing_receipt = missing.evaluate(epoch());
+    assert_eq!(
+        missing_receipt.verdict,
+        GovernanceVerdict::UnprovenCertificate
+    );
+    assert!(!missing_receipt.formal_resource_validity_established);
+
+    let mut valid = GovernanceEvaluator::new(PublicationPolicy::formal());
+    for dim in ResourceDimension::all() {
+        valid.add_certificate_with_bound_proof(
+            *dim,
+            "formal_valid".into(),
+            10_000,
+            5_000,
+            200,
+            5_000,
+        );
+    }
+    let valid_receipt = valid.evaluate(epoch());
+    assert_eq!(valid_receipt.verdict, GovernanceVerdict::Approved);
+    assert!(valid_receipt.formal_resource_validity_established);
+    assert_eq!(valid_receipt.resource_bound_proofs.len(), 10);
 }
 
 #[test]
@@ -724,6 +756,7 @@ fn enrichment_verdict_all_non_approved_block() {
         GovernanceVerdict::TailRiskExceeded,
         GovernanceVerdict::InsufficientCoverage,
         GovernanceVerdict::InsufficientSamples,
+        GovernanceVerdict::UnprovenCertificate,
         GovernanceVerdict::MultipleViolations,
     ];
     for v in &blocking {

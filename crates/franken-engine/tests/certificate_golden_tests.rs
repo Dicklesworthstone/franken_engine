@@ -10,8 +10,8 @@ use std::path::Path;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::resource_certificate_governance::{
-    CertificateEvidence, GovernanceEvaluator, GovernanceVerdict, PublicationPolicy,
-    ResourceDimension,
+    CertificateEvidence, CertificateGovernanceEvidenceKind, GovernanceEvaluator, GovernanceVerdict,
+    PublicationPolicy, ResourceDimension,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::timescale_separation_certificate::{
@@ -140,6 +140,7 @@ fn relaxed_policy_with_required_dimensions(
         max_utilisation_millionths: 900_000,
         min_samples: 30,
         min_observability_coverage: 800_000,
+        required_evidence_kind: CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic,
         required_dimensions,
     }
 }

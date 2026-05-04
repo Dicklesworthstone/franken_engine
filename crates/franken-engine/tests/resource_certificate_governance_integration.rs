@@ -389,6 +389,7 @@ fn test_verdict_all_non_approved_block() {
         GovernanceVerdict::TailRiskExceeded,
         GovernanceVerdict::InsufficientCoverage,
         GovernanceVerdict::InsufficientSamples,
+        GovernanceVerdict::UnprovenCertificate,
         GovernanceVerdict::MultipleViolations,
     ];
     for v in &blocking {
@@ -433,6 +434,63 @@ fn test_evaluator_certificate_pass() {
     let receipt = eval.evaluate(epoch());
     assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
     assert_eq!(receipt.certificates.len(), 1);
+    assert!(!receipt.formal_resource_validity_established);
+}
+
+#[test]
+fn test_formal_policy_missing_bound_proof_blocks_certificate_claim() {
+    let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+    for dim in ResourceDimension::all() {
+        eval.add_certificate(*dim, "formal_missing".into(), 1000, 500, 100);
+    }
+
+    let receipt = eval.evaluate(epoch());
+
+    assert_eq!(receipt.verdict, GovernanceVerdict::UnprovenCertificate);
+    assert!(!receipt.formal_resource_validity_established);
+    assert_eq!(receipt.violations.len(), ResourceDimension::all().len());
+    assert!(receipt.resource_bound_proofs.is_empty());
+}
+
+#[test]
+fn test_formal_policy_invalid_bound_proof_blocks_certificate_claim() {
+    let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+    for dim in ResourceDimension::all() {
+        eval.add_certificate_with_bound_proof(*dim, "formal_invalid".into(), 1000, 500, 100, 1001);
+    }
+
+    let receipt = eval.evaluate(epoch());
+
+    assert_eq!(receipt.verdict, GovernanceVerdict::UnprovenCertificate);
+    assert!(!receipt.formal_resource_validity_established);
+    assert_eq!(
+        receipt.resource_bound_proofs.len(),
+        ResourceDimension::all().len()
+    );
+    assert!(
+        receipt
+            .violations
+            .iter()
+            .all(|v| v.category == GovernanceVerdict::UnprovenCertificate)
+    );
+}
+
+#[test]
+fn test_formal_policy_valid_bound_proofs_establish_resource_validity() {
+    let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+    for dim in ResourceDimension::all() {
+        eval.add_certificate_with_bound_proof(*dim, "formal_valid".into(), 1000, 500, 100, 500);
+    }
+
+    let receipt = eval.evaluate(epoch());
+
+    assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+    assert!(receipt.formal_resource_validity_established);
+    assert_eq!(
+        receipt.resource_bound_proofs.len(),
+        ResourceDimension::all().len()
+    );
+    assert!(receipt.violations.is_empty());
 }
 
 #[test]

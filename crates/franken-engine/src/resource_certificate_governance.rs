@@ -10,11 +10,14 @@
 //!
 //! - `ResourceDimension` classifies the bounded resource (time, memory, etc.).
 //! - `CertificateEvidence` captures measured vs certified budget utilisation.
+//! - `ResourceBoundProof` captures a deterministic inequality proof that a
+//!   certificate's observed usage is bounded by the certified budget.
 //! - `RegressionEntry` records budget regression between versions.
 //! - `TailRiskEntry` records p99/p50 ratio drift on resource dimensions.
 //! - `PublicationPolicy` configures threshold-based publication gates for
 //!   resource claims. These gates are operational governance checks, not formal
-//!   proofs that a resource certificate is mathematically valid.
+//!   proofs that a resource certificate is mathematically valid unless the
+//!   policy explicitly requires deterministic bound proofs.
 //! - `GovernanceVerdict` is the top-level gate output.
 //! - `GovernanceReceipt` is a content-hashed audit trail.
 //!
@@ -80,6 +83,10 @@ fn append_str(buf: &mut Vec<u8>, val: &str) {
 
 fn compute_digest(data: &[u8]) -> ContentHash {
     ContentHash::compute(data)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +223,94 @@ impl CertificateEvidence {
 }
 
 // ---------------------------------------------------------------------------
+// ResourceBoundProof
+// ---------------------------------------------------------------------------
+
+/// Deterministic proof that a certificate's observed usage is bounded by its
+/// certified budget.
+///
+/// The checker is intentionally finite and auditable: a proof validates only
+/// when it is tied to the exact evidence hash and establishes the inequality
+/// `measured_usage <= verified_upper_bound <= certified_budget`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceBoundProof {
+    /// Resource dimension.
+    pub dimension: ResourceDimension,
+    /// Workload identifier.
+    pub workload_id: String,
+    /// Certified budget value.
+    pub certified_budget: u64,
+    /// Measured usage copied from the certificate evidence.
+    pub measured_usage: u64,
+    /// Verified deterministic upper bound for usage.
+    pub verified_upper_bound: u64,
+    /// Hash of the evidence this proof is bound to.
+    pub evidence_hash: ContentHash,
+    /// Hash of the proof obligation.
+    pub proof_hash: ContentHash,
+}
+
+impl ResourceBoundProof {
+    /// Create a deterministic bound proof for the supplied evidence fields.
+    pub fn new(
+        dimension: ResourceDimension,
+        workload_id: String,
+        certified_budget: u64,
+        measured_usage: u64,
+        verified_upper_bound: u64,
+        evidence_hash: ContentHash,
+    ) -> Self {
+        let mut buf = Vec::with_capacity(128);
+        append_str(&mut buf, "resource-bound-proof-v1");
+        append_str(&mut buf, &dimension.to_string());
+        append_str(&mut buf, &workload_id);
+        append_u64(&mut buf, certified_budget);
+        append_u64(&mut buf, measured_usage);
+        append_u64(&mut buf, verified_upper_bound);
+        buf.extend_from_slice(evidence_hash.as_bytes());
+        let proof_hash = compute_digest(&buf);
+        Self {
+            dimension,
+            workload_id,
+            certified_budget,
+            measured_usage,
+            verified_upper_bound,
+            evidence_hash,
+            proof_hash,
+        }
+    }
+
+    /// Create a proof from an existing certificate evidence entry.
+    pub fn from_certificate(certificate: &CertificateEvidence, verified_upper_bound: u64) -> Self {
+        Self::new(
+            certificate.dimension,
+            certificate.workload_id.clone(),
+            certificate.certified_budget,
+            certificate.measured_usage,
+            verified_upper_bound,
+            certificate.evidence_hash,
+        )
+    }
+
+    /// Whether this proof is tied to the exact certificate evidence entry.
+    pub fn matches_certificate_identity(&self, certificate: &CertificateEvidence) -> bool {
+        self.dimension == certificate.dimension
+            && self.workload_id == certificate.workload_id
+            && self.certified_budget == certificate.certified_budget
+            && self.measured_usage == certificate.measured_usage
+            && self.evidence_hash == certificate.evidence_hash
+    }
+
+    /// Whether this proof establishes the certificate's resource-bound
+    /// inequality.
+    pub fn validates_certificate(&self, certificate: &CertificateEvidence) -> bool {
+        self.matches_certificate_identity(certificate)
+            && self.measured_usage <= self.verified_upper_bound
+            && self.verified_upper_bound <= self.certified_budget
+    }
+}
+
+// ---------------------------------------------------------------------------
 // RegressionEntry
 // ---------------------------------------------------------------------------
 
@@ -344,6 +439,12 @@ pub struct PublicationPolicy {
     pub min_samples: u64,
     /// Minimum observability coverage (millionths).
     pub min_observability_coverage: u64,
+    /// Evidence kind required before a receipt may claim formal resource validity.
+    #[serde(
+        default = "default_certificate_governance_evidence_kind",
+        skip_serializing_if = "certificate_governance_evidence_kind_is_threshold"
+    )]
+    pub required_evidence_kind: CertificateGovernanceEvidenceKind,
     /// Required dimensions (empty = all).
     pub required_dimensions: BTreeSet<ResourceDimension>,
 }
@@ -355,13 +456,25 @@ pub enum CertificateGovernanceEvidenceKind {
     /// Threshold and sample-count governance. This is operational publication
     /// support, not a formal proof of resource-budget validity.
     ThresholdAndSampleHeuristic,
+    /// Deterministic bound proof that establishes a finite resource inequality.
+    DeterministicBoundProof,
 }
 
 impl CertificateGovernanceEvidenceKind {
     /// Whether this evidence kind establishes formal resource-budget validity.
     pub fn establishes_formal_resource_validity(self) -> bool {
-        false
+        matches!(self, Self::DeterministicBoundProof)
     }
+}
+
+fn default_certificate_governance_evidence_kind() -> CertificateGovernanceEvidenceKind {
+    CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic
+}
+
+fn certificate_governance_evidence_kind_is_threshold(
+    value: &CertificateGovernanceEvidenceKind,
+) -> bool {
+    *value == CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic
 }
 
 impl PublicationPolicy {
@@ -373,6 +486,7 @@ impl PublicationPolicy {
             max_utilisation_millionths: 800_000,
             min_samples: 100,
             min_observability_coverage: 950_000,
+            required_evidence_kind: CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic,
             required_dimensions: ResourceDimension::all().iter().copied().collect(),
         }
     }
@@ -385,13 +499,27 @@ impl PublicationPolicy {
             max_utilisation_millionths: DEFAULT_MAX_UTILISATION_MILLIONTHS,
             min_samples: DEFAULT_MIN_SAMPLES,
             min_observability_coverage: DEFAULT_MIN_OBSERVABILITY_COVERAGE,
+            required_evidence_kind: CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic,
             required_dimensions: BTreeSet::new(),
         }
     }
 
+    /// Formal policy for security-boundary resource claims.
+    pub fn formal() -> Self {
+        let mut policy = Self::strict();
+        policy.required_evidence_kind = CertificateGovernanceEvidenceKind::DeterministicBoundProof;
+        policy
+    }
+
     /// Evidence classification for decisions made under this policy.
     pub fn evidence_kind(&self) -> CertificateGovernanceEvidenceKind {
-        CertificateGovernanceEvidenceKind::ThresholdAndSampleHeuristic
+        self.required_evidence_kind
+    }
+
+    /// Whether the policy requires deterministic formal proof artifacts.
+    pub fn requires_formal_resource_validity(&self) -> bool {
+        self.required_evidence_kind
+            .establishes_formal_resource_validity()
     }
 }
 
@@ -421,6 +549,8 @@ pub enum GovernanceVerdict {
     InsufficientCoverage,
     /// Insufficient samples.
     InsufficientSamples,
+    /// Missing or invalid deterministic resource-bound proof.
+    UnprovenCertificate,
     /// Multiple issues.
     MultipleViolations,
 }
@@ -441,6 +571,7 @@ impl fmt::Display for GovernanceVerdict {
             Self::TailRiskExceeded => "tail_risk_exceeded",
             Self::InsufficientCoverage => "insufficient_coverage",
             Self::InsufficientSamples => "insufficient_samples",
+            Self::UnprovenCertificate => "unproven_certificate",
             Self::MultipleViolations => "multiple_violations",
         };
         write!(f, "{s}")
@@ -489,6 +620,12 @@ pub struct GovernanceReceipt {
     pub regressions: Vec<RegressionEntry>,
     /// Tail-risk entries.
     pub tail_risks: Vec<TailRiskEntry>,
+    /// Deterministic bound proofs included in the evaluation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_bound_proofs: Vec<ResourceBoundProof>,
+    /// Whether the evaluated certificates all have valid deterministic bound proofs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub formal_resource_validity_established: bool,
     /// All violations.
     pub violations: Vec<ViolationDetail>,
     /// Content hash.
@@ -521,6 +658,16 @@ impl GovernanceReceipt {
         for t in &self.tail_risks {
             buf.extend_from_slice(t.entry_hash.as_bytes());
         }
+        if !self.resource_bound_proofs.is_empty() {
+            append_u64(&mut buf, self.resource_bound_proofs.len() as u64);
+            for proof in &self.resource_bound_proofs {
+                buf.extend_from_slice(proof.proof_hash.as_bytes());
+            }
+        }
+        if self.formal_resource_validity_established {
+            append_str(&mut buf, "formal_resource_validity_established");
+            append_u64(&mut buf, 1);
+        }
         append_u64(&mut buf, self.violations.len() as u64);
         for violation in &self.violations {
             append_str(&mut buf, &violation.dimension.to_string());
@@ -549,6 +696,9 @@ pub struct GovernanceEvaluator {
     pub regressions: Vec<RegressionEntry>,
     /// Tail-risk entries.
     pub tail_risks: Vec<TailRiskEntry>,
+    /// Deterministic resource-bound proofs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_bound_proofs: Vec<ResourceBoundProof>,
 }
 
 impl GovernanceEvaluator {
@@ -559,6 +709,7 @@ impl GovernanceEvaluator {
             certificates: Vec::new(),
             regressions: Vec::new(),
             tail_risks: Vec::new(),
+            resource_bound_proofs: Vec::new(),
         }
     }
 
@@ -580,6 +731,34 @@ impl GovernanceEvaluator {
             self.policy.max_utilisation_millionths,
         );
         self.certificates.push(entry);
+    }
+
+    /// Add certificate evidence and a deterministic bound proof in one step.
+    pub fn add_certificate_with_bound_proof(
+        &mut self,
+        dimension: ResourceDimension,
+        workload_id: String,
+        certified_budget: u64,
+        measured_usage: u64,
+        sample_count: u64,
+        verified_upper_bound: u64,
+    ) {
+        let entry = CertificateEvidence::new(
+            dimension,
+            workload_id,
+            certified_budget,
+            measured_usage,
+            sample_count,
+            self.policy.max_utilisation_millionths,
+        );
+        let proof = ResourceBoundProof::from_certificate(&entry, verified_upper_bound);
+        self.certificates.push(entry);
+        self.resource_bound_proofs.push(proof);
+    }
+
+    /// Add an externally created deterministic resource-bound proof.
+    pub fn add_bound_proof(&mut self, proof: ResourceBoundProof) {
+        self.resource_bound_proofs.push(proof);
     }
 
     /// Add regression entry.
@@ -685,6 +864,41 @@ impl GovernanceEvaluator {
                     threshold_millionths: self.policy.min_samples,
                 });
             }
+
+            if self.policy.requires_formal_resource_validity() {
+                match self
+                    .resource_bound_proofs
+                    .iter()
+                    .find(|proof| proof.matches_certificate_identity(c))
+                {
+                    Some(proof) if proof.validates_certificate(c) => {}
+                    Some(proof) => violations.push(ViolationDetail {
+                        dimension: c.dimension,
+                        workload_id: c.workload_id.clone(),
+                        category: GovernanceVerdict::UnprovenCertificate,
+                        summary: format!(
+                            "{} proof on {} is invalid: {} must satisfy measured <= bound <= {}",
+                            c.dimension,
+                            c.workload_id,
+                            proof.verified_upper_bound,
+                            c.certified_budget
+                        ),
+                        measured_millionths: proof.verified_upper_bound,
+                        threshold_millionths: c.certified_budget,
+                    }),
+                    None => violations.push(ViolationDetail {
+                        dimension: c.dimension,
+                        workload_id: c.workload_id.clone(),
+                        category: GovernanceVerdict::UnprovenCertificate,
+                        summary: format!(
+                            "No deterministic bound proof for {} certificate on {}",
+                            c.dimension, c.workload_id
+                        ),
+                        measured_millionths: c.measured_usage,
+                        threshold_millionths: c.certified_budget,
+                    }),
+                }
+            }
         }
 
         // Check regressions.
@@ -744,6 +958,14 @@ impl GovernanceEvaluator {
             }
         };
 
+        let formal_resource_validity_established = self.policy.requires_formal_resource_validity()
+            && !self.certificates.is_empty()
+            && self.certificates.iter().all(|certificate| {
+                self.resource_bound_proofs
+                    .iter()
+                    .any(|proof| proof.validates_certificate(certificate))
+            });
+
         let mut receipt = GovernanceReceipt {
             verdict,
             epoch,
@@ -752,6 +974,8 @@ impl GovernanceEvaluator {
             certificates: self.certificates.clone(),
             regressions: self.regressions.clone(),
             tail_risks: self.tail_risks.clone(),
+            resource_bound_proofs: self.resource_bound_proofs.clone(),
+            formal_resource_validity_established,
             violations,
             content_hash: ContentHash::compute(b"placeholder"),
         };
@@ -957,6 +1181,19 @@ mod tests {
     }
 
     #[test]
+    fn test_formal_policy_requires_deterministic_bound_proof() {
+        let p = PublicationPolicy::formal();
+        let evidence_kind = p.evidence_kind();
+
+        assert_eq!(
+            evidence_kind,
+            CertificateGovernanceEvidenceKind::DeterministicBoundProof
+        );
+        assert!(p.requires_formal_resource_validity());
+        assert!(evidence_kind.establishes_formal_resource_validity());
+    }
+
+    #[test]
     fn test_verdict_blocks_publication() {
         assert!(!GovernanceVerdict::Approved.blocks_publication());
         assert!(GovernanceVerdict::RegressionDetected.blocks_publication());
@@ -1002,6 +1239,69 @@ mod tests {
                 .evidence_kind()
                 .establishes_formal_resource_validity()
         );
+        assert!(!receipt.formal_resource_validity_established);
+    }
+
+    #[test]
+    fn test_formal_policy_blocks_missing_bound_proof() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+        for dim in ResourceDimension::all() {
+            eval.add_certificate(*dim, "formal-missing".into(), 1000, 500, 100);
+        }
+
+        let receipt = eval.evaluate(epoch());
+
+        assert_eq!(receipt.verdict, GovernanceVerdict::UnprovenCertificate);
+        assert!(!receipt.formal_resource_validity_established);
+        assert_eq!(receipt.violations.len(), ResourceDimension::all().len());
+        assert!(
+            receipt
+                .violations
+                .iter()
+                .all(|v| v.category == GovernanceVerdict::UnprovenCertificate)
+        );
+    }
+
+    #[test]
+    fn test_formal_policy_blocks_invalid_bound_proof() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+        for dim in ResourceDimension::all() {
+            eval.add_certificate_with_bound_proof(
+                *dim,
+                "formal-invalid".into(),
+                1000,
+                500,
+                100,
+                1001,
+            );
+        }
+
+        let receipt = eval.evaluate(epoch());
+
+        assert_eq!(receipt.verdict, GovernanceVerdict::UnprovenCertificate);
+        assert!(!receipt.formal_resource_validity_established);
+        assert_eq!(
+            receipt.resource_bound_proofs.len(),
+            ResourceDimension::all().len()
+        );
+    }
+
+    #[test]
+    fn test_formal_policy_accepts_valid_bound_proofs() {
+        let mut eval = GovernanceEvaluator::new(PublicationPolicy::formal());
+        for dim in ResourceDimension::all() {
+            eval.add_certificate_with_bound_proof(*dim, "formal-valid".into(), 1000, 500, 100, 500);
+        }
+
+        let receipt = eval.evaluate(epoch());
+
+        assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
+        assert!(receipt.formal_resource_validity_established);
+        assert_eq!(
+            receipt.resource_bound_proofs.len(),
+            ResourceDimension::all().len()
+        );
+        assert!(receipt.violations.is_empty());
     }
 
     #[test]
@@ -1370,6 +1670,10 @@ mod tests {
                 GovernanceVerdict::InsufficientSamples,
                 "insufficient_samples",
             ),
+            (
+                GovernanceVerdict::UnprovenCertificate,
+                "unproven_certificate",
+            ),
             (GovernanceVerdict::MultipleViolations, "multiple_violations"),
         ];
         for (v, expected) in &cases {
@@ -1385,6 +1689,7 @@ mod tests {
             GovernanceVerdict::TailRiskExceeded,
             GovernanceVerdict::InsufficientCoverage,
             GovernanceVerdict::InsufficientSamples,
+            GovernanceVerdict::UnprovenCertificate,
             GovernanceVerdict::MultipleViolations,
         ];
         for v in &blocking {
@@ -1422,6 +1727,7 @@ mod tests {
             GovernanceVerdict::TailRiskExceeded,
             GovernanceVerdict::InsufficientCoverage,
             GovernanceVerdict::InsufficientSamples,
+            GovernanceVerdict::UnprovenCertificate,
             GovernanceVerdict::MultipleViolations,
         ];
         for v in &verdicts {

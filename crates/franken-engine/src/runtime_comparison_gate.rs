@@ -1015,10 +1015,10 @@ pub fn passes_broad_performance_claim_gate(
 /// live/operator workload evidence.
 pub fn evaluate_workload_drift(input: &WorkloadDriftInput<'_>) -> WorkloadDriftReport {
     let mut blockers = Vec::new();
-    let mut benchmark_case_count = 0;
-    let mut live_workload_count = 0;
-    let mut matched_live_workload_count = 0;
-    let mut live_sample_count = 0;
+    let mut benchmark_case_count: u64 = 0;
+    let mut live_workload_count: u64 = 0;
+    let mut matched_live_workload_count: u64 = 0;
+    let mut live_sample_count: u64 = 0;
 
     let mut manifest_categories = BTreeSet::new();
     let mut manifest_case_ids = BTreeSet::new();

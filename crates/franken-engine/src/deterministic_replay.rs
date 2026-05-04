@@ -25,9 +25,9 @@
 //! - Integer-to-float and float-to-integer conversions
 //!
 //! ### Divergence Classification
-//! - **Benign**: Same infinity (exact match)
-//! - **Warning**: Both NaN (any NaN equals any NaN for replay), 1-4 ULP difference
-//! - **Critical**: NaN vs number, opposite infinities, >4 ULP difference
+//! - **Benign**: Exact byte match
+//! - **Critical**: Any floating-point byte mismatch, including NaN payloads,
+//!   signed zero differences, and small ULP differences
 
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use serde::{Deserialize, Serialize};
@@ -476,53 +476,12 @@ fn classify_divergence(
         }
         NondeterminismSource::ThreadSchedule => DivergenceSeverity::Warning,
         NondeterminismSource::FloatingPointResult => {
-            // FP results are compared bit-exactly. Cross-architecture divergence
-            // (x87 vs SSE, ARM NEON rounding) is Warning if values are close,
-            // Critical if they differ significantly.
-            if expected.len() == 8 && actual.len() == 8 {
-                let exp_bits = u64::from_le_bytes(expected.try_into().unwrap_or([0; 8]));
-                let act_bits = u64::from_le_bytes(actual.try_into().unwrap_or([0; 8]));
-                let exp_f64 = f64::from_bits(exp_bits);
-                let act_f64 = f64::from_bits(act_bits);
-
-                // NaN handling: both NaN is Warning, one NaN is Critical
-                if exp_f64.is_nan() && act_f64.is_nan() {
-                    return DivergenceSeverity::Warning;
-                }
-                if exp_f64.is_nan() || act_f64.is_nan() {
-                    return DivergenceSeverity::Critical;
-                }
-
-                // Infinity handling: same infinity is Benign, opposite is Critical
-                if exp_f64.is_infinite() && act_f64.is_infinite() {
-                    if exp_f64.signum() == act_f64.signum() {
-                        return DivergenceSeverity::Benign;
-                    }
-                    return DivergenceSeverity::Critical;
-                }
-
-                // Convert sign-magnitude IEEE 754 bit patterns to a linear
-                // integer ordering so that subtraction gives correct ULP
-                // distance even across the +0 / -0 boundary.
-                fn to_ordered(bits: u64) -> i64 {
-                    let signed = bits as i64;
-                    if signed < 0 {
-                        i64::MIN - signed
-                    } else {
-                        signed
-                    }
-                }
-                let ulp_diff = (to_ordered(exp_bits) - to_ordered(act_bits)).unsigned_abs();
-                if ulp_diff <= 1 {
-                    DivergenceSeverity::Warning
-                } else if ulp_diff <= 4 {
-                    // Small ULP difference (compiler optimizations, FMA fusion)
-                    DivergenceSeverity::Warning
-                } else {
-                    DivergenceSeverity::Critical
-                }
+            // FP replay is a byte-stability contract. Any bit-level mismatch is
+            // critical; ULP proximity is diagnostic context, not proof of
+            // deterministic replay equivalence.
+            if expected == actual {
+                DivergenceSeverity::Benign
             } else {
-                // Unexpected format: Critical
                 DivergenceSeverity::Critical
             }
         }
@@ -3080,17 +3039,16 @@ mod tests {
     }
 
     #[test]
-    fn fp_divergence_same_value_is_benign() {
+    fn fp_divergence_same_bytes_is_benign() {
         let value = 1.5_f64;
         let bytes = encode_fp_for_trace(value);
         let severity =
             classify_divergence(&NondeterminismSource::FloatingPointResult, &bytes, &bytes);
-        // Same value: no divergence recorded (but if it were, would be benign)
-        assert!(severity != DivergenceSeverity::Critical);
+        assert_eq!(severity, DivergenceSeverity::Benign);
     }
 
     #[test]
-    fn fp_divergence_1ulp_is_warning() {
+    fn fp_divergence_1ulp_is_critical() {
         let value = 1.5_f64;
         let bits = value.to_bits();
         let expected = bits.to_le_bytes().to_vec();
@@ -3101,7 +3059,7 @@ mod tests {
             &expected,
             &actual,
         );
-        assert_eq!(severity, DivergenceSeverity::Warning);
+        assert_eq!(severity, DivergenceSeverity::Critical);
     }
 
     #[test]
@@ -3117,12 +3075,12 @@ mod tests {
     }
 
     #[test]
-    fn fp_divergence_nan_vs_nan_is_warning() {
-        let nan1 = encode_fp_for_trace(f64::NAN);
-        let nan2 = encode_fp_for_trace(f64::NAN);
+    fn fp_divergence_different_nan_payloads_are_critical() {
+        let nan1 = encode_fp_for_trace(f64::from_bits(0x7ff8_0000_0000_0001));
+        let nan2 = encode_fp_for_trace(f64::from_bits(0x7ff8_0000_0000_0002));
         let severity =
             classify_divergence(&NondeterminismSource::FloatingPointResult, &nan1, &nan2);
-        assert_eq!(severity, DivergenceSeverity::Warning);
+        assert_eq!(severity, DivergenceSeverity::Critical);
     }
 
     #[test]
@@ -3153,10 +3111,8 @@ mod tests {
     }
 
     #[test]
-    fn fp_divergence_pos_zero_vs_neg_zero_is_warning() {
-        // +0.0 and -0.0 differ only in the sign bit; they are 0 ULPs apart
-        // in ordered-float space. The old sign-magnitude-unaware subtraction
-        // produced ulp_diff ≈ 2^63 and incorrectly classified this as Critical.
+    fn fp_divergence_pos_zero_vs_neg_zero_is_critical() {
+        // +0.0 and -0.0 compare numerically equal but are different replay bytes.
         let pos_zero = encode_fp_for_trace(0.0_f64);
         let neg_zero = encode_fp_for_trace(-0.0_f64);
         let severity = classify_divergence(
@@ -3164,13 +3120,12 @@ mod tests {
             &pos_zero,
             &neg_zero,
         );
-        assert_eq!(severity, DivergenceSeverity::Warning);
+        assert_eq!(severity, DivergenceSeverity::Critical);
     }
 
     #[test]
-    fn fp_divergence_small_negative_vs_small_positive_is_warning() {
-        // Values very close to zero but on opposite sides should still
-        // produce a small ULP distance with the ordered-float formula.
+    fn fp_divergence_small_negative_vs_small_positive_is_critical() {
+        // ULP proximity cannot prove byte-identical replay.
         let tiny_pos = encode_fp_for_trace(5.0e-324_f64); // smallest positive subnormal
         let tiny_neg = encode_fp_for_trace(-5.0e-324_f64); // smallest negative subnormal
         let severity = classify_divergence(
@@ -3178,14 +3133,13 @@ mod tests {
             &tiny_pos,
             &tiny_neg,
         );
-        // ULP distance is 2 (one step from +0 to +min, one from -0 to -min)
-        assert_eq!(severity, DivergenceSeverity::Warning);
+        assert_eq!(severity, DivergenceSeverity::Critical);
     }
 
     #[test]
     fn nondeterminism_source_all_includes_fp() {
         assert!(NondeterminismSource::ALL.contains(&NondeterminismSource::FloatingPointResult));
-        assert_eq!(NondeterminismSource::ALL.len(), 7);
+        assert_eq!(NondeterminismSource::ALL.len(), 11);
     }
 
     #[test]
@@ -3294,10 +3248,11 @@ mod tests {
         let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
         // Live value differs by more than 1 ULP but less than a factor of 2
         let live = 1.0_f64 + 1e-10;
-        let _ = engine.replay_fp_result(live);
+        let result = engine.replay_fp_result(live);
 
-        // Divergence should be recorded (Warning severity for small diff)
+        assert!(result.is_err());
         assert!(!engine.divergences.is_empty());
+        assert_eq!(engine.divergences[0].severity, DivergenceSeverity::Critical);
     }
 
     #[test]

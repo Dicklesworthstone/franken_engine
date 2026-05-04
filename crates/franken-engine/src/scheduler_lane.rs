@@ -191,6 +191,109 @@ pub struct LaneMetrics {
 }
 
 // ---------------------------------------------------------------------------
+// LanePressureSnapshot — operator-visible scheduler pressure evidence
+// ---------------------------------------------------------------------------
+
+/// Stable schema version for [`LanePressureSnapshot`].
+pub const LANE_PRESSURE_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+
+/// Operator-visible scheduler pressure snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanePressureSnapshot {
+    /// Snapshot schema version for downstream artifacts.
+    pub schema_version: u32,
+    /// Tick used to compute task wait ages.
+    pub current_ticks: u64,
+    /// Total queued task count across all scheduler lanes.
+    pub total_queue_depth: usize,
+    /// Per-lane pressure evidence in deterministic cancel/timed/ready order.
+    pub lanes: Vec<LanePressureLaneSnapshot>,
+    /// Timed-lane backlog grouped by deadline in ascending deadline order.
+    pub timed_deadline_backlog: Vec<TimedDeadlineBacklogSnapshot>,
+    /// Scheduler event counters copied in sorted key order.
+    pub event_counts: BTreeMap<String, u64>,
+    /// Count of scheduler admissions that were accepted under throttle.
+    pub budget_throttle_count: u64,
+}
+
+/// Per-lane pressure evidence for a scheduler snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanePressureLaneSnapshot {
+    /// Lane name.
+    pub lane: String,
+    /// Current queue depth.
+    pub queue_depth: usize,
+    /// Configured maximum queue depth for the lane.
+    pub max_depth: usize,
+    /// Whether the lane has reached its configured capacity.
+    pub is_at_capacity: bool,
+    /// Earliest submitted tick among currently queued tasks.
+    pub oldest_submitted_tick: Option<u64>,
+    /// Latest submitted tick among currently queued tasks.
+    pub newest_submitted_tick: Option<u64>,
+    /// Wait age for the oldest queued task, computed from `current_ticks`.
+    pub oldest_wait_ticks: Option<u64>,
+    /// Wait age for the newest queued task, computed from `current_ticks`.
+    pub newest_wait_ticks: Option<u64>,
+    /// Total tasks submitted to this lane.
+    pub tasks_submitted: u64,
+    /// Total tasks scheduled from this lane.
+    pub tasks_scheduled: u64,
+    /// Total tasks completed for this lane.
+    pub tasks_completed: u64,
+    /// Total timed-out tasks charged to this lane.
+    pub tasks_timed_out: u64,
+    /// Queued task counts by task type, sorted by task-type string.
+    pub task_type_counts: BTreeMap<String, usize>,
+    /// Queued task labels in deterministic lane queue order.
+    pub queued_tasks: Vec<LanePressureTaskSnapshot>,
+}
+
+/// Stable queued-task label included in lane pressure snapshots.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanePressureTaskSnapshot {
+    /// Scheduler-assigned task ID.
+    pub task_id: u64,
+    /// Lane name.
+    pub lane: String,
+    /// Task classification.
+    pub task_type: String,
+    /// Trace ID for correlation.
+    pub trace_id: String,
+    /// Fine-grained priority metadata recorded with the task label.
+    pub priority_sub_band: u32,
+    /// Deadline tick for timed tasks; `0` for tasks without a deadline.
+    pub deadline_tick: u64,
+    /// Tick at which the task was submitted.
+    pub submitted_at: u64,
+    /// Current queued wait age.
+    pub wait_ticks: u64,
+    /// Opaque payload identifier.
+    pub payload_id: String,
+}
+
+/// Timed-lane backlog evidence for a single deadline bucket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimedDeadlineBacklogSnapshot {
+    /// Deadline tick shared by the bucket.
+    pub deadline_tick: u64,
+    /// Number of queued timed-lane tasks in this bucket.
+    pub queue_depth: usize,
+    /// Earliest submitted tick in the bucket.
+    pub oldest_submitted_tick: Option<u64>,
+    /// Latest submitted tick in the bucket.
+    pub newest_submitted_tick: Option<u64>,
+    /// Wait age for the oldest queued task in the bucket.
+    pub oldest_wait_ticks: Option<u64>,
+    /// Wait age for the newest queued task in the bucket.
+    pub newest_wait_ticks: Option<u64>,
+    /// Task IDs in deterministic FIFO order within the deadline bucket.
+    pub task_ids: Vec<u64>,
+    /// Trace IDs in deterministic FIFO order within the deadline bucket.
+    pub trace_ids: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // LaneConfig — configurable lane parameters
 // ---------------------------------------------------------------------------
 
@@ -713,7 +816,153 @@ impl LaneScheduler {
         &self.event_counts
     }
 
+    /// Build an operator-visible pressure snapshot for all scheduler lanes.
+    pub fn pressure_snapshot(&self, current_ticks: u64) -> LanePressureSnapshot {
+        let lanes = vec![
+            self.lane_pressure_snapshot(
+                SchedulerLane::Cancel,
+                self.cancel_queue.iter(),
+                current_ticks,
+            ),
+            self.lane_pressure_snapshot(
+                SchedulerLane::Timed,
+                self.timed_queue.values().flat_map(|bucket| bucket.iter()),
+                current_ticks,
+            ),
+            self.lane_pressure_snapshot(
+                SchedulerLane::Ready,
+                self.ready_queue.iter(),
+                current_ticks,
+            ),
+        ];
+
+        LanePressureSnapshot {
+            schema_version: LANE_PRESSURE_SNAPSHOT_SCHEMA_VERSION,
+            current_ticks,
+            total_queue_depth: self.total_queue_depth(),
+            lanes,
+            timed_deadline_backlog: self.timed_deadline_backlog(current_ticks),
+            event_counts: self.event_counts.clone(),
+            budget_throttle_count: self
+                .event_counts
+                .get("submit_throttled")
+                .copied()
+                .unwrap_or(0),
+        }
+    }
+
     // -- Internal --
+
+    fn lane_pressure_snapshot<'a, I>(
+        &self,
+        lane: SchedulerLane,
+        tasks: I,
+        current_ticks: u64,
+    ) -> LanePressureLaneSnapshot
+    where
+        I: IntoIterator<Item = &'a ScheduledTask>,
+    {
+        let lane_name = lane.to_string();
+        let metrics = self
+            .metrics
+            .get(&lane_name)
+            .cloned()
+            .unwrap_or_else(|| LaneMetrics {
+                lane: lane_name.clone(),
+                ..Default::default()
+            });
+        let max_depth = self.lane_max_depth(lane);
+        let mut oldest_submitted_tick: Option<u64> = None;
+        let mut newest_submitted_tick: Option<u64> = None;
+        let mut task_type_counts = BTreeMap::new();
+        let mut queued_tasks = Vec::new();
+
+        for task in tasks {
+            oldest_submitted_tick = Some(
+                oldest_submitted_tick
+                    .map(|oldest| oldest.min(task.submitted_at))
+                    .unwrap_or(task.submitted_at),
+            );
+            newest_submitted_tick = Some(
+                newest_submitted_tick
+                    .map(|newest| newest.max(task.submitted_at))
+                    .unwrap_or(task.submitted_at),
+            );
+            *task_type_counts
+                .entry(task.label.task_type.to_string())
+                .or_insert(0) += 1;
+            queued_tasks.push(Self::task_pressure_snapshot(task, current_ticks));
+        }
+
+        LanePressureLaneSnapshot {
+            lane: lane_name,
+            queue_depth: metrics.queue_depth,
+            max_depth,
+            is_at_capacity: metrics.queue_depth >= max_depth,
+            oldest_submitted_tick,
+            newest_submitted_tick,
+            oldest_wait_ticks: oldest_submitted_tick
+                .map(|submitted_at| current_ticks.saturating_sub(submitted_at)),
+            newest_wait_ticks: newest_submitted_tick
+                .map(|submitted_at| current_ticks.saturating_sub(submitted_at)),
+            tasks_submitted: metrics.tasks_submitted,
+            tasks_scheduled: metrics.tasks_scheduled,
+            tasks_completed: metrics.tasks_completed,
+            tasks_timed_out: metrics.tasks_timed_out,
+            task_type_counts,
+            queued_tasks,
+        }
+    }
+
+    fn timed_deadline_backlog(&self, current_ticks: u64) -> Vec<TimedDeadlineBacklogSnapshot> {
+        self.timed_queue
+            .iter()
+            .map(|(deadline_tick, bucket)| {
+                let oldest_submitted_tick = bucket.iter().map(|task| task.submitted_at).min();
+                let newest_submitted_tick = bucket.iter().map(|task| task.submitted_at).max();
+                TimedDeadlineBacklogSnapshot {
+                    deadline_tick: *deadline_tick,
+                    queue_depth: bucket.len(),
+                    oldest_submitted_tick,
+                    newest_submitted_tick,
+                    oldest_wait_ticks: oldest_submitted_tick
+                        .map(|submitted_at| current_ticks.saturating_sub(submitted_at)),
+                    newest_wait_ticks: newest_submitted_tick
+                        .map(|submitted_at| current_ticks.saturating_sub(submitted_at)),
+                    task_ids: bucket.iter().map(|task| task.task_id.0).collect(),
+                    trace_ids: bucket
+                        .iter()
+                        .map(|task| task.label.trace_id.clone())
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    fn task_pressure_snapshot(
+        task: &ScheduledTask,
+        current_ticks: u64,
+    ) -> LanePressureTaskSnapshot {
+        LanePressureTaskSnapshot {
+            task_id: task.task_id.0,
+            lane: task.label.lane.to_string(),
+            task_type: task.label.task_type.to_string(),
+            trace_id: task.label.trace_id.clone(),
+            priority_sub_band: task.label.priority_sub_band,
+            deadline_tick: task.deadline_tick,
+            submitted_at: task.submitted_at,
+            wait_ticks: current_ticks.saturating_sub(task.submitted_at),
+            payload_id: task.payload_id.clone(),
+        }
+    }
+
+    fn lane_max_depth(&self, lane: SchedulerLane) -> usize {
+        match lane {
+            SchedulerLane::Cancel => self.config.cancel_max_depth,
+            SchedulerLane::Timed => self.config.timed_max_depth,
+            SchedulerLane::Ready => self.config.ready_max_depth,
+        }
+    }
 
     fn record_schedule(&mut self, task: &ScheduledTask) {
         if let Some(m) = self.metrics.get_mut(&task.label.lane.to_string()) {
@@ -808,6 +1057,17 @@ mod tests {
             trace_id: trace.to_string(),
             priority_sub_band: 0,
         }
+    }
+
+    fn snapshot_lane<'a>(
+        snapshot: &'a LanePressureSnapshot,
+        lane: &str,
+    ) -> &'a LanePressureLaneSnapshot {
+        snapshot
+            .lanes
+            .iter()
+            .find(|entry| entry.lane.as_str() == lane)
+            .expect("lane snapshot should be present")
     }
 
     // -- SchedulerLane --
@@ -1188,6 +1448,220 @@ mod tests {
 
         assert_eq!(sched.event_counts().get("submit"), Some(&2));
         assert_eq!(sched.event_counts().get("schedule"), Some(&2));
+    }
+
+    // -- Pressure snapshots --
+
+    #[test]
+    fn pressure_snapshot_empty_scheduler_has_all_lanes_and_zero_depths() {
+        let sched = LaneScheduler::new(LaneConfig::default());
+
+        let snapshot = sched.pressure_snapshot(42);
+
+        assert_eq!(
+            snapshot.schema_version,
+            LANE_PRESSURE_SNAPSHOT_SCHEMA_VERSION
+        );
+        assert_eq!(snapshot.current_ticks, 42);
+        assert_eq!(snapshot.total_queue_depth, 0);
+        assert_eq!(
+            snapshot
+                .lanes
+                .iter()
+                .map(|lane| lane.lane.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cancel", "timed", "ready"]
+        );
+        for lane in &snapshot.lanes {
+            assert_eq!(lane.queue_depth, 0);
+            assert!(!lane.is_at_capacity);
+            assert_eq!(lane.oldest_submitted_tick, None);
+            assert_eq!(lane.newest_submitted_tick, None);
+            assert_eq!(lane.oldest_wait_ticks, None);
+            assert_eq!(lane.newest_wait_ticks, None);
+            assert!(lane.task_type_counts.is_empty());
+            assert!(lane.queued_tasks.is_empty());
+        }
+        assert!(snapshot.timed_deadline_backlog.is_empty());
+        assert!(snapshot.event_counts.is_empty());
+        assert_eq!(snapshot.budget_throttle_count, 0);
+    }
+
+    #[test]
+    fn pressure_snapshot_reports_stable_lane_pressure_and_task_labels() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        let cancel_id = sched
+            .submit(cancel_label("trace-cancel"), 0, "cancel-payload", 10)
+            .expect("cancel submit should succeed");
+        let timed_late_id = sched
+            .submit(timed_label("trace-timed-late"), 75, "timed-late", 11)
+            .expect("timed submit should succeed");
+        let timed_early_id = sched
+            .submit(timed_label("trace-timed-early"), 50, "timed-early", 12)
+            .expect("timed submit should succeed");
+        let ready_id = sched
+            .submit(ready_label("trace-ready"), 0, "ready-payload", 15)
+            .expect("ready submit should succeed");
+
+        let snapshot = sched.pressure_snapshot(20);
+
+        assert_eq!(snapshot.total_queue_depth, 4);
+        assert_eq!(snapshot.event_counts.get("submit"), Some(&4));
+
+        let cancel = snapshot_lane(&snapshot, "cancel");
+        assert_eq!(cancel.queue_depth, 1);
+        assert_eq!(cancel.oldest_wait_ticks, Some(10));
+        assert_eq!(cancel.queued_tasks[0].task_id, cancel_id.0);
+        assert_eq!(cancel.queued_tasks[0].lane, "cancel");
+        assert_eq!(cancel.queued_tasks[0].task_type, "cancel_cleanup");
+        assert_eq!(cancel.queued_tasks[0].trace_id, "trace-cancel");
+
+        let timed = snapshot_lane(&snapshot, "timed");
+        assert_eq!(timed.queue_depth, 2);
+        assert_eq!(timed.max_depth, LaneConfig::default().timed_max_depth);
+        assert_eq!(timed.oldest_submitted_tick, Some(11));
+        assert_eq!(timed.newest_submitted_tick, Some(12));
+        assert_eq!(timed.oldest_wait_ticks, Some(9));
+        assert_eq!(timed.newest_wait_ticks, Some(8));
+        assert_eq!(timed.task_type_counts.get("lease_renewal"), Some(&2));
+        assert_eq!(
+            timed
+                .queued_tasks
+                .iter()
+                .map(|task| (
+                    task.task_id,
+                    task.trace_id.as_str(),
+                    task.task_type.as_str(),
+                    task.deadline_tick,
+                    task.wait_ticks
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    timed_early_id.0,
+                    "trace-timed-early",
+                    "lease_renewal",
+                    50,
+                    8,
+                ),
+                (timed_late_id.0, "trace-timed-late", "lease_renewal", 75, 9,),
+            ]
+        );
+
+        let ready = snapshot_lane(&snapshot, "ready");
+        assert_eq!(ready.queue_depth, 1);
+        assert_eq!(ready.queued_tasks[0].task_id, ready_id.0);
+        assert_eq!(ready.queued_tasks[0].trace_id, "trace-ready");
+        assert_eq!(ready.queued_tasks[0].wait_ticks, 5);
+
+        assert_eq!(
+            snapshot
+                .timed_deadline_backlog
+                .iter()
+                .map(|bucket| bucket.deadline_tick)
+                .collect::<Vec<_>>(),
+            vec![50, 75]
+        );
+        assert_eq!(
+            snapshot.timed_deadline_backlog[0].task_ids,
+            vec![timed_early_id.0]
+        );
+        assert_eq!(
+            snapshot.timed_deadline_backlog[0].trace_ids,
+            vec!["trace-timed-early"]
+        );
+        assert_eq!(
+            snapshot.timed_deadline_backlog[1].task_ids,
+            vec![timed_late_id.0]
+        );
+
+        let json = serde_json::to_string(&snapshot).expect("snapshot serialization should succeed");
+        let restored: LanePressureSnapshot =
+            serde_json::from_str(&json).expect("snapshot deserialization should succeed");
+        assert_eq!(snapshot, restored);
+    }
+
+    #[test]
+    fn pressure_snapshot_reports_saturated_lane_capacity() {
+        let config = LaneConfig {
+            cancel_max_depth: 2,
+            ..Default::default()
+        };
+        let mut sched = LaneScheduler::new(config);
+        sched
+            .submit(cancel_label("sat-1"), 0, "payload-1", 5)
+            .expect("first submit should succeed");
+        sched
+            .submit(cancel_label("sat-2"), 0, "payload-2", 6)
+            .expect("second submit should succeed");
+
+        assert!(matches!(
+            sched.submit(cancel_label("sat-3"), 0, "payload-3", 7),
+            Err(LaneError::LaneFull {
+                lane,
+                max_depth: 2,
+            }) if lane == "cancel"
+        ));
+
+        let snapshot = sched.pressure_snapshot(10);
+        let cancel = snapshot_lane(&snapshot, "cancel");
+        assert_eq!(cancel.queue_depth, 2);
+        assert_eq!(cancel.max_depth, 2);
+        assert!(cancel.is_at_capacity);
+        assert_eq!(cancel.oldest_wait_ticks, Some(5));
+        assert_eq!(cancel.newest_wait_ticks, Some(4));
+        assert_eq!(snapshot.event_counts.get("submit"), Some(&2));
+        assert_eq!(
+            cancel
+                .queued_tasks
+                .iter()
+                .map(|task| task.trace_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["sat-1", "sat-2"]
+        );
+    }
+
+    #[test]
+    fn pressure_snapshot_carries_schedule_timeout_and_budget_throttle_counts() {
+        let mut timed_sched = LaneScheduler::new(LaneConfig {
+            ready_min_throughput: 0,
+            ..Default::default()
+        });
+        timed_sched
+            .submit(timed_label("trace-late"), 10, "late", 0)
+            .expect("timed submit should succeed");
+        timed_sched
+            .submit(timed_label("trace-earlier"), 5, "earlier", 0)
+            .expect("timed submit should succeed");
+        let batch = timed_sched.schedule_batch(1, 20);
+        assert_eq!(batch[0].payload_id, "earlier");
+
+        let timed_snapshot = timed_sched.pressure_snapshot(25);
+        assert_eq!(timed_snapshot.event_counts.get("submit"), Some(&2));
+        assert_eq!(timed_snapshot.event_counts.get("schedule"), Some(&1));
+        assert_eq!(timed_snapshot.event_counts.get("timeout"), Some(&1));
+        let timed = snapshot_lane(&timed_snapshot, "timed");
+        assert_eq!(timed.queue_depth, 0);
+        assert_eq!(timed.tasks_scheduled, 1);
+        assert_eq!(timed.tasks_timed_out, 1);
+        assert!(timed_snapshot.timed_deadline_backlog.is_empty());
+
+        let mut throttled_sched = LaneScheduler::new(LaneConfig::default());
+        throttled_sched.set_budget_enforcer(admission_enforcer("ext-a", 100));
+        throttled_sched
+            .submit_for_extension("ext-a", ready_label("trace-throttle"), 95, "payload", 0)
+            .expect("throttled admission should still queue the task");
+
+        let throttled_snapshot = throttled_sched.pressure_snapshot(5);
+        assert_eq!(
+            throttled_snapshot.event_counts.get("submit_throttled"),
+            Some(&1)
+        );
+        assert_eq!(throttled_snapshot.budget_throttle_count, 1);
+        assert_eq!(
+            snapshot_lane(&throttled_snapshot, "ready").queued_tasks[0].trace_id,
+            "trace-throttle"
+        );
     }
 
     // -- Serialization round-trips --

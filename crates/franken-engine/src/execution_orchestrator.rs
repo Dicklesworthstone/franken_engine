@@ -2865,11 +2865,13 @@ mod tests {
 
     #[test]
     fn try_new_rejects_zero_concurrency_envelope() {
-        let err = ExecutionOrchestrator::try_new(OrchestratorConfig {
+        let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {
             max_concurrent_sagas: 0,
             ..OrchestratorConfig::default()
-        })
-        .expect_err("zero-concurrency envelope should fail closed");
+        }) {
+            Ok(_) => panic!("zero-concurrency envelope should fail closed"),
+            Err(err) => err,
+        };
 
         assert!(matches!(
             err,
@@ -2884,11 +2886,13 @@ mod tests {
     #[test]
     fn try_new_rejects_absurdly_high_concurrency_envelope() {
         let requested = MAX_CONCURRENT_SAGAS_LIMIT + 1;
-        let err = ExecutionOrchestrator::try_new(OrchestratorConfig {
+        let err = match ExecutionOrchestrator::try_new(OrchestratorConfig {
             max_concurrent_sagas: requested,
             ..OrchestratorConfig::default()
-        })
-        .expect_err("absurd concurrency envelope should fail closed");
+        }) {
+            Ok(_) => panic!("absurd concurrency envelope should fail closed"),
+            Err(err) => err,
+        };
 
         assert!(matches!(
             err,

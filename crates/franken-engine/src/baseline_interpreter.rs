@@ -6751,11 +6751,11 @@ impl InterpreterCore {
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
                 // Use float coercion to handle all numeric cases properly.
-                let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+                let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
                     expected: "number or string".to_string(),
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
-                let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+                let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
                     expected: "number or string".to_string(),
                     got: format!("{} + {}", a.type_name(), b.type_name()),
                 })?;
@@ -6795,11 +6795,11 @@ impl InterpreterCore {
         }
 
         // Float path: use float arithmetic
-        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} {} {}", a.type_name(), op, b.type_name()),
         })?;
-        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} {} {}", a.type_name(), op, b.type_name()),
         })?;
@@ -6830,11 +6830,11 @@ impl InterpreterCore {
     fn eval_div(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} / {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} / {}", a.type_name(), b.type_name()),
         })?;
@@ -6868,11 +6868,11 @@ impl InterpreterCore {
             return Ok(Value::Int(x.checked_rem(*y).unwrap_or(0)));
         }
 
-        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} % {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} % {}", a.type_name(), b.type_name()),
         })?;
@@ -6896,11 +6896,11 @@ impl InterpreterCore {
     fn eval_exp(&self, lhs: u32, rhs: u32) -> Result<Value, InterpreterError> {
         let a = self.read_reg(lhs)?;
         let b = self.read_reg(rhs)?;
-        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
             expected: "number".to_string(),
             got: format!("{} ** {}", a.type_name(), b.type_name()),
         })?;
@@ -6927,10 +6927,11 @@ impl InterpreterCore {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Float(*f)),
             _ => {
-                let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
-                    expected: "number-coercible primitive".to_string(),
-                    got: value.type_name().to_string(),
-                })?;
+                let number =
+                    Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
+                        expected: "number-coercible primitive".to_string(),
+                        got: value.type_name().to_string(),
+                    })?;
                 // Return Int if whole number in i64 range
                 if number.fract() == 0.0
                     && !number.is_nan()
@@ -6952,10 +6953,11 @@ impl InterpreterCore {
             Value::Int(n) => Ok(Value::Int(n.wrapping_neg())),
             Value::Float(f) => Ok(Value::Float(Float64::new(-f.inner()))),
             _ => {
-                let number = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
-                    expected: "number-coercible primitive".to_string(),
-                    got: value.type_name().to_string(),
-                })?;
+                let number =
+                    Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
+                        expected: "number-coercible primitive".to_string(),
+                        got: value.type_name().to_string(),
+                    })?;
                 // Return Int if whole number in i64 range
                 let negated = -number;
                 if negated.fract() == 0.0
@@ -6986,10 +6988,11 @@ impl InterpreterCore {
                 }
             }
             _ => {
-                let n = Self::coerce_to_float(&value).ok_or(InterpreterError::TypeError {
-                    expected: "number-coercible primitive".to_string(),
-                    got: value.type_name().to_string(),
-                })?;
+                let n =
+                    Self::coerce_to_float(&value).ok_or_else(|| InterpreterError::TypeError {
+                        expected: "number-coercible primitive".to_string(),
+                        got: value.type_name().to_string(),
+                    })?;
                 if n.is_nan() || n.is_infinite() {
                     0
                 } else {
@@ -7023,11 +7026,11 @@ impl InterpreterCore {
         }
 
         // Numeric comparison using float (NaN comparisons return false)
-        let x = Self::coerce_to_float(&a).ok_or(InterpreterError::TypeError {
+        let x = Self::coerce_to_float(&a).ok_or_else(|| InterpreterError::TypeError {
             expected: "comparable primitive".to_string(),
             got: format!("{} {op} {}", a.type_name(), b.type_name()),
         })?;
-        let y = Self::coerce_to_float(&b).ok_or(InterpreterError::TypeError {
+        let y = Self::coerce_to_float(&b).ok_or_else(|| InterpreterError::TypeError {
             expected: "comparable primitive".to_string(),
             got: format!("{} {op} {}", a.type_name(), b.type_name()),
         })?;
@@ -7106,10 +7109,11 @@ impl InterpreterCore {
                     }
                 }
                 _ => {
-                    let n = Self::coerce_to_float(v).ok_or(InterpreterError::TypeError {
-                        expected: "number".to_string(),
-                        got: v.type_name().to_string(),
-                    })?;
+                    let n =
+                        Self::coerce_to_float(v).ok_or_else(|| InterpreterError::TypeError {
+                            expected: "number".to_string(),
+                            got: v.type_name().to_string(),
+                        })?;
                     if n.is_nan() || n.is_infinite() {
                         Ok(0)
                     } else {
@@ -10328,12 +10332,12 @@ impl InterpreterCore {
             }
             _ => {
                 let left_number =
-                    Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
+                    Self::coerce_to_float(left).ok_or_else(|| InterpreterError::TypeError {
                         expected: "number or string".to_string(),
                         got: format!("{} + {}", left.type_name(), right.type_name()),
                     })?;
                 let right_number =
-                    Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
+                    Self::coerce_to_float(right).ok_or_else(|| InterpreterError::TypeError {
                         expected: "number or string".to_string(),
                         got: format!("{} + {}", left.type_name(), right.type_name()),
                     })?;
@@ -10359,14 +10363,16 @@ impl InterpreterCore {
                 }
             }));
         }
-        let left_number = Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
-        })?;
-        let right_number = Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
-        })?;
+        let left_number =
+            Self::coerce_to_float(left).ok_or_else(|| InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
+            })?;
+        let right_number =
+            Self::coerce_to_float(right).ok_or_else(|| InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: format!("{} {} {}", left.type_name(), operator, right.type_name()),
+            })?;
         let result = match operator {
             "sub" => left_number - right_number,
             "mul" => left_number * right_number,
@@ -10381,14 +10387,16 @@ impl InterpreterCore {
     }
 
     fn eval_div_values(left: &Value, right: &Value) -> Result<Value, InterpreterError> {
-        let left_number = Self::coerce_to_float(left).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} / {}", left.type_name(), right.type_name()),
-        })?;
-        let right_number = Self::coerce_to_float(right).ok_or(InterpreterError::TypeError {
-            expected: "number".to_string(),
-            got: format!("{} / {}", left.type_name(), right.type_name()),
-        })?;
+        let left_number =
+            Self::coerce_to_float(left).ok_or_else(|| InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: format!("{} / {}", left.type_name(), right.type_name()),
+            })?;
+        let right_number =
+            Self::coerce_to_float(right).ok_or_else(|| InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: format!("{} / {}", left.type_name(), right.type_name()),
+            })?;
         Self::number_value(left_number / right_number)
     }
 
@@ -25546,6 +25554,69 @@ mod tests {
     }
 
     // -- Mixed Int/Float arithmetic tests --
+
+    #[test]
+    fn eval_numeric_helpers_preserve_type_error_messages() {
+        let mut core = quickjs_test_core();
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Object(ObjectId(7));
+        core.registers[1] = Value::Int(1);
+
+        let add_err = core
+            .eval_add(0, 1)
+            .expect_err("object + int should remain a TypeError");
+        assert_eq!(
+            add_err,
+            InterpreterError::TypeError {
+                expected: "number or string".to_string(),
+                got: "object + number".to_string(),
+            }
+        );
+
+        let arith_err = core
+            .eval_arith(0, 1, "mul")
+            .expect_err("object * int should remain a TypeError");
+        assert_eq!(
+            arith_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "object mul number".to_string(),
+            }
+        );
+
+        let div_err = core
+            .eval_div(0, 1)
+            .expect_err("object / int should remain a TypeError");
+        assert_eq!(
+            div_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "object / number".to_string(),
+            }
+        );
+
+        let bitwise_err = core
+            .eval_bitwise(0, 1, "&")
+            .expect_err("object bitwise int should remain a TypeError");
+        assert_eq!(
+            bitwise_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "object".to_string(),
+            }
+        );
+
+        let relational_err = core
+            .eval_relational(0, 1, "<")
+            .expect_err("object < int should remain a TypeError");
+        assert_eq!(
+            relational_err,
+            InterpreterError::TypeError {
+                expected: "comparable primitive".to_string(),
+                got: "object < number".to_string(),
+            }
+        );
+    }
 
     #[test]
     fn eval_add_int_float_promotion() {

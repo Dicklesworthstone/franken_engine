@@ -17,16 +17,29 @@ frankenctl benchmark compare \
   --out-dir artifacts/runtime_comparison
 ```
 
-Run the focused Cargo bench wrapper for FrankenEngine-vs-Node subprocess timing with:
+Build the `frankenctl` binary into a shared target directory, then run the
+focused Cargo bench wrappers for subprocess timing:
 
 ```bash
-cargo bench -p frankenengine-engine --bench comparative_node
+rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  cargo build -p frankenengine-engine --bin frankenctl --release
+
+rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  cargo bench -p frankenengine-engine --bench comparative_node -- --noplot
+
+rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine_runtime_comparison_target \
+  CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' \
+  cargo bench -p frankenengine-engine --bench comparative_bun -- --noplot
 ```
 
-The Cargo bench materializes three representative workloads: numeric loops, basic
-arithmetic, and JSON round trips. It executes each workload through `frankenctl run`
-and `node`, verifies matching observable output before timing, and lets Criterion
-report per-runtime wall-clock distributions inside the same benchmark group.
+The Node Cargo bench materializes numeric-loop, basic-arithmetic, and JSON
+round-trip workloads. The Bun Cargo bench materializes numeric-loop,
+JSON-round-trip, and array-indexing workloads. Each bench executes the workload
+through `frankenctl run` and the peer runtime, verifies matching observable
+output before timing, and lets Criterion report per-runtime wall-clock
+distributions inside the same benchmark group.
 
 ## Methodology
 
@@ -35,10 +48,14 @@ report per-runtime wall-clock distributions inside the same benchmark group.
 - FrankenEngine is invoked through `frankenctl run --input <workload>` to include
   the operator-visible CLI/orchestrator path.
 - Node.js is invoked through the configured `node` binary with the same workload
-  path.
+  path; Bun is invoked through the configured `bun` binary with the same
+  workload path.
 - The artifact suite uses the manifest fairness policy: two warmups, thirty
   measured samples, and a thirty-second per-case timeout.
 - The Cargo bench uses Criterion with ten samples per runtime/workload to keep
   local iteration practical; use the artifact suite for release evidence.
+- `frankenctl` is resolved from `FRANKENCTL`, Cargo's bin env var, the shared
+  target directory, or PATH. The peer runtimes can be overridden with `NODE` and
+  `BUN`.
 - Runtime ratios are valid for this subprocess methodology only. They must not be
   presented as broad VM throughput claims without the emitted artifact bundle.

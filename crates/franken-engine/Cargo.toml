@@ -39,6 +39,11 @@ name = "comparative_node"
 path = "benches/comparative_node.rs"
 harness = false
 
+[[bench]]
+name = "comparative_bun"
+path = "benches/comparative_bun.rs"
+harness = false
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

@@ -678,18 +678,14 @@ impl LaneScheduler {
             return Err(err);
         }
 
-        let throttled = match self.try_enforce_admission(
-            extension_id,
-            &label,
-            deadline_tick,
-            current_ticks,
-        ) {
-            Ok(throttled) => throttled,
-            Err(err) => {
-                self.record_extension_shed(extension_id, lane);
-                return Err(err);
-            }
-        };
+        let throttled =
+            match self.try_enforce_admission(extension_id, &label, deadline_tick, current_ticks) {
+                Ok(throttled) => throttled,
+                Err(err) => {
+                    self.record_extension_shed(extension_id, lane);
+                    return Err(err);
+                }
+            };
 
         let task_id = match self.submit(label.clone(), deadline_tick, payload_id, current_ticks) {
             Ok(task_id) => task_id,
@@ -4202,9 +4198,7 @@ mod tests {
             ledger.schema_version,
             EXTENSION_FAIRNESS_LEDGER_SCHEMA_VERSION
         );
-        assert!(ledger
-            .report_id
-            .starts_with("scheduler-fairness-sha256:"));
+        assert!(ledger.report_id.starts_with("scheduler-fairness-sha256:"));
         assert_eq!(
             ledger.report_id.len(),
             "scheduler-fairness-sha256:".len() + 64
@@ -4285,7 +4279,13 @@ mod tests {
             ..LaneConfig::default()
         });
         sched
-            .submit_for_extension("ext-a", timed_label("trace-timeout"), 10, "payload-timeout", 0)
+            .submit_for_extension(
+                "ext-a",
+                timed_label("trace-timeout"),
+                10,
+                "payload-timeout",
+                0,
+            )
             .expect("timed extension submit should succeed");
 
         let batch = sched.schedule_batch(0, 20);

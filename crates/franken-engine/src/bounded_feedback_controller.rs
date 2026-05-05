@@ -237,20 +237,23 @@ impl Default for ControllerConfig {
 impl ControllerConfig {
     /// Compute a content hash of this config for change detection.
     pub fn content_hash(&self) -> String {
-        let canonical = format!(
-            "{}:{}:{}:{}:{}:{}:{}:{}:{}",
-            self.schema_version,
-            self.actuator,
-            self.mode,
-            self.kp_millionths,
-            self.ki_millionths,
-            self.integrator_clamp_ns,
-            self.output_clamp_millionths,
-            self.deadband_override_ns
-                .map_or("none".to_string(), |v| v.to_string()),
-            self.warmup_epochs,
-        );
-        hex_encode(ContentHash::compute(canonical.as_bytes()).as_bytes())
+        let mut hasher = Sha256::new();
+        hash_str(&mut hasher, &self.schema_version);
+        hash_str(&mut hasher, &self.actuator.to_string());
+        hash_str(&mut hasher, &self.mode.to_string());
+        hash_i64(&mut hasher, self.kp_millionths);
+        hash_i64(&mut hasher, self.ki_millionths);
+        hash_i64(&mut hasher, self.integrator_clamp_ns);
+        hash_i64(&mut hasher, self.output_clamp_millionths);
+        match self.deadband_override_ns {
+            Some(value) => {
+                hash_bool(&mut hasher, true);
+                hash_u64(&mut hasher, value);
+            }
+            None => hash_bool(&mut hasher, false),
+        }
+        hash_u64(&mut hasher, self.warmup_epochs);
+        hex_encode(&hasher.finalize())
     }
 }
 
@@ -430,14 +433,19 @@ impl PiController {
         self.state.last_error_ns = error_ns;
         self.state.last_output_millionths = clamped_output;
 
-        let hash = compute_decision_hash(
-            self.config.actuator,
-            self.target.target_ns,
-            observation.observed_ns,
+        let hash = compute_decision_hash(DecisionHashInput {
+            actuator: self.config.actuator,
+            target: &self.target,
+            observation,
             error_ns,
-            clamped_output,
-            self.state.epoch_count,
-        );
+            p_term_millionths: p_term,
+            i_term_millionths: i_term,
+            raw_output_millionths: raw_output,
+            clamped_output_millionths: clamped_output,
+            action: &action,
+            emergency,
+            epoch_count: self.state.epoch_count,
+        });
 
         ControllerDecision {
             schema_version: FEEDBACK_SCHEMA_VERSION.into(),
@@ -457,14 +465,22 @@ impl PiController {
     }
 
     fn bypassed_decision(&self, observation: &LatencyObservation) -> ControllerDecision {
-        let hash = compute_decision_hash(
-            self.config.actuator,
-            self.target.target_ns,
-            observation.observed_ns,
-            0,
-            0,
-            self.state.epoch_count,
-        );
+        let action = ControlAction::Bypassed {
+            mode: self.config.mode,
+        };
+        let hash = compute_decision_hash(DecisionHashInput {
+            actuator: self.config.actuator,
+            target: &self.target,
+            observation,
+            error_ns: 0,
+            p_term_millionths: 0,
+            i_term_millionths: 0,
+            raw_output_millionths: 0,
+            clamped_output_millionths: 0,
+            action: &action,
+            emergency: false,
+            epoch_count: self.state.epoch_count,
+        });
         ControllerDecision {
             schema_version: FEEDBACK_SCHEMA_VERSION.into(),
             actuator: self.config.actuator,
@@ -475,9 +491,7 @@ impl PiController {
             i_term_millionths: 0,
             raw_output_millionths: 0,
             clamped_output_millionths: 0,
-            action: ControlAction::Bypassed {
-                mode: self.config.mode,
-            },
+            action,
             emergency: false,
             epoch_count: self.state.epoch_count,
             decision_hash: hash,
@@ -486,14 +500,22 @@ impl PiController {
 
     fn warmup_decision(&self, observation: &LatencyObservation) -> ControllerDecision {
         let remaining = self.config.warmup_epochs - self.state.epoch_count;
-        let hash = compute_decision_hash(
-            self.config.actuator,
-            self.target.target_ns,
-            observation.observed_ns,
-            0,
-            0,
-            self.state.epoch_count,
-        );
+        let action = ControlAction::Warmup {
+            epochs_remaining: remaining,
+        };
+        let hash = compute_decision_hash(DecisionHashInput {
+            actuator: self.config.actuator,
+            target: &self.target,
+            observation,
+            error_ns: 0,
+            p_term_millionths: 0,
+            i_term_millionths: 0,
+            raw_output_millionths: 0,
+            clamped_output_millionths: 0,
+            action: &action,
+            emergency: false,
+            epoch_count: self.state.epoch_count,
+        });
         ControllerDecision {
             schema_version: FEEDBACK_SCHEMA_VERSION.into(),
             actuator: self.config.actuator,
@@ -504,9 +526,7 @@ impl PiController {
             i_term_millionths: 0,
             raw_output_millionths: 0,
             clamped_output_millionths: 0,
-            action: ControlAction::Warmup {
-                epochs_remaining: remaining,
-            },
+            action,
             emergency: false,
             epoch_count: self.state.epoch_count,
             decision_hash: hash,
@@ -552,21 +572,19 @@ impl FeedbackPolicy {
     /// Content hash of the entire policy for diffing and audit.
     pub fn content_hash(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.schema_version.as_bytes());
-        hasher.update(self.policy_id.as_bytes());
-        hasher.update((self.controllers.len() as u64).to_le_bytes());
+        hash_str(&mut hasher, &self.schema_version);
+        hash_str(&mut hasher, &self.policy_id);
+        hash_u64(&mut hasher, self.controllers.len() as u64);
         for (key, config) in &self.controllers {
-            hasher.update(key.as_bytes());
-            hasher.update(config.content_hash().as_bytes());
+            hash_str(&mut hasher, key);
+            hash_str(&mut hasher, &config.content_hash());
         }
-        hasher.update((self.targets.len() as u64).to_le_bytes());
+        hash_u64(&mut hasher, self.targets.len() as u64);
         for target in &self.targets {
-            hasher.update(target.target_ns.to_le_bytes());
-            hasher.update(target.deadband_ns.to_le_bytes());
-            hasher.update(target.emergency_ns.to_le_bytes());
+            hash_latency_target(&mut hasher, target);
         }
-        hasher.update([u8::from(self.enabled)]);
-        hasher.update(self.emergency_multiplier_millionths.to_le_bytes());
+        hash_bool(&mut hasher, self.enabled);
+        hash_u64(&mut hasher, self.emergency_multiplier_millionths);
         hex_encode(&hasher.finalize())
     }
 
@@ -815,12 +833,17 @@ impl FeedbackCoordinator {
                     deadband_ns: 500_000,
                     emergency_ns: 30_000_000,
                 });
+            let preserved_state = self
+                .controllers
+                .get(key)
+                .filter(|existing| {
+                    existing.config.content_hash() == config.content_hash()
+                        && existing.target == target
+                })
+                .map(|existing| existing.state.clone());
             let mut controller = PiController::new(config.clone(), target);
-            // Preserve state if config hash matches.
-            if let Some(existing) = self.controllers.get(key)
-                && existing.config.content_hash() == config.content_hash()
-            {
-                controller.state = existing.state.clone();
+            if let Some(state) = preserved_state {
+                controller.state = state;
             }
             new_controllers.insert(key.clone(), controller);
         }
@@ -913,20 +936,91 @@ fn clamp(value: i64, min: i64, max: i64) -> i64 {
     }
 }
 
-/// Compute a content-addressed decision hash.
-fn compute_decision_hash(
+struct DecisionHashInput<'a> {
     actuator: ActuatorKind,
-    target_ns: u64,
-    observed_ns: u64,
+    target: &'a LatencyTarget,
+    observation: &'a LatencyObservation,
     error_ns: i64,
-    output_millionths: i64,
+    p_term_millionths: i64,
+    i_term_millionths: i64,
+    raw_output_millionths: i64,
+    clamped_output_millionths: i64,
+    action: &'a ControlAction,
+    emergency: bool,
     epoch_count: u64,
-) -> String {
-    let input = format!(
-        "{}:{}:{}:{}:{}:{}",
-        actuator, target_ns, observed_ns, error_ns, output_millionths, epoch_count,
-    );
-    hex_encode(ContentHash::compute(input.as_bytes()).as_bytes())
+}
+
+/// Compute a content-addressed decision hash.
+fn compute_decision_hash(input: DecisionHashInput<'_>) -> String {
+    let mut hasher = Sha256::new();
+    hash_str(&mut hasher, FEEDBACK_SCHEMA_VERSION);
+    hash_str(&mut hasher, &input.actuator.to_string());
+    hash_latency_target(&mut hasher, input.target);
+    hash_latency_observation(&mut hasher, input.observation);
+    hash_i64(&mut hasher, input.error_ns);
+    hash_i64(&mut hasher, input.p_term_millionths);
+    hash_i64(&mut hasher, input.i_term_millionths);
+    hash_i64(&mut hasher, input.raw_output_millionths);
+    hash_i64(&mut hasher, input.clamped_output_millionths);
+    hash_control_action(&mut hasher, input.action);
+    hash_bool(&mut hasher, input.emergency);
+    hash_u64(&mut hasher, input.epoch_count);
+    hex_encode(&hasher.finalize())
+}
+
+fn hash_latency_target(hasher: &mut Sha256, target: &LatencyTarget) {
+    hash_str(hasher, &target.stage.to_string());
+    hash_str(hasher, &target.percentile.to_string());
+    hash_u64(hasher, target.target_ns);
+    hash_u64(hasher, target.deadband_ns);
+    hash_u64(hasher, target.emergency_ns);
+}
+
+fn hash_latency_observation(hasher: &mut Sha256, observation: &LatencyObservation) {
+    hash_str(hasher, &observation.stage.to_string());
+    hash_str(hasher, &observation.percentile.to_string());
+    hash_u64(hasher, observation.observed_ns);
+    hash_u64(hasher, observation.sample_count);
+    hash_u64(hasher, observation.epoch.as_u64());
+}
+
+fn hash_control_action(hasher: &mut Sha256, action: &ControlAction) {
+    match action {
+        ControlAction::Increase { delta_millionths } => {
+            hash_str(hasher, "increase");
+            hash_i64(hasher, *delta_millionths);
+        }
+        ControlAction::Decrease { delta_millionths } => {
+            hash_str(hasher, "decrease");
+            hash_i64(hasher, *delta_millionths);
+        }
+        ControlAction::Hold => hash_str(hasher, "hold"),
+        ControlAction::Warmup { epochs_remaining } => {
+            hash_str(hasher, "warmup");
+            hash_u64(hasher, *epochs_remaining);
+        }
+        ControlAction::Bypassed { mode } => {
+            hash_str(hasher, "bypassed");
+            hash_str(hasher, &mode.to_string());
+        }
+    }
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hash_u64(hasher, value.len() as u64);
+    hasher.update(value.as_bytes());
+}
+
+fn hash_bool(hasher: &mut Sha256, value: bool) {
+    hasher.update([u8::from(value)]);
+}
+
+fn hash_i64(hasher: &mut Sha256, value: i64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_u64(hasher: &mut Sha256, value: u64) {
+    hasher.update(value.to_le_bytes());
 }
 
 /// Hex-encode a byte slice.
@@ -1204,6 +1298,45 @@ mod tests {
     }
 
     #[test]
+    fn decision_hash_distinguishes_warmup_and_bypass_actions() {
+        let mut warmup = PiController::new(
+            ControllerConfig {
+                warmup_epochs: 1,
+                ..Default::default()
+            },
+            test_target(),
+        );
+        let warmup_decision = warmup.tick(&test_observation(8_000_000));
+
+        let mut disabled = PiController::new(
+            ControllerConfig {
+                mode: ControllerMode::Disabled,
+                warmup_epochs: 1,
+                ..Default::default()
+            },
+            test_target(),
+        );
+        let disabled_decision = disabled.tick(&test_observation(8_000_000));
+
+        assert_eq!(
+            warmup_decision.action,
+            ControlAction::Warmup {
+                epochs_remaining: 0
+            }
+        );
+        assert_eq!(
+            disabled_decision.action,
+            ControlAction::Bypassed {
+                mode: ControllerMode::Disabled
+            }
+        );
+        assert_ne!(
+            warmup_decision.decision_hash,
+            disabled_decision.decision_hash
+        );
+    }
+
+    #[test]
     fn controller_reset_clears_state() {
         let config = ControllerConfig {
             warmup_epochs: 0,
@@ -1321,6 +1454,35 @@ mod tests {
         let h2 = p2.content_hash();
 
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn policy_content_hash_changes_with_target_stage_and_percentile() {
+        let mut base = FeedbackPolicy::default();
+        base.controllers
+            .insert("test".into(), ControllerConfig::default());
+        base.targets.push(test_target());
+
+        let mut different_stage = base.clone();
+        different_stage.targets[0] = LatencyTarget::new(
+            ExecutionStage::Parse,
+            LatencyPercentile::P99,
+            5_000_000,
+            200_000,
+            15_000_000,
+        );
+
+        let mut different_percentile = base.clone();
+        different_percentile.targets[0] = LatencyTarget::new(
+            ExecutionStage::ExecutionQuantum,
+            LatencyPercentile::P999,
+            5_000_000,
+            200_000,
+            15_000_000,
+        );
+
+        assert_ne!(base.content_hash(), different_stage.content_hash());
+        assert_ne!(base.content_hash(), different_percentile.content_hash());
     }
 
     #[test]
@@ -1460,6 +1622,37 @@ mod tests {
             .kp_millionths = 900_000;
         coordinator.apply_policy(new_policy);
         assert_eq!(coordinator.controllers["test"].state.epoch_count, 0);
+    }
+
+    #[test]
+    fn coordinator_apply_policy_resets_on_target_change() {
+        let mut policy = FeedbackPolicy::default();
+        policy.controllers.insert(
+            "test".into(),
+            ControllerConfig {
+                warmup_epochs: 0,
+                ..Default::default()
+            },
+        );
+        policy.targets.push(test_target());
+        let mut coordinator = FeedbackCoordinator::new(policy.clone(), test_epoch());
+        coordinator.tick_all(&[test_observation(8_000_000)]);
+        assert!(coordinator.controllers["test"].state.integrator_ns > 0);
+
+        let mut new_policy = policy;
+        new_policy.targets[0] = LatencyTarget::new(
+            ExecutionStage::ExecutionQuantum,
+            LatencyPercentile::P99,
+            10_000_000,
+            500_000,
+            30_000_000,
+        );
+        coordinator.apply_policy(new_policy);
+
+        let controller = &coordinator.controllers["test"];
+        assert_eq!(controller.state.epoch_count, 0);
+        assert_eq!(controller.state.integrator_ns, 0);
+        assert_eq!(controller.target.target_ns, 10_000_000);
     }
 
     #[test]

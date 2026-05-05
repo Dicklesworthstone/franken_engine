@@ -5,10 +5,12 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::novelty_scoring_contract::{
     CandidateKind, DimensionWeight, NoveltyCandidate, NoveltyDimension, ScoringConfig, score_batch,
 };
+use frankenengine_engine::novelty_synthesis_engine::franken_engine_synthesis_manifest;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::semantic_dark_matter_engine::{
     DarkMatterEngineConfig, DarkMatterEngineError, DarkMatterEngineOrchestrator,
-    DarkMatterSpecimenFamily, DarkMatterVerdict, dark_matter_corpus, run_dark_matter_corpus,
+    DarkMatterSpecimenFamily, DarkMatterVerdict, RegionUpdateAction,
+    SynthesizedCandidateDenialReason, dark_matter_corpus, run_dark_matter_corpus,
 };
 
 const MILLION: u64 = 1_000_000;
@@ -207,6 +209,131 @@ fn test_seq_increments() {
         .unwrap();
     assert_eq!(r1.seq, 1);
     assert_eq!(r2.seq, 2);
+}
+
+#[test]
+fn test_discover_emits_mixed_synthesized_candidate_receipts_and_region_updates() {
+    let mut engine = DarkMatterEngineOrchestrator::new(
+        test_epoch(),
+        DarkMatterEngineConfig {
+            promotion_threshold_millionths: 850_000,
+            max_promotions_per_cycle: 2,
+            ..DarkMatterEngineConfig::default()
+        },
+    );
+    let result = engine
+        .discover(&[candidate("explicit-high", CandidateKind::Program, 900_000)])
+        .expect("discovery should succeed");
+
+    let synthesis_receipt = result
+        .synthesis_receipt
+        .as_ref()
+        .expect("synthesis receipt should be present");
+    assert_eq!(
+        synthesis_receipt.candidates_proposed as usize,
+        result.synthesized_candidate_receipts.len()
+    );
+    assert!(synthesis_receipt.candidates_accepted > 0);
+    assert!(synthesis_receipt.candidates_denied > 0);
+
+    let accepted = result
+        .synthesized_candidate_receipts
+        .iter()
+        .filter(|receipt| receipt.accepted)
+        .count();
+    let denied = result
+        .synthesized_candidate_receipts
+        .iter()
+        .filter(|receipt| !receipt.accepted)
+        .count();
+    assert!(accepted > 0);
+    assert!(denied > 0);
+    assert!(
+        result
+            .synthesized_candidate_receipts
+            .iter()
+            .any(|receipt| matches!(
+                receipt.denial_reason,
+                Some(SynthesizedCandidateDenialReason::PromotionCapReached)
+            )),
+        "expected at least one synthesized candidate denied by promotion cap"
+    );
+    assert!(
+        result
+            .synthesized_candidate_receipts
+            .iter()
+            .any(|receipt| matches!(
+                receipt.denial_reason,
+                Some(SynthesizedCandidateDenialReason::Filter(_))
+            )),
+        "expected at least one synthesized candidate denied by synthesis filtering"
+    );
+    assert!(
+        result
+            .region_update_receipts
+            .iter()
+            .any(|receipt| receipt.action == RegionUpdateAction::Retired)
+    );
+    assert!(
+        result
+            .region_update_receipts
+            .iter()
+            .any(|receipt| receipt.action == RegionUpdateAction::Activated)
+    );
+    assert!(engine.regions().iter().any(|region| {
+        region
+            .region_id
+            .starts_with("semantic_dark_matter_synthesis::")
+            && region.retired
+    }));
+    assert!(engine.regions().iter().any(|region| {
+        region
+            .region_id
+            .starts_with("semantic_dark_matter_synthesis::")
+            && !region.retired
+    }));
+}
+
+#[test]
+fn test_discover_synthesis_artifacts_are_deterministic() {
+    let config = DarkMatterEngineConfig {
+        promotion_threshold_millionths: 850_000,
+        max_promotions_per_cycle: 2,
+        ..DarkMatterEngineConfig::default()
+    };
+    let candidates = [candidate("explicit-high", CandidateKind::Program, 900_000)];
+    let mut first = DarkMatterEngineOrchestrator::new(test_epoch(), config.clone());
+    let mut second = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+
+    let first_result = first
+        .discover(&candidates)
+        .expect("first discovery should succeed");
+    let second_result = second
+        .discover(&candidates)
+        .expect("second discovery should succeed");
+
+    let manifest_hash = franken_engine_synthesis_manifest().content_hash();
+    assert_eq!(
+        first_result
+            .synthesis_receipt
+            .as_ref()
+            .expect("synthesis receipt should be present")
+            .manifest_hash,
+        manifest_hash
+    );
+    assert_eq!(
+        first_result.synthesis_receipt,
+        second_result.synthesis_receipt
+    );
+    assert_eq!(
+        first_result.synthesized_candidate_receipts,
+        second_result.synthesized_candidate_receipts
+    );
+    assert_eq!(
+        first_result.region_update_receipts,
+        second_result.region_update_receipts
+    );
+    assert_eq!(first_result.content_hash, second_result.content_hash);
 }
 
 // --- Summary ---

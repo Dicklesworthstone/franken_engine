@@ -33,6 +33,10 @@ use crate::novelty_scoring_contract::{
     CandidateKind, CompositeVerdict, NoveltyCandidate, NoveltyDimension, NoveltyVerdict,
     ScoringConfig, score_batch,
 };
+use crate::novelty_synthesis_engine::{
+    DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, ProgramKind, SynthesisConstraint,
+    SynthesisDenialReason, SynthesisStrategy, filter_candidates, franken_engine_synthesis_manifest,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -45,6 +49,7 @@ pub const DARK_MATTER_ENGINE_POLICY_ID: &str = "RGC-707";
 
 const MILLION: u64 = 1_000_000;
 const DISCOVERY_OBSERVATION_STEP_SECS: u64 = 3600;
+const SYNTHESIS_REGION_PREFIX: &str = "semantic_dark_matter_synthesis::";
 
 /// Maximum discovery cycles retained in history.
 const MAX_DISCOVERY_HISTORY: usize = 256;
@@ -140,6 +145,102 @@ pub struct DiscoveryCandidateReceipt {
     pub composite_score_hash: ContentHash,
 }
 
+/// Orchestrator-level denial reason for a synthesized candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SynthesizedCandidateDenialReason {
+    /// Candidate was denied by the synthesis-engine filter itself.
+    Filter(SynthesisDenialReason),
+    /// Candidate would otherwise have been accepted, but the cycle-wide
+    /// promotion budget was already exhausted.
+    PromotionCapReached,
+}
+
+impl SynthesizedCandidateDenialReason {
+    fn stable_label(&self) -> String {
+        match self {
+            Self::Filter(reason) => format!("filter:{}", reason.as_str()),
+            Self::PromotionCapReached => "promotion_cap_reached".to_string(),
+        }
+    }
+}
+
+/// Detailed synthesized-candidate outcome captured during a discovery cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SynthesizedCandidateReceipt {
+    /// Candidate identifier covered by this receipt.
+    pub candidate_id: String,
+    /// Synthesized artifact kind.
+    pub kind: ProgramKind,
+    /// Synthesis strategy used to produce this artifact.
+    pub strategy: SynthesisStrategy,
+    /// Novelty score assigned by the synthesis engine.
+    pub novelty_score_millionths: u64,
+    /// Estimated coverage delta carried by this candidate.
+    pub coverage_delta_millionths: u64,
+    /// Target board cells this candidate is meant to exercise.
+    pub target_cells: Vec<String>,
+    /// Candidate content hash from the synthesis engine.
+    pub content_hash: ContentHash,
+    /// Whether the candidate was accepted into this discovery cycle.
+    pub accepted: bool,
+    /// Denial reason when the candidate is not accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denial_reason: Option<SynthesizedCandidateDenialReason>,
+}
+
+/// Aggregate synthesis receipt bound into a discovery cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoverySynthesisReceipt {
+    /// Canonical synthesis manifest batch identifier.
+    pub manifest_batch_id: String,
+    /// Deterministic content hash of the manifest batch.
+    pub manifest_hash: ContentHash,
+    /// Total synthesized candidates proposed to the cycle.
+    pub candidates_proposed: u64,
+    /// Synthesized candidates ultimately accepted by the cycle.
+    pub candidates_accepted: u64,
+    /// Synthesized candidates denied by filter or budget gating.
+    pub candidates_denied: u64,
+    /// Total novelty yield contributed by accepted synthesized candidates.
+    pub novelty_yield_millionths: u64,
+    /// Total coverage delta contributed by accepted synthesized candidates.
+    pub coverage_improvement_millionths: u64,
+    /// Deterministic hash over the synthesis outcome ledger.
+    pub receipt_hash: ContentHash,
+}
+
+/// Region update action emitted from synthesized-candidate outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionUpdateAction {
+    /// A rejected synthesized candidate leaves a target cell active.
+    Activated,
+    /// An accepted synthesized candidate retires a target cell.
+    Retired,
+}
+
+/// Deterministic receipt describing a single region update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegionUpdateReceipt {
+    /// Region identifier affected by this update.
+    pub region_id: String,
+    /// Candidate that triggered the update.
+    pub candidate_id: String,
+    /// Target cell that mapped to the region.
+    pub target_cell: String,
+    /// Whether the region was activated or retired.
+    pub action: RegionUpdateAction,
+    /// Region kind used for the synthesized coverage surface.
+    pub kind: DarkMatterRegionKind,
+    /// Mass assigned to this target-cell update.
+    pub mass_millionths: u64,
+    /// Whether the resulting region is retired after the update.
+    pub retired: bool,
+    /// Resulting region content hash after the update.
+    pub content_hash: ContentHash,
+}
+
 /// Result of a single discovery cycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveryCycleResult {
@@ -158,6 +259,15 @@ pub struct DiscoveryCycleResult {
     /// Per-candidate scoring receipts for auditing promotion decisions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_receipts: Vec<DiscoveryCandidateReceipt>,
+    /// Aggregate synthesis receipt for the cycle, when synthesis is run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesis_receipt: Option<DiscoverySynthesisReceipt>,
+    /// Per-synthesized-candidate acceptance or denial ledger.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub synthesized_candidate_receipts: Vec<SynthesizedCandidateReceipt>,
+    /// Deterministic region-update ledger emitted from synthesized outcomes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_update_receipts: Vec<RegionUpdateReceipt>,
     /// Saturation-gate receipt binding the emitted board state to the
     /// dark-matter estimate, freshness, and ratchet verdicts for this cycle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,6 +383,45 @@ fn logical_cycle_timestamp(epoch: SecurityEpoch, seq: u64) -> u64 {
         .saturating_add(seq.saturating_mul(DISCOVERY_OBSERVATION_STEP_SECS))
 }
 
+fn synthesis_region_id(target_cell: &str) -> String {
+    format!("{SYNTHESIS_REGION_PREFIX}{target_cell}")
+}
+
+fn synthesis_region_kind(kind: ProgramKind) -> DarkMatterRegionKind {
+    match kind {
+        ProgramKind::PlainJs | ProgramKind::TypeScript => DarkMatterRegionKind::UntestedCodePath,
+        ProgramKind::ReactComponent | ProgramKind::ReactApp => {
+            DarkMatterRegionKind::UnobservedModuleTopology
+        }
+        ProgramKind::NodePackage | ProgramKind::BunPackage => {
+            DarkMatterRegionKind::UnobservedInteraction
+        }
+    }
+}
+
+fn split_target_cell_mass(
+    target_cells: &[String],
+    total_mass_millionths: u64,
+) -> Vec<(String, u64)> {
+    if target_cells.is_empty() || total_mass_millionths == 0 {
+        return Vec::new();
+    }
+
+    let cell_count = target_cells.len() as u64;
+    let base_mass = total_mass_millionths / cell_count;
+    let mut remainder = total_mass_millionths % cell_count;
+    let mut allocations = Vec::with_capacity(target_cells.len());
+    for target_cell in target_cells {
+        let mut mass = base_mass;
+        if remainder > 0 {
+            mass = mass.saturating_add(1);
+            remainder -= 1;
+        }
+        allocations.push((target_cell.clone(), mass));
+    }
+    allocations
+}
+
 impl DarkMatterEngineOrchestrator {
     /// Create a new orchestrator.
     pub fn new(epoch: SecurityEpoch, config: DarkMatterEngineConfig) -> Self {
@@ -357,6 +506,12 @@ impl DarkMatterEngineOrchestrator {
             });
         }
 
+        let now_epoch_secs = logical_cycle_timestamp(self.epoch, seq);
+        let (synthesis_receipt, synthesized_candidate_receipts) =
+            self.run_synthesis_cycle(promoted, now_epoch_secs);
+        let region_update_receipts =
+            self.apply_synthesis_region_updates(&synthesized_candidate_receipts, now_epoch_secs);
+
         let avg_novelty = if candidates.is_empty() {
             0
         } else {
@@ -402,6 +557,46 @@ impl DarkMatterEngineOrchestrator {
                 buf.extend_from_slice(receipt.certificate_hash.as_bytes());
                 buf.extend_from_slice(receipt.composite_score_hash.as_bytes());
             }
+            buf.extend_from_slice(synthesis_receipt.manifest_batch_id.as_bytes());
+            buf.extend_from_slice(synthesis_receipt.manifest_hash.as_bytes());
+            buf.extend_from_slice(&synthesis_receipt.candidates_proposed.to_le_bytes());
+            buf.extend_from_slice(&synthesis_receipt.candidates_accepted.to_le_bytes());
+            buf.extend_from_slice(&synthesis_receipt.candidates_denied.to_le_bytes());
+            buf.extend_from_slice(&synthesis_receipt.novelty_yield_millionths.to_le_bytes());
+            buf.extend_from_slice(
+                &synthesis_receipt
+                    .coverage_improvement_millionths
+                    .to_le_bytes(),
+            );
+            buf.extend_from_slice(synthesis_receipt.receipt_hash.as_bytes());
+            for receipt in &synthesized_candidate_receipts {
+                buf.extend_from_slice(receipt.candidate_id.as_bytes());
+                buf.extend_from_slice(receipt.kind.as_str().as_bytes());
+                buf.extend_from_slice(receipt.strategy.as_str().as_bytes());
+                buf.extend_from_slice(&receipt.novelty_score_millionths.to_le_bytes());
+                buf.extend_from_slice(&receipt.coverage_delta_millionths.to_le_bytes());
+                for target_cell in &receipt.target_cells {
+                    buf.extend_from_slice(target_cell.as_bytes());
+                }
+                buf.extend_from_slice(receipt.content_hash.as_bytes());
+                buf.push(u8::from(receipt.accepted));
+                if let Some(reason) = &receipt.denial_reason {
+                    buf.extend_from_slice(reason.stable_label().as_bytes());
+                }
+            }
+            for update in &region_update_receipts {
+                buf.extend_from_slice(update.region_id.as_bytes());
+                buf.extend_from_slice(update.candidate_id.as_bytes());
+                buf.extend_from_slice(update.target_cell.as_bytes());
+                buf.extend_from_slice(update.kind.as_str().as_bytes());
+                buf.extend_from_slice(&update.mass_millionths.to_le_bytes());
+                buf.push(match update.action {
+                    RegionUpdateAction::Activated => 0,
+                    RegionUpdateAction::Retired => 1,
+                });
+                buf.push(u8::from(update.retired));
+                buf.extend_from_slice(update.content_hash.as_bytes());
+            }
             buf.extend_from_slice(board_state_evaluation.receipt.receipt_hash.as_bytes());
             ContentHash::compute(&buf)
         };
@@ -414,6 +609,9 @@ impl DarkMatterEngineOrchestrator {
             max_novelty_millionths: max_novelty,
             avg_novelty_millionths: avg_novelty,
             candidate_receipts,
+            synthesis_receipt: Some(synthesis_receipt),
+            synthesized_candidate_receipts,
+            region_update_receipts,
             board_state_receipt: Some(board_state_evaluation.receipt.clone()),
             dark_matter_regions: board_state_evaluation.region_count,
             content_hash,
@@ -475,7 +673,7 @@ impl DarkMatterEngineOrchestrator {
 
     /// Add a dark-matter region.
     pub fn add_region(&mut self, region: DarkMatterRegion) {
-        self.regions.push(region);
+        self.upsert_region(region);
         self.board_state = self.board_state_receipt().composite_state;
     }
 
@@ -494,6 +692,206 @@ impl DarkMatterEngineOrchestrator {
         self.regions.clear();
         self.history.clear();
         self.epoch = new_epoch;
+    }
+
+    fn run_synthesis_cycle(
+        &self,
+        explicit_promoted: usize,
+        now_epoch_secs: u64,
+    ) -> (DiscoverySynthesisReceipt, Vec<SynthesizedCandidateReceipt>) {
+        let manifest = franken_engine_synthesis_manifest();
+        let manifest_hash = manifest.content_hash();
+        let constraint = SynthesisConstraint::new(
+            DEFAULT_MAX_AST_NODES,
+            DEFAULT_MAX_BYTES,
+            self.config.promotion_threshold_millionths,
+        );
+        let (accepted_prelimit, denied_prelimit) =
+            filter_candidates(manifest.candidates.clone(), &constraint);
+        let remaining_slots = self
+            .config
+            .max_promotions_per_cycle
+            .saturating_sub(explicit_promoted);
+
+        let mut acceptance_map: BTreeMap<String, (bool, Option<SynthesizedCandidateDenialReason>)> =
+            BTreeMap::new();
+        for (index, candidate) in accepted_prelimit.into_iter().enumerate() {
+            if index < remaining_slots {
+                acceptance_map.insert(candidate.candidate_id.clone(), (true, None));
+            } else {
+                acceptance_map.insert(
+                    candidate.candidate_id.clone(),
+                    (
+                        false,
+                        Some(SynthesizedCandidateDenialReason::PromotionCapReached),
+                    ),
+                );
+            }
+        }
+        for (candidate, reason) in denied_prelimit {
+            acceptance_map.insert(
+                candidate.candidate_id.clone(),
+                (
+                    false,
+                    Some(SynthesizedCandidateDenialReason::Filter(reason)),
+                ),
+            );
+        }
+
+        let candidate_receipts: Vec<_> = manifest
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let (accepted, denial_reason) = acceptance_map
+                    .get(candidate.candidate_id.as_str())
+                    .cloned()
+                    .expect("every synthesized candidate must have an outcome");
+                SynthesizedCandidateReceipt {
+                    candidate_id: candidate.candidate_id.clone(),
+                    kind: candidate.kind,
+                    strategy: candidate.strategy,
+                    novelty_score_millionths: candidate.novelty_score_millionths,
+                    coverage_delta_millionths: candidate.coverage_delta_millionths,
+                    target_cells: candidate.target_cells.clone(),
+                    content_hash: candidate.content_hash,
+                    accepted,
+                    denial_reason,
+                }
+            })
+            .collect();
+
+        let candidates_accepted = candidate_receipts
+            .iter()
+            .filter(|receipt| receipt.accepted)
+            .count() as u64;
+        let novelty_yield_millionths = candidate_receipts
+            .iter()
+            .filter(|receipt| receipt.accepted)
+            .map(|receipt| receipt.novelty_score_millionths)
+            .fold(0u64, |acc, score| acc.saturating_add(score));
+        let coverage_improvement_millionths = candidate_receipts
+            .iter()
+            .filter(|receipt| receipt.accepted)
+            .map(|receipt| receipt.coverage_delta_millionths)
+            .fold(0u64, |acc, delta| acc.saturating_add(delta));
+        let candidates_proposed = candidate_receipts.len() as u64;
+        let candidates_denied = candidates_proposed.saturating_sub(candidates_accepted);
+        let receipt_hash = {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(DARK_MATTER_ENGINE_SCHEMA_VERSION.as_bytes());
+            buf.extend_from_slice(manifest.batch_id.as_bytes());
+            buf.extend_from_slice(manifest_hash.as_bytes());
+            buf.extend_from_slice(&now_epoch_secs.to_le_bytes());
+            buf.extend_from_slice(&candidates_proposed.to_le_bytes());
+            buf.extend_from_slice(&candidates_accepted.to_le_bytes());
+            buf.extend_from_slice(&candidates_denied.to_le_bytes());
+            buf.extend_from_slice(&novelty_yield_millionths.to_le_bytes());
+            buf.extend_from_slice(&coverage_improvement_millionths.to_le_bytes());
+            for receipt in &candidate_receipts {
+                buf.extend_from_slice(receipt.candidate_id.as_bytes());
+                buf.extend_from_slice(receipt.kind.as_str().as_bytes());
+                buf.extend_from_slice(receipt.strategy.as_str().as_bytes());
+                buf.extend_from_slice(&receipt.novelty_score_millionths.to_le_bytes());
+                buf.extend_from_slice(&receipt.coverage_delta_millionths.to_le_bytes());
+                for target_cell in &receipt.target_cells {
+                    buf.extend_from_slice(target_cell.as_bytes());
+                }
+                buf.extend_from_slice(receipt.content_hash.as_bytes());
+                buf.push(u8::from(receipt.accepted));
+                if let Some(reason) = &receipt.denial_reason {
+                    buf.extend_from_slice(reason.stable_label().as_bytes());
+                }
+            }
+            ContentHash::compute(&buf)
+        };
+
+        (
+            DiscoverySynthesisReceipt {
+                manifest_batch_id: manifest.batch_id,
+                manifest_hash,
+                candidates_proposed,
+                candidates_accepted,
+                candidates_denied,
+                novelty_yield_millionths,
+                coverage_improvement_millionths,
+                receipt_hash,
+            },
+            candidate_receipts,
+        )
+    }
+
+    fn apply_synthesis_region_updates(
+        &mut self,
+        candidate_receipts: &[SynthesizedCandidateReceipt],
+        now_epoch_secs: u64,
+    ) -> Vec<RegionUpdateReceipt> {
+        let mut updates = Vec::new();
+        for receipt in candidate_receipts {
+            if receipt.coverage_delta_millionths == 0 || receipt.target_cells.is_empty() {
+                continue;
+            }
+
+            let action = if receipt.accepted {
+                RegionUpdateAction::Retired
+            } else {
+                RegionUpdateAction::Activated
+            };
+            for (target_cell, mass_millionths) in
+                split_target_cell_mass(&receipt.target_cells, receipt.coverage_delta_millionths)
+            {
+                if mass_millionths == 0 {
+                    continue;
+                }
+                let region_id = synthesis_region_id(&target_cell);
+                let discovered_at_epoch_secs = self
+                    .region(region_id.as_str())
+                    .map(|region| region.discovered_at_epoch_secs)
+                    .unwrap_or(now_epoch_secs);
+                let region = DarkMatterRegion {
+                    region_id: region_id.clone(),
+                    kind: synthesis_region_kind(receipt.kind),
+                    mass_millionths,
+                    retired: matches!(action, RegionUpdateAction::Retired),
+                    discovered_at_epoch_secs,
+                    retired_at_epoch_secs: if matches!(action, RegionUpdateAction::Retired) {
+                        Some(now_epoch_secs)
+                    } else {
+                        None
+                    },
+                    priority_weight_millionths: MILLION,
+                };
+                self.upsert_region(region.clone());
+                updates.push(RegionUpdateReceipt {
+                    region_id,
+                    candidate_id: receipt.candidate_id.clone(),
+                    target_cell,
+                    action,
+                    kind: region.kind,
+                    mass_millionths,
+                    retired: region.retired,
+                    content_hash: region.content_hash(),
+                });
+            }
+        }
+        updates
+    }
+
+    fn region(&self, region_id: &str) -> Option<&DarkMatterRegion> {
+        self.regions
+            .iter()
+            .find(|region| region.region_id == region_id)
+    }
+
+    fn upsert_region(&mut self, region: DarkMatterRegion) {
+        if let Some(index) = self
+            .regions
+            .iter()
+            .rposition(|existing| existing.region_id == region.region_id)
+        {
+            self.regions[index] = region;
+        } else {
+            self.regions.push(region);
+        }
     }
 
     fn evaluate_board_state(
@@ -996,6 +1394,9 @@ mod tests {
             max_novelty_millionths: 0,
             avg_novelty_millionths: 0,
             candidate_receipts: Vec::new(),
+            synthesis_receipt: None,
+            synthesized_candidate_receipts: Vec::new(),
+            region_update_receipts: Vec::new(),
             board_state_receipt: None,
             dark_matter_regions: 0,
             content_hash: ContentHash::compute(
@@ -1380,6 +1781,40 @@ mod tests {
             saturated_result.content_hash,
             insufficient_result.content_hash
         );
+    }
+
+    #[test]
+    fn test_content_hash_covers_synthesis_receipt_evidence() {
+        let candidates = [make_candidate("high", CandidateKind::Program, 900_000)];
+        let mut constrained = DarkMatterEngineOrchestrator::new(
+            test_epoch(),
+            DarkMatterEngineConfig {
+                promotion_threshold_millionths: 850_000,
+                max_promotions_per_cycle: 2,
+                ..DarkMatterEngineConfig::default()
+            },
+        );
+        let mut relaxed = DarkMatterEngineOrchestrator::new(
+            test_epoch(),
+            DarkMatterEngineConfig {
+                promotion_threshold_millionths: 850_000,
+                max_promotions_per_cycle: 8,
+                ..DarkMatterEngineConfig::default()
+            },
+        );
+
+        let constrained_result = constrained
+            .discover(&candidates)
+            .expect("constrained discovery should succeed");
+        let relaxed_result = relaxed
+            .discover(&candidates)
+            .expect("relaxed discovery should succeed");
+
+        assert_ne!(
+            constrained_result.synthesis_receipt,
+            relaxed_result.synthesis_receipt
+        );
+        assert_ne!(constrained_result.content_hash, relaxed_result.content_hash);
     }
 
     #[test]

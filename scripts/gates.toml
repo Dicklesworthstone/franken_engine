@@ -76,6 +76,14 @@ command = "./scripts/run_claim_to_proof_matrix_gate.sh ci"
 needs_rch = false
 generates_manifest = true
 
+[gates.module_composition_drift_gate]
+name = "module_composition_drift_gate"
+description = "Module-composition drift artifact gate for claim-truth publication"
+artifact_root = "artifacts/rgc_module_composition_drift_gate"
+command = "./scripts/run_rgc_module_composition_drift_gate.sh ci"
+needs_rch = false
+generates_manifest = true
+
 [gates.containment_latency_metric_gate]
 name = "containment_latency_metric_gate"
 description = "Containment latency metric artifact from signal-to-action traces"
@@ -178,7 +186,7 @@ replay_source_gate = "ambient_mock_guard"
 
 # Meta-configuration for script generation
 [meta]
-total_gates = 53
+total_gates = 54
 total_scripts_to_replace = 388
 script_pattern_types = [
     "run_*_gate.sh",

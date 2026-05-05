@@ -40,6 +40,7 @@ echo ""
 declare -a PROOF_GATES=(
     # Core claim matrix (foundation)
     "claim_to_proof_matrix:./scripts/run_claim_to_proof_matrix_gate.sh:bd-1qkrc"
+    "module_composition_drift:./scripts/run_rgc_module_composition_drift_gate.sh ci:bd-qg92c"
 
     # Live security examples (bd-1ypps, bd-dpfvh). The quarantine propagation
     # example is intentionally omitted because it is marked PROVISIONAL

@@ -61,7 +61,7 @@ validate_contract() {
     .schema_version == "franken-engine.module-composition-claim-ledger.v1"
     and .bead_id == "bd-37q56"
     and (.verification_commands | type == "array")
-    and (.verification_commands | length) == 5
+    and (.verification_commands | length) == 8
     and (.claims | type == "array")
     and (.claims | length) == 6
   ' <<<"$contract_json" >/dev/null; then

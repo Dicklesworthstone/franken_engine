@@ -64,13 +64,32 @@ gate keeps the ledger honest by checking stable claim ordering, source-span
 fragments, child-substrate paths, and provisional fallback metadata. `bd-tl6l7`
 adds the drift gate, which fails when a claimed parent surface no longer shows
 the required child-surface evidence or when it falls back to an undeclared
-proxy or heuristic path.
+proxy or heuristic path. `bd-qg92c` adds the artifact-emitting runner and replay
+surface so operators can see whether each claim is currently `valid`,
+`provisional`, or `unpublished`, along with the exact module links and
+remediation text that justify that status.
 
 - `docs/rgc_module_composition_claim_ledger_v1.json`
 - `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check`
 - `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest`
 - `./scripts/e2e/rgc_module_composition_drift_gate.sh check`
 - `./scripts/e2e/rgc_module_composition_drift_gate.sh selftest`
+- `./scripts/run_rgc_module_composition_drift_gate.sh ci`
+- `./scripts/run_rgc_module_composition_drift_gate.sh selftest`
+- `./scripts/e2e/rgc_module_composition_drift_replay.sh ci`
+
+The runner emits:
+
+- `composition_drift_report.json`
+- `composition_drift_summary.md`
+- `claim_module_links.json`
+- `claim_statuses.json`
+- `manifest.json`
+
+Interpretation:
+- `valid` means an observed claim still exposes all required child evidence and no undeclared proxy path.
+- `provisional` means the declared fallback state is still truthful, but the claim must not be upgraded to observed yet.
+- `unpublished` means the operator should either wire the missing child/proof surface or downgrade the claim wording before presenting it as observed behavior.
 
 ## RGC Compound JSON Runtime Proof Lanes
 

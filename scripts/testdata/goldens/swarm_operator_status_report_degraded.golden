@@ -4,15 +4,30 @@
   "source_revision": "smoke-rev",
   "status": "degraded",
   "tui_ready": true,
+  "dashboard_contract": {
+    "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
+    "contract_doc": "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md",
+    "contract_json": "docs/swarm_predictive_dashboard_contract_v1.json",
+    "renderer": {
+      "provider": "/dp/frankentui",
+      "shipped_in_franken_engine": false,
+      "local_renderer": false
+    }
+  },
   "summary": {
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 9,
+    "degraded_count": 10,
     "planned_command_count": 0,
+    "predictive_cost_command_count": 0,
+    "high_cost_command_count": 0,
+    "proof_cost_budget_count": 0,
     "stale_evidence_count": 1,
     "dirty_reserved_count": 1,
-    "blocked_bead_count": 1
+    "blocked_bead_count": 1,
+    "collision_risk": "none",
+    "rch_incident_count": 1
   },
   "services": {
     "agent_mail": "missing",
@@ -68,13 +83,18 @@
   },
   "validation_plan": {
     "decision": "fail_closed",
+    "collision_risk": "none",
+    "risk_flags": [],
     "commands": [],
     "omitted_commands": [
       {
         "kind": "unknown_path_mapping",
         "path": "unknown/path.rs"
       }
-    ]
+    ],
+    "proof_cost_budgets": [],
+    "conflicting_agents": [],
+    "safe_alternatives": []
   },
   "proof_evidence_index": {
     "queries": []
@@ -100,6 +120,70 @@
       "overlaps_ready": true
     }
   ],
+  "predictive_dashboard": {
+    "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
+    "renderer_contract": {
+      "provider": "/dp/frankentui",
+      "shipped_in_franken_engine": false,
+      "local_renderer": false
+    },
+    "predictive_cost": {
+      "status": "nominal",
+      "commands": [],
+      "high_risk_commands": [],
+      "proof_cost_budgets": []
+    },
+    "collision_risk": {
+      "risk": "none",
+      "conflicting_agents": [],
+      "safe_alternatives": [],
+      "reservation_recommendations": [],
+      "conflicts": {
+        "reservations": [],
+        "dirty": [],
+        "in_progress": []
+      }
+    },
+    "proof_freshness": {
+      "state": "fresh",
+      "reusable": true,
+      "artifact_id": "proof-current",
+      "artifact_path": null,
+      "reason": "proof artifact is reusable",
+      "recommended_next_action": "Reuse the proof artifact.",
+      "covered_paths": [
+        "crates/franken-engine/src/semantic_dark_matter_engine.rs"
+      ],
+      "changed_paths": []
+    },
+    "rch_incidents": {
+      "status": "degraded",
+      "incidents": [
+        {
+          "incident_id": "rch-incident-smoke",
+          "status": "fail",
+          "failure_kind": "worker_timeout",
+          "retry_safety": "safe_after_narrowing_or_timeout_adjustment",
+          "classification_confidence": "high",
+          "worker_id": "worker-smoke",
+          "command": "rch exec -- cargo test -p frankenengine-engine --test smoke",
+          "target_dir": "/tmp/rch_target_smoke",
+          "recommended_next_action": "Retry only after narrowing the command."
+        }
+      ]
+    },
+    "fixture_contract": {
+      "golden_cases": [
+        "healthy",
+        "degraded",
+        "stale_proof",
+        "high_cost",
+        "collision_risk"
+      ],
+      "intended_renderer_repo": "/dp/frankentui",
+      "local_tui_renderer": false
+    }
+  },
   "degraded": [
     {
       "component": "agent_mail",
@@ -154,6 +238,12 @@
       "status": "blocked",
       "impact": "bd-blocked is blocked in the bv track",
       "remediation": "Inspect dependencies before recommending this bead."
+    },
+    {
+      "component": "rch_incident_packet",
+      "status": "worker_timeout",
+      "impact": "rch proof execution has an incident packet",
+      "remediation": "Retry only after narrowing the command."
     }
   ],
   "recommendations": [

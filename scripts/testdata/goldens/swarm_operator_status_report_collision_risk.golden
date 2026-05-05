@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "healthy",
+  "status": "degraded",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 0,
+    "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -26,7 +26,7 @@
     "stale_evidence_count": 0,
     "dirty_reserved_count": 0,
     "blocked_bead_count": 0,
-    "collision_risk": "none",
+    "collision_risk": "reserved_overlap",
     "rch_incident_count": 0
   },
   "services": {
@@ -68,7 +68,7 @@
   "active_reservations": [
     {
       "path": "scripts/swarm_operator_status_report.sh",
-      "holder": "SandyThrush",
+      "holder": "CyanOak",
       "exclusive": true
     }
   ],
@@ -77,12 +77,12 @@
     "findings": []
   },
   "validation_plan": {
-    "decision": "admit",
-    "collision_risk": "none",
+    "decision": "admit_narrow",
+    "collision_risk": "reserved_overlap",
     "risk_flags": [],
     "commands": [
       {
-        "command_id": "script-check",
+        "command_id": "bash-n-dashboard-contract",
         "display": "bash -n scripts/swarm_operator_status_report.sh",
         "command_kind": "shell_syntax",
         "predicted_cost": {
@@ -98,17 +98,17 @@
         "risk_flags": [],
         "cost_evidence": {
           "status": "not_required",
-          "matched_rows": 0,
-          "fresh_rows": 0,
-          "stale_rows": 0
+          "matched_rows": 0
         }
       }
     ],
     "omitted_commands": [],
     "proof_cost_budgets": [],
-    "conflicting_agents": [],
+    "conflicting_agents": [
+      "CyanOak"
+    ],
     "safe_alternatives": [
-      "scripts/swarm_operator_status_report.sh"
+      "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md"
     ]
   },
   "proof_evidence_index": {
@@ -143,7 +143,7 @@
       "status": "nominal",
       "commands": [
         {
-          "command_id": "script-check",
+          "command_id": "bash-n-dashboard-contract",
           "display": "bash -n scripts/swarm_operator_status_report.sh",
           "command_kind": "shell_syntax",
           "cost_class": "low",
@@ -156,9 +156,7 @@
           "risk_flags": [],
           "cost_evidence": {
             "status": "not_required",
-            "matched_rows": 0,
-            "fresh_rows": 0,
-            "stale_rows": 0
+            "matched_rows": 0
           }
         }
       ],
@@ -166,14 +164,30 @@
       "proof_cost_budgets": []
     },
     "collision_risk": {
-      "risk": "none",
-      "conflicting_agents": [],
-      "safe_alternatives": [
-        "scripts/swarm_operator_status_report.sh"
+      "risk": "reserved_overlap",
+      "conflicting_agents": [
+        "CyanOak"
       ],
-      "reservation_recommendations": [],
+      "safe_alternatives": [
+        "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md"
+      ],
+      "reservation_recommendations": [
+        {
+          "action": "coordinate_reservation_holder",
+          "scope": "planned_write_set",
+          "reason": "planned write paths overlap active exclusive reservations"
+        }
+      ],
       "conflicts": {
-        "reservations": [],
+        "reservations": [
+          {
+            "planned_path": "scripts/swarm_operator_status_report.sh",
+            "path_pattern": "scripts/swarm_operator_status_report.sh",
+            "agent": "CyanOak",
+            "bead_id": "bd-gc1ml",
+            "source": "reservation"
+          }
+        ],
         "dirty": [],
         "in_progress": []
       }
@@ -206,12 +220,19 @@
       "local_tui_renderer": false
     }
   },
-  "degraded": [],
+  "degraded": [
+    {
+      "component": "collision_risk",
+      "status": "reserved_overlap",
+      "impact": "planned work may collide with another agent or dirty surface",
+      "remediation": "Coordinate with listed agents or use safe alternatives before editing."
+    }
+  ],
   "recommendations": [
     {
-      "action": "pick_next_ready_bead",
-      "bead_id": "bd-p03vs",
-      "reason": "resource governor admits validation and bead is ready"
+      "action": "coordinate_collision_risk",
+      "bead_id": null,
+      "reason": "planned dashboard feed reports collision risk"
     }
   ]
 }

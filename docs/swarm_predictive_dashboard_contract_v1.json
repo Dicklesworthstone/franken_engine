@@ -1,0 +1,46 @@
+{
+  "schema_version": "franken-engine.swarm-predictive-dashboard-contract.v1",
+  "contract_id": "swarm-predictive-dashboard-v1",
+  "status": "contract_only",
+  "producer": {
+    "script": "scripts/swarm_operator_status_report.sh",
+    "status_schema_version": "franken-engine.swarm-operator-status-report.v1",
+    "dashboard_schema_version": "franken-engine.swarm-predictive-dashboard.v1"
+  },
+  "renderer": {
+    "repo_path": "/dp/frankentui",
+    "shipped_in_franken_engine": false,
+    "local_renderer": false,
+    "handoff_note": "franken_engine produces JSON fixtures; /dp/frankentui owns rich interactive rendering."
+  },
+  "required_dashboard_fields": [
+    "predictive_dashboard.schema_version",
+    "predictive_dashboard.renderer_contract.provider",
+    "predictive_dashboard.predictive_cost.commands",
+    "predictive_dashboard.predictive_cost.high_risk_commands",
+    "predictive_dashboard.collision_risk.risk",
+    "predictive_dashboard.collision_risk.conflicting_agents",
+    "predictive_dashboard.proof_freshness.state",
+    "predictive_dashboard.proof_freshness.reusable",
+    "predictive_dashboard.rch_incidents.status",
+    "predictive_dashboard.rch_incidents.incidents"
+  ],
+  "input_snapshot_contracts": [
+    "franken-engine.swarm-validation-plan.v1",
+    "franken-engine.swarm-validation-collision-receipt.v1",
+    "franken-engine.proof-freshness-decay-report.v1",
+    "franken-engine.rch-incident-packet.v1"
+  ],
+  "golden_fixture_cases": [
+    "healthy",
+    "degraded",
+    "stale_proof",
+    "high_cost",
+    "collision_risk"
+  ],
+  "truth_constraints": [
+    "No rich interactive renderer is implemented in franken_engine by this contract.",
+    "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
+    "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands."
+  ]
+}

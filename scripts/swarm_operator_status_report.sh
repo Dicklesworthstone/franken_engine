@@ -282,7 +282,7 @@ jq -n \
     }) as $collision_summary
   | ({
       state: ($proof_freshness.freshness_state // "not_provided"),
-      reusable: ($proof_freshness.reusable // null),
+      reusable: (if ($proof_freshness | has("reusable")) then $proof_freshness.reusable else null end),
       artifact_id: ($proof_freshness.proof_artifact_id // null),
       artifact_path: ($proof_freshness.artifact_path // null),
       reason: ($proof_freshness.reason // null),

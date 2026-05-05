@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "healthy",
+  "status": "degraded",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 0,
+    "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -179,12 +179,12 @@
       }
     },
     "proof_freshness": {
-      "state": "fresh",
-      "reusable": true,
-      "artifact_id": "proof-current",
-      "artifact_path": null,
-      "reason": "proof artifact is reusable",
-      "recommended_next_action": "Reuse the proof artifact.",
+      "state": "stale_by_time",
+      "reusable": false,
+      "artifact_id": "proof-stale",
+      "artifact_path": "artifacts/proof/current/manifest.json",
+      "reason": "current time exceeds the artifact freshness deadline",
+      "recommended_next_action": "Refresh the proof artifact before publishing or relying on the claim.",
       "covered_paths": [
         "scripts/swarm_operator_status_report.sh"
       ],
@@ -206,12 +206,19 @@
       "local_tui_renderer": false
     }
   },
-  "degraded": [],
+  "degraded": [
+    {
+      "component": "proof_freshness",
+      "status": "stale_by_time",
+      "impact": "prior proof evidence is not reusable",
+      "remediation": "Refresh the proof artifact before publishing or relying on the claim."
+    }
+  ],
   "recommendations": [
     {
-      "action": "pick_next_ready_bead",
-      "bead_id": "bd-p03vs",
-      "reason": "resource governor admits validation and bead is ready"
+      "action": "refresh_stale_proof",
+      "bead_id": null,
+      "reason": "proof freshness gate reports non-reusable evidence"
     }
   ]
 }

@@ -56,6 +56,17 @@ stay explicitly unpublished until their links and focused proof are complete.
 - `./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh check`
 - `./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest`
 
+## Module Composition Claim Ledger
+
+`bd-37q56` records high-value operator-facing composition claims from README,
+docs, and source-level module contracts in one fail-closed ledger. The smoke
+gate keeps the ledger honest by checking stable claim ordering, source-span
+fragments, child-substrate paths, and provisional fallback metadata.
+
+- `docs/rgc_module_composition_claim_ledger_v1.json`
+- `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check`
+- `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest`
+
 ## RGC Compound JSON Runtime Proof Lanes
 
 Compound `JSON.parse` / `JSON.stringify` semantics are defined in

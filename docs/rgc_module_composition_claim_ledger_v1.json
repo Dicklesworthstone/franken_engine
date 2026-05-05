@@ -1,0 +1,363 @@
+{
+  "schema_version": "franken-engine.module-composition-claim-ledger.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-37q56",
+  "policy_id": "policy-module-composition-claim-ledger-v1",
+  "generated_by": "bd-37q56",
+  "purpose": "Fail-closed ledger for high-value operator-facing composition claims whose wording lives in README, docs, or source-level contract comments. Each claim names the parent surface, required child substrates, proof posture, and any allowed provisional fallback semantics.",
+  "proof_posture_semantics": {
+    "observed": "The source wording, child substrate inventory, and named proof handles all line up with the shipped parent composition surface.",
+    "provisional": "The source wording intentionally stays ahead of currently observed parent wiring, so the ledger must name each allowed fallback or missing child composition explicitly."
+  },
+  "verification_commands": [
+    "jq empty docs/rgc_module_composition_claim_ledger_v1.json",
+    "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check",
+    "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest"
+  ],
+  "claims": [
+    {
+      "composition_id": "parser_frontier_harness",
+      "title": "Parser frontier harness replay bundle",
+      "parent_surface": "parser_frontier_harness",
+      "proof_posture": "observed",
+      "source_kind": "readme_contract",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 438,
+        "end_line": 444,
+        "must_contain": [
+          "The parser frontier harness composes the optional chaining, tagged-meta frontier,",
+          "and parser-gap inventory lanes into one replayable evidence bundle.",
+          "./scripts/run_parser_frontier_harness.sh ci"
+        ]
+      },
+      "claim_summary": "README promises one replayable evidence bundle that composes the optional-chaining frontier, tagged-meta frontier, and parser-gap inventory lanes.",
+      "primary_paths": [
+        "README.md",
+        "scripts/run_parser_frontier_harness.sh",
+        "scripts/e2e/parser_frontier_harness_replay.sh",
+        "crates/franken-engine/tests/parser_frontier_harness.rs"
+      ],
+      "verification_commands": [
+        "./scripts/run_parser_frontier_harness.sh ci",
+        "./scripts/e2e/parser_frontier_harness_replay.sh full ci"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "optional_chaining",
+          "role": "parser frontier child lane",
+          "primary_paths": [
+            "scripts/run_parser_optional_chaining_suite.sh"
+          ]
+        },
+        {
+          "surface_id": "parser_gap_inventory",
+          "role": "parser inventory child lane",
+          "primary_paths": [
+            "crates/franken-engine/src/parser_gap_inventory.rs",
+            "crates/franken-engine/src/bin/franken_parser_gap_inventory.rs"
+          ]
+        },
+        {
+          "surface_id": "tagged_meta_frontier",
+          "role": "parser frontier child lane",
+          "primary_paths": [
+            "scripts/run_parser_tagged_meta_frontier_suite.sh"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [],
+      "status_note": ""
+    },
+    {
+      "composition_id": "rgc_066c_observability_publication_bundle",
+      "title": "Observability publication bundle",
+      "parent_surface": "observability_publication_bundle",
+      "proof_posture": "observed",
+      "source_kind": "docs_contract",
+      "source_path": "docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md",
+      "source_span": {
+        "start_line": 14,
+        "end_line": 20,
+        "must_contain": [
+          "The publication bundle composes:",
+          "- calibration-sentinel quality evidence",
+          "- telemetry demotion receipts"
+        ]
+      },
+      "claim_summary": "The RGC-066C publication lane composes calibration, supremacy-cell, claim-delta, and telemetry-demotion evidence into one fail-closed publication bundle.",
+      "primary_paths": [
+        "docs/RGC_OBSERVABILITY_PUBLICATION_POLICY_V1.md",
+        "docs/rgc_observability_publication_policy_v1.json",
+        "scripts/run_rgc_observability_publication_policy.sh",
+        "crates/franken-engine/src/observability_publication_bundle.rs",
+        "crates/franken-engine/tests/observability_publication_bundle_integration.rs"
+      ],
+      "verification_commands": [
+        "./scripts/run_rgc_observability_publication_policy.sh ci",
+        "./scripts/e2e/rgc_observability_publication_policy_replay.sh ci"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "calibration_sentinel",
+          "role": "quality evidence input",
+          "primary_paths": [
+            "crates/franken-engine/src/calibration_sentinel.rs"
+          ]
+        },
+        {
+          "surface_id": "supremacy_cell_matrix",
+          "role": "observability-on decision surface",
+          "primary_paths": [
+            "crates/franken-engine/src/supremacy_cell_matrix.rs",
+            "scripts/run_supremacy_cell_matrix_suite.sh"
+          ]
+        },
+        {
+          "surface_id": "telemetry_demotion_receipts",
+          "role": "publication artifact emitted by the parent bundle",
+          "primary_paths": [
+            "crates/franken-engine/src/observability_publication_bundle.rs",
+            "scripts/run_rgc_observability_publication_policy.sh"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [],
+      "status_note": ""
+    },
+    {
+      "composition_id": "rgc_611_tail_latency_control_plane",
+      "title": "Tail-latency control plane bundle",
+      "parent_surface": "tail_latency_control_plane",
+      "proof_posture": "observed",
+      "source_kind": "docs_contract",
+      "source_path": "docs/RGC_TAIL_LATENCY_CONTROL_PLANE_V1.md",
+      "source_span": {
+        "start_line": 5,
+        "end_line": 14,
+        "must_contain": [
+          "This document defines the parent integration surface for the compositional",
+          "The parent `RGC-611` surface composes those child artifacts into one",
+          "without losing the queue/service/synchronization/GC decomposition."
+        ]
+      },
+      "claim_summary": "The parent RGC-611 lane composes stage envelopes, queueing admission control, and bounded feedback into one deterministic operator bundle.",
+      "primary_paths": [
+        "docs/RGC_TAIL_LATENCY_CONTROL_PLANE_V1.md",
+        "scripts/run_rgc_tail_latency_control_plane.sh",
+        "scripts/e2e/rgc_tail_latency_control_plane_replay.sh",
+        "crates/franken-engine/src/tail_latency_control_plane.rs",
+        "crates/franken-engine/src/bin/franken_tail_latency_control_plane.rs"
+      ],
+      "verification_commands": [
+        "./scripts/run_rgc_tail_latency_control_plane.sh ci",
+        "./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "bounded_feedback_control",
+          "role": "feedback controller child subsystem",
+          "primary_paths": [
+            "crates/franken-engine/src/tail_latency_feedback_control.rs"
+          ]
+        },
+        {
+          "surface_id": "queueing_admission_control",
+          "role": "queueing admission child subsystem",
+          "primary_paths": [
+            "crates/franken-engine/src/queueing_admission_control.rs"
+          ]
+        },
+        {
+          "surface_id": "stage_envelope_certificates",
+          "role": "per-stage envelope child subsystem",
+          "primary_paths": [
+            "crates/franken-engine/src/stage_envelope_certificate.rs"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [],
+      "status_note": ""
+    },
+    {
+      "composition_id": "rgc_707_semantic_dark_matter_engine",
+      "title": "Semantic dark-matter discovery pipeline",
+      "parent_surface": "semantic_dark_matter_engine",
+      "proof_posture": "provisional",
+      "source_kind": "rust_module_doc",
+      "source_path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+      "source_span": {
+        "start_line": 5,
+        "end_line": 18,
+        "must_contain": [
+          "Implements [RGC-707]: orchestrates the three child substrates",
+          "The pipeline is:",
+          "3. **Gate** board saturation, freshness, and ratchet widening on"
+        ]
+      },
+      "claim_summary": "The module docstring claims one parent RGC-707 pipeline that scores novelty, synthesizes frontier artifacts, and gates board saturation.",
+      "primary_paths": [
+        "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+        "crates/franken-engine/tests/semantic_dark_matter_engine_integration.rs"
+      ],
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_semantic_dark_matter_engine_verify cargo +nightly-2026-04-22 test -p frankenengine-engine --test semantic_dark_matter_engine_integration -- --nocapture"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "dark_matter_saturation_gate",
+          "role": "board saturation and burndown child substrate",
+          "primary_paths": [
+            "crates/franken-engine/src/dark_matter_saturation_gate.rs",
+            "crates/franken-engine/tests/dark_matter_saturation_gate_integration.rs"
+          ]
+        },
+        {
+          "surface_id": "novelty_scoring_contract",
+          "role": "candidate scoring child substrate",
+          "primary_paths": [
+            "crates/franken-engine/src/novelty_scoring_contract.rs",
+            "crates/franken-engine/tests/novelty_scoring_contract_enrichment_integration.rs"
+          ]
+        },
+        {
+          "surface_id": "novelty_synthesis_engine",
+          "role": "frontier artifact synthesis child substrate",
+          "primary_paths": [
+            "crates/franken-engine/src/novelty_synthesis_engine.rs",
+            "crates/franken-engine/tests/novelty_synthesis_engine_integration.rs"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [
+        {
+          "surface_id": "dark_matter_saturation_gate",
+          "current_behavior": "The parent module still derives board state from local promotion-rate thresholds instead of consuming emitted saturation-gate receipts.",
+          "blocking_bead": "bd-4kwo8"
+        },
+        {
+          "surface_id": "novelty_synthesis_engine",
+          "current_behavior": "The parent module doc promises synthesis-driven board expansion, but discover() does not yet emit or persist synthesis promotion receipts.",
+          "blocking_bead": "bd-bsez3"
+        }
+      ],
+      "status_note": "RGC-708A has started replacing the old novelty proxy, but the parent composition claim remains intentionally provisional until the synthesis and saturation child receipts are wired into the parent surface."
+    },
+    {
+      "composition_id": "rgc_cold_start_compilation_lane",
+      "title": "Cold-start compilation lane operator bundle",
+      "parent_surface": "cold_start_compilation_lane",
+      "proof_posture": "observed",
+      "source_kind": "docs_contract",
+      "source_path": "docs/RGC_COLD_START_COMPILATION_LANE_V1.md",
+      "source_span": {
+        "start_line": 5,
+        "end_line": 16,
+        "must_contain": [
+          "It stitches the existing persistent-cache, AOT entrygraph, runtime-image, and",
+          "cold-start governance modules into one deterministic operator bundle",
+          "This lane is intentionally a composition surface, not a replacement for the"
+        ]
+      },
+      "claim_summary": "The cold-start parent lane composes persistent cache, AOT entrygraph, governance, and runtime-image evidence into one deterministic operator bundle.",
+      "primary_paths": [
+        "docs/RGC_COLD_START_COMPILATION_LANE_V1.md",
+        "scripts/run_rgc_cold_start_compilation_lane.sh",
+        "scripts/e2e/rgc_cold_start_compilation_lane_replay.sh",
+        "crates/franken-engine/src/cold_start_compilation_lane.rs",
+        "crates/franken-engine/tests/cold_start_compilation_lane.rs"
+      ],
+      "verification_commands": [
+        "./scripts/run_rgc_cold_start_compilation_lane.sh ci",
+        "./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "aot_entrygraph_compiler",
+          "role": "AOT compilation child module",
+          "primary_paths": [
+            "crates/franken-engine/src/aot_entrygraph_compiler.rs"
+          ]
+        },
+        {
+          "surface_id": "cold_start_aot_governance",
+          "role": "cold-start governance child module",
+          "primary_paths": [
+            "crates/franken-engine/src/cold_start_aot_governance.rs"
+          ]
+        },
+        {
+          "surface_id": "persistent_cache_contract",
+          "role": "persistent cache child module",
+          "primary_paths": [
+            "crates/franken-engine/src/persistent_cache_contract.rs"
+          ]
+        },
+        {
+          "surface_id": "runtime_image_contract",
+          "role": "runtime-image child module",
+          "primary_paths": [
+            "crates/franken-engine/src/runtime_image_contract.rs"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [],
+      "status_note": ""
+    },
+    {
+      "composition_id": "runtime_diagnostics_doctor",
+      "title": "Runtime diagnostics doctor workflow",
+      "parent_surface": "frankenctl_doctor",
+      "proof_posture": "observed",
+      "source_kind": "docs_contract",
+      "source_path": "docs/RUNTIME_DIAGNOSTICS_CLI.md",
+      "source_span": {
+        "start_line": 17,
+        "end_line": 20,
+        "must_contain": [
+          "`frankenctl doctor` composes the existing diagnostics preflight, onboarding",
+          "scorecard, and rollout-decision surfaces into one deterministic migration",
+          "readiness workflow."
+        ]
+      },
+      "claim_summary": "The user-facing doctor workflow composes preflight diagnostics, onboarding scorecards, and rollout-decision artifacts behind one deterministic frankenctl surface.",
+      "primary_paths": [
+        "docs/RUNTIME_DIAGNOSTICS_CLI.md",
+        "crates/franken-engine/src/runtime_diagnostics_cli.rs",
+        "crates/franken-engine/src/bin/runtime_diagnostics.rs",
+        "crates/franken-engine/src/bin/frankenctl.rs",
+        "crates/franken-engine/tests/runtime_diagnostics_cli.rs",
+        "crates/franken-engine/tests/frankenctl_cli.rs"
+      ],
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_runtime_diagnostics_cli_verify cargo +nightly-2026-04-22 test -p frankenengine-engine --test runtime_diagnostics_cli --test frankenctl_cli -- --nocapture"
+      ],
+      "child_substrates": [
+        {
+          "surface_id": "onboarding_scorecard",
+          "role": "rollout-readiness scoring child surface",
+          "primary_paths": [
+            "crates/franken-engine/src/runtime_diagnostics_cli.rs"
+          ]
+        },
+        {
+          "surface_id": "preflight_doctor",
+          "role": "migration preflight child surface",
+          "primary_paths": [
+            "crates/franken-engine/src/runtime_diagnostics_cli.rs",
+            "crates/franken-engine/src/workload_preflight_doctor.rs"
+          ]
+        },
+        {
+          "surface_id": "rollout_decision_artifact",
+          "role": "operator routing child surface",
+          "primary_paths": [
+            "crates/franken-engine/src/runtime_diagnostics_cli.rs"
+          ]
+        }
+      ],
+      "allowed_provisional_fallbacks": [],
+      "status_note": ""
+    }
+  ]
+}

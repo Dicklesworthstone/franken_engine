@@ -61,11 +61,16 @@ stay explicitly unpublished until their links and focused proof are complete.
 `bd-37q56` records high-value operator-facing composition claims from README,
 docs, and source-level module contracts in one fail-closed ledger. The smoke
 gate keeps the ledger honest by checking stable claim ordering, source-span
-fragments, child-substrate paths, and provisional fallback metadata.
+fragments, child-substrate paths, and provisional fallback metadata. `bd-tl6l7`
+adds the drift gate, which fails when a claimed parent surface no longer shows
+the required child-surface evidence or when it falls back to an undeclared
+proxy or heuristic path.
 
 - `docs/rgc_module_composition_claim_ledger_v1.json`
 - `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check`
 - `./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest`
+- `./scripts/e2e/rgc_module_composition_drift_gate.sh check`
+- `./scripts/e2e/rgc_module_composition_drift_gate.sh selftest`
 
 ## RGC Compound JSON Runtime Proof Lanes
 

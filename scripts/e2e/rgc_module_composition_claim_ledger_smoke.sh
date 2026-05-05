@@ -61,7 +61,7 @@ validate_contract() {
     .schema_version == "franken-engine.module-composition-claim-ledger.v1"
     and .bead_id == "bd-37q56"
     and (.verification_commands | type == "array")
-    and (.verification_commands | length) == 3
+    and (.verification_commands | length) == 5
     and (.claims | type == "array")
     and (.claims | length) == 6
   ' <<<"$contract_json" >/dev/null; then
@@ -147,6 +147,72 @@ validate_contract() {
         check_path_exists "$rel_path"
       done < <(jq -r '.primary_paths[]' <<<"$child")
     done < <(jq -c '.child_substrates[]' <<<"$claim")
+
+    if ! jq -e '
+      (.drift_checks.required_parent_evidence | type == "array")
+      and (.drift_checks.required_parent_evidence | length > 0)
+      and (.drift_checks.proxy_bypass_modes | type == "array")
+    ' <<<"$claim" >/dev/null; then
+      record_failure "${composition_id}: drift_checks block is missing or malformed"
+    else
+      record_pass "${composition_id}: drift_checks block present"
+    fi
+
+    if ! jq -e '.drift_checks.required_parent_evidence == (.drift_checks.required_parent_evidence | sort_by(.surface_id))' <<<"$claim" >/dev/null; then
+      record_failure "${composition_id}: required_parent_evidence must be sorted by surface_id"
+    else
+      record_pass "${composition_id}: required_parent_evidence sorted by surface_id"
+    fi
+
+    if ! jq -e '.drift_checks.proxy_bypass_modes == (.drift_checks.proxy_bypass_modes | sort_by(.mode_id))' <<<"$claim" >/dev/null; then
+      record_failure "${composition_id}: proxy_bypass_modes must be sorted by mode_id"
+    else
+      record_pass "${composition_id}: proxy_bypass_modes sorted by mode_id"
+    fi
+
+    while IFS= read -r evidence; do
+      local evidence_surface evidence_path allowed_surface
+      evidence_surface="$(jq -r '.surface_id // empty' <<<"$evidence")"
+      evidence_path="$(jq -r '.path // empty' <<<"$evidence")"
+      if [[ -z "$evidence_surface" ]]; then
+        record_failure "${composition_id}: required evidence missing surface_id"
+      elif ! jq -e --arg surface "$evidence_surface" 'any(.child_substrates[]; .surface_id == $surface)' <<<"$claim" >/dev/null; then
+        record_failure "${composition_id}: required evidence references unknown child surface ${evidence_surface}"
+      else
+        record_pass "${composition_id}: required evidence surface ${evidence_surface}"
+      fi
+      check_path_exists "$evidence_path"
+      if (( "$(jq '.fragments | length' <<<"$evidence")" == 0 )); then
+        record_failure "${composition_id}: required evidence for ${evidence_surface} must list fragments"
+      else
+        record_pass "${composition_id}: required evidence fragments present for ${evidence_surface}"
+      fi
+    done < <(jq -c '.drift_checks.required_parent_evidence[]' <<<"$claim")
+
+    while IFS= read -r mode; do
+      local mode_id mode_path allowed_surface
+      mode_id="$(jq -r '.mode_id // empty' <<<"$mode")"
+      mode_path="$(jq -r '.path // empty' <<<"$mode")"
+      allowed_surface="$(jq -r '.allowed_only_when_fallback_declared_for // empty' <<<"$mode")"
+      if [[ -z "$mode_id" ]]; then
+        record_failure "${composition_id}: proxy bypass mode missing mode_id"
+      fi
+      check_path_exists "$mode_path"
+      if (( "$(jq '.fragments | length' <<<"$mode")" == 0 )); then
+        record_failure "${composition_id}: proxy bypass mode ${mode_id} must list fragments"
+      else
+        record_pass "${composition_id}: proxy bypass fragments present for ${mode_id}"
+      fi
+      if [[ -n "$allowed_surface" ]]; then
+        if ! jq -e --arg surface "$allowed_surface" 'any(.child_substrates[]; .surface_id == $surface)' <<<"$claim" >/dev/null; then
+          record_failure "${composition_id}: proxy bypass mode ${mode_id} references unknown child surface ${allowed_surface}"
+        elif ! jq -e --arg surface "$allowed_surface" 'any(.allowed_provisional_fallbacks[]?; .surface_id == $surface)' <<<"$claim" >/dev/null; then
+          record_failure "${composition_id}: proxy bypass mode ${mode_id} references undeclared fallback ${allowed_surface}"
+        else
+          record_pass "${composition_id}: proxy bypass mode ${mode_id} references declared fallback ${allowed_surface}"
+        fi
+      fi
+    done < <(jq -c '.drift_checks.proxy_bypass_modes[]' <<<"$claim")
 
     while IFS= read -r fragment; do
       [[ -z "$fragment" ]] && continue

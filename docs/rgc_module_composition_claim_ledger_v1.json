@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.module-composition-claim-ledger.v1",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "bead_id": "bd-37q56",
   "policy_id": "policy-module-composition-claim-ledger-v1",
   "generated_by": "bd-37q56",
@@ -12,7 +12,9 @@
   "verification_commands": [
     "jq empty docs/rgc_module_composition_claim_ledger_v1.json",
     "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check",
-    "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest"
+    "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh selftest",
+    "./scripts/e2e/rgc_module_composition_drift_gate.sh check",
+    "./scripts/e2e/rgc_module_composition_drift_gate.sh selftest"
   ],
   "claims": [
     {
@@ -67,6 +69,35 @@
         }
       ],
       "allowed_provisional_fallbacks": [],
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "optional_chaining",
+            "path": "scripts/run_parser_frontier_harness.sh",
+            "fragments": [
+              "run_parser_optional_chaining_suite.sh",
+              "verify_child_report_pass \"optional_chaining\""
+            ]
+          },
+          {
+            "surface_id": "parser_gap_inventory",
+            "path": "scripts/run_parser_frontier_harness.sh",
+            "fragments": [
+              "run_parser_gap_inventory()",
+              "franken_parser_gap_inventory -- --out-dir"
+            ]
+          },
+          {
+            "surface_id": "tagged_meta_frontier",
+            "path": "scripts/run_parser_frontier_harness.sh",
+            "fragments": [
+              "run_parser_tagged_meta_frontier_suite.sh",
+              "verify_child_report_pass \"tagged_meta_frontier\""
+            ]
+          }
+        ],
+        "proxy_bypass_modes": []
+      },
       "status_note": ""
     },
     {
@@ -123,6 +154,34 @@
         }
       ],
       "allowed_provisional_fallbacks": [],
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "calibration_sentinel",
+            "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+            "fragments": [
+              "use crate::calibration_sentinel::{"
+            ]
+          },
+          {
+            "surface_id": "supremacy_cell_matrix",
+            "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+            "fragments": [
+              "build_supremacy_matrix(epoch)",
+              "observability_on_supremacy_matrix_path"
+            ]
+          },
+          {
+            "surface_id": "telemetry_demotion_receipts",
+            "path": "crates/franken-engine/src/observability_publication_bundle.rs",
+            "fragments": [
+              "TELEMETRY_DEMOTION_RECEIPTS_FILE",
+              "telemetry_demotion_receipts_path"
+            ]
+          }
+        ],
+        "proxy_bypass_modes": []
+      },
       "status_note": ""
     },
     {
@@ -177,6 +236,35 @@
         }
       ],
       "allowed_provisional_fallbacks": [],
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "bounded_feedback_control",
+            "path": "crates/franken-engine/src/tail_latency_control_plane.rs",
+            "fragments": [
+              "use crate::bounded_feedback_controller::{",
+              "FEEDBACK_SCHEMA_VERSION"
+            ]
+          },
+          {
+            "surface_id": "queueing_admission_control",
+            "path": "crates/franken-engine/src/tail_latency_control_plane.rs",
+            "fragments": [
+              "use crate::queueing_admission_control::{",
+              "AdmissionDecision::Queue"
+            ]
+          },
+          {
+            "surface_id": "stage_envelope_certificates",
+            "path": "crates/franken-engine/src/tail_latency_control_plane.rs",
+            "fragments": [
+              "use crate::stage_envelope_certificate::{",
+              "default_stage_envelopes()"
+            ]
+          }
+        ],
+        "proxy_bypass_modes": []
+      },
       "status_note": ""
     },
     {
@@ -236,12 +324,62 @@
           "blocking_bead": "bd-4kwo8"
         },
         {
+          "surface_id": "novelty_scoring_contract",
+          "current_behavior": "The parent module still scores candidates via description_length_bits proxy logic instead of consuming novelty_scoring_contract batch certificates.",
+          "blocking_bead": "bd-0ub12"
+        },
+        {
           "surface_id": "novelty_synthesis_engine",
           "current_behavior": "The parent module doc promises synthesis-driven board expansion, but discover() does not yet emit or persist synthesis promotion receipts.",
           "blocking_bead": "bd-bsez3"
         }
       ],
-      "status_note": "RGC-708A has started replacing the old novelty proxy, but the parent composition claim remains intentionally provisional until the synthesis and saturation child receipts are wired into the parent surface."
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "dark_matter_saturation_gate",
+            "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+            "fragments": [
+              "use crate::dark_matter_saturation_gate::{"
+            ]
+          },
+          {
+            "surface_id": "novelty_scoring_contract",
+            "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+            "fragments": [
+              "use crate::novelty_scoring_contract::{"
+            ]
+          },
+          {
+            "surface_id": "novelty_synthesis_engine",
+            "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+            "fragments": [
+              "novelty_synthesis_engine::"
+            ]
+          }
+        ],
+        "proxy_bypass_modes": [
+          {
+            "mode_id": "description_length_bits_proxy",
+            "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+            "fragments": [
+              "description_length_bits as a novelty proxy.",
+              "let score = candidate.description_length_bits;"
+            ],
+            "allowed_only_when_fallback_declared_for": "novelty_scoring_contract"
+          },
+          {
+            "mode_id": "promotion_rate_threshold_gate",
+            "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+            "fragments": [
+              "Update board state based on promotion rate.",
+              "self.board_state = if promotion_rate > 700_000 {"
+            ],
+            "allowed_only_when_fallback_declared_for": "dark_matter_saturation_gate"
+          }
+        ]
+      },
+      "status_note": "The parent composition claim remains intentionally provisional until RGC-708A removes the local novelty proxy and the synthesis and saturation child receipts are wired into the parent surface."
     },
     {
       "composition_id": "rgc_cold_start_compilation_lane",
@@ -302,6 +440,42 @@
         }
       ],
       "allowed_provisional_fallbacks": [],
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "aot_entrygraph_compiler",
+            "path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+            "fragments": [
+              "aot_entrygraph_compiler::compile_batch",
+              "aot_entrygraph_compiler::build_receipt"
+            ]
+          },
+          {
+            "surface_id": "cold_start_aot_governance",
+            "path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+            "fragments": [
+              "cold_start_aot_governance::evaluate_cold_start_at_epoch",
+              "cold_start_aot_governance::produce_receipt"
+            ]
+          },
+          {
+            "surface_id": "persistent_cache_contract",
+            "path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+            "fragments": [
+              "persistent_cache_contract::ArtifactContext::new",
+              "persistent_cache_contract::emit_default_contract_bundle"
+            ]
+          },
+          {
+            "surface_id": "runtime_image_contract",
+            "path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+            "fragments": [
+              "use crate::runtime_image_contract::{"
+            ]
+          }
+        ],
+        "proxy_bypass_modes": []
+      },
       "status_note": ""
     },
     {
@@ -357,6 +531,35 @@
         }
       ],
       "allowed_provisional_fallbacks": [],
+      "drift_checks": {
+        "required_parent_evidence": [
+          {
+            "surface_id": "onboarding_scorecard",
+            "path": "crates/franken-engine/src/bin/runtime_diagnostics.rs",
+            "fragments": [
+              "build_onboarding_scorecard(",
+              "\"support_bundle/onboarding_scorecard.json\""
+            ]
+          },
+          {
+            "surface_id": "preflight_doctor",
+            "path": "crates/franken-engine/src/runtime_diagnostics_cli.rs",
+            "fragments": [
+              "run_preflight_doctor(",
+              "\"preflight_doctor\""
+            ]
+          },
+          {
+            "surface_id": "rollout_decision_artifact",
+            "path": "crates/franken-engine/src/bin/runtime_diagnostics.rs",
+            "fragments": [
+              "build_rollout_decision_artifact(",
+              "\"support_bundle/rollout_decision_artifact.json\""
+            ]
+          }
+        ],
+        "proxy_bypass_modes": []
+      },
       "status_note": ""
     }
   ]

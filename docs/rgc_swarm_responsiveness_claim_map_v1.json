@@ -151,9 +151,9 @@
     {
       "child_bead_id": "bd-bdrwq.6",
       "title": "Per-extension scheduler fairness ledgers",
-      "claim_status": "implemented_pending_validation",
+      "claim_status": "published",
       "surface_kind": "source_test_surface",
-      "claim_summary": "Per-extension fairness accounting is implemented in scheduler_lane, but the claim remains unpublished until focused proof and tracker closeout are complete.",
+      "claim_summary": "Per-extension fairness accounting is published from deterministic scheduler_lane ledger coverage with a focused remote proof for extension fairness.",
       "primary_paths": [
         "crates/franken-engine/src/scheduler_lane.rs"
       ],
@@ -164,20 +164,20 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_fairness_verify cargo test -p frankenengine-engine --lib extension_fairness -- --nocapture"
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_fairness_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib extension_fairness -- --nocapture"
       ],
       "implementation_commits": [
         "338f86dd"
       ],
       "blocking_beads": [],
-      "status_note": "Do not cite fairness/deprivation claims as published until the focused rch proof clears and the tracker state reflects the landed scheduler_lane ledger surface."
+      "status_note": ""
     },
     {
       "child_bead_id": "bd-bdrwq.7",
       "title": "Cancel-lane latency histogram artifacts",
-      "claim_status": "blocked",
+      "claim_status": "implemented_pending_validation",
       "surface_kind": "source_test_surface",
-      "claim_summary": "Cancel-lane cleanup latency histograms are still blocked on a non-overlapping scheduler implementation slice and must not be cited as published evidence yet.",
+      "claim_summary": "Cancel-lane cleanup latency histograms are implemented in scheduler_lane, but the claim remains unpublished because the focused remote proof has only reached a local fallback so far.",
       "primary_paths": [
         "crates/franken-engine/src/scheduler_lane.rs"
       ],
@@ -188,20 +188,20 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_cancel_latency_verify cargo test -p frankenengine-engine --lib scheduler_lane -- --nocapture"
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_cancel_latency_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cancel_lane_latency -- --nocapture"
       ],
-      "implementation_commits": [],
-      "blocking_beads": [
-        "bd-bdrwq.6"
+      "implementation_commits": [
+        "c4243971"
       ],
-      "status_note": "The cancel-lane histogram surface shares scheduler_lane with the fairness ledger lane and remains unpublished until that implementation and its focused coverage are landed without overlap."
+      "blocking_beads": [],
+      "status_note": "Keep cancel-lane histogram claims unpublished until the focused rch proof stops timing out after compile start; the current local fallback passed, but the remote acceptance proof is still missing."
     },
     {
       "child_bead_id": "bd-bdrwq.8",
       "title": "Cold-start memory envelope reports",
-      "claim_status": "implemented_pending_validation",
+      "claim_status": "published",
       "surface_kind": "gate_bundle_surface",
-      "claim_summary": "The cold-start lane now emits a fail-closed cold-versus-warm memory envelope report, but the claim remains unpublished because focused rch proof is still blocked by remote sync state.",
+      "claim_summary": "The cold-start lane publishes a fail-closed cold-versus-warm memory envelope report backed by a focused remote proof for the memory_envelope seam.",
       "primary_paths": [
         "crates/franken-engine/src/cold_start_compilation_lane.rs",
         "crates/franken-engine/src/bin/franken_cold_start_compilation_lane.rs",
@@ -226,20 +226,22 @@
       },
       "verification_commands": [
         "./scripts/run_rgc_cold_start_compilation_lane.sh ci",
-        "./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci"
+        "./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci",
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_cold_start_memory_envelope_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib cold_start_compilation_lane::tests -- --nocapture"
       ],
       "implementation_commits": [
-        "339178ba"
+        "339178ba",
+        "6ed2cc65"
       ],
       "blocking_beads": [],
-      "status_note": "Keep the cold-start memory claim unpublished until the focused rch test or bundle run escapes dependency-closure sync failures and produces a clean remote proof."
+      "status_note": ""
     },
     {
       "child_bead_id": "bd-bdrwq.9",
       "title": "Admission-control publication bundles",
       "claim_status": "implemented_pending_validation",
       "surface_kind": "gate_bundle_surface",
-      "claim_summary": "Tail-latency control-plane bundles now expose admission publication data, but the swarm claim remains unpublished until focused proof can clear rch transport and sync blockers.",
+      "claim_summary": "Tail-latency control-plane bundles now expose admission publication data, but the swarm claim remains unpublished because the focused remote proof reaches frankenengine-engine and then stalls in a stale-progress execute tail.",
       "primary_paths": [
         "crates/franken-engine/src/tail_latency_control_plane.rs",
         "docs/RGC_TAIL_LATENCY_CONTROL_PLANE_V1.md",
@@ -265,20 +267,21 @@
       },
       "verification_commands": [
         "./scripts/run_rgc_tail_latency_control_plane.sh ci",
-        "./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci"
+        "./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci",
+        "RCH_VISIBILITY=verbose rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_admission_publication_bundle_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
       ],
       "implementation_commits": [
         "b640e78c"
       ],
       "blocking_beads": [],
-      "status_note": "Keep admission publication claims unpublished until the focused rch proof clears and the tracker stops advertising the lane as merely in progress."
+      "status_note": "Keep admission publication claims unpublished until the focused rch proof completes cleanly; the latest attempt cleared dependency sync and compiled into frankenengine-engine on vmi1167313 before stalling in phase=execute with fresh heartbeats and stale progress."
     },
     {
       "child_bead_id": "bd-bdrwq.10",
       "title": "Swarm fleet-health dashboard feed",
-      "claim_status": "blocked",
+      "claim_status": "implemented_pending_validation",
       "surface_kind": "operator_dashboard_surface",
-      "claim_summary": "The intended fleet-health export should aggregate pressure, VOI, fairness, admission, and drift surfaces, but the feed itself is not implemented and must not be cited as shipped.",
+      "claim_summary": "The fleet-health export now aggregates pressure, VOI, fairness, admission, and drift surfaces, but it remains unpublished until the focused proof completes and the admission bundle claim is publishable.",
       "primary_paths": [
         "crates/franken-engine/src/policy_controller/operator_safety_copilot.rs"
       ],
@@ -289,14 +292,15 @@
         "replay_wrapper": null
       },
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_fleet_health_verify cargo test -p frankenengine-engine --lib operator_safety_copilot -- --nocapture"
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_fleet_health_verify CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RUSTFLAGS='-C linker=cc' cargo +nightly-2026-04-22 test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
       ],
-      "implementation_commits": [],
+      "implementation_commits": [
+        "c52fdc81"
+      ],
       "blocking_beads": [
-        "bd-bdrwq.6",
         "bd-bdrwq.9"
       ],
-      "status_note": "The dashboard feed depends on fairness and admission publication surfaces being publishable first; until then this feed remains an explicit blocked follow-on."
+      "status_note": "Keep the dashboard feed unpublished until the focused proof completes and bd-bdrwq.9 becomes publishable; the code is landed, but the validation seam has only progressed into frankenengine-engine before stalling in remote execute tails."
     }
   ],
   "operator_verification": [

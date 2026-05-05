@@ -139,3 +139,23 @@ refactor_ternary.py
 
 # Stray scratch files at root
 /tests_leak.rs
+/test_tla.rs
+/test_tla_simple.rs
+
+# Compiled rust libraries — should never be in repo
+*.rlib
+*.rmeta
+
+# Agent-swarm runtime state
+/.swarm_state.json
+
+# Stale duplicates of files canonical under scripts/analysis or docs/
+# (kept here so a fresh checkout doesn't accidentally re-add them)
+/analyze_module_deps.py
+/analyze_module_deps.rs
+/analyze_module_deps_refined.py
+/module_classification.json
+
+# Old image asset locations — canonical under docs/assets/
+/franken_engine_illustration.webp
+/gh_og_share_image.png

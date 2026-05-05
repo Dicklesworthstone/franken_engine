@@ -56,6 +56,11 @@ and fails closed when the observed target surface contains a target outside the
 declared focus set. The smoke contract lives at
 `scripts/e2e/focused_proof_runner_smoke.sh`.
 
+`scripts/focused_proof_cost_gate.sh` compares the emitted proof-cost manifest
+against a suite budget and writes machine-readable diagnostics plus a
+human-readable triage report. See `docs/FOCUSED_PROOF_COST_GATE.md` for budget
+shape and remediation rules.
+
 Rerun example:
 
 ```bash

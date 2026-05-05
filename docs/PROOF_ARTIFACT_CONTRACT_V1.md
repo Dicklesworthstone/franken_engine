@@ -48,6 +48,14 @@ timestamp-free so reordering the same observed targets yields the same content
 hash. Use it to distinguish a real source regression from an unrelated compile
 surface pulled in by a nominally narrow `cargo test --test ...` command.
 
+`scripts/focused_proof_runner.sh` is the standard wrapper for high-value
+focused proofs. Callers provide the exact command, expected target names, and
+the observed target inventory; the wrapper records worker, sync-root,
+wall-time, and target-cardinality metadata, emits `proof_cost_manifest.json`,
+and fails closed when the observed target surface contains a target outside the
+declared focus set. The smoke contract lives at
+`scripts/e2e/focused_proof_runner_smoke.sh`.
+
 Rerun example:
 
 ```bash

@@ -52,6 +52,11 @@ fn generated_artifacts() -> Vec<Value> {
             "schema_version": "franken-engine.focused-proof-runner-report.v1",
             "role": "source_machine_report"
         }),
+        json!({
+            "path": "artifacts/focused_proof_runner/run/redaction_policy.json",
+            "sha256": null,
+            "role": "redaction_policy"
+        }),
     ]
 }
 

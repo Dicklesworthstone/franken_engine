@@ -148,7 +148,11 @@ where
     for artifact in artifacts {
         let artifact_path = required_string(artifact, &["path"])?;
         let artifact_role = required_string(artifact, &["role"])?;
-        let artifact_sha256 = required_string(artifact, &["sha256"])?;
+        let artifact_sha256 = match optional_string(artifact, &["sha256"]) {
+            Some(sha256) => sha256,
+            None if artifact_role == "redaction_policy" => continue,
+            None => return Err(integrity("`sha256` must be a string")),
+        };
         let artifact_schema = optional_string(artifact, &["schema_version"]);
         let receipt_kind = receipt_kind_for_manifest_role(&artifact_role);
         let artifact_id = format!("{bundle_id}:{receipt_kind}:{artifact_sha256}");

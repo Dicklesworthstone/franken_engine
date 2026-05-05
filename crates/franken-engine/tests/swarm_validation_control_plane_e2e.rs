@@ -196,6 +196,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
     );
 
     let validation_plan_pass_dir = harness.run_root.join("pass/validation-plan");
+    let validation_plan_pass_arg = repo_relative_string(&harness, &validation_plan_pass_dir);
     harness.run(
         "validation-plan-pass",
         "scripts/swarm_validation_planner.sh",
@@ -205,7 +206,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
             "--source-revision",
             &source_revision,
             "--output-dir",
-            path_str(&validation_plan_pass_dir),
+            &validation_plan_pass_arg,
             "--package",
             "frankenengine-engine",
             "--test-target",
@@ -304,6 +305,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
                 "/data/projects/franken_engine,/dp/frankensqlite,/dp/sqlmodel_rust",
             ),
             ("FOCUSED_PROOF_DURATION_MS_OVERRIDE", "0"),
+            ("PROOF_ARTIFACT_SOURCE_REVISION", &source_revision),
         ],
         &[0],
     );
@@ -391,7 +393,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
         GateReportImport {
             bead_id: BEAD_ID,
             source_revision: &source_revision,
-            artifact_path: path_str(&focused_report_path),
+            artifact_path: &repo_relative_string(&harness, &focused_report_path),
             expected_source_revision: &source_revision,
             generated_timestamp_ms: GENERATED_MS,
             freshness_policy_ms: FRESHNESS_MS,
@@ -405,7 +407,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
         GateReportImport {
             bead_id: BEAD_ID,
             source_revision: &source_revision,
-            artifact_path: path_str(&cost_gate_report_path),
+            artifact_path: &repo_relative_string(&harness, &cost_gate_report_path),
             expected_source_revision: &source_revision,
             generated_timestamp_ms: GENERATED_MS,
             freshness_policy_ms: FRESHNESS_MS,
@@ -495,6 +497,8 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
     assert_eq!(read_json(&pass_status_path)["status"], "healthy");
 
     let validation_plan_degraded_dir = harness.run_root.join("degraded/validation-plan");
+    let validation_plan_degraded_arg =
+        repo_relative_string(&harness, &validation_plan_degraded_dir);
     harness.run(
         "validation-plan-degraded",
         "scripts/swarm_validation_planner.sh",
@@ -504,7 +508,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
             "--source-revision",
             &source_revision,
             "--output-dir",
-            path_str(&validation_plan_degraded_dir),
+            &validation_plan_degraded_arg,
             "--changed-path",
             "unknown/control-plane/path.rs",
         ],
@@ -584,6 +588,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
             ),
             ("FOCUSED_PROOF_WORKER", "control-plane-e2e"),
             ("FOCUSED_PROOF_DURATION_MS_OVERRIDE", "0"),
+            ("PROOF_ARTIFACT_SOURCE_REVISION", &source_revision),
         ],
         &[42],
     );
@@ -594,7 +599,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
         GateReportImport {
             bead_id: BEAD_ID,
             source_revision: &source_revision,
-            artifact_path: path_str(&broad_report_path),
+            artifact_path: &repo_relative_string(&harness, &broad_report_path),
             expected_source_revision: &source_revision,
             generated_timestamp_ms: GENERATED_MS + 1,
             freshness_policy_ms: FRESHNESS_MS,
@@ -886,10 +891,18 @@ fn source_revision(repo_root: &Path) -> String {
             .trim()
             .to_string();
     }
-    std::env::var("SWARM_VALIDATION_CONTROL_PLANE_E2E_SOURCE_REVISION")
-        .ok()
-        .filter(|revision| !revision.trim().is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+    for env_key in [
+        "SWARM_VALIDATION_CONTROL_PLANE_E2E_SOURCE_REVISION",
+        "PROOF_ARTIFACT_SOURCE_REVISION",
+    ] {
+        if let Some(revision) = std::env::var(env_key)
+            .ok()
+            .filter(|revision| !revision.trim().is_empty())
+        {
+            return revision;
+        }
+    }
+    "unknown".to_string()
 }
 
 fn read_json(path: &Path) -> Value {
@@ -934,6 +947,12 @@ fn path_str(path: &Path) -> &str {
 
 fn path_string(path: &Path) -> String {
     path_str(path).to_string()
+}
+
+fn repo_relative_string(harness: &Harness, path: &Path) -> String {
+    path.strip_prefix(&harness.repo_root)
+        .map(path_string)
+        .unwrap_or_else(|_| path_string(path))
 }
 
 fn shell_join(args: &[String]) -> String {

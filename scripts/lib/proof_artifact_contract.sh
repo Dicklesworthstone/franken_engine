@@ -64,6 +64,10 @@ proof_contract_csv_json() {
 }
 
 proof_contract_git_revision() {
+  if [[ -n "${PROOF_ARTIFACT_SOURCE_REVISION:-}" ]]; then
+    printf '%s' "${PROOF_ARTIFACT_SOURCE_REVISION}"
+    return 0
+  fi
   git rev-parse HEAD 2>/dev/null || printf 'unknown'
 }
 

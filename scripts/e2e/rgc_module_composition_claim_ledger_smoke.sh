@@ -267,13 +267,13 @@ run_selftest() {
     validate_contract <(jq '
     (.claims[]
       | select(.composition_id == "rgc_707_semantic_dark_matter_engine")
-      | .allowed_provisional_fallbacks) = []
+      | .allowed_provisional_fallbacks) = [{"surface_id":"novelty_scoring_contract"}]
   ' "$default_contract")
   ) >/dev/null 2>&1; then
-    record_failure "selftest expected provisional fallback validation failure"
+    record_failure "selftest expected observed-claim fallback rejection"
     return 1
   fi
-  record_pass "selftest rejects provisional claim without fallback metadata"
+  record_pass "selftest rejects observed claim with fallback metadata"
 }
 
 mode="${1:-check}"

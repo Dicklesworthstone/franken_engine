@@ -7,6 +7,9 @@
   "reason_codes": [
     "package_lib_fallback"
   ],
+  "risk_flags": [
+    "unknown_cost_evidence"
+  ],
   "changed_paths": [
     "crates/franken-engine/src/proof_artifact.rs",
     "crates/franken-extension-host/src/lib.rs"
@@ -34,7 +37,30 @@
       "command_kind": "rch_cargo_check_lib",
       "package": "frankenengine-engine",
       "target": "lib",
-      "rationale": "package lib fallback for source changes without an exact test target"
+      "rationale": "package lib fallback for source changes without an exact test target",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "unknown",
+        "cost_class": "unknown",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_lib",
+      "risk_flags": [
+        "unknown_cost_evidence"
+      ],
+      "cost_evidence": {
+        "status": "unknown",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     },
     {
       "command_id": "cargo-check-frankenengine_extension_host-lib",
@@ -42,7 +68,30 @@
       "command_kind": "rch_cargo_check_lib",
       "package": "frankenengine-extension-host",
       "target": "lib",
-      "rationale": "package lib fallback for source changes without an exact test target"
+      "rationale": "package lib fallback for source changes without an exact test target",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "unknown",
+        "cost_class": "unknown",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_extension_host_lib",
+      "risk_flags": [
+        "unknown_cost_evidence"
+      ],
+      "cost_evidence": {
+        "status": "unknown",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     }
   ],
   "omitted_commands": [

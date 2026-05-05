@@ -7,6 +7,7 @@
   "reason_codes": [
     "docs_only"
   ],
+  "risk_flags": [],
   "changed_paths": [
     "docs/swarm_validation_control_plane_contract_v1.json"
   ],
@@ -26,7 +27,28 @@
       "command_kind": "diff_check",
       "package": null,
       "target": null,
-      "rationale": "docs whitespace validation"
+      "rationale": "docs whitespace validation",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "static",
+        "cost_class": "low",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": null,
+      "risk_flags": [],
+      "cost_evidence": {
+        "status": "not_required",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     },
     {
       "command_id": "jq-empty-docs_swarm_validation_control_plane_contract_v1_json",
@@ -34,7 +56,28 @@
       "command_kind": "json_syntax",
       "package": null,
       "target": null,
-      "rationale": "JSON contract syntax validation"
+      "rationale": "JSON contract syntax validation",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "static",
+        "cost_class": "low",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": null,
+      "risk_flags": [],
+      "cost_evidence": {
+        "status": "not_required",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     }
   ],
   "omitted_commands": [

@@ -91,6 +91,37 @@ Interpretation:
 - `provisional` means the declared fallback state is still truthful, but the claim must not be upgraded to observed yet.
 - `unpublished` means the operator should either wire the missing child/proof surface or downgrade the claim wording before presenting it as observed behavior.
 
+## Semantic Dark-Matter Pipeline Proof Suite
+
+`bd-6bs27` upgrades the parent `rgc_707_semantic_dark_matter_engine` claim to
+an observed surface now that novelty scoring, synthesis receipts, and
+saturation-gate receipts are all wired into the parent discovery cycle. The
+proof lane stays focused on the real composed integration target and emits a
+deterministic artifact bundle that operators can replay without reconstructing
+chat history.
+
+- `docs/rgc_module_composition_claim_ledger_v1.json`
+- `./scripts/run_semantic_dark_matter_pipeline_suite.sh ci`
+- `./scripts/e2e/semantic_dark_matter_pipeline_replay.sh ci`
+- `./scripts/e2e/semantic_dark_matter_pipeline_docs_truth_gate.sh check`
+- `./scripts/e2e/semantic_dark_matter_pipeline_docs_truth_gate.sh selftest`
+
+The runner emits:
+
+- `artifacts/semantic_dark_matter_pipeline/<timestamp>/run_manifest.json`
+- `artifacts/semantic_dark_matter_pipeline/<timestamp>/events.jsonl`
+- `artifacts/semantic_dark_matter_pipeline/<timestamp>/commands.txt`
+- `artifacts/semantic_dark_matter_pipeline/<timestamp>/summary.md`
+- `artifacts/semantic_dark_matter_pipeline/<timestamp>/step_logs/step_*.log`
+
+Replay the latest complete bundle with:
+
+- `./scripts/e2e/semantic_dark_matter_pipeline_replay.sh ci`
+
+Replay a specific preserved run directory with:
+
+- `SEMANTIC_DARK_MATTER_PIPELINE_REPLAY_RUN_DIR=artifacts/semantic_dark_matter_pipeline/<timestamp> ./scripts/e2e/semantic_dark_matter_pipeline_replay.sh ci`
+
 ## RGC Compound JSON Runtime Proof Lanes
 
 Compound `JSON.parse` / `JSON.stringify` semantics are defined in

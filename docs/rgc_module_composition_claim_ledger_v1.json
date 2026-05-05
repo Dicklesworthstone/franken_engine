@@ -274,7 +274,7 @@
       "composition_id": "rgc_707_semantic_dark_matter_engine",
       "title": "Semantic dark-matter discovery pipeline",
       "parent_surface": "semantic_dark_matter_engine",
-      "proof_posture": "provisional",
+      "proof_posture": "observed",
       "source_kind": "rust_module_doc",
       "source_path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
       "source_span": {
@@ -289,10 +289,18 @@
       "claim_summary": "The module docstring claims one parent RGC-707 pipeline that scores novelty, synthesizes frontier artifacts, and gates board saturation.",
       "primary_paths": [
         "crates/franken-engine/src/semantic_dark_matter_engine.rs",
-        "crates/franken-engine/tests/semantic_dark_matter_engine_integration.rs"
+        "crates/franken-engine/tests/semantic_dark_matter_engine_integration.rs",
+        "scripts/run_semantic_dark_matter_pipeline_suite.sh",
+        "scripts/e2e/semantic_dark_matter_pipeline_replay.sh",
+        "scripts/e2e/semantic_dark_matter_pipeline_docs_truth_gate.sh",
+        "docs/operator-gates/RGC_GATES_REFERENCE.md"
       ],
       "verification_commands": [
-        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_semantic_dark_matter_engine_verify cargo +nightly-2026-04-22 test -p frankenengine-engine --test semantic_dark_matter_engine_integration -- --nocapture"
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_semantic_dark_matter_engine_verify cargo +nightly-2026-04-22 test -p frankenengine-engine --test semantic_dark_matter_engine_integration -- --nocapture",
+        "./scripts/run_semantic_dark_matter_pipeline_suite.sh ci",
+        "./scripts/e2e/semantic_dark_matter_pipeline_replay.sh ci",
+        "./scripts/e2e/semantic_dark_matter_pipeline_docs_truth_gate.sh check",
+        "./scripts/e2e/semantic_dark_matter_pipeline_docs_truth_gate.sh selftest"
       ],
       "child_substrates": [
         {
@@ -320,23 +328,7 @@
           ]
         }
       ],
-      "allowed_provisional_fallbacks": [
-        {
-          "surface_id": "dark_matter_saturation_gate",
-          "current_behavior": "The parent module still derives board state from local promotion-rate thresholds instead of consuming emitted saturation-gate receipts.",
-          "blocking_bead": "bd-4kwo8"
-        },
-        {
-          "surface_id": "novelty_scoring_contract",
-          "current_behavior": "The parent module still scores candidates via description_length_bits proxy logic instead of consuming novelty_scoring_contract batch certificates.",
-          "blocking_bead": "bd-0ub12"
-        },
-        {
-          "surface_id": "novelty_synthesis_engine",
-          "current_behavior": "The parent module doc promises synthesis-driven board expansion, but discover() does not yet emit or persist synthesis promotion receipts.",
-          "blocking_bead": "bd-bsez3"
-        }
-      ],
+      "allowed_provisional_fallbacks": [],
       "drift_checks": {
         "required_parent_evidence": [
           {
@@ -368,8 +360,7 @@
             "fragments": [
               "description_length_bits as a novelty proxy.",
               "let score = candidate.description_length_bits;"
-            ],
-            "allowed_only_when_fallback_declared_for": "novelty_scoring_contract"
+            ]
           },
           {
             "mode_id": "promotion_rate_threshold_gate",
@@ -377,12 +368,11 @@
             "fragments": [
               "Update board state based on promotion rate.",
               "self.board_state = if promotion_rate > 700_000 {"
-            ],
-            "allowed_only_when_fallback_declared_for": "dark_matter_saturation_gate"
+            ]
           }
         ]
       },
-      "status_note": "The parent composition claim remains intentionally provisional until RGC-708A removes the local novelty proxy and the synthesis and saturation child receipts are wired into the parent surface."
+      "status_note": "Observed via the composed semantic dark-matter pipeline suite, replay wrapper, and docs truth gate."
     },
     {
       "composition_id": "rgc_cold_start_compilation_lane",

@@ -1,6 +1,9 @@
 //! Integration tests for semantic_dark_matter_engine (RGC-707).
 
-use frankenengine_engine::dark_matter_saturation_gate::{DarkMatterRegion, DarkMatterRegionKind};
+use frankenengine_engine::dark_matter_saturation_gate::{
+    BoardState, DARK_MATTER_GATE_SCHEMA_VERSION, DarkMatterRegion, DarkMatterRegionKind,
+    RatchetWideningReason, SaturationReason,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::novelty_scoring_contract::{
     CandidateKind, DimensionWeight, NoveltyCandidate, NoveltyDimension, ScoringConfig, score_batch,
@@ -292,6 +295,54 @@ fn test_discover_emits_mixed_synthesized_candidate_receipts_and_region_updates()
             .starts_with("semantic_dark_matter_synthesis::")
             && !region.retired
     }));
+}
+
+#[test]
+fn test_discover_emits_composed_saturation_gate_receipt() {
+    let mut engine = DarkMatterEngineOrchestrator::new(
+        test_epoch(),
+        DarkMatterEngineConfig {
+            promotion_threshold_millionths: 850_000,
+            max_promotions_per_cycle: 2,
+            ..DarkMatterEngineConfig::default()
+        },
+    );
+    let result = engine
+        .discover(&[candidate("explicit-high", CandidateKind::Program, 900_000)])
+        .expect("discovery should succeed");
+
+    let receipt = result
+        .board_state_receipt
+        .as_ref()
+        .expect("board-state receipt should be present");
+    assert_eq!(receipt.schema_version, DARK_MATTER_GATE_SCHEMA_VERSION);
+    assert_eq!(receipt.composite_state, BoardState::ScopeLimited);
+    assert_eq!(engine.board_state(), &BoardState::ScopeLimited);
+    assert_eq!(receipt.saturation_verdict.observation_count, 1);
+    assert!(
+        receipt.saturation_verdict.dark_matter_fraction_millionths > 0,
+        "synthesized region updates should feed a non-zero dark-matter estimate"
+    );
+    assert!(
+        receipt
+            .saturation_verdict
+            .reasons
+            .iter()
+            .any(|reason| matches!(
+                reason,
+                SaturationReason::InsufficientObservations { count: 1, .. }
+            )),
+        "composed receipt should carry the saturation-gate insufficient-observations reason"
+    );
+    assert!(
+        receipt.freshness_verdict.is_fresh,
+        "the same-cycle receipt should stay fresh"
+    );
+    assert!(!receipt.ratchet_widening_verdict.permitted);
+    assert_eq!(
+        receipt.ratchet_widening_verdict.reason,
+        RatchetWideningReason::InsufficientData
+    );
 }
 
 #[test]

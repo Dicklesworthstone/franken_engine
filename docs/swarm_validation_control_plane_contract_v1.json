@@ -440,8 +440,13 @@
         "bead_id",
         "changed_paths",
         "commands",
+        "commands[].cost_evidence",
+        "commands[].predicted_cost",
+        "commands[].recommended_target_dir",
+        "commands[].risk_flags",
         "expected_artifacts",
-        "proof_cost_budget"
+        "proof_cost_budgets",
+        "risk_flags"
       ]
     },
     {

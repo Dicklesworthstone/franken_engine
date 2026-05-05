@@ -7,7 +7,9 @@
   "reason_codes": [
     "exact_test_target"
   ],
-  "risk_flags": [],
+  "risk_flags": [
+    "high_cost_history"
+  ],
   "changed_paths": [
     "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
   ],
@@ -31,18 +33,20 @@
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
         "state": "matched",
-        "cost_class": "low",
+        "cost_class": "high",
         "sample_count": 1,
-        "elapsed_ms_p50": 1200,
-        "elapsed_ms_max": 1200,
-        "compiled_target_count_max": 1,
-        "linked_target_count_max": 1
+        "elapsed_ms_p50": 900000,
+        "elapsed_ms_max": 900000,
+        "compiled_target_count_max": 12,
+        "linked_target_count_max": 2
       },
       "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_proof_manifest_golden_artifacts",
-      "risk_flags": [],
+      "risk_flags": [
+        "high_cost_history"
+      ],
       "cost_evidence": {
         "status": "matched",
-        "source": "[SMOKE_ROOT]/low-cost-history.json",
+        "source": "[SMOKE_ROOT]/high-cost-history.json",
         "matched_rows": 1,
         "fresh_rows": 1,
         "stale_rows": 0,
@@ -50,7 +54,7 @@
           "smoke-rev"
         ],
         "content_hashes": [
-          "sha-low-cost"
+          "sha-high-cost"
         ]
       }
     }

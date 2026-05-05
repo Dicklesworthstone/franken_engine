@@ -7,7 +7,9 @@
   "reason_codes": [
     "exact_test_target"
   ],
-  "risk_flags": [],
+  "risk_flags": [
+    "stale_cost_evidence"
+  ],
   "changed_paths": [
     "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
   ],
@@ -30,27 +32,29 @@
       "rationale": "exact test target inferred from changed integration test path",
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
-        "state": "matched",
-        "cost_class": "low",
-        "sample_count": 1,
-        "elapsed_ms_p50": 1200,
-        "elapsed_ms_max": 1200,
+        "state": "stale",
+        "cost_class": "unknown",
+        "sample_count": 0,
+        "elapsed_ms_p50": 800,
+        "elapsed_ms_max": 800,
         "compiled_target_count_max": 1,
         "linked_target_count_max": 1
       },
       "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_proof_manifest_golden_artifacts",
-      "risk_flags": [],
+      "risk_flags": [
+        "stale_cost_evidence"
+      ],
       "cost_evidence": {
-        "status": "matched",
-        "source": "[SMOKE_ROOT]/low-cost-history.json",
+        "status": "stale",
+        "source": "[SMOKE_ROOT]/stale-cost-history.json",
         "matched_rows": 1,
-        "fresh_rows": 1,
-        "stale_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 1,
         "source_revisions": [
-          "smoke-rev"
+          "old-rev"
         ],
         "content_hashes": [
-          "sha-low-cost"
+          "sha-stale-cost"
         ]
       }
     }

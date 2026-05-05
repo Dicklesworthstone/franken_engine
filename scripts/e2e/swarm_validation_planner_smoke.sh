@@ -77,6 +77,116 @@ assert_case_golden() {
   compare_case_golden "$case_name" "$actual_path" "$golden_path"
 }
 
+write_proof_cost_history() {
+  local output_path="$1"
+  local row_source_revision="$2"
+  local command_id="$3"
+  local package="$4"
+  local target="$5"
+  local elapsed_ms="$6"
+  local compiled_count="$7"
+  local linked_count="$8"
+  local rch_status="$9"
+  local fallback_detected="${10}"
+  local content_hash="${11}"
+
+  jq -n \
+    --arg schema_version "franken-engine.proof-cost-history.v1" \
+    --arg bead_id "bd-history" \
+    --arg source_revision "$row_source_revision" \
+    --arg command_id "$command_id" \
+    --arg package "$package" \
+    --arg target "$target" \
+    --arg rch_status "$rch_status" \
+    --arg content_hash "$content_hash" \
+    --argjson elapsed_ms "$elapsed_ms" \
+    --argjson compiled_count "$compiled_count" \
+    --argjson linked_count "$linked_count" \
+    --argjson fallback_detected "$fallback_detected" \
+    '{
+      schema_version: $schema_version,
+      bead_id: $bead_id,
+      source_revision: $source_revision,
+      changed_paths: ["crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"],
+      rows: [
+        {
+          command_id: $command_id,
+          package: $package,
+          target: $target,
+          elapsed_ms: $elapsed_ms,
+          compiled_target_count: $compiled_count,
+          linked_target_count: $linked_count,
+          rch_worker: "rch-smoke",
+          rch_status: $rch_status,
+          fallback_detected: $fallback_detected,
+          artifact_paths: ["artifacts/proof-cost-history-smoke/report.json"],
+          content_hash: $content_hash
+        }
+      ]
+    }' >"$output_path"
+}
+
+write_contradictory_cost_history() {
+  local output_path="$1"
+  local command_id="cargo-test-proof_manifest_golden_artifacts"
+  local package="frankenengine-engine"
+  local target="proof_manifest_golden_artifacts"
+
+  jq -n \
+    --arg schema_version "franken-engine.proof-cost-history.v1" \
+    --arg command_id "$command_id" \
+    --arg package "$package" \
+    --arg target "$target" \
+    '{
+      schema_version: $schema_version,
+      bead_id: "bd-history",
+      source_revision: "smoke-rev",
+      changed_paths: ["crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"],
+      rows: [
+        {
+          command_id: $command_id,
+          package: $package,
+          target: $target,
+          elapsed_ms: 900,
+          compiled_target_count: 1,
+          linked_target_count: 1,
+          rch_worker: "rch-smoke-a",
+          rch_status: "pass",
+          fallback_detected: false,
+          artifact_paths: ["artifacts/proof-cost-history-smoke/pass.json"],
+          content_hash: "sha-contradict-pass"
+        },
+        {
+          command_id: $command_id,
+          package: $package,
+          target: $target,
+          elapsed_ms: 1000,
+          compiled_target_count: 1,
+          linked_target_count: 1,
+          rch_worker: "local",
+          rch_status: "fail",
+          fallback_detected: true,
+          artifact_paths: ["artifacts/proof-cost-history-smoke/fail.json"],
+          content_hash: "sha-contradict-fail"
+        }
+      ]
+    }' >"$output_path"
+}
+
+assert_no_stale_or_mismatch_low_cost_claim() {
+  local plan_path="$1"
+
+  jq -e '
+    [
+      .commands[]?
+      | select((.cost_evidence.status == "stale" or .cost_evidence.status == "mismatched")
+          and .predicted_cost.cost_class == "low")
+    ]
+    | length == 0
+  ' "$plan_path" >/dev/null
+  record_pass "stale/mismatched evidence cannot claim low cost"
+}
+
 run_planner_expect_pass() {
   local output_dir="$1"
   shift
@@ -90,6 +200,32 @@ run_planner_expect_pass() {
     return 1
   fi
   record_pass "planner passed"
+}
+
+run_planner_expect_cost_fail() {
+  local output_dir="$1"
+  local expected_flag="$2"
+  shift 2
+  local output exit_code
+
+  set +e
+  output="$(SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE="${SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE:-}" \
+    "$planner" --bead-id bd-1onpa --source-revision smoke-rev --output-dir "$output_dir" "$@" 2>&1)"
+  exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    record_failure "planner unexpectedly passed"
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+
+  jq -e \
+    --arg expected_flag "$expected_flag" \
+    '.decision == "fail_closed" and (.risk_flags | index($expected_flag) != null)' \
+    "${output_dir}/plan.json" >/dev/null
+  assert_no_stale_or_mismatch_low_cost_claim "${output_dir}/plan.json"
+  record_pass "planner failed closed for ${expected_flag}"
 }
 
 run_planner_expect_fail() {
@@ -134,20 +270,41 @@ assert_default_output_dir_outside_worktree() {
 
 run_selftest() {
   local tmp_parent tmp_root
+  local low_history high_history stale_history mismatched_history contradictory_history
 
   tmp_parent="${SWARM_VALIDATION_PLANNER_SMOKE_ARTIFACT_ROOT:-${TMPDIR:-/tmp}}"
   mkdir -p "$tmp_parent"
   tmp_root="$(mktemp -d "${tmp_parent%/}/swarm-validation-planner.XXXXXX")"
+  low_history="${tmp_root}/low-cost-history.json"
+  high_history="${tmp_root}/high-cost-history.json"
+  stale_history="${tmp_root}/stale-cost-history.json"
+  mismatched_history="${tmp_root}/mismatched-cost-history.json"
+  contradictory_history="${tmp_root}/contradictory-cost-history.json"
+  write_proof_cost_history "$low_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 1200 1 1 "pass" false "sha-low-cost"
+  write_proof_cost_history "$high_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 900000 12 2 "pass" false "sha-high-cost"
+  write_proof_cost_history "$stale_history" "old-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 800 1 1 "pass" false "sha-stale-cost"
+  write_proof_cost_history "$mismatched_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-extension-host" "proof_manifest_golden_artifacts" 800 1 1 "pass" false "sha-mismatched-cost"
+  write_contradictory_cost_history "$contradictory_history"
 
   SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE=''
   run_planner_expect_pass \
     "${tmp_root}/exact-test" \
+    --proof-cost-history-json "$low_history" \
     --changed-path crates/franken-engine/tests/proof_manifest_golden_artifacts.rs
   assert_case_golden \
     "exact-test" \
     "$tmp_root" \
     "${tmp_root}/exact-test" \
     "${golden_dir}/swarm_validation_planner_exact_test.golden"
+
+  run_planner_expect_pass \
+    "${tmp_root}/unknown-cost" \
+    --changed-path crates/franken-engine/tests/swarm_validation_control_plane_e2e.rs
+  assert_case_golden \
+    "unknown-cost" \
+    "$tmp_root" \
+    "${tmp_root}/unknown-cost" \
+    "${golden_dir}/swarm_validation_planner_unknown_cost.golden"
 
   run_planner_expect_pass \
     "${tmp_root}/script-only" \
@@ -187,6 +344,39 @@ run_selftest() {
     "$tmp_root" \
     "${tmp_root}/multi-crate" \
     "${golden_dir}/swarm_validation_planner_multi_crate.golden"
+
+  run_planner_expect_pass \
+    "${tmp_root}/high-cost" \
+    --proof-cost-history-json "$high_history" \
+    --changed-path crates/franken-engine/tests/proof_manifest_golden_artifacts.rs
+  assert_case_golden \
+    "high-cost" \
+    "$tmp_root" \
+    "${tmp_root}/high-cost" \
+    "${golden_dir}/swarm_validation_planner_high_cost.golden"
+
+  run_planner_expect_pass \
+    "${tmp_root}/stale-cost" \
+    --proof-cost-history-json "$stale_history" \
+    --changed-path crates/franken-engine/tests/proof_manifest_golden_artifacts.rs
+  assert_no_stale_or_mismatch_low_cost_claim "${tmp_root}/stale-cost/plan.json"
+  assert_case_golden \
+    "stale-cost" \
+    "$tmp_root" \
+    "${tmp_root}/stale-cost" \
+    "${golden_dir}/swarm_validation_planner_stale_cost.golden"
+
+  run_planner_expect_cost_fail \
+    "${tmp_root}/mismatched-cost" \
+    "mismatched_cost_evidence" \
+    --proof-cost-history-json "$mismatched_history" \
+    --changed-path crates/franken-engine/tests/proof_manifest_golden_artifacts.rs
+
+  run_planner_expect_cost_fail \
+    "${tmp_root}/contradictory-cost" \
+    "contradictory_cost_evidence" \
+    --proof-cost-history-json "$contradictory_history" \
+    --changed-path crates/franken-engine/tests/proof_manifest_golden_artifacts.rs
 
   run_planner_expect_fail \
     "${tmp_root}/unknown-path" \

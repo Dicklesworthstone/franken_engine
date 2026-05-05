@@ -7,6 +7,7 @@
   "reason_codes": [
     "script_only"
   ],
+  "risk_flags": [],
   "changed_paths": [
     "scripts/rch_policy_compliance_gate.sh"
   ],
@@ -26,7 +27,28 @@
       "command_kind": "shell_syntax",
       "package": null,
       "target": null,
-      "rationale": "script syntax validation"
+      "rationale": "script syntax validation",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "static",
+        "cost_class": "low",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": null,
+      "risk_flags": [],
+      "cost_evidence": {
+        "status": "not_required",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     },
     {
       "command_id": "shellcheck-scripts_rch_policy_compliance_gate_sh",
@@ -34,7 +56,28 @@
       "command_kind": "shellcheck",
       "package": null,
       "target": null,
-      "rationale": "script static analysis"
+      "rationale": "script static analysis",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "static",
+        "cost_class": "low",
+        "sample_count": 0,
+        "elapsed_ms_p50": 0,
+        "elapsed_ms_max": 0,
+        "compiled_target_count_max": 0,
+        "linked_target_count_max": 0
+      },
+      "recommended_target_dir": null,
+      "risk_flags": [],
+      "cost_evidence": {
+        "status": "not_required",
+        "source": null,
+        "matched_rows": 0,
+        "fresh_rows": 0,
+        "stale_rows": 0,
+        "source_revisions": [],
+        "content_hashes": []
+      }
     }
   ],
   "omitted_commands": [

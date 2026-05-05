@@ -7,6 +7,7 @@
   "reason_codes": [
     "unknown_path_mapping"
   ],
+  "risk_flags": [],
   "changed_paths": [
     "unknown/path.rs"
   ],

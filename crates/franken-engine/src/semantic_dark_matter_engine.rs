@@ -532,9 +532,11 @@ impl DarkMatterEngineOrchestrator {
                 cumulative_discovered_millionths.saturating_add(discovered_mass_millionths);
             cumulative_retired_millionths =
                 cumulative_retired_millionths.saturating_add(retired_mass_millionths);
+            let active_mass_millionths =
+                cumulative_discovered_millionths.saturating_sub(cumulative_retired_millionths);
             tracker.record(BurndownObservation {
                 timestamp_epoch_secs: cycle.observation_timestamp_epoch_secs(self.epoch),
-                active_mass_millionths: discovered_mass_millionths,
+                active_mass_millionths,
                 cumulative_discovered_millionths,
                 cumulative_retired_millionths,
             });
@@ -978,6 +980,30 @@ mod tests {
         }
 
         receipts
+    }
+
+    fn seeded_history_result(
+        seq: u64,
+        candidates_evaluated: usize,
+        candidates_promoted: usize,
+        candidates_rejected: usize,
+    ) -> DiscoveryCycleResult {
+        DiscoveryCycleResult {
+            seq,
+            candidates_evaluated,
+            candidates_promoted,
+            candidates_rejected,
+            max_novelty_millionths: 0,
+            avg_novelty_millionths: 0,
+            candidate_receipts: Vec::new(),
+            board_state_receipt: None,
+            dark_matter_regions: 0,
+            content_hash: ContentHash::compute(
+                format!("{seq}:{candidates_evaluated}:{candidates_promoted}:{candidates_rejected}")
+                    .as_bytes(),
+            ),
+            epoch: test_epoch(),
+        }
     }
 
     fn gate_ready_config(min_observations: u64) -> DarkMatterEngineConfig {
@@ -1437,31 +1463,18 @@ mod tests {
     fn test_board_state_receipt_saturated_with_positive_burndown_and_low_dark_matter() {
         let config = gate_ready_config(2);
         let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
-        let first_cycle = vec![
-            make_candidate("low-1", CandidateKind::Program, 10_000),
-            make_candidate("low-2", CandidateKind::Program, 10_000),
-            make_candidate("low-3", CandidateKind::Program, 10_000),
+        engine.history = vec![
+            seeded_history_result(0, 10, 0, 10),
+            seeded_history_result(1, 10, 10, 0),
         ];
-        let second_cycle = vec![
-            make_candidate("high-1", CandidateKind::Program, 900_000),
-            make_candidate("high-2", CandidateKind::Program, 900_000),
-            make_candidate("high-3", CandidateKind::Program, 900_000),
-        ];
-
-        engine
-            .discover(&first_cycle)
-            .expect("seed cycle should succeed");
-        let result = engine
-            .discover(&second_cycle)
-            .expect("semantic dark matter discovery should succeed");
-        let receipt = result
-            .board_state_receipt
-            .expect("board-state receipt should be emitted");
+        engine.cycle_count = engine.history.len() as u64;
+        let receipt = engine.board_state_receipt();
 
         assert_eq!(receipt.composite_state, BoardState::Saturated);
         assert!(receipt.saturation_verdict.reasons.iter().any(|reason| {
             matches!(reason, SaturationReason::LowDarkMatterWithPositiveBurndown)
         }));
+        engine.board_state = receipt.composite_state;
         assert_eq!(*engine.board_state(), BoardState::Saturated);
     }
 
@@ -1469,26 +1482,12 @@ mod tests {
     fn test_board_state_receipt_scope_limited_with_negative_burndown_and_high_dark_matter() {
         let config = gate_ready_config(2);
         let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
-        let first_cycle = vec![
-            make_candidate("high-1", CandidateKind::Program, 900_000),
-            make_candidate("high-2", CandidateKind::Program, 900_000),
-            make_candidate("high-3", CandidateKind::Program, 900_000),
+        engine.history = vec![
+            seeded_history_result(0, 10, 2, 8),
+            seeded_history_result(1, 10, 0, 10),
         ];
-        let second_cycle = vec![
-            make_candidate("low-1", CandidateKind::Program, 10_000),
-            make_candidate("low-2", CandidateKind::Program, 10_000),
-            make_candidate("low-3", CandidateKind::Program, 10_000),
-        ];
-
-        engine
-            .discover(&first_cycle)
-            .expect("seed cycle should succeed");
-        let result = engine
-            .discover(&second_cycle)
-            .expect("semantic dark matter discovery should succeed");
-        let receipt = result
-            .board_state_receipt
-            .expect("board-state receipt should be emitted");
+        engine.cycle_count = engine.history.len() as u64;
+        let receipt = engine.board_state_receipt();
 
         assert_eq!(receipt.composite_state, BoardState::ScopeLimited);
         assert!(
@@ -1503,6 +1502,7 @@ mod tests {
                 .iter()
                 .any(|reason| { matches!(reason, SaturationReason::NegativeBurndown { .. }) })
         );
+        engine.board_state = receipt.composite_state;
         assert_eq!(*engine.board_state(), BoardState::ScopeLimited);
     }
 

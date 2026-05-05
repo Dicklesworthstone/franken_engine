@@ -7,6 +7,7 @@
 //! Implements typed boundaries for:
 //! - ReplacementLineage: replacement/promotion lineage + signed receipts
 //! - IfcProvenance: label-flow provenance edges + declassification references
+//! - ProofEvidenceIndex: proof artifact, command receipt, validation plan, and gate outcome rows
 //! - SpecializationIndex: proof-specialization mapping + invalidation markers
 
 #![forbid(unsafe_code)]
@@ -126,6 +127,44 @@ fn require_json_object_typed<T: TypedStoreRecord>(
     }
     Err(typed_integrity_error::<T>(format!(
         "`{field_name}` must be a JSON object"
+    )))
+}
+
+fn require_repo_relative_path_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &str,
+) -> StorageResult<()> {
+    require_non_empty_typed::<T>(field_name, value)?;
+    if value.contains('\0') || value.contains('\\') {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field_name}` must be a canonical repo-relative path"
+        )));
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field_name}` must not be absolute"
+        )));
+    }
+    if path
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(typed_integrity_error::<T>(format!(
+            "`{field_name}` must not contain `.` or `..` components"
+        )));
+    }
+    Ok(())
+}
+
+fn require_sha256_typed<T: TypedStoreRecord>(field_name: &str, value: &str) -> StorageResult<()> {
+    require_non_empty_typed::<T>(field_name, value)?;
+    let digest = value.strip_prefix("sha256:").unwrap_or(value);
+    if digest.len() == 64 && digest.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Ok(());
+    }
+    Err(typed_integrity_error::<T>(format!(
+        "`{field_name}` must be a 64-hex SHA-256 digest or `sha256:<digest>`"
     )))
 }
 
@@ -1265,6 +1304,9 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
             .if_not_exists()
             .build(),
         create_table::<IfcProvenanceEntry>().if_not_exists().build(),
+        create_table::<ProofEvidenceIndexEntry>()
+            .if_not_exists()
+            .build(),
         create_table::<SpecializationIndexEntry>()
             .if_not_exists()
             .build(),
@@ -1342,6 +1384,11 @@ impl<C: Connection> TypedSqlModelSession<C> {
 
     /// Add an IFC provenance row to the SQLModel unit of work.
     pub fn add_ifc_provenance(&mut self, record: &IfcProvenanceEntry) {
+        self.add_typed(record);
+    }
+
+    /// Add a proof-evidence-index row to the SQLModel unit of work.
+    pub fn add_proof_evidence_index(&mut self, record: &ProofEvidenceIndexEntry) {
         self.add_typed(record);
     }
 
@@ -1647,6 +1694,159 @@ impl TypedStoreRecord for IfcProvenanceEntry {
 }
 
 // ---------------------------------------------------------------------------
+// ProofEvidenceIndex: sqlmodel_rust typed model
+// ---------------------------------------------------------------------------
+
+/// Typed model for proof-evidence index rows.
+///
+/// Links beads, source revisions, proof artifacts, command receipts,
+/// validation plans, and gate outcomes through the EvidenceIndex store without
+/// trusting untyped generic records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[sqlmodel(table = "proof_evidence_index")]
+pub struct ProofEvidenceIndexEntry {
+    /// Stable typed row ID allocated from a domain natural key.
+    #[sqlmodel(primary_key)]
+    pub evidence_id: i64,
+
+    /// Bead that owns or consumes this evidence.
+    pub bead_id: String,
+
+    /// Git source revision the evidence was generated from.
+    pub source_revision: String,
+
+    /// Stable artifact identifier derived from the source document and hash.
+    pub artifact_id: String,
+
+    /// Canonical repo-relative path to the indexed artifact.
+    pub artifact_path: String,
+
+    /// Artifact role from the originating manifest or planner.
+    pub artifact_role: String,
+
+    /// Content hash for the artifact or source receipt.
+    pub artifact_sha256: String,
+
+    /// Receipt class represented by this row.
+    pub receipt_kind: String,
+
+    /// Gate status normalized for dashboard queries.
+    pub gate_status: String,
+
+    /// Unix timestamp (milliseconds) when the evidence was generated.
+    pub generated_timestamp_ms: i64,
+
+    /// Unix timestamp (milliseconds) after which the evidence is stale.
+    pub freshness_deadline_ms: i64,
+
+    /// Lossless structured metadata from the source evidence document.
+    pub metadata_json: String,
+}
+
+impl ProofEvidenceIndexEntry {
+    /// Build a deterministic typed lookup for one proof-evidence entry.
+    pub fn select_by_evidence_id(evidence_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("evidence_id").eq(evidence_id))
+    }
+
+    /// Build a deterministic typed lookup for all evidence associated with one bead.
+    pub fn select_by_bead_id(bead_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("bead_id").eq(bead_id.into()))
+            .order_by(Expr::col("source_revision").asc())
+            .order_by(Expr::col("artifact_path").asc())
+            .order_by(Expr::col("evidence_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for all evidence from one source revision.
+    pub fn select_by_source_revision(source_revision: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("source_revision").eq(source_revision.into()))
+            .order_by(Expr::col("bead_id").asc())
+            .order_by(Expr::col("artifact_path").asc())
+            .order_by(Expr::col("evidence_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for recent failed gate evidence.
+    pub fn select_recent_failed_gates() -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("gate_status").eq("fail"))
+            .order_by(Expr::col("generated_timestamp_ms").desc())
+            .order_by(Expr::col("evidence_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for evidence older than its freshness policy.
+    pub fn select_stale_artifacts(now_ms: i64) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("freshness_deadline_ms").lt(now_ms))
+            .order_by(Expr::col("freshness_deadline_ms").asc())
+            .order_by(Expr::col("evidence_id").asc())
+    }
+}
+
+impl TypedStoreRecord for ProofEvidenceIndexEntry {
+    const STORE_KIND: StoreKind = StoreKind::EvidenceIndex;
+    const MODEL_NAME: &'static str = "ProofEvidenceIndexEntry";
+
+    fn typed_record_id(&self) -> i64 {
+        self.evidence_id
+    }
+
+    fn typed_record_extra_metadata(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("artifact_id".to_string(), self.artifact_id.clone()),
+            ("artifact_path".to_string(), self.artifact_path.clone()),
+            ("artifact_role".to_string(), self.artifact_role.clone()),
+            ("bead_id".to_string(), self.bead_id.clone()),
+            ("gate_status".to_string(), self.gate_status.clone()),
+            ("receipt_kind".to_string(), self.receipt_kind.clone()),
+            ("source_revision".to_string(), self.source_revision.clone()),
+        ])
+    }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("evidence_id", self.evidence_id)?;
+        require_non_empty_typed::<Self>("bead_id", &self.bead_id)?;
+        require_non_empty_typed::<Self>("source_revision", &self.source_revision)?;
+        if self.source_revision == "unknown" {
+            return Err(typed_integrity_error::<Self>(
+                "`source_revision` must be an explicit revision",
+            ));
+        }
+        require_non_empty_typed::<Self>("artifact_id", &self.artifact_id)?;
+        require_repo_relative_path_typed::<Self>("artifact_path", &self.artifact_path)?;
+        require_non_empty_typed::<Self>("artifact_role", &self.artifact_role)?;
+        require_sha256_typed::<Self>("artifact_sha256", &self.artifact_sha256)?;
+        require_allowed_typed::<Self>(
+            "receipt_kind",
+            &self.receipt_kind,
+            &[
+                "command_receipt",
+                "gate_report",
+                "proof_artifact",
+                "proof_cost_manifest",
+                "proof_manifest",
+                "validation_command",
+                "validation_plan",
+            ],
+        )?;
+        require_allowed_typed::<Self>(
+            "gate_status",
+            &self.gate_status,
+            &["pass", "fail", "blocked", "skipped", "stale", "unknown"],
+        )?;
+        require_non_negative_typed::<Self>("generated_timestamp_ms", self.generated_timestamp_ms)?;
+        require_non_negative_typed::<Self>("freshness_deadline_ms", self.freshness_deadline_ms)?;
+        if self.freshness_deadline_ms < self.generated_timestamp_ms {
+            return Err(typed_integrity_error::<Self>(
+                "`freshness_deadline_ms` must not precede `generated_timestamp_ms`",
+            ));
+        }
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SpecializationIndex: sqlmodel_rust typed model
 // ---------------------------------------------------------------------------
 
@@ -1880,6 +2080,25 @@ mod tests {
             created_timestamp_ms: 1_700_000_000_013,
             specialized_content_hash: "sha256:abc123".to_string(),
             metadata_json: r#"{"fallback":"deterministic"}"#.to_string(),
+        }
+    }
+
+    fn proof_evidence_entry(evidence_id: i64) -> ProofEvidenceIndexEntry {
+        ProofEvidenceIndexEntry {
+            evidence_id,
+            bead_id: "bd-proof".to_string(),
+            source_revision: "abc1234".to_string(),
+            artifact_id: "proof-bundle:manifest".to_string(),
+            artifact_path: "artifacts/proof/run/manifest.json".to_string(),
+            artifact_role: "proof_manifest".to_string(),
+            artifact_sha256:
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .to_string(),
+            receipt_kind: "proof_manifest".to_string(),
+            gate_status: "pass".to_string(),
+            generated_timestamp_ms: 1_700_000_000_019,
+            freshness_deadline_ms: 1_700_086_400_019,
+            metadata_json: r#"{"source":"test"}"#.to_string(),
         }
     }
 
@@ -2148,6 +2367,21 @@ mod tests {
     }
 
     #[test]
+    fn proof_evidence_index_model_exports_dashboard_fields() {
+        assert_eq!(ProofEvidenceIndexEntry::TABLE_NAME, "proof_evidence_index");
+        assert_eq!(ProofEvidenceIndexEntry::PRIMARY_KEY, &["evidence_id"]);
+        assert!(field::<ProofEvidenceIndexEntry>("evidence_id").primary_key);
+        assert_eq!(
+            field::<ProofEvidenceIndexEntry>("artifact_path").sql_type,
+            SqlType::Text
+        );
+        assert_eq!(
+            field::<ProofEvidenceIndexEntry>("freshness_deadline_ms").sql_type,
+            SqlType::BigInt
+        );
+    }
+
+    #[test]
     fn typed_persistence_models_round_trip_through_sqlmodel_rows() {
         assert_round_trips(ReplacementLineageEntry {
             sequence_id: 7,
@@ -2173,6 +2407,8 @@ mod tests {
             trace_id: "trace-ifc".to_string(),
             metadata_json: r#"{"policy_id":"ifc-policy"}"#.to_string(),
         });
+
+        assert_round_trips(proof_evidence_entry(19));
 
         assert_round_trips(SpecializationIndexEntry {
             specialization_id: 13,
@@ -2247,12 +2483,21 @@ mod tests {
             r#"SELECT * FROM specialization_index WHERE "status" = $1 ORDER BY "invalidation_timestamp_ms" DESC, "specialization_id" ASC LIMIT 50"#
         );
         assert_eq!(params, vec![Value::Text("invalidated".to_string())]);
+
+        let (sql, params) = ProofEvidenceIndexEntry::select_by_bead_id("bd-proof")
+            .limit(25)
+            .build();
+        assert_eq!(
+            sql,
+            r#"SELECT * FROM proof_evidence_index WHERE "bead_id" = $1 ORDER BY "source_revision" ASC, "artifact_path" ASC, "evidence_id" ASC LIMIT 25"#
+        );
+        assert_eq!(params, vec![Value::Text("bd-proof".to_string())]);
     }
 
     #[test]
     fn typed_session_schema_sql_lists_all_typed_tables() {
         let sql = typed_persistence_create_table_sql();
-        assert_eq!(sql.len(), 3);
+        assert_eq!(sql.len(), 4);
         assert!(
             sql.iter()
                 .all(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS ")),
@@ -2273,11 +2518,18 @@ mod tests {
             sql[1]
         );
         assert!(
-            sql[2].contains("\"specialization_index\"")
-                && sql[2].contains("\"invalidation_reason\" TEXT")
-                && sql[2].contains("PRIMARY KEY (\"specialization_id\")"),
-            "specialization index DDL should expose nullable invalidation fields: {}",
+            sql[2].contains("\"proof_evidence_index\"")
+                && sql[2].contains("\"artifact_path\" TEXT NOT NULL")
+                && sql[2].contains("PRIMARY KEY (\"evidence_id\")"),
+            "proof evidence DDL should expose dashboard query fields: {}",
             sql[2]
+        );
+        assert!(
+            sql[3].contains("\"specialization_index\"")
+                && sql[3].contains("\"invalidation_reason\" TEXT")
+                && sql[3].contains("PRIMARY KEY (\"specialization_id\")"),
+            "specialization index DDL should expose nullable invalidation fields: {}",
+            sql[3]
         );
     }
 
@@ -2294,19 +2546,22 @@ mod tests {
 
         let replacement = replacement_entry(7);
         let ifc = ifc_entry(11, "trace-ifc");
+        let proof_evidence = proof_evidence_entry(19);
         let specialization = specialization_entry(13);
 
         session.add_replacement_lineage(&replacement);
         session.add_ifc_provenance(&ifc);
+        session.add_proof_evidence_index(&proof_evidence);
         session.add_specialization_index(&specialization);
 
         assert!(session.contains_typed(&replacement));
         assert!(session.contains_typed(&ifc));
+        assert!(session.contains_typed(&proof_evidence));
         assert!(session.contains_typed(&specialization));
 
         let debug = session.debug_state();
-        assert_eq!(debug.tracked, 3);
-        assert_eq!(debug.pending_new, 3);
+        assert_eq!(debug.tracked, 4);
+        assert_eq!(debug.pending_new, 4);
         assert_eq!(debug.pending_delete, 0);
         assert_eq!(debug.pending_dirty, 0);
         assert!(!debug.in_transaction);
@@ -2324,6 +2579,7 @@ mod tests {
         for (table, primary_key) in [
             ("replacement_lineage", "sequence_id"),
             ("ifc_provenance", "provenance_id"),
+            ("proof_evidence_index", "evidence_id"),
             ("specialization_index", "specialization_id"),
         ] {
             let sql = format!("PRAGMA table_info({table})");

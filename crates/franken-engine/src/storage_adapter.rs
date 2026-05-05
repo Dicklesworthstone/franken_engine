@@ -643,7 +643,8 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     backend: B,
     schema_version: u32,
     events: Vec<StorageEvent>,
-    /// Optional typed SQLModel session for ReplacementLineage, IfcProvenance, SpecializationIndex stores.
+    /// Optional typed SQLModel session for ReplacementLineage, IfcProvenance,
+    /// EvidenceIndex, and SpecializationIndex stores.
     /// When present, typed operations use SQLModel boundaries instead of generic record operations.
     typed_session: Option<TypedFrankenSqliteSession>,
 }
@@ -686,9 +687,10 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
         })
     }
 
-    /// Create a new storage adapter with typed SQLModel session enabled for ReplacementLineage operations.
+    /// Create a new storage adapter with typed SQLModel session enabled for typed persistence operations.
     ///
-    /// This enables typed operations for ReplacementLineage, IfcProvenance, and SpecializationIndex stores
+    /// This enables typed operations for ReplacementLineage, IfcProvenance,
+    /// EvidenceIndex, and SpecializationIndex stores
     /// using SQLModel boundaries instead of generic record operations. Uses in-memory typed session
     /// for development/testing; production callers should extend this to use file-backed sessions.
     pub fn new_with_typed_session(mut backend: B) -> Result<Self, StorageError> {

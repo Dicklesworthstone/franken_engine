@@ -159,6 +159,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 "artifact_dir": bundle.artifact_dir,
                 "report_path": bundle.report_path,
                 "observability_delta_path": bundle.observability_delta_path,
+                "memory_envelope_report_path": bundle.memory_envelope_report_path,
                 "aot_bundle_report_path": bundle.aot_bundle_report_path,
                 "runtime_image_manifest_path": bundle.runtime_image_manifest_path,
                 "trace_ids_path": bundle.trace_ids_path,

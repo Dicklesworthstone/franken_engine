@@ -32,11 +32,14 @@ pub const RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.rgc-cold-start-runtime-image-manifest.v1";
 pub const OBSERVABILITY_DELTA_SCHEMA_VERSION: &str =
     "franken-engine.rgc-cold-start-observability-delta.v1";
+pub const MEMORY_ENVELOPE_REPORT_SCHEMA_VERSION: &str =
+    "franken-engine.rgc-cold-start-memory-envelope-report.v1";
 pub const TRACE_IDS_SCHEMA_VERSION: &str = "franken-engine.rgc-cold-start-trace-ids.v1";
 pub const RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC: &str = "PROVISIONAL_SYNTHETIC";
 
 pub const REPORT_FILE: &str = "cold_start_compilation_report.json";
 pub const OBSERVABILITY_DELTA_FILE: &str = "cold_start_observability_delta.json";
+pub const MEMORY_ENVELOPE_REPORT_FILE: &str = "cold_start_memory_envelope_report.json";
 pub const AOT_BUNDLE_FILE: &str = "aot_bundle_compilation_report.json";
 pub const RUNTIME_IMAGE_MANIFEST_FILE: &str = "runtime_image_manifest.json";
 pub const SUMMARY_FILE: &str = "summary.md";
@@ -140,6 +143,105 @@ pub struct ColdStartObservabilityDeltaArtifact {
     pub rows: Vec<ColdStartObservabilityDeltaRow>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColdStartMemoryEnvelope {
+    pub rss_bytes: Option<u64>,
+    pub heap_bytes: Option<u64>,
+    pub metadata_bytes: Option<u64>,
+    pub cache_bytes: Option<u64>,
+}
+
+impl ColdStartMemoryEnvelope {
+    #[must_use]
+    pub const fn observed(
+        rss_bytes: u64,
+        heap_bytes: u64,
+        metadata_bytes: u64,
+        cache_bytes: u64,
+    ) -> Self {
+        Self {
+            rss_bytes: Some(rss_bytes),
+            heap_bytes: Some(heap_bytes),
+            metadata_bytes: Some(metadata_bytes),
+            cache_bytes: Some(cache_bytes),
+        }
+    }
+
+    fn total_bytes(&self) -> Option<u64> {
+        Some(
+            self.rss_bytes?
+                .saturating_add(self.heap_bytes?)
+                .saturating_add(self.metadata_bytes?)
+                .saturating_add(self.cache_bytes?),
+        )
+    }
+
+    fn missing_fields(&self, prefix: &str) -> Vec<String> {
+        let mut missing_fields = Vec::new();
+        if self.rss_bytes.is_none() {
+            missing_fields.push(format!("{prefix}.rss_bytes"));
+        }
+        if self.heap_bytes.is_none() {
+            missing_fields.push(format!("{prefix}.heap_bytes"));
+        }
+        if self.metadata_bytes.is_none() {
+            missing_fields.push(format!("{prefix}.metadata_bytes"));
+        }
+        if self.cache_bytes.is_none() {
+            missing_fields.push(format!("{prefix}.cache_bytes"));
+        }
+        missing_fields
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryEnvelopeVerdict {
+    Matching,
+    Regressed,
+    MissingEvidence,
+}
+
+impl std::fmt::Display for MemoryEnvelopeVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Matching => "matching",
+            Self::Regressed => "regressed",
+            Self::MissingEvidence => "missing_evidence",
+        };
+        f.write_str(label)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColdStartMemoryEnvelopeRow {
+    pub mode_id: String,
+    pub startup_path: StartupPathKind,
+    pub cold_start_envelope: ColdStartMemoryEnvelope,
+    pub warm_start_envelope: ColdStartMemoryEnvelope,
+    pub rss_delta_bytes: Option<i64>,
+    pub heap_delta_bytes: Option<i64>,
+    pub metadata_delta_bytes: Option<i64>,
+    pub cache_delta_bytes: Option<i64>,
+    pub total_delta_bytes: Option<i64>,
+    pub verdict: MemoryEnvelopeVerdict,
+    pub preserves_claim: bool,
+    pub missing_fields: Vec<String>,
+    pub regression_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColdStartMemoryEnvelopeReport {
+    pub schema_version: String,
+    pub component: String,
+    pub bead_id: String,
+    pub policy_id: String,
+    pub required_fields: Vec<String>,
+    pub comparison_policy: String,
+    pub publication_verdict: MemoryEnvelopeVerdict,
+    pub rows: Vec<ColdStartMemoryEnvelopeRow>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColdStartCompilationReport {
     pub schema_version: String,
@@ -155,6 +257,8 @@ pub struct ColdStartCompilationReport {
     pub aot_bundle_report_path: String,
     pub runtime_image_manifest_path: String,
     pub observability_delta_path: String,
+    pub memory_envelope_report_path: String,
+    pub memory_envelope_publication_verdict: MemoryEnvelopeVerdict,
     pub governance_verdict: GovernanceVerdict,
     pub aggregate_benchmark_verdict: BenchmarkVerdict,
     pub aggregate_speedup_millionths: i64,
@@ -171,6 +275,7 @@ pub struct BundleWriteReport {
     pub artifact_dir: PathBuf,
     pub report_path: PathBuf,
     pub observability_delta_path: PathBuf,
+    pub memory_envelope_report_path: PathBuf,
     pub aot_bundle_report_path: PathBuf,
     pub runtime_image_manifest_path: PathBuf,
     pub trace_ids_path: PathBuf,
@@ -183,6 +288,7 @@ pub struct BundleWriteReport {
 struct EvaluatedArtifacts {
     report: ColdStartCompilationReport,
     observability_delta: ColdStartObservabilityDeltaArtifact,
+    memory_envelope_report: ColdStartMemoryEnvelopeReport,
     aot_bundle: AotBundleCompilationReport,
     runtime_image_manifest: RuntimeImageManifestArtifact,
     trace_ids: TraceIdsArtifact,
@@ -217,28 +323,56 @@ struct ModeSample {
     mode_id: &'static str,
     startup_path: StartupPathKind,
     candidate_nanos: u64,
+    warm_start_envelope: ColdStartMemoryEnvelope,
 }
+
+const COLD_START_MEMORY_ENVELOPE: ColdStartMemoryEnvelope =
+    ColdStartMemoryEnvelope::observed(402_653_184, 167_772_160, 33_554_432, 50_331_648);
 
 const MODE_SAMPLES: [ModeSample; 4] = [
     ModeSample {
         mode_id: "observability_off",
         startup_path: StartupPathKind::AotRestored,
         candidate_nanos: 78_000_000,
+        warm_start_envelope: ColdStartMemoryEnvelope::observed(
+            369_098_752,
+            150_994_944,
+            31_457_280,
+            45_088_768,
+        ),
     },
     ModeSample {
         mode_id: "shipped_budgeted",
         startup_path: StartupPathKind::AotRestored,
         candidate_nanos: 82_000_000,
+        warm_start_envelope: ColdStartMemoryEnvelope::observed(
+            377_487_360,
+            155_189_248,
+            31_981_568,
+            46_137_344,
+        ),
     },
     ModeSample {
         mode_id: "exact_shadow",
         startup_path: StartupPathKind::PrewarmedPool,
         candidate_nanos: 88_000_000,
+        warm_start_envelope: ColdStartMemoryEnvelope::observed(
+            385_875_968,
+            159_383_552,
+            32_505_856,
+            47_185_920,
+        ),
     },
     ModeSample {
         mode_id: "incident_full_capture",
         startup_path: StartupPathKind::ZygoteFork,
         candidate_nanos: 94_000_000,
+        warm_start_envelope: ColdStartMemoryEnvelope::observed(
+            394_264_576,
+            163_577_856,
+            33_030_144,
+            49_283_072,
+        ),
     },
 ];
 
@@ -261,6 +395,10 @@ pub fn render_summary(report: &ColdStartCompilationReport) -> String {
         format!(
             "- aggregate_speedup_millionths: `{}`",
             report.aggregate_speedup_millionths
+        ),
+        format!(
+            "- memory_envelope_publication_verdict: `{}`",
+            report.memory_envelope_publication_verdict
         ),
         format!("- governance_verdict: `{}`", report.governance_verdict),
         format!(
@@ -313,6 +451,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> Result<EvaluatedArti
         ..GovernanceConfig::default()
     };
     let observability_delta = build_observability_delta(&governance_config);
+    let memory_envelope_report = build_memory_envelope_report();
     let evidence = build_cold_start_evidence(epoch);
     let parity_results = build_parity_results();
     let governance_verdict = cold_start_aot_governance::evaluate_cold_start_at_epoch(
@@ -350,6 +489,8 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> Result<EvaluatedArti
         aot_bundle_report_path: AOT_BUNDLE_FILE.to_string(),
         runtime_image_manifest_path: RUNTIME_IMAGE_MANIFEST_FILE.to_string(),
         observability_delta_path: OBSERVABILITY_DELTA_FILE.to_string(),
+        memory_envelope_report_path: MEMORY_ENVELOPE_REPORT_FILE.to_string(),
+        memory_envelope_publication_verdict: memory_envelope_report.publication_verdict,
         governance_verdict,
         aggregate_benchmark_verdict,
         aggregate_speedup_millionths,
@@ -365,6 +506,7 @@ fn evaluate_default_artifacts(context: &ArtifactContext) -> Result<EvaluatedArti
     Ok(EvaluatedArtifacts {
         report,
         observability_delta,
+        memory_envelope_report,
         aot_bundle,
         runtime_image_manifest,
         trace_ids,
@@ -585,6 +727,142 @@ fn build_observability_delta(config: &GovernanceConfig) -> ColdStartObservabilit
     }
 }
 
+fn build_memory_envelope_report() -> ColdStartMemoryEnvelopeReport {
+    let rows = MODE_SAMPLES
+        .iter()
+        .map(|sample| {
+            evaluate_memory_envelope_row(
+                sample.mode_id,
+                sample.startup_path,
+                COLD_START_MEMORY_ENVELOPE,
+                sample.warm_start_envelope,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    ColdStartMemoryEnvelopeReport {
+        schema_version: MEMORY_ENVELOPE_REPORT_SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        bead_id: BEAD_ID.to_string(),
+        policy_id: POLICY_ID.to_string(),
+        required_fields: required_memory_envelope_fields(),
+        comparison_policy:
+            "publish only when cold_start_envelope and warm_start_envelope provide rss_bytes, heap_bytes, metadata_bytes, and cache_bytes, and each warm_start_envelope field is less than or equal to the cold_start_envelope field".to_string(),
+        publication_verdict: aggregate_memory_envelope_verdict(&rows),
+        rows,
+    }
+}
+
+fn evaluate_memory_envelope_row(
+    mode_id: &str,
+    startup_path: StartupPathKind,
+    cold_start_envelope: ColdStartMemoryEnvelope,
+    warm_start_envelope: ColdStartMemoryEnvelope,
+) -> ColdStartMemoryEnvelopeRow {
+    let mut missing_fields = cold_start_envelope.missing_fields("cold_start_envelope");
+    missing_fields.extend(warm_start_envelope.missing_fields("warm_start_envelope"));
+
+    let rss_delta_bytes =
+        envelope_delta_bytes(warm_start_envelope.rss_bytes, cold_start_envelope.rss_bytes);
+    let heap_delta_bytes = envelope_delta_bytes(
+        warm_start_envelope.heap_bytes,
+        cold_start_envelope.heap_bytes,
+    );
+    let metadata_delta_bytes = envelope_delta_bytes(
+        warm_start_envelope.metadata_bytes,
+        cold_start_envelope.metadata_bytes,
+    );
+    let cache_delta_bytes = envelope_delta_bytes(
+        warm_start_envelope.cache_bytes,
+        cold_start_envelope.cache_bytes,
+    );
+    let total_delta_bytes = envelope_delta_bytes(
+        warm_start_envelope.total_bytes(),
+        cold_start_envelope.total_bytes(),
+    );
+
+    let regression_fields = if missing_fields.is_empty() {
+        collect_regression_fields(cold_start_envelope, warm_start_envelope)
+    } else {
+        Vec::new()
+    };
+
+    let verdict = if !missing_fields.is_empty() {
+        MemoryEnvelopeVerdict::MissingEvidence
+    } else if !regression_fields.is_empty() {
+        MemoryEnvelopeVerdict::Regressed
+    } else {
+        MemoryEnvelopeVerdict::Matching
+    };
+
+    ColdStartMemoryEnvelopeRow {
+        mode_id: mode_id.to_string(),
+        startup_path,
+        cold_start_envelope,
+        warm_start_envelope,
+        rss_delta_bytes,
+        heap_delta_bytes,
+        metadata_delta_bytes,
+        cache_delta_bytes,
+        total_delta_bytes,
+        verdict,
+        preserves_claim: matches!(verdict, MemoryEnvelopeVerdict::Matching),
+        missing_fields,
+        regression_fields,
+    }
+}
+
+fn required_memory_envelope_fields() -> Vec<String> {
+    vec![
+        "rss_bytes".to_string(),
+        "heap_bytes".to_string(),
+        "metadata_bytes".to_string(),
+        "cache_bytes".to_string(),
+    ]
+}
+
+fn aggregate_memory_envelope_verdict(rows: &[ColdStartMemoryEnvelopeRow]) -> MemoryEnvelopeVerdict {
+    if rows
+        .iter()
+        .any(|row| matches!(row.verdict, MemoryEnvelopeVerdict::MissingEvidence))
+    {
+        MemoryEnvelopeVerdict::MissingEvidence
+    } else if rows
+        .iter()
+        .any(|row| matches!(row.verdict, MemoryEnvelopeVerdict::Regressed))
+    {
+        MemoryEnvelopeVerdict::Regressed
+    } else {
+        MemoryEnvelopeVerdict::Matching
+    }
+}
+
+fn collect_regression_fields(
+    cold_start_envelope: ColdStartMemoryEnvelope,
+    warm_start_envelope: ColdStartMemoryEnvelope,
+) -> Vec<String> {
+    let mut regression_fields = Vec::new();
+    if warm_start_envelope.rss_bytes > cold_start_envelope.rss_bytes {
+        regression_fields.push("rss_bytes".to_string());
+    }
+    if warm_start_envelope.heap_bytes > cold_start_envelope.heap_bytes {
+        regression_fields.push("heap_bytes".to_string());
+    }
+    if warm_start_envelope.metadata_bytes > cold_start_envelope.metadata_bytes {
+        regression_fields.push("metadata_bytes".to_string());
+    }
+    if warm_start_envelope.cache_bytes > cold_start_envelope.cache_bytes {
+        regression_fields.push("cache_bytes".to_string());
+    }
+    regression_fields
+}
+
+fn envelope_delta_bytes(candidate: Option<u64>, baseline: Option<u64>) -> Option<i64> {
+    let candidate = i128::from(candidate?);
+    let baseline = i128::from(baseline?);
+    Some((candidate - baseline).clamp(i64::MIN as i128, i64::MAX as i128) as i64)
+}
+
 fn build_cold_start_evidence(epoch: SecurityEpoch) -> Vec<ColdStartEvidence> {
     vec![
         ColdStartEvidence::new(
@@ -674,6 +952,9 @@ fn operator_verification_commands() -> Vec<String> {
             "jq '.rows[] | {{mode_id,preserves_claim,speedup_millionths}}' {OBSERVABILITY_DELTA_FILE}"
         ),
         format!(
+            "jq '.publication_verdict,.rows[] | {{mode_id,verdict,missing_fields,regression_fields,total_delta_bytes}}' {MEMORY_ENVELOPE_REPORT_FILE}"
+        ),
+        format!(
             "jq '.best_warm_start_image_id,.best_warm_start_mode' {RUNTIME_IMAGE_MANIFEST_FILE}"
         ),
         format!("jq '.batch_report.total_graphs,.batch_report.usable_graphs' {AOT_BUNDLE_FILE}"),
@@ -685,6 +966,7 @@ fn required_artifact_names() -> Vec<String> {
     vec![
         REPORT_FILE.to_string(),
         OBSERVABILITY_DELTA_FILE.to_string(),
+        MEMORY_ENVELOPE_REPORT_FILE.to_string(),
         AOT_BUNDLE_FILE.to_string(),
         RUNTIME_IMAGE_MANIFEST_FILE.to_string(),
         TRACE_IDS_FILE.to_string(),
@@ -702,6 +984,10 @@ fn write_bundle(
     let artifacts = vec![
         FileArtifact::json(REPORT_FILE, &evaluated.report)?,
         FileArtifact::json(OBSERVABILITY_DELTA_FILE, &evaluated.observability_delta)?,
+        FileArtifact::json(
+            MEMORY_ENVELOPE_REPORT_FILE,
+            &evaluated.memory_envelope_report,
+        )?,
         FileArtifact::json(AOT_BUNDLE_FILE, &evaluated.aot_bundle)?,
         FileArtifact::json(
             RUNTIME_IMAGE_MANIFEST_FILE,
@@ -731,6 +1017,7 @@ fn write_bundle(
         artifact_dir: context.artifact_dir.clone(),
         report_path: context.artifact_dir.join(REPORT_FILE),
         observability_delta_path: context.artifact_dir.join(OBSERVABILITY_DELTA_FILE),
+        memory_envelope_report_path: context.artifact_dir.join(MEMORY_ENVELOPE_REPORT_FILE),
         aot_bundle_report_path: context.artifact_dir.join(AOT_BUNDLE_FILE),
         runtime_image_manifest_path: context.artifact_dir.join(RUNTIME_IMAGE_MANIFEST_FILE),
         trace_ids_path: context.artifact_dir.join(TRACE_IDS_FILE),
@@ -796,6 +1083,7 @@ mod tests {
         assert!(!REPORT_FILE.is_empty());
         assert!(REPORT_FILE.ends_with(".json"));
         assert!(!OBSERVABILITY_DELTA_FILE.is_empty());
+        assert!(!MEMORY_ENVELOPE_REPORT_FILE.is_empty());
         assert!(!AOT_BUNDLE_FILE.is_empty());
         assert!(!RUNTIME_IMAGE_MANIFEST_FILE.is_empty());
         assert!(!SUMMARY_FILE.is_empty());
@@ -808,6 +1096,7 @@ mod tests {
         assert!(AOT_BUNDLE_SCHEMA_VERSION.contains(".v1"));
         assert!(RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION.contains(".v1"));
         assert!(OBSERVABILITY_DELTA_SCHEMA_VERSION.contains(".v1"));
+        assert!(MEMORY_ENVELOPE_REPORT_SCHEMA_VERSION.contains(".v1"));
         assert!(TRACE_IDS_SCHEMA_VERSION.contains(".v1"));
     }
 
@@ -924,6 +1213,151 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // ColdStartMemoryEnvelope
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cold_start_memory_envelope_total_requires_all_fields() {
+        let observed = ColdStartMemoryEnvelope::observed(1, 2, 3, 4);
+        assert_eq!(observed.total_bytes(), Some(10));
+
+        let missing = ColdStartMemoryEnvelope {
+            rss_bytes: Some(1),
+            heap_bytes: Some(2),
+            metadata_bytes: None,
+            cache_bytes: Some(4),
+        };
+        assert_eq!(missing.total_bytes(), None);
+    }
+
+    #[test]
+    fn cold_start_memory_envelope_missing_fields_are_prefixed() {
+        let envelope = ColdStartMemoryEnvelope {
+            rss_bytes: None,
+            heap_bytes: Some(2),
+            metadata_bytes: None,
+            cache_bytes: Some(4),
+        };
+        assert_eq!(
+            envelope.missing_fields("warm_start_envelope"),
+            vec![
+                "warm_start_envelope.rss_bytes".to_string(),
+                "warm_start_envelope.metadata_bytes".to_string()
+            ]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ColdStartMemoryEnvelopeRow / Report
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn memory_envelope_row_matching_evidence_preserves_claim() {
+        let row = evaluate_memory_envelope_row(
+            "shipped_budgeted",
+            StartupPathKind::AotRestored,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope::observed(95, 75, 20, 10),
+        );
+        assert_eq!(row.verdict, MemoryEnvelopeVerdict::Matching);
+        assert!(row.preserves_claim);
+        assert!(row.missing_fields.is_empty());
+        assert!(row.regression_fields.is_empty());
+        assert_eq!(row.total_delta_bytes, Some(-10));
+    }
+
+    #[test]
+    fn memory_envelope_row_regressed_evidence_blocks_publication() {
+        let row = evaluate_memory_envelope_row(
+            "incident_full_capture",
+            StartupPathKind::ZygoteFork,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope::observed(101, 81, 20, 10),
+        );
+        assert_eq!(row.verdict, MemoryEnvelopeVerdict::Regressed);
+        assert!(!row.preserves_claim);
+        assert_eq!(
+            row.regression_fields,
+            vec!["rss_bytes".to_string(), "heap_bytes".to_string()]
+        );
+        assert!(row.missing_fields.is_empty());
+    }
+
+    #[test]
+    fn memory_envelope_row_missing_evidence_fails_closed() {
+        let row = evaluate_memory_envelope_row(
+            "exact_shadow",
+            StartupPathKind::PrewarmedPool,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope {
+                rss_bytes: Some(95),
+                heap_bytes: None,
+                metadata_bytes: Some(20),
+                cache_bytes: Some(10),
+            },
+        );
+        assert_eq!(row.verdict, MemoryEnvelopeVerdict::MissingEvidence);
+        assert!(!row.preserves_claim);
+        assert_eq!(
+            row.missing_fields,
+            vec!["warm_start_envelope.heap_bytes".to_string()]
+        );
+        assert!(row.regression_fields.is_empty());
+        assert_eq!(row.heap_delta_bytes, None);
+        assert_eq!(row.total_delta_bytes, None);
+    }
+
+    #[test]
+    fn memory_envelope_report_aggregates_to_worst_verdict() {
+        let matching = evaluate_memory_envelope_row(
+            "matching",
+            StartupPathKind::AotRestored,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope::observed(95, 75, 20, 10),
+        );
+        let regressed = evaluate_memory_envelope_row(
+            "regressed",
+            StartupPathKind::ZygoteFork,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope::observed(101, 80, 20, 10),
+        );
+        let missing = evaluate_memory_envelope_row(
+            "missing",
+            StartupPathKind::PrewarmedPool,
+            ColdStartMemoryEnvelope::observed(100, 80, 20, 10),
+            ColdStartMemoryEnvelope {
+                rss_bytes: None,
+                heap_bytes: Some(75),
+                metadata_bytes: Some(20),
+                cache_bytes: Some(10),
+            },
+        );
+
+        assert_eq!(
+            aggregate_memory_envelope_verdict(&[matching.clone()]),
+            MemoryEnvelopeVerdict::Matching
+        );
+        assert_eq!(
+            aggregate_memory_envelope_verdict(&[matching.clone(), regressed.clone()]),
+            MemoryEnvelopeVerdict::Regressed
+        );
+        assert_eq!(
+            aggregate_memory_envelope_verdict(&[matching, regressed, missing]),
+            MemoryEnvelopeVerdict::MissingEvidence
+        );
+    }
+
+    #[test]
+    fn memory_envelope_report_serde_roundtrip() {
+        let report = build_memory_envelope_report();
+        let json = serde_json::to_string(&report).expect("serde serialization should succeed");
+        let decoded: ColdStartMemoryEnvelopeReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(report, decoded);
+        assert_eq!(decoded.publication_verdict, MemoryEnvelopeVerdict::Matching);
+    }
+
+    // -----------------------------------------------------------------------
     // RuntimeImageManifestArtifact
     // -----------------------------------------------------------------------
 
@@ -1000,6 +1434,8 @@ mod tests {
             aot_bundle_report_path: "aot.json".to_string(),
             runtime_image_manifest_path: "manifest.json".to_string(),
             observability_delta_path: "delta.json".to_string(),
+            memory_envelope_report_path: "memory.json".to_string(),
+            memory_envelope_publication_verdict: MemoryEnvelopeVerdict::Matching,
             governance_verdict: GovernanceVerdict::Approved,
             aggregate_benchmark_verdict: BenchmarkVerdict::Faster,
             aggregate_speedup_millionths: 150_000,
@@ -1019,6 +1455,7 @@ mod tests {
         assert!(summary.contains("Cold-Start Compilation Lane Summary"));
         assert!(summary.contains(BEAD_ID));
         assert!(summary.contains("artifact1.json"));
+        assert!(summary.contains("matching"));
         assert!(summary.contains("verify cmd"));
     }
 

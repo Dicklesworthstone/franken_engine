@@ -36,6 +36,7 @@ must contain:
 
 - `cold_start_compilation_report.json`
 - `cold_start_observability_delta.json`
+- `cold_start_memory_envelope_report.json`
 - `aot_bundle_compilation_report.json`
 - `runtime_image_manifest.json`
 - `trace_ids.json`
@@ -49,6 +50,14 @@ must contain:
 The parent report is the summary artifact that downstream rollout and supremacy
 work can consume directly. The subordinate artifacts preserve enough detail for
 replay, differential triage, and operator forensics.
+
+`cold_start_memory_envelope_report.json` is the fail-closed cold-versus-warm
+memory checker for this lane. Each row must provide both
+`cold_start_envelope` and `warm_start_envelope` with `rss_bytes`,
+`heap_bytes`, `metadata_bytes`, and `cache_bytes`. Publication remains
+`matching` only when every required field is present and every warm-start field
+is less than or equal to its cold-start counterpart; missing fields publish as
+`missing_evidence`, and larger warm-start values publish as `regressed`.
 
 Current `runtime_image_manifest.json` output is explicitly
 `PROVISIONAL_SYNTHETIC`: it contains deterministic demo image records whose
@@ -87,6 +96,9 @@ jq '.aggregate_benchmark_verdict,.aggregate_speedup_millionths' \
 
 jq '.rows[] | {mode_id,preserves_claim,speedup_millionths}' \
   artifacts/.../cold_start_observability_delta.json
+
+jq '.publication_verdict,.rows[] | {mode_id,verdict,missing_fields,regression_fields,total_delta_bytes}' \
+  artifacts/.../cold_start_memory_envelope_report.json
 
 jq '.best_warm_start_image_id,.best_warm_start_mode' \
   artifacts/.../runtime_image_manifest.json

@@ -26,7 +26,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::dark_matter_saturation_gate::{BoardState, DarkMatterRegion, SaturationConfig};
 use crate::hash_tiers::ContentHash;
-use crate::novelty_scoring_contract::{CandidateKind, NoveltyCandidate, ScoringConfig};
+use crate::novelty_scoring_contract::{
+    CandidateKind, CompositeVerdict, NoveltyCandidate, NoveltyDimension, NoveltyVerdict,
+    ScoringConfig, score_batch,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -106,6 +109,33 @@ impl Default for DarkMatterEngineConfig {
 // Discovery cycle result
 // ---------------------------------------------------------------------------
 
+/// Per-candidate novelty receipt captured during a discovery cycle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveryCandidateReceipt {
+    /// Candidate identifier covered by this receipt.
+    pub candidate_id: String,
+    /// Threshold-facing novelty verdict from the scoring contract.
+    pub novelty_verdict: NoveltyVerdict,
+    /// Legacy composite verdict used by downstream publication surfaces.
+    pub composite_verdict: CompositeVerdict,
+    /// Total novelty score used for promotion gating.
+    pub total_score_millionths: u64,
+    /// Legacy composite novelty score used for ranking.
+    pub composite_millionths: u64,
+    /// Rank within the scored batch (0-based).
+    pub rank: u32,
+    /// Whether the candidate was promoted by this cycle.
+    pub promoted: bool,
+    /// Per-dimension novelty evidence from the scoring contract.
+    pub dimension_scores: Vec<(NoveltyDimension, u64)>,
+    /// Hash of the scoring configuration bound into the certificate.
+    pub config_hash: ContentHash,
+    /// Hash of the scoring certificate.
+    pub certificate_hash: ContentHash,
+    /// Hash of the legacy composite score entry.
+    pub composite_score_hash: ContentHash,
+}
+
 /// Result of a single discovery cycle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscoveryCycleResult {
@@ -121,6 +151,9 @@ pub struct DiscoveryCycleResult {
     pub max_novelty_millionths: u64,
     /// Average novelty score (millionths).
     pub avg_novelty_millionths: u64,
+    /// Per-candidate scoring receipts for auditing promotion decisions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_receipts: Vec<DiscoveryCandidateReceipt>,
     /// Number of dark-matter regions identified.
     pub dark_matter_regions: usize,
     /// Content hash.
@@ -208,31 +241,59 @@ impl DarkMatterEngineOrchestrator {
         if candidates.is_empty() {
             return Err(DarkMatterEngineError::NoCandidates);
         }
+        if let Err(detail) = self.config.scoring_config.validate() {
+            return Err(DarkMatterEngineError::ConfigError {
+                detail: detail.to_string(),
+            });
+        }
 
         self.cycle_count += 1;
         let seq = self.cycle_count;
 
-        // Score each candidate using description_length_bits as a novelty proxy.
-        // Lower description length = more compressible = less novel.
-        // Higher description length = more complex = more novel.
+        // Score the batch through the shipped novelty scoring contract so
+        // promotion decisions are derived from the same evidence surface that
+        // powers the downstream RGC-707A publication lane.
+        let novelty_batch = score_batch(candidates, &self.config.scoring_config);
+        let composite_scores: BTreeMap<&str, _> = novelty_batch
+            .scores
+            .iter()
+            .map(|score| (score.candidate_fingerprint.as_str(), score))
+            .collect();
         let mut promoted = 0usize;
         let mut rejected = 0usize;
         let mut max_novelty: u64 = 0;
         let mut sum_novelty: u64 = 0;
+        let mut candidate_receipts = Vec::with_capacity(novelty_batch.certificates.len());
 
-        for candidate in candidates {
-            // Use description_length_bits as a proxy for novelty scoring.
-            let score = candidate.description_length_bits;
+        for certificate in &novelty_batch.certificates {
+            let score = certificate.score.total_score_millionths;
+            let composite_score = composite_scores
+                .get(certificate.candidate_id.as_str())
+                .expect("composite score must exist for each novelty certificate");
             sum_novelty = sum_novelty.saturating_add(score);
             max_novelty = max_novelty.max(score);
 
-            if score >= self.config.promotion_threshold_millionths
-                && promoted < self.config.max_promotions_per_cycle
-            {
+            let promoted_candidate = score >= self.config.promotion_threshold_millionths
+                && promoted < self.config.max_promotions_per_cycle;
+            if promoted_candidate {
                 promoted += 1;
             } else {
                 rejected += 1;
             }
+
+            candidate_receipts.push(DiscoveryCandidateReceipt {
+                candidate_id: certificate.candidate_id.clone(),
+                novelty_verdict: certificate.verdict,
+                composite_verdict: composite_score.verdict,
+                total_score_millionths: score,
+                composite_millionths: composite_score.composite_millionths,
+                rank: certificate.score.rank,
+                promoted: promoted_candidate,
+                dimension_scores: certificate.score.dimension_scores.clone(),
+                config_hash: certificate.config_hash,
+                certificate_hash: certificate.certificate_hash,
+                composite_score_hash: composite_score.content_hash,
+            });
         }
 
         let avg_novelty = if candidates.is_empty() {
@@ -267,7 +328,26 @@ impl DarkMatterEngineOrchestrator {
             buf.extend_from_slice(DARK_MATTER_ENGINE_SCHEMA_VERSION.as_bytes());
             buf.extend_from_slice(&seq.to_le_bytes());
             buf.extend_from_slice(&max_novelty.to_le_bytes());
+            buf.extend_from_slice(&avg_novelty.to_le_bytes());
             buf.extend_from_slice(&(promoted as u64).to_le_bytes());
+            buf.extend_from_slice(&(rejected as u64).to_le_bytes());
+            buf.extend_from_slice(novelty_batch.content_hash.as_bytes());
+            for receipt in &candidate_receipts {
+                buf.extend_from_slice(receipt.candidate_id.as_bytes());
+                buf.extend_from_slice(receipt.novelty_verdict.as_str().as_bytes());
+                buf.extend_from_slice(receipt.composite_verdict.as_str().as_bytes());
+                buf.extend_from_slice(&receipt.total_score_millionths.to_le_bytes());
+                buf.extend_from_slice(&receipt.composite_millionths.to_le_bytes());
+                buf.extend_from_slice(&u64::from(receipt.rank).to_le_bytes());
+                buf.push(u8::from(receipt.promoted));
+                for (dimension, score) in &receipt.dimension_scores {
+                    buf.extend_from_slice(dimension.as_str().as_bytes());
+                    buf.extend_from_slice(&score.to_le_bytes());
+                }
+                buf.extend_from_slice(receipt.config_hash.as_bytes());
+                buf.extend_from_slice(receipt.certificate_hash.as_bytes());
+                buf.extend_from_slice(receipt.composite_score_hash.as_bytes());
+            }
             ContentHash::compute(&buf)
         };
 
@@ -278,6 +358,7 @@ impl DarkMatterEngineOrchestrator {
             candidates_rejected: rejected,
             max_novelty_millionths: max_novelty,
             avg_novelty_millionths: avg_novelty,
+            candidate_receipts,
             dark_matter_regions: self.regions.len(),
             content_hash,
             epoch: self.epoch,
@@ -428,14 +509,23 @@ pub struct DarkMatterEvidenceInventory {
 // Evidence helpers
 // ---------------------------------------------------------------------------
 
-fn make_candidate(id: &str, kind: CandidateKind, description_length: u64) -> NoveltyCandidate {
+fn make_candidate_with_features(
+    id: &str,
+    kind: CandidateKind,
+    description_length: u64,
+    feature_vector: Vec<u64>,
+) -> NoveltyCandidate {
     NoveltyCandidate {
         candidate_id: id.to_string(),
         kind,
         description_length_bits: description_length,
-        feature_vector: vec![description_length; 4],
+        feature_vector,
         source_hash: ContentHash::compute(id.as_bytes()),
     }
+}
+
+fn make_candidate(id: &str, kind: CandidateKind, description_length: u64) -> NoveltyCandidate {
+    make_candidate_with_features(id, kind, description_length, vec![description_length; 4])
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +762,80 @@ mod tests {
         SecurityEpoch::from_raw(1)
     }
 
+    fn expected_cycle_metrics(
+        config: &DarkMatterEngineConfig,
+        candidates: &[NoveltyCandidate],
+    ) -> (usize, usize, u64, u64) {
+        let batch = score_batch(candidates, &config.scoring_config);
+        let mut promoted = 0usize;
+        let mut rejected = 0usize;
+        let mut max_novelty = 0u64;
+        let mut sum_novelty = 0u64;
+
+        for certificate in &batch.certificates {
+            let score = certificate.score.total_score_millionths;
+            sum_novelty = sum_novelty.saturating_add(score);
+            max_novelty = max_novelty.max(score);
+            if score >= config.promotion_threshold_millionths
+                && promoted < config.max_promotions_per_cycle
+            {
+                promoted += 1;
+            } else {
+                rejected += 1;
+            }
+        }
+
+        let avg_novelty = if candidates.is_empty() {
+            0
+        } else {
+            sum_novelty / candidates.len() as u64
+        };
+
+        (promoted, rejected, max_novelty, avg_novelty)
+    }
+
+    fn expected_candidate_receipts(
+        config: &DarkMatterEngineConfig,
+        candidates: &[NoveltyCandidate],
+    ) -> Vec<DiscoveryCandidateReceipt> {
+        let batch = score_batch(candidates, &config.scoring_config);
+        let composite_scores: BTreeMap<&str, _> = batch
+            .scores
+            .iter()
+            .map(|score| (score.candidate_fingerprint.as_str(), score))
+            .collect();
+        let mut promoted = 0usize;
+        let mut receipts = Vec::with_capacity(batch.certificates.len());
+
+        for certificate in &batch.certificates {
+            let promoted_candidate = certificate.score.total_score_millionths
+                >= config.promotion_threshold_millionths
+                && promoted < config.max_promotions_per_cycle;
+            if promoted_candidate {
+                promoted += 1;
+            }
+
+            let composite_score = composite_scores
+                .get(certificate.candidate_id.as_str())
+                .expect("composite score must exist for each novelty certificate");
+            receipts.push(DiscoveryCandidateReceipt {
+                candidate_id: certificate.candidate_id.clone(),
+                novelty_verdict: certificate.verdict,
+                composite_verdict: composite_score.verdict,
+                total_score_millionths: certificate.score.total_score_millionths,
+                composite_millionths: composite_score.composite_millionths,
+                rank: certificate.score.rank,
+                promoted: promoted_candidate,
+                dimension_scores: certificate.score.dimension_scores.clone(),
+                config_hash: certificate.config_hash,
+                certificate_hash: certificate.certificate_hash,
+                composite_score_hash: composite_score.content_hash,
+            });
+        }
+
+        receipts
+    }
+
     #[test]
     fn test_construction() {
         let engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
@@ -718,8 +882,9 @@ mod tests {
         let result = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(result.candidates_promoted, 1);
-        assert_eq!(result.candidates_rejected, 0);
+        let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        assert_eq!(result.candidates_promoted, promoted);
+        assert_eq!(result.candidates_rejected, rejected);
     }
 
     #[test]
@@ -730,8 +895,9 @@ mod tests {
         let result = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(result.candidates_promoted, 0);
-        assert_eq!(result.candidates_rejected, 1);
+        let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        assert_eq!(result.candidates_promoted, promoted);
+        assert_eq!(result.candidates_rejected, rejected);
     }
 
     #[test]
@@ -745,7 +911,8 @@ mod tests {
         let result = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(result.max_novelty_millionths, 700_000);
+        let (_, _, max_novelty, _) = expected_cycle_metrics(&engine.config, &candidates);
+        assert_eq!(result.max_novelty_millionths, max_novelty);
     }
 
     #[test]
@@ -914,8 +1081,80 @@ mod tests {
         let result = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(result.candidates_promoted, 2);
-        assert_eq!(result.candidates_rejected, 2);
+        let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        assert_eq!(result.candidates_promoted, promoted);
+        assert_eq!(result.candidates_rejected, rejected);
+    }
+
+    #[test]
+    fn test_discovery_candidate_receipts_match_scoring_contract() {
+        let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+        let candidates = vec![
+            make_candidate("alpha", CandidateKind::Program, 750_000),
+            make_candidate("beta", CandidateKind::Package, 320_000),
+            make_candidate("gamma", CandidateKind::ReactComponent, 610_000),
+        ];
+
+        let result = engine
+            .discover(&candidates)
+            .expect("serde deserialization should succeed");
+        let expected = expected_candidate_receipts(&engine.config, &candidates);
+
+        assert_eq!(result.candidate_receipts, expected);
+    }
+
+    #[test]
+    fn test_content_hash_covers_candidate_receipt_evidence() {
+        let config = DarkMatterEngineConfig {
+            scoring_config: ScoringConfig {
+                dimension_weights: vec![
+                    crate::novelty_scoring_contract::DimensionWeight::new(
+                        NoveltyDimension::Obstruction,
+                        500_000,
+                    ),
+                    crate::novelty_scoring_contract::DimensionWeight::new(
+                        NoveltyDimension::TopologicalDistance,
+                        500_000,
+                    ),
+                ],
+                mdl_baseline_bits: 10_000,
+                information_gain_threshold_millionths: 50_000,
+                frontier_proximity_decay_millionths: 100_000,
+                min_novelty_threshold_millionths: 200_000,
+            },
+            promotion_threshold_millionths: 300_000,
+            ..DarkMatterEngineConfig::default()
+        };
+
+        let candidate_obstruction = make_candidate_with_features(
+            "shape",
+            CandidateKind::Program,
+            10_000,
+            vec![0, 0, 800_000, 0, 0, 0, 0, 0],
+        );
+        let candidate_topology = make_candidate_with_features(
+            "shape",
+            CandidateKind::Program,
+            10_000,
+            vec![0, 0, 0, 800_000, 0, 0, 0, 0],
+        );
+
+        let mut first_engine = DarkMatterEngineOrchestrator::new(test_epoch(), config.clone());
+        let mut second_engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+
+        let first = first_engine
+            .discover(&[candidate_obstruction])
+            .expect("serde deserialization should succeed");
+        let second = second_engine
+            .discover(&[candidate_topology])
+            .expect("serde deserialization should succeed");
+
+        assert_eq!(first.candidates_promoted, second.candidates_promoted);
+        assert_eq!(first.candidates_rejected, second.candidates_rejected);
+        assert_eq!(first.max_novelty_millionths, second.max_novelty_millionths);
+        assert_eq!(first.avg_novelty_millionths, second.avg_novelty_millionths);
+        assert_ne!(first.candidate_receipts, second.candidate_receipts);
+        assert_ne!(first.content_hash, second.content_hash);
     }
 
     #[test]
@@ -930,7 +1169,8 @@ mod tests {
         let result = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(result.avg_novelty_millionths, 400_000);
+        let (_, _, _, avg_novelty) = expected_cycle_metrics(&engine.config, &candidates);
+        assert_eq!(result.avg_novelty_millionths, avg_novelty);
     }
 
     #[test]
@@ -970,7 +1210,16 @@ mod tests {
         let _ = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(*engine.board_state(), BoardState::Saturated);
+        let (promoted, _, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        let promotion_rate = (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64;
+        let expected = if promotion_rate > 700_000 {
+            BoardState::Saturated
+        } else if promotion_rate > 300_000 {
+            BoardState::ScopeLimited
+        } else {
+            BoardState::Stale
+        };
+        assert_eq!(*engine.board_state(), expected);
     }
 
     #[test]
@@ -985,15 +1234,29 @@ mod tests {
         let _ = engine
             .discover(&candidates)
             .expect("serde deserialization should succeed");
-        assert_eq!(*engine.board_state(), BoardState::Stale);
+        let (promoted, _, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        let promotion_rate = (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64;
+        let expected = if promotion_rate > 700_000 {
+            BoardState::Saturated
+        } else if promotion_rate > 300_000 {
+            BoardState::ScopeLimited
+        } else {
+            BoardState::Stale
+        };
+        assert_eq!(*engine.board_state(), expected);
     }
 
     #[test]
     fn test_coverage_millionths() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
-        let _ = engine.discover(&[make_candidate("h", CandidateKind::Program, 900_000)]);
+        let candidates = vec![make_candidate("h", CandidateKind::Program, 900_000)];
+        let _ = engine
+            .discover(&candidates)
+            .expect("semantic dark matter discovery should succeed");
         let summary = engine.summary();
-        assert_eq!(summary.dark_matter_coverage_millionths, MILLION);
+        let (promoted, _, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+        let expected_coverage = (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64;
+        assert_eq!(summary.dark_matter_coverage_millionths, expected_coverage);
     }
 
     #[test]
@@ -1096,7 +1359,11 @@ mod tests {
             .discover(&[make_candidate("solo", CandidateKind::Program, 800_000)])
             .expect("serde deserialization should succeed");
         assert_eq!(result.candidates_evaluated, 1);
-        assert_eq!(result.max_novelty_millionths, 800_000);
+        let (_, _, max_novelty, _) = expected_cycle_metrics(
+            &engine.config,
+            &[make_candidate("solo", CandidateKind::Program, 800_000)],
+        );
+        assert_eq!(result.max_novelty_millionths, max_novelty);
     }
 
     #[test]

@@ -2,7 +2,9 @@
 
 use frankenengine_engine::dark_matter_saturation_gate::{DarkMatterRegion, DarkMatterRegionKind};
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::novelty_scoring_contract::{CandidateKind, NoveltyCandidate};
+use frankenengine_engine::novelty_scoring_contract::{
+    CandidateKind, DimensionWeight, NoveltyCandidate, NoveltyDimension, ScoringConfig, score_batch,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::semantic_dark_matter_engine::{
     DarkMatterEngineConfig, DarkMatterEngineError, DarkMatterEngineOrchestrator,
@@ -23,6 +25,53 @@ fn candidate(id: &str, kind: CandidateKind, desc_len: u64) -> NoveltyCandidate {
         feature_vector: vec![desc_len; 4],
         source_hash: ContentHash::compute(id.as_bytes()),
     }
+}
+
+fn candidate_with_features(
+    id: &str,
+    kind: CandidateKind,
+    desc_len: u64,
+    feature_vector: Vec<u64>,
+) -> NoveltyCandidate {
+    NoveltyCandidate {
+        candidate_id: id.to_string(),
+        kind,
+        description_length_bits: desc_len,
+        feature_vector,
+        source_hash: ContentHash::compute(id.as_bytes()),
+    }
+}
+
+fn expected_cycle_metrics(
+    config: &DarkMatterEngineConfig,
+    candidates: &[NoveltyCandidate],
+) -> (usize, usize, u64, u64) {
+    let batch = score_batch(candidates, &config.scoring_config);
+    let mut promoted = 0usize;
+    let mut rejected = 0usize;
+    let mut max_novelty = 0u64;
+    let mut sum_novelty = 0u64;
+
+    for certificate in &batch.certificates {
+        let score = certificate.score.total_score_millionths;
+        sum_novelty = sum_novelty.saturating_add(score);
+        max_novelty = max_novelty.max(score);
+        if score >= config.promotion_threshold_millionths
+            && promoted < config.max_promotions_per_cycle
+        {
+            promoted += 1;
+        } else {
+            rejected += 1;
+        }
+    }
+
+    let avg_novelty = if candidates.is_empty() {
+        0
+    } else {
+        sum_novelty / candidates.len() as u64
+    };
+
+    (promoted, rejected, max_novelty, avg_novelty)
 }
 
 // --- Construction ---
@@ -76,8 +125,10 @@ fn test_discover_mixed_candidates() {
         candidate("mid", CandidateKind::ReactComponent, 500_000),
     ];
     let result = engine.discover(&candidates).unwrap();
+    let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
     assert_eq!(result.candidates_evaluated, 3);
-    assert_eq!(result.candidates_promoted + result.candidates_rejected, 3);
+    assert_eq!(result.candidates_promoted, promoted);
+    assert_eq!(result.candidates_rejected, rejected);
 }
 
 #[test]
@@ -88,8 +139,9 @@ fn test_discover_all_promoted() {
         candidate("h2", CandidateKind::Package, 800_000),
     ];
     let result = engine.discover(&candidates).unwrap();
-    assert_eq!(result.candidates_promoted, 2);
-    assert_eq!(result.candidates_rejected, 0);
+    let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+    assert_eq!(result.candidates_promoted, promoted);
+    assert_eq!(result.candidates_rejected, rejected);
 }
 
 #[test]
@@ -100,8 +152,9 @@ fn test_discover_all_rejected() {
         candidate("l2", CandidateKind::Program, 200_000),
     ];
     let result = engine.discover(&candidates).unwrap();
-    assert_eq!(result.candidates_promoted, 0);
-    assert_eq!(result.candidates_rejected, 2);
+    let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+    assert_eq!(result.candidates_promoted, promoted);
+    assert_eq!(result.candidates_rejected, rejected);
 }
 
 #[test]
@@ -113,7 +166,8 @@ fn test_max_novelty() {
         candidate("c", CandidateKind::Program, 500_000),
     ];
     let result = engine.discover(&candidates).unwrap();
-    assert_eq!(result.max_novelty_millionths, 700_000);
+    let (_, _, max_novelty, _) = expected_cycle_metrics(&engine.config, &candidates);
+    assert_eq!(result.max_novelty_millionths, max_novelty);
 }
 
 #[test]
@@ -125,7 +179,8 @@ fn test_avg_novelty() {
         candidate("c", CandidateKind::Program, 900_000),
     ];
     let result = engine.discover(&candidates).unwrap();
-    assert_eq!(result.avg_novelty_millionths, 600_000);
+    let (_, _, _, avg_novelty) = expected_cycle_metrics(&engine.config, &candidates);
+    assert_eq!(result.avg_novelty_millionths, avg_novelty);
 }
 
 // --- Multiple cycles ---
@@ -168,11 +223,14 @@ fn test_summary_initial() {
 #[test]
 fn test_summary_after_discover() {
     let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
-    let _ = engine.discover(&[candidate("x", CandidateKind::Program, 800_000)]);
+    let candidates = [candidate("x", CandidateKind::Program, 800_000)];
+    let _ = engine.discover(&candidates);
     let s = engine.summary();
+    let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
     assert_eq!(s.total_cycles, 1);
     assert_eq!(s.total_candidates, 1);
-    assert_eq!(s.total_promoted, 1);
+    assert_eq!(s.total_promoted, promoted as u64);
+    assert_eq!(s.total_rejected, rejected as u64);
 }
 
 #[test]
@@ -339,6 +397,55 @@ fn test_promotion_cap() {
         candidate("h4", CandidateKind::Program, 600_000),
     ];
     let result = engine.discover(&candidates).unwrap();
-    assert_eq!(result.candidates_promoted, 2);
-    assert_eq!(result.candidates_rejected, 2);
+    let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
+    assert_eq!(result.candidates_promoted, promoted);
+    assert_eq!(result.candidates_rejected, rejected);
+}
+
+#[test]
+fn test_discover_uses_contract_scoring_not_description_length_proxy() {
+    let config = DarkMatterEngineConfig {
+        scoring_config: ScoringConfig {
+            dimension_weights: vec![DimensionWeight::new(NoveltyDimension::Obstruction, MILLION)],
+            mdl_baseline_bits: 10_000,
+            information_gain_threshold_millionths: 50_000,
+            frontier_proximity_decay_millionths: 100_000,
+            min_novelty_threshold_millionths: 200_000,
+        },
+        promotion_threshold_millionths: 500_000,
+        ..DarkMatterEngineConfig::default()
+    };
+    let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+    let candidates = vec![
+        candidate_with_features(
+            "proxy_favored_by_length",
+            CandidateKind::Program,
+            900_000,
+            vec![0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        candidate_with_features(
+            "contract_favored_by_obstruction",
+            CandidateKind::Program,
+            100_000,
+            vec![0, 0, 900_000, 0, 0, 0, 0, 0],
+        ),
+    ];
+
+    let result = engine.discover(&candidates).unwrap();
+    let receipts = result
+        .candidate_receipts
+        .iter()
+        .map(|receipt| (receipt.candidate_id.as_str(), receipt.promoted))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_eq!(
+        receipts.get("proxy_favored_by_length"),
+        Some(&false),
+        "description length alone should no longer drive promotion decisions"
+    );
+    assert_eq!(
+        receipts.get("contract_favored_by_obstruction"),
+        Some(&true),
+        "real novelty scoring evidence should control promotion"
+    );
 }

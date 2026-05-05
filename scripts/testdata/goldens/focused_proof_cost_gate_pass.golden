@@ -1,0 +1,59 @@
+=== DIAGNOSTICS ===
+{
+  "schema_version": "franken-engine.focused-proof-cost-gate-report.v1",
+  "diagnostics_id": "focused-proof-cost-gate-257ee08162281948",
+  "status": "pass",
+  "focused_suite": "focused_proof_cost_gate_smoke",
+  "bead_id": "bd-ctebo",
+  "manifest_path": "[SMOKE_ROOT]/runner-pass/stable/proof_cost_manifest.json",
+  "budget_path": "[SMOKE_ROOT]/budget-pass.json",
+  "manifest_sha256": "77ec4a0c85b29e4336b2fd8f997c375dfb0010be69da57a70d7413a5220b2dd0",
+  "budget_sha256": "86b8645f255597fc0962263dedbd2eddd5bb4903a3ce807cfd75f41f6745e510",
+  "budget": {
+    "schema_version": "franken-engine.focused-proof-cost-budget.v1",
+    "suite": "focused_proof_cost_gate_smoke",
+    "max_total_compiled_targets": 2,
+    "max_total_linked_targets": 1,
+    "max_unexpected_targets": 0,
+    "max_targets_by_kind": {
+      "test": 1,
+      "lib": 1
+    },
+    "upstream_beads": [
+      "bd-fn2zh",
+      "bd-fk5cb"
+    ],
+    "gated_bead": "bd-ctebo"
+  },
+  "observed": {
+    "total_compiled_targets": 2,
+    "total_linked_targets": 1,
+    "target_counts": {
+      "lib": 1,
+      "test": 1
+    },
+    "unexpected_targets": []
+  },
+  "breaches": [],
+  "remediation": [
+    "Inspect proof_cost_manifest.operator_log before changing budgets.",
+    "If a new target is legitimate, add it to the focused runner expected target set and update this budget in the same review.",
+    "If the target is unrelated, narrow the cargo command, split the proof suite, or remove the dependency that pulled it in.",
+    "Rerun scripts/focused_proof_runner.sh and then this gate before publishing the proof."
+  ],
+  "artifact_paths": {
+    "diagnostics_json": "[SMOKE_ROOT]/gate-pass/diagnostics.json",
+    "events_jsonl": "[SMOKE_ROOT]/gate-pass/events.jsonl",
+    "report_md": "[SMOKE_ROOT]/gate-pass/report.md"
+  }
+}
+=== REPORT ===
+# Focused Proof Cost Gate
+
+- Status: `pass`
+- Manifest: `[SMOKE_ROOT]/runner-pass/stable/proof_cost_manifest.json`
+- Budget: `[SMOKE_ROOT]/budget-pass.json`
+- Diagnostics: `[SMOKE_ROOT]/gate-pass/diagnostics.json`
+- Breaches: `0`
+
+The proof-cost receipt is within the configured budget.

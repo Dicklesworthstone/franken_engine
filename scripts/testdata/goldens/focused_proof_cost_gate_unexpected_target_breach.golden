@@ -1,0 +1,76 @@
+=== DIAGNOSTICS ===
+{
+  "schema_version": "franken-engine.focused-proof-cost-gate-report.v1",
+  "diagnostics_id": "focused-proof-cost-gate-123797c7d8ad6083",
+  "status": "fail",
+  "focused_suite": "focused_proof_cost_gate_smoke",
+  "bead_id": "bd-ctebo",
+  "manifest_path": "[SMOKE_ROOT]/runner-broad/broad/proof_cost_manifest.json",
+  "budget_path": "[SMOKE_ROOT]/budget-unexpected.json",
+  "manifest_sha256": "e35dd48cfe5a75dea8edc859b0ef490da57868467f5aa47dce2674b22b601bcb",
+  "budget_sha256": "240cfd35202096b718ae1fc80940fde34f7a2bad7111a7aba95e83bfe60bb7e3",
+  "budget": {
+    "schema_version": "franken-engine.focused-proof-cost-budget.v1",
+    "suite": "focused_proof_cost_gate_smoke",
+    "max_total_compiled_targets": 2,
+    "max_total_linked_targets": 2,
+    "max_unexpected_targets": 0,
+    "max_targets_by_kind": {
+      "test": 2,
+      "lib": 0
+    },
+    "upstream_beads": [
+      "bd-fn2zh",
+      "bd-fk5cb"
+    ],
+    "gated_bead": "bd-ctebo"
+  },
+  "observed": {
+    "total_compiled_targets": 2,
+    "total_linked_targets": 2,
+    "target_counts": {
+      "test": 2
+    },
+    "unexpected_targets": [
+      "frankenengine-engine:test:unexpected_broad_target"
+    ]
+  },
+  "breaches": [
+    {
+      "kind": "unexpected_target_breach",
+      "actual": 1,
+      "budget": 0,
+      "remediation": "Treat every unexpected target as suspect; either add it to the focused runner expected set with evidence or remove the hidden dependency."
+    }
+  ],
+  "remediation": [
+    "Inspect proof_cost_manifest.operator_log before changing budgets.",
+    "If a new target is legitimate, add it to the focused runner expected target set and update this budget in the same review.",
+    "If the target is unrelated, narrow the cargo command, split the proof suite, or remove the dependency that pulled it in.",
+    "Rerun scripts/focused_proof_runner.sh and then this gate before publishing the proof."
+  ],
+  "artifact_paths": {
+    "diagnostics_json": "[SMOKE_ROOT]/gate-unexpected-fail/diagnostics.json",
+    "events_jsonl": "[SMOKE_ROOT]/gate-unexpected-fail/events.jsonl",
+    "report_md": "[SMOKE_ROOT]/gate-unexpected-fail/report.md"
+  }
+}
+=== REPORT ===
+# Focused Proof Cost Gate
+
+- Status: `fail`
+- Manifest: `[SMOKE_ROOT]/runner-broad/broad/proof_cost_manifest.json`
+- Budget: `[SMOKE_ROOT]/budget-unexpected.json`
+- Diagnostics: `[SMOKE_ROOT]/gate-unexpected-fail/diagnostics.json`
+- Breaches: `1`
+
+The proof-cost receipt breached the configured budget.
+
+- `unexpected_target_breach`: actual=`1` budget=`0`; Treat every unexpected target as suspect; either add it to the focused runner expected set with evidence or remove the hidden dependency.
+
+## Remediation
+
+- Inspect proof_cost_manifest.operator_log before changing budgets.
+- If a new target is legitimate, add it to the focused runner expected target set and update this budget in the same review.
+- If the target is unrelated, narrow the cargo command, split the proof suite, or remove the dependency that pulled it in.
+- Rerun scripts/focused_proof_runner.sh and then this gate before publishing the proof.

@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+  "decision_id": "swarm-resource-governor-ba3ba91c7c942a3b",
+  "bead_id": "bd-zmuv5",
+  "decision": "fail_closed",
+  "evidence_ready": false,
+  "override_note": null,
+  "thresholds": {
+    "max_active_compile_count": 2,
+    "min_disk_available_bytes": 1073741824,
+    "min_memory_available_bytes": 1073741824
+  },
+  "signals": {
+    "active_compile_count": 1,
+    "disk_available_bytes": 2147483648,
+    "target_dir": "/tmp/rch_target_franken_engine_swarm_resource_governor",
+    "target_dir_writable": false,
+    "memory_available_bytes": 2147483648,
+    "rch_present": true,
+    "rch_status": "ok",
+    "rch_local_fallback": false,
+    "command_exit_code": 0,
+    "command_failure_kind": "none",
+    "ownership_state": "none",
+    "dirty_state": "clean"
+  },
+  "findings": [
+    {
+      "decision": "fail_closed",
+      "signal": "target_dir_writable",
+      "reason": "non_writable_target_dir",
+      "remediation": "Pick or create a writable off-repo target directory before running validation."
+    }
+  ],
+  "remediation": [
+    "Pick or create a writable off-repo target directory before running validation."
+  ]
+}

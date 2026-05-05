@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+  "decision_id": "swarm-resource-governor-0a72e3023dc2b23e",
+  "bead_id": "bd-zmuv5",
+  "decision": "fail_closed",
+  "evidence_ready": false,
+  "override_note": null,
+  "thresholds": {
+    "max_active_compile_count": 2,
+    "min_disk_available_bytes": 1073741824,
+    "min_memory_available_bytes": 1073741824
+  },
+  "signals": {
+    "active_compile_count": 1,
+    "disk_available_bytes": 2147483648,
+    "target_dir": "/tmp/rch_target_franken_engine_swarm_resource_governor",
+    "target_dir_writable": true,
+    "memory_available_bytes": 2147483648,
+    "rch_present": true,
+    "rch_status": "ok",
+    "rch_local_fallback": true,
+    "command_exit_code": 0,
+    "command_failure_kind": "none",
+    "ownership_state": "none",
+    "dirty_state": "clean"
+  },
+  "findings": [
+    {
+      "decision": "fail_closed",
+      "signal": "rch_local_fallback",
+      "reason": "local_fallback_detected",
+      "remediation": "Reject fallback-to-local markers and rerun only when rch reports a remote execution path."
+    }
+  ],
+  "remediation": [
+    "Reject fallback-to-local markers and rerun only when rch reports a remote execution path."
+  ]
+}

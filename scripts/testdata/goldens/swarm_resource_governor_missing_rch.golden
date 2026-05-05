@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+  "decision_id": "swarm-resource-governor-fa2aa8852415992b",
+  "bead_id": "bd-zmuv5",
+  "decision": "fail_closed",
+  "evidence_ready": false,
+  "override_note": null,
+  "thresholds": {
+    "max_active_compile_count": 2,
+    "min_disk_available_bytes": 1073741824,
+    "min_memory_available_bytes": 1073741824
+  },
+  "signals": {
+    "active_compile_count": 1,
+    "disk_available_bytes": 2147483648,
+    "target_dir": "/tmp/rch_target_franken_engine_swarm_resource_governor",
+    "target_dir_writable": true,
+    "memory_available_bytes": 2147483648,
+    "rch_present": false,
+    "rch_status": "missing",
+    "rch_local_fallback": false,
+    "command_exit_code": 0,
+    "command_failure_kind": "none",
+    "ownership_state": "none",
+    "dirty_state": "clean"
+  },
+  "findings": [
+    {
+      "decision": "fail_closed",
+      "signal": "rch_present",
+      "reason": "missing_rch",
+      "remediation": "Install or repair rch before admitting heavy validation."
+    },
+    {
+      "decision": "fail_closed",
+      "signal": "rch_status",
+      "reason": "missing_rch_status",
+      "remediation": "Capture rch status evidence before admitting validation work."
+    }
+  ],
+  "remediation": [
+    "Capture rch status evidence before admitting validation work.",
+    "Install or repair rch before admitting heavy validation."
+  ]
+}

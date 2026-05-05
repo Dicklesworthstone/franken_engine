@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+  "decision_id": "swarm-resource-governor-b4527eb6f895e77d",
+  "bead_id": "bd-zmuv5",
+  "decision": "admit_narrow",
+  "evidence_ready": true,
+  "override_note": "operator confirms script-only validation; no heavy cargo",
+  "thresholds": {
+    "max_active_compile_count": 2,
+    "min_disk_available_bytes": 1073741824,
+    "min_memory_available_bytes": 1073741824
+  },
+  "signals": {
+    "active_compile_count": 5,
+    "disk_available_bytes": 2147483648,
+    "target_dir": "/tmp/rch_target_franken_engine_swarm_resource_governor",
+    "target_dir_writable": true,
+    "memory_available_bytes": 2147483648,
+    "rch_present": true,
+    "rch_status": "ok",
+    "rch_local_fallback": false,
+    "command_exit_code": 0,
+    "command_failure_kind": "none",
+    "ownership_state": "none",
+    "dirty_state": "clean"
+  },
+  "findings": [
+    {
+      "decision": "admit_narrow",
+      "signal": "active_compile_count",
+      "reason": "operator_override_high_compile_count",
+      "remediation": "Proceed only with narrow/script-only validation and preserve the override note in evidence."
+    }
+  ],
+  "remediation": [
+    "Proceed only with narrow/script-only validation and preserve the override note in evidence."
+  ]
+}

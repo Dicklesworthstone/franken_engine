@@ -30,6 +30,7 @@ use crate::bounded_feedback_controller::{
     FeedbackCoordinator, FeedbackEvidenceManifest, FeedbackPolicy, LatencyObservation,
     LatencyTarget, PolicyValidationError,
 };
+use crate::hash_tiers::ContentHash;
 use crate::queueing_admission_control::{
     AdmissionControlManifest, AdmissionControlPolicy, AdmissionController, AdmissionPriority,
     AdmissionReceipt, SizingInput, WorkerPoolSizing, compute_worker_pool_sizing,
@@ -52,6 +53,11 @@ pub const TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION: &str =
 pub const TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.tail-latency-control-plane.events.v1";
 pub const TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE: &str = "latency_control_plane_report.json";
+pub const ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION: &str =
+    "franken-engine.admission-publication-bundle.v1";
+pub const ADMISSION_PUBLICATION_BUNDLE_COMPONENT: &str = "admission_control_publication_bundle";
+pub const ADMISSION_PUBLICATION_BUNDLE_FILE: &str = "admission_publication_bundle.json";
+const MAX_PUBLICATION_RECEIPTS: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -157,6 +163,47 @@ pub struct RuntimeGuardrailStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionPublicationReceiptSummary {
+    pub receipt_id: String,
+    pub sequence: u64,
+    pub priority: AdmissionPriority,
+    pub stage: ExecutionStage,
+    pub decision: crate::queueing_admission_control::AdmissionDecision,
+    pub queue_depth_snapshot: u64,
+    pub utilization_snapshot_millionths: u64,
+    pub content_hash: ContentHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionPublicationControlDecisionSummary {
+    pub actuator: ActuatorKind,
+    pub action: String,
+    pub observed_ns: u64,
+    pub target_ns: u64,
+    pub emergency: bool,
+    pub epoch_count: u64,
+    pub decision_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionPublicationBundle {
+    pub schema_version: String,
+    pub component: String,
+    pub profile: StressProfile,
+    pub bundle_epoch: u64,
+    pub policy_hash: ContentHash,
+    pub recommended_workers: Option<u64>,
+    pub estimated_p99_wait_ns: Option<u64>,
+    pub utilization_snapshot_millionths: u64,
+    pub queue_depth_snapshot: u64,
+    pub partition_count: u64,
+    pub total_receipt_count: u64,
+    pub recent_receipt_summaries: Vec<AdmissionPublicationReceiptSummary>,
+    pub latest_control_decision: Option<AdmissionPublicationControlDecisionSummary>,
+    pub content_hash: ContentHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TailLatencyControlPlaneReport {
     pub schema_version: String,
     pub bead_id: String,
@@ -167,6 +214,7 @@ pub struct TailLatencyControlPlaneReport {
     pub envelope_bundle: EnvelopeBundle,
     pub violation_reports: Vec<ViolationReport>,
     pub stage_calibrations: Vec<StageQueueCalibration>,
+    pub admission_publication_bundle: AdmissionPublicationBundle,
     pub admission_manifest: AdmissionControlManifest,
     pub admission_receipts: Vec<AdmissionReceipt>,
     pub feedback_manifest: FeedbackEvidenceManifest,
@@ -180,6 +228,7 @@ pub struct TailLatencyControlPlaneReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TailLatencyControlPlaneArtifactPaths {
     pub latency_control_plane_report: String,
+    pub admission_publication_bundle: String,
     pub trace_ids: String,
     pub run_manifest: String,
     pub events_jsonl: String,
@@ -237,6 +286,7 @@ pub struct TailLatencyControlPlaneEvent {
 pub struct TailLatencyControlPlaneArtifacts {
     pub out_dir: PathBuf,
     pub report_path: PathBuf,
+    pub admission_publication_bundle_path: PathBuf,
     pub trace_ids_path: PathBuf,
     pub run_manifest_path: PathBuf,
     pub events_path: PathBuf,
@@ -420,6 +470,13 @@ pub fn build_tail_latency_control_plane_report(
 
     let feedback_health = coordinator.health_summary();
     let feedback_manifest = FeedbackEvidenceManifest::from_coordinator(&coordinator);
+    let admission_publication_bundle = build_admission_publication_bundle(
+        scenario.profile,
+        epoch,
+        &admission_manifest,
+        &admission_receipts,
+        controller_decisions.last(),
+    );
 
     Ok(TailLatencyControlPlaneReport {
         schema_version: TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION.to_string(),
@@ -431,6 +488,7 @@ pub fn build_tail_latency_control_plane_report(
         envelope_bundle,
         violation_reports,
         stage_calibrations,
+        admission_publication_bundle,
         admission_manifest,
         admission_receipts,
         feedback_manifest,
@@ -456,6 +514,7 @@ pub fn write_tail_latency_control_plane_bundle(
 
     let report = build_tail_latency_control_plane_report(profile, epoch)?;
     let report_path = out_dir.join(TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE);
+    let admission_publication_bundle_path = out_dir.join(ADMISSION_PUBLICATION_BUNDLE_FILE);
     let trace_ids_path = out_dir.join("trace_ids.json");
     let run_manifest_path = out_dir.join("run_manifest.json");
     let events_path = out_dir.join("events.jsonl");
@@ -498,6 +557,7 @@ pub fn write_tail_latency_control_plane_bundle(
         shed_count: report.admission_manifest.summary.total_shed,
         artifact_paths: TailLatencyControlPlaneArtifactPaths {
             latency_control_plane_report: TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.to_string(),
+            admission_publication_bundle: ADMISSION_PUBLICATION_BUNDLE_FILE.to_string(),
             trace_ids: "trace_ids.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
@@ -509,6 +569,10 @@ pub fn write_tail_latency_control_plane_bundle(
         },
     };
     let run_manifest_bytes = canonical_json_bytes(&run_manifest, &run_manifest_path)?;
+    let admission_publication_bundle_bytes = canonical_json_bytes(
+        &report.admission_publication_bundle,
+        &admission_publication_bundle_path,
+    )?;
 
     let events = build_control_plane_events(&report, &trace_id, &decision_id);
     let mut events_jsonl = String::new();
@@ -560,6 +624,10 @@ pub fn write_tail_latency_control_plane_bundle(
     let _bundle_lock = acquire_bundle_write_lock(&out_dir)?;
     remove_commit_marker(&run_manifest_path)?;
     write_atomic(&report_path, &report_bytes)?;
+    write_atomic(
+        &admission_publication_bundle_path,
+        &admission_publication_bundle_bytes,
+    )?;
     write_atomic(&trace_ids_path, &trace_ids_bytes)?;
     write_atomic(&events_path, events_jsonl.as_bytes())?;
     write_atomic(&commands_path, commands_buf.as_bytes())?;
@@ -576,6 +644,7 @@ pub fn write_tail_latency_control_plane_bundle(
     Ok(TailLatencyControlPlaneArtifacts {
         out_dir,
         report_path,
+        admission_publication_bundle_path,
         trace_ids_path,
         run_manifest_path,
         events_path,
@@ -1262,7 +1331,7 @@ fn render_control_plane_summary(
         ),
         String::new(),
         "## Replay".to_string(),
-        "- inspect run_manifest.json, events.jsonl, commands.txt, and latency_control_plane_report.json".to_string(),
+        "- inspect run_manifest.json, events.jsonl, commands.txt, latency_control_plane_report.json, and admission_publication_bundle.json".to_string(),
     ]
     .join("\n")
 }
@@ -1302,6 +1371,110 @@ fn render_step_log(
     }
 
     lines.join("\n")
+}
+
+fn build_admission_publication_bundle(
+    profile: StressProfile,
+    epoch: u64,
+    admission_manifest: &AdmissionControlManifest,
+    admission_receipts: &[AdmissionReceipt],
+    latest_control_decision: Option<&ControllerDecision>,
+) -> AdmissionPublicationBundle {
+    let mut recent_receipt_summaries = admission_receipts
+        .iter()
+        .rev()
+        .take(MAX_PUBLICATION_RECEIPTS)
+        .map(|receipt| AdmissionPublicationReceiptSummary {
+            receipt_id: receipt.receipt_id.clone(),
+            sequence: receipt.sequence,
+            priority: receipt.priority,
+            stage: receipt.stage,
+            decision: receipt.decision.clone(),
+            queue_depth_snapshot: receipt.queue_depth_snapshot,
+            utilization_snapshot_millionths: receipt.utilization_snapshot_millionths,
+            content_hash: receipt.content_hash,
+        })
+        .collect::<Vec<_>>();
+    recent_receipt_summaries.reverse();
+
+    let latest_control_decision =
+        latest_control_decision.map(|decision| AdmissionPublicationControlDecisionSummary {
+            actuator: decision.actuator,
+            action: format!("{}", decision.action),
+            observed_ns: decision.observed_ns,
+            target_ns: decision.target_ns,
+            emergency: decision.emergency,
+            epoch_count: decision.epoch_count,
+            decision_hash: decision.decision_hash.clone(),
+        });
+
+    let policy_hash = admission_manifest.policy.policy_hash();
+    let recommended_workers = admission_manifest
+        .sizing
+        .as_ref()
+        .map(|sizing| sizing.recommended_workers);
+    let estimated_p99_wait_ns = admission_manifest
+        .sizing
+        .as_ref()
+        .map(|sizing| sizing.estimated_p99_wait_ns);
+    let partition_count = u64::try_from(admission_manifest.partitions.len()).unwrap_or(u64::MAX);
+    let total_receipt_count = u64::try_from(admission_receipts.len()).unwrap_or(u64::MAX);
+
+    let content_hash = {
+        #[derive(Serialize)]
+        struct PublicationHashEnvelope<'a> {
+            schema_version: &'a str,
+            component: &'a str,
+            profile: StressProfile,
+            bundle_epoch: u64,
+            policy_hash: ContentHash,
+            recommended_workers: Option<u64>,
+            estimated_p99_wait_ns: Option<u64>,
+            utilization_snapshot_millionths: u64,
+            queue_depth_snapshot: u64,
+            partition_count: u64,
+            total_receipt_count: u64,
+            recent_receipt_summaries: &'a [AdmissionPublicationReceiptSummary],
+            latest_control_decision: Option<&'a AdmissionPublicationControlDecisionSummary>,
+        }
+
+        let bytes = serde_json::to_vec(&PublicationHashEnvelope {
+            schema_version: ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION,
+            component: ADMISSION_PUBLICATION_BUNDLE_COMPONENT,
+            profile,
+            bundle_epoch: epoch,
+            policy_hash,
+            recommended_workers,
+            estimated_p99_wait_ns,
+            utilization_snapshot_millionths: admission_manifest
+                .summary
+                .current_utilization_millionths,
+            queue_depth_snapshot: admission_manifest.summary.current_queue_depth,
+            partition_count,
+            total_receipt_count,
+            recent_receipt_summaries: &recent_receipt_summaries,
+            latest_control_decision: latest_control_decision.as_ref(),
+        })
+        .expect("admission publication bundle hash envelope serializes");
+        ContentHash::compute(&bytes)
+    };
+
+    AdmissionPublicationBundle {
+        schema_version: ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION.to_string(),
+        component: ADMISSION_PUBLICATION_BUNDLE_COMPONENT.to_string(),
+        profile,
+        bundle_epoch: epoch,
+        policy_hash,
+        recommended_workers,
+        estimated_p99_wait_ns,
+        utilization_snapshot_millionths: admission_manifest.summary.current_utilization_millionths,
+        queue_depth_snapshot: admission_manifest.summary.current_queue_depth,
+        partition_count,
+        total_receipt_count,
+        recent_receipt_summaries,
+        latest_control_decision,
+        content_hash,
+    }
 }
 
 fn map_policy_validation_error(error: PolicyValidationError) -> TailLatencyControlPlaneWriteError {
@@ -1485,6 +1658,9 @@ mod tests {
         assert!(!TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION.is_empty());
         assert!(!TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.is_empty());
         assert!(!TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.is_empty());
+        assert!(!ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION.is_empty());
+        assert!(!ADMISSION_PUBLICATION_BUNDLE_COMPONENT.is_empty());
+        assert!(!ADMISSION_PUBLICATION_BUNDLE_FILE.is_empty());
     }
 
     #[test]
@@ -1494,12 +1670,14 @@ mod tests {
         assert!(TAIL_LATENCY_CONTROL_PLANE_TRACE_IDS_SCHEMA_VERSION.contains(".v1"));
         assert!(TAIL_LATENCY_CONTROL_PLANE_RUN_MANIFEST_SCHEMA_VERSION.contains(".v1"));
         assert!(TAIL_LATENCY_CONTROL_PLANE_EVENT_SCHEMA_VERSION.contains(".v1"));
+        assert!(ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION.contains(".v1"));
     }
 
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn report_file_constant_ends_with_json() {
         assert!(TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.ends_with(".json"));
+        assert!(ADMISSION_PUBLICATION_BUNDLE_FILE.ends_with(".json"));
     }
 
     // --- StressProfile Display / as_str / FromStr ---
@@ -1699,6 +1877,7 @@ mod tests {
     fn serde_roundtrip_artifact_paths() {
         let paths = TailLatencyControlPlaneArtifactPaths {
             latency_control_plane_report: "report.json".to_string(),
+            admission_publication_bundle: "admission_publication_bundle.json".to_string(),
             trace_ids: "trace_ids.json".to_string(),
             run_manifest: "run_manifest.json".to_string(),
             events_jsonl: "events.jsonl".to_string(),
@@ -1712,6 +1891,46 @@ mod tests {
         let deserialized: TailLatencyControlPlaneArtifactPaths =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, paths);
+    }
+
+    #[test]
+    fn write_bundle_emits_admission_publication_bundle_artifact() {
+        let out_dir = tempfile::tempdir().expect("tempdir should be created");
+        let artifacts = write_tail_latency_control_plane_bundle(
+            out_dir.path(),
+            StressProfile::SyntheticContention,
+            10,
+            &["rch exec -- cargo test".to_string()],
+        )
+        .expect("bundle write should succeed");
+
+        assert!(artifacts.admission_publication_bundle_path.exists());
+        let bundle_json = fs::read_to_string(&artifacts.admission_publication_bundle_path)
+            .expect("bundle artifact should be readable");
+        let bundle: AdmissionPublicationBundle =
+            serde_json::from_str(&bundle_json).expect("bundle artifact should deserialize");
+        assert_eq!(
+            bundle.schema_version,
+            ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION
+        );
+        assert!(
+            bundle
+                .recent_receipt_summaries
+                .iter()
+                .any(|summary| matches!(
+                    summary.decision,
+                    crate::queueing_admission_control::AdmissionDecision::Shed { .. }
+                ))
+        );
+
+        let run_manifest_json = fs::read_to_string(&artifacts.run_manifest_path)
+            .expect("run manifest should be readable");
+        let run_manifest: TailLatencyControlPlaneRunManifest =
+            serde_json::from_str(&run_manifest_json).expect("run manifest should deserialize");
+        assert_eq!(
+            run_manifest.artifact_paths.admission_publication_bundle,
+            ADMISSION_PUBLICATION_BUNDLE_FILE
+        );
     }
 
     #[test]
@@ -1849,6 +2068,51 @@ mod tests {
         assert!(!report.controller_decisions.is_empty());
     }
 
+    #[test]
+    fn balanced_report_has_admission_publication_bundle() {
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
+            .expect("serde deserialization should succeed");
+        let bundle = &report.admission_publication_bundle;
+
+        assert_eq!(
+            bundle.schema_version,
+            ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION
+        );
+        assert_eq!(bundle.component, ADMISSION_PUBLICATION_BUNDLE_COMPONENT);
+        assert_eq!(bundle.profile, report.profile);
+        assert_eq!(bundle.bundle_epoch, report.bundle_epoch);
+        assert_eq!(
+            bundle.policy_hash,
+            report.admission_manifest.policy.policy_hash()
+        );
+        assert_eq!(
+            bundle.recommended_workers,
+            report
+                .admission_manifest
+                .sizing
+                .as_ref()
+                .map(|sizing| sizing.recommended_workers)
+        );
+        assert_eq!(
+            bundle.utilization_snapshot_millionths,
+            report
+                .admission_manifest
+                .summary
+                .current_utilization_millionths
+        );
+        assert_eq!(
+            bundle.queue_depth_snapshot,
+            report.admission_manifest.summary.current_queue_depth
+        );
+        assert_eq!(
+            bundle.total_receipt_count,
+            u64::try_from(report.admission_receipts.len()).unwrap_or(u64::MAX)
+        );
+        assert!(bundle.latest_control_decision.is_some());
+        assert!(!bundle.recent_receipt_summaries.is_empty());
+        assert!(!bundle.content_hash.to_hex().is_empty());
+    }
+
     // --- Report structure: synthetic contention ---
 
     #[test]
@@ -1870,6 +2134,53 @@ mod tests {
             report.guardrails.shed_count > 0
                 || report.admission_manifest.summary.total_shed > 0
                 || report.guardrails.fallback_activated
+        );
+    }
+
+    #[test]
+    fn synthetic_contention_publication_bundle_captures_queue_and_shed_mix() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
+                .expect("serde deserialization should succeed");
+        let bundle = &report.admission_publication_bundle;
+
+        assert_eq!(
+            bundle.total_receipt_count,
+            u64::try_from(report.admission_receipts.len()).unwrap_or(u64::MAX)
+        );
+        assert_eq!(
+            bundle.recent_receipt_summaries.len(),
+            report.admission_receipts.len()
+        );
+        assert!(
+            bundle
+                .recent_receipt_summaries
+                .iter()
+                .any(|summary| matches!(
+                    summary.decision,
+                    crate::queueing_admission_control::AdmissionDecision::Queue { .. }
+                ))
+        );
+        assert!(
+            bundle
+                .recent_receipt_summaries
+                .iter()
+                .any(|summary| matches!(
+                    summary.decision,
+                    crate::queueing_admission_control::AdmissionDecision::Shed { .. }
+                ))
+        );
+        assert!(
+            bundle
+                .recent_receipt_summaries
+                .iter()
+                .any(|summary| summary.priority == AdmissionPriority::High)
+        );
+        assert!(
+            bundle
+                .recent_receipt_summaries
+                .iter()
+                .any(|summary| summary.priority == AdmissionPriority::BestEffort)
         );
     }
 
@@ -1966,6 +2277,10 @@ mod tests {
         assert_eq!(deserialized.guardrails.state, report.guardrails.state);
         assert_eq!(deserialized.decomposition, report.decomposition);
         assert_eq!(deserialized.end_to_end_bounds, report.end_to_end_bounds);
+        assert_eq!(
+            deserialized.admission_publication_bundle,
+            report.admission_publication_bundle
+        );
     }
 
     // --- StageQueueCalibration serde roundtrip ---
@@ -2017,6 +2332,31 @@ mod tests {
         let json_b =
             serde_json::to_string(&report_b).expect("serde deserialization should succeed");
         assert_eq!(json_a, json_b);
+    }
+
+    #[test]
+    fn admission_publication_bundle_receipts_stay_in_sequence_order() {
+        let report =
+            build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
+                .expect("serde deserialization should succeed");
+        let summaries = &report.admission_publication_bundle.recent_receipt_summaries;
+        assert!(
+            summaries
+                .windows(2)
+                .all(|window| window[0].sequence < window[1].sequence)
+        );
+    }
+
+    #[test]
+    fn admission_publication_bundle_hash_is_deterministic() {
+        let report_a = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
+            .expect("serde deserialization should succeed");
+        let report_b = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            report_a.admission_publication_bundle.content_hash,
+            report_b.admission_publication_bundle.content_hash
+        );
     }
 
     // --- Clone / Debug impls ---

@@ -12,10 +12,16 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::monitor_scheduler::ScheduleEvidenceReport;
+use crate::runtime_comparison_gate::WorkloadDriftReport;
+use crate::scheduler_lane::{ExtensionFairnessLedger, ExtensionFairnessRow, LanePressureSnapshot};
+use crate::tail_latency_control_plane::AdmissionPublicationBundle;
+
 const COPILOT_COMPONENT: &str = "operator_safety_copilot";
 const MILLION: i64 = 1_000_000;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const SWARM_FLEET_HEALTH_FEED_SCHEMA_VERSION: &str = "franken-engine.swarm-fleet-health-feed.v1";
 
 /// Reversibility classification for an operator recommendation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +403,91 @@ pub struct FleetHealthOverview {
     pub attacker_roi_trend_millionths: Vec<i64>,
     pub recent_containment_actions: Vec<ContainmentActionOutcome>,
     pub extension_details: Vec<ExtensionTrustCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub swarm_dashboard_feed: Option<SwarmFleetHealthFeed>,
+}
+
+/// Deterministic dashboard feed for operators managing large agent swarms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmFleetHealthFeed {
+    pub schema_version: String,
+    pub rows: Vec<SwarmFleetHealthFeedRow>,
+}
+
+/// Derived deprivation level for one fairness/deprivation summary row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeprivationRiskLevel {
+    None,
+    Watch,
+    High,
+}
+
+/// Typed dashboard feed row emitted for one operator-facing evidence slice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "row_type", rename_all = "snake_case")]
+pub enum SwarmFleetHealthFeedRow {
+    LanePressure {
+        lane: String,
+        total_queue_depth: usize,
+        queue_depth: usize,
+        max_depth: usize,
+        is_at_capacity: bool,
+        oldest_wait_ticks: Option<u64>,
+        budget_throttle_count: u64,
+    },
+    VoiBudgetUsage {
+        scheduler_id: String,
+        interval: u64,
+        regime: String,
+        budget_total_millionths: i64,
+        budget_used_millionths: i64,
+        budget_remaining_millionths: i64,
+        probes_scheduled: usize,
+        probes_deferred: usize,
+    },
+    FairnessDeprivation {
+        extension_id: String,
+        attempted_count: u64,
+        admitted_count: u64,
+        queued_count: u64,
+        scheduled_count: u64,
+        throttled_count: u64,
+        shed_count: u64,
+        oldest_wait_ticks: Option<u64>,
+        deprivation_risk: DeprivationRiskLevel,
+    },
+    AdmissionRecommendation {
+        bundle_epoch: u64,
+        policy_hash: String,
+        recommended_workers: Option<u64>,
+        estimated_p99_wait_ns: Option<u64>,
+        utilization_snapshot_millionths: u64,
+        queue_depth_snapshot: u64,
+        total_receipt_count: u64,
+        latest_control_action: Option<String>,
+        latest_control_emergency: Option<bool>,
+    },
+    WorkloadDriftGateState {
+        outcome: String,
+        benchmark_case_count: u64,
+        live_workload_count: u64,
+        matched_live_workload_count: u64,
+        live_sample_count: u64,
+        blocker_count: usize,
+        blockers: Vec<String>,
+        allows_broad_performance_claim: bool,
+    },
+}
+
+/// Existing evidence artifacts that can be merged into a swarm dashboard feed.
+#[derive(Debug, Clone, Default)]
+pub struct SwarmFleetHealthEvidence<'a> {
+    pub lane_pressure_snapshot: Option<&'a LanePressureSnapshot>,
+    pub monitor_schedule_evidence: Option<&'a ScheduleEvidenceReport>,
+    pub extension_fairness_ledger: Option<&'a ExtensionFairnessLedger>,
+    pub admission_publication_bundle: Option<&'a AdmissionPublicationBundle>,
+    pub workload_drift_report: Option<&'a WorkloadDriftReport>,
 }
 
 /// Raw detection counts for policy effectiveness views.
@@ -831,6 +922,40 @@ pub fn build_fleet_health_overview(
     attacker_roi_trend_millionths: &[i64],
     recent_containment_actions: &[ContainmentActionOutcome],
 ) -> FleetHealthOverview {
+    build_base_fleet_health_overview(
+        extension_cards,
+        active_incidents,
+        attacker_roi_trend_millionths,
+        recent_containment_actions,
+    )
+}
+
+/// Build fleet-health aggregates and attach the swarm dashboard feed when the
+/// caller provides existing pressure, fairness, admission, VOI, and drift
+/// evidence.
+pub fn build_swarm_fleet_health_overview(
+    extension_cards: &[ExtensionTrustCard],
+    active_incidents: &[ActiveIncidentSummary],
+    attacker_roi_trend_millionths: &[i64],
+    recent_containment_actions: &[ContainmentActionOutcome],
+    evidence: SwarmFleetHealthEvidence<'_>,
+) -> FleetHealthOverview {
+    let mut overview = build_base_fleet_health_overview(
+        extension_cards,
+        active_incidents,
+        attacker_roi_trend_millionths,
+        recent_containment_actions,
+    );
+    overview.swarm_dashboard_feed = build_swarm_dashboard_feed(evidence);
+    overview
+}
+
+fn build_base_fleet_health_overview(
+    extension_cards: &[ExtensionTrustCard],
+    active_incidents: &[ActiveIncidentSummary],
+    attacker_roi_trend_millionths: &[i64],
+    recent_containment_actions: &[ContainmentActionOutcome],
+) -> FleetHealthOverview {
     let mut high = 0u32;
     let mut guarded = 0u32;
     let mut watch = 0u32;
@@ -903,6 +1028,111 @@ pub fn build_fleet_health_overview(
         attacker_roi_trend_millionths: attacker_roi_trend_millionths.to_vec(),
         recent_containment_actions: containment,
         extension_details,
+        swarm_dashboard_feed: None,
+    }
+}
+
+fn build_swarm_dashboard_feed(
+    evidence: SwarmFleetHealthEvidence<'_>,
+) -> Option<SwarmFleetHealthFeed> {
+    let mut rows = Vec::new();
+
+    if let Some(snapshot) = evidence.lane_pressure_snapshot {
+        rows.extend(
+            snapshot
+                .lanes
+                .iter()
+                .map(|lane| SwarmFleetHealthFeedRow::LanePressure {
+                    lane: lane.lane.clone(),
+                    total_queue_depth: snapshot.total_queue_depth,
+                    queue_depth: lane.queue_depth,
+                    max_depth: lane.max_depth,
+                    is_at_capacity: lane.is_at_capacity,
+                    oldest_wait_ticks: lane.oldest_wait_ticks,
+                    budget_throttle_count: snapshot.budget_throttle_count,
+                }),
+        );
+    }
+
+    if let Some(report) = evidence.monitor_schedule_evidence {
+        rows.push(SwarmFleetHealthFeedRow::VoiBudgetUsage {
+            scheduler_id: report.scheduler_id.clone(),
+            interval: report.interval,
+            regime: report.regime.clone(),
+            budget_total_millionths: report.budget_total,
+            budget_used_millionths: report.budget_used,
+            budget_remaining_millionths: report.budget_total.saturating_sub(report.budget_used),
+            probes_scheduled: report.probes_scheduled,
+            probes_deferred: report.probes_deferred,
+        });
+    }
+
+    if let Some(ledger) = evidence.extension_fairness_ledger {
+        rows.extend(ledger.extensions.iter().map(|row| {
+            SwarmFleetHealthFeedRow::FairnessDeprivation {
+                extension_id: row.extension_id.clone(),
+                attempted_count: row.attempted_count,
+                admitted_count: row.admitted_count,
+                queued_count: row.queued_count,
+                scheduled_count: row.scheduled_count,
+                throttled_count: row.throttled_count,
+                shed_count: row.shed_count,
+                oldest_wait_ticks: row.oldest_wait_ticks,
+                deprivation_risk: deprivation_risk_for_row(row),
+            }
+        }));
+    }
+
+    if let Some(bundle) = evidence.admission_publication_bundle {
+        rows.push(SwarmFleetHealthFeedRow::AdmissionRecommendation {
+            bundle_epoch: bundle.bundle_epoch,
+            policy_hash: bundle.policy_hash.to_string(),
+            recommended_workers: bundle.recommended_workers,
+            estimated_p99_wait_ns: bundle.estimated_p99_wait_ns,
+            utilization_snapshot_millionths: bundle.utilization_snapshot_millionths,
+            queue_depth_snapshot: bundle.queue_depth_snapshot,
+            total_receipt_count: bundle.total_receipt_count,
+            latest_control_action: bundle
+                .latest_control_decision
+                .as_ref()
+                .map(|decision| decision.action.clone()),
+            latest_control_emergency: bundle
+                .latest_control_decision
+                .as_ref()
+                .map(|decision| decision.emergency),
+        });
+    }
+
+    if let Some(report) = evidence.workload_drift_report {
+        rows.push(SwarmFleetHealthFeedRow::WorkloadDriftGateState {
+            outcome: report.outcome.to_string(),
+            benchmark_case_count: report.benchmark_case_count,
+            live_workload_count: report.live_workload_count,
+            matched_live_workload_count: report.matched_live_workload_count,
+            live_sample_count: report.live_sample_count,
+            blocker_count: report.blockers.len(),
+            blockers: report.blockers.iter().map(ToString::to_string).collect(),
+            allows_broad_performance_claim: report.outcome.is_pass(),
+        });
+    }
+
+    if rows.is_empty() {
+        None
+    } else {
+        Some(SwarmFleetHealthFeed {
+            schema_version: SWARM_FLEET_HEALTH_FEED_SCHEMA_VERSION.to_string(),
+            rows,
+        })
+    }
+}
+
+fn deprivation_risk_for_row(row: &ExtensionFairnessRow) -> DeprivationRiskLevel {
+    if row.shed_count > 0 {
+        DeprivationRiskLevel::High
+    } else if row.queued_count > row.scheduled_count || row.throttled_count > 0 {
+        DeprivationRiskLevel::Watch
+    } else {
+        DeprivationRiskLevel::None
     }
 }
 
@@ -1334,6 +1564,24 @@ fn format_millionths(value: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    use crate::bounded_feedback_controller::ActuatorKind;
+    use crate::hash_tiers::ContentHash;
+    use crate::monitor_scheduler::{
+        MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION, ScheduleDecisionEvidence, ScheduleEvidenceReport,
+    };
+    use crate::runtime_comparison_gate::{
+        GateOutcome, WORKLOAD_DRIFT_SCHEMA_VERSION, WorkloadDriftBlocker, WorkloadDriftReport,
+    };
+    use crate::scheduler_lane::{
+        ExtensionFairnessLedger, ExtensionFairnessRow, LANE_PRESSURE_SNAPSHOT_SCHEMA_VERSION,
+        LanePressureLaneSnapshot, LanePressureSnapshot,
+    };
+    use crate::tail_latency_control_plane::{
+        ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION, AdmissionPublicationBundle,
+        AdmissionPublicationControlDecisionSummary, StressProfile,
+    };
 
     // ── Helper constructors ───────────────────────────────────────
     fn test_candidate(
@@ -1396,6 +1644,208 @@ mod tests {
                 error_code: None,
                 drilldown: TimelineDrilldownPointers::default(),
             }],
+        }
+    }
+
+    struct SwarmDashboardFixture {
+        extension_cards: Vec<ExtensionTrustCard>,
+        active_incidents: Vec<ActiveIncidentSummary>,
+        attacker_roi_trend_millionths: Vec<i64>,
+        recent_containment_actions: Vec<ContainmentActionOutcome>,
+        lane_pressure_snapshot: LanePressureSnapshot,
+        monitor_schedule_evidence: ScheduleEvidenceReport,
+        extension_fairness_ledger: ExtensionFairnessLedger,
+        admission_publication_bundle: AdmissionPublicationBundle,
+        workload_drift_report: WorkloadDriftReport,
+    }
+
+    impl SwarmDashboardFixture {
+        fn evidence(&self) -> SwarmFleetHealthEvidence<'_> {
+            SwarmFleetHealthEvidence {
+                lane_pressure_snapshot: Some(&self.lane_pressure_snapshot),
+                monitor_schedule_evidence: Some(&self.monitor_schedule_evidence),
+                extension_fairness_ledger: Some(&self.extension_fairness_ledger),
+                admission_publication_bundle: Some(&self.admission_publication_bundle),
+                workload_drift_report: Some(&self.workload_drift_report),
+            }
+        }
+    }
+
+    fn swarm_dashboard_fixture() -> SwarmDashboardFixture {
+        SwarmDashboardFixture {
+            extension_cards: vec![
+                ExtensionTrustCard {
+                    extension_id: "ext-a".to_string(),
+                    trust_level: ExtensionTrustLevel::Guarded,
+                    recent_evidence_atoms: 6,
+                    recent_decision_ids: vec!["decision-a".to_string()],
+                    current_recommendation: Some("throttle".to_string()),
+                },
+                ExtensionTrustCard {
+                    extension_id: "ext-z".to_string(),
+                    trust_level: ExtensionTrustLevel::Watch,
+                    recent_evidence_atoms: 3,
+                    recent_decision_ids: vec!["decision-z".to_string()],
+                    current_recommendation: Some("observe".to_string()),
+                },
+            ],
+            active_incidents: vec![ActiveIncidentSummary {
+                incident_id: "incident-1".to_string(),
+                extension_id: "ext-z".to_string(),
+                severity: IncidentSeverity::High,
+                started_at_ns: 42,
+                status: "active".to_string(),
+            }],
+            attacker_roi_trend_millionths: vec![300_000, 240_000],
+            recent_containment_actions: vec![ContainmentActionOutcome {
+                incident_id: "incident-1".to_string(),
+                action_type: "quarantine".to_string(),
+                outcome: "pass".to_string(),
+                latency_ms: 85,
+            }],
+            lane_pressure_snapshot: LanePressureSnapshot {
+                schema_version: LANE_PRESSURE_SNAPSHOT_SCHEMA_VERSION,
+                current_ticks: 99,
+                total_queue_depth: 3,
+                lanes: vec![
+                    LanePressureLaneSnapshot {
+                        lane: "cancel".to_string(),
+                        queue_depth: 2,
+                        max_depth: 4,
+                        is_at_capacity: false,
+                        oldest_submitted_tick: Some(90),
+                        newest_submitted_tick: Some(95),
+                        oldest_wait_ticks: Some(9),
+                        newest_wait_ticks: Some(4),
+                        tasks_submitted: 8,
+                        tasks_scheduled: 6,
+                        tasks_completed: 5,
+                        tasks_timed_out: 1,
+                        task_type_counts: BTreeMap::from([("quarantine".to_string(), 2usize)]),
+                        queued_tasks: vec![],
+                    },
+                    LanePressureLaneSnapshot {
+                        lane: "ready".to_string(),
+                        queue_depth: 1,
+                        max_depth: 1,
+                        is_at_capacity: true,
+                        oldest_submitted_tick: Some(92),
+                        newest_submitted_tick: Some(92),
+                        oldest_wait_ticks: Some(7),
+                        newest_wait_ticks: Some(7),
+                        tasks_submitted: 4,
+                        tasks_scheduled: 3,
+                        tasks_completed: 2,
+                        tasks_timed_out: 0,
+                        task_type_counts: BTreeMap::from([("run".to_string(), 1usize)]),
+                        queued_tasks: vec![],
+                    },
+                ],
+                timed_deadline_backlog: vec![],
+                event_counts: BTreeMap::from([("admitted".to_string(), 11u64)]),
+                budget_throttle_count: 1,
+            },
+            monitor_schedule_evidence: ScheduleEvidenceReport {
+                schema_version: MONITOR_SCHEDULER_EVIDENCE_SCHEMA_VERSION.to_string(),
+                scheduler_id: "monitor-main".to_string(),
+                interval: 17,
+                regime: "attack".to_string(),
+                budget_total: 1_000_000,
+                budget_used: 700_000,
+                probes_scheduled: 3,
+                probes_deferred: 1,
+                decisions: vec![
+                    ScheduleDecisionEvidence {
+                        probe_id: "probe-a".to_string(),
+                        kind: "health_check".to_string(),
+                        voi_score: 900_000,
+                        cost: 400_000,
+                        scheduled: true,
+                        skip_reason: None,
+                    },
+                    ScheduleDecisionEvidence {
+                        probe_id: "probe-b".to_string(),
+                        kind: "integrity_audit".to_string(),
+                        voi_score: 250_000,
+                        cost: 300_000,
+                        scheduled: false,
+                        skip_reason: Some("budget exhausted".to_string()),
+                    },
+                ],
+            },
+            extension_fairness_ledger: ExtensionFairnessLedger {
+                schema_version: 1,
+                current_ticks: 99,
+                report_id: "fairness-report-1".to_string(),
+                extensions: vec![
+                    ExtensionFairnessRow {
+                        extension_id: "ext-a".to_string(),
+                        attempted_count: 10,
+                        submitted_count: 8,
+                        admitted_count: 7,
+                        queued_count: 4,
+                        scheduled_count: 2,
+                        throttled_count: 1,
+                        shed_count: 0,
+                        oldest_wait_ticks: Some(11),
+                        per_lane_submitted: BTreeMap::from([("ready".to_string(), 8u64)]),
+                        per_lane_queued: BTreeMap::from([("ready".to_string(), 4u64)]),
+                        per_lane_scheduled: BTreeMap::from([("ready".to_string(), 2u64)]),
+                    },
+                    ExtensionFairnessRow {
+                        extension_id: "ext-z".to_string(),
+                        attempted_count: 5,
+                        submitted_count: 4,
+                        admitted_count: 3,
+                        queued_count: 0,
+                        scheduled_count: 3,
+                        throttled_count: 0,
+                        shed_count: 1,
+                        oldest_wait_ticks: None,
+                        per_lane_submitted: BTreeMap::from([("cancel".to_string(), 4u64)]),
+                        per_lane_queued: BTreeMap::new(),
+                        per_lane_scheduled: BTreeMap::from([("cancel".to_string(), 3u64)]),
+                    },
+                ],
+            },
+            admission_publication_bundle: AdmissionPublicationBundle {
+                schema_version: ADMISSION_PUBLICATION_BUNDLE_SCHEMA_VERSION.to_string(),
+                component: "admission_control_publication_bundle".to_string(),
+                profile: StressProfile::Balanced,
+                bundle_epoch: 22,
+                policy_hash: ContentHash::from_bytes([0x2a; 32]),
+                recommended_workers: Some(12),
+                estimated_p99_wait_ns: Some(55_000),
+                utilization_snapshot_millionths: 810_000,
+                queue_depth_snapshot: 14,
+                partition_count: 3,
+                total_receipt_count: 9,
+                recent_receipt_summaries: vec![],
+                latest_control_decision: Some(AdmissionPublicationControlDecisionSummary {
+                    actuator: ActuatorKind::WorkerConcurrency,
+                    action: "scale_up".to_string(),
+                    observed_ns: 40_000,
+                    target_ns: 20_000,
+                    emergency: true,
+                    epoch_count: 3,
+                    decision_hash: "decision-22".to_string(),
+                }),
+                content_hash: ContentHash::from_bytes([0x4b; 32]),
+            },
+            workload_drift_report: WorkloadDriftReport {
+                schema_version: WORKLOAD_DRIFT_SCHEMA_VERSION.to_string(),
+                outcome: GateOutcome::Fail,
+                blockers: vec![WorkloadDriftBlocker::UnrepresentedLiveCategory {
+                    category: "swarm-heavy".to_string(),
+                    live_sample_count: 12,
+                }],
+                benchmark_case_count: 6,
+                live_workload_count: 2,
+                matched_live_workload_count: 1,
+                live_sample_count: 18,
+                evaluated_at_epoch_seconds: 1234,
+                max_live_summary_age_seconds: 3600,
+            },
         }
     }
 
@@ -2169,6 +2619,7 @@ mod tests {
         assert_eq!(overview.active_incidents_count, 1);
         assert_eq!(overview.highest_severity, IncidentSeverity::High);
         assert_eq!(overview.extension_details.len(), 2);
+        assert!(overview.swarm_dashboard_feed.is_none());
     }
 
     #[test]
@@ -2176,6 +2627,7 @@ mod tests {
         let overview = build_fleet_health_overview(&[], &[], &[], &[]);
         assert_eq!(overview.active_incidents_count, 0);
         assert_eq!(overview.highest_severity, IncidentSeverity::Low);
+        assert!(overview.swarm_dashboard_feed.is_none());
     }
 
     #[test]
@@ -2199,6 +2651,160 @@ mod tests {
         let overview = build_fleet_health_overview(&cards, &[], &[], &[]);
         assert_eq!(overview.extension_details[0].extension_id, "a-ext");
         assert_eq!(overview.extension_details[1].extension_id, "z-ext");
+    }
+
+    #[test]
+    fn swarm_fleet_health_overview_attaches_required_dashboard_rows() {
+        let fixture = swarm_dashboard_fixture();
+        let overview = build_swarm_fleet_health_overview(
+            &fixture.extension_cards,
+            &fixture.active_incidents,
+            &fixture.attacker_roi_trend_millionths,
+            &fixture.recent_containment_actions,
+            fixture.evidence(),
+        );
+        let feed = overview
+            .swarm_dashboard_feed
+            .expect("swarm dashboard feed should be attached");
+
+        assert_eq!(feed.schema_version, SWARM_FLEET_HEALTH_FEED_SCHEMA_VERSION);
+        assert_eq!(feed.rows.len(), 7);
+
+        assert!(matches!(
+            &feed.rows[0],
+            SwarmFleetHealthFeedRow::LanePressure {
+                lane,
+                total_queue_depth,
+                queue_depth,
+                max_depth,
+                is_at_capacity,
+                oldest_wait_ticks,
+                budget_throttle_count,
+            } if lane == "cancel"
+                && *total_queue_depth == 3
+                && *queue_depth == 2
+                && *max_depth == 4
+                && !*is_at_capacity
+                && *oldest_wait_ticks == Some(9)
+                && *budget_throttle_count == 1
+        ));
+        assert!(matches!(
+            &feed.rows[1],
+            SwarmFleetHealthFeedRow::LanePressure {
+                lane,
+                queue_depth,
+                max_depth,
+                is_at_capacity,
+                ..
+            } if lane == "ready"
+                && *queue_depth == 1
+                && *max_depth == 1
+                && *is_at_capacity
+        ));
+        assert!(matches!(
+            &feed.rows[2],
+            SwarmFleetHealthFeedRow::VoiBudgetUsage {
+                scheduler_id,
+                budget_total_millionths,
+                budget_used_millionths,
+                budget_remaining_millionths,
+                probes_scheduled,
+                probes_deferred,
+                ..
+            } if scheduler_id == "monitor-main"
+                && *budget_total_millionths == 1_000_000
+                && *budget_used_millionths == 700_000
+                && *budget_remaining_millionths == 300_000
+                && *probes_scheduled == 3
+                && *probes_deferred == 1
+        ));
+        assert!(matches!(
+            &feed.rows[3],
+            SwarmFleetHealthFeedRow::FairnessDeprivation {
+                extension_id,
+                queued_count,
+                scheduled_count,
+                throttled_count,
+                deprivation_risk,
+                ..
+            } if extension_id == "ext-a"
+                && *queued_count == 4
+                && *scheduled_count == 2
+                && *throttled_count == 1
+                && *deprivation_risk == DeprivationRiskLevel::Watch
+        ));
+        assert!(matches!(
+            &feed.rows[4],
+            SwarmFleetHealthFeedRow::FairnessDeprivation {
+                extension_id,
+                shed_count,
+                deprivation_risk,
+                ..
+            } if extension_id == "ext-z"
+                && *shed_count == 1
+                && *deprivation_risk == DeprivationRiskLevel::High
+        ));
+        assert!(matches!(
+            &feed.rows[5],
+            SwarmFleetHealthFeedRow::AdmissionRecommendation {
+                bundle_epoch,
+                recommended_workers,
+                latest_control_action,
+                latest_control_emergency,
+                total_receipt_count,
+                ..
+            } if *bundle_epoch == 22
+                && *recommended_workers == Some(12)
+                && latest_control_action.as_deref() == Some("scale_up")
+                && *latest_control_emergency == Some(true)
+                && *total_receipt_count == 9
+        ));
+        assert!(matches!(
+            &feed.rows[6],
+            SwarmFleetHealthFeedRow::WorkloadDriftGateState {
+                outcome,
+                blocker_count,
+                allows_broad_performance_claim,
+                blockers,
+                ..
+            } if outcome == "FAIL"
+                && *blocker_count == 1
+                && !*allows_broad_performance_claim
+                && blockers[0].contains("swarm-heavy")
+        ));
+    }
+
+    #[test]
+    fn swarm_fleet_health_overview_fixture_export_is_stable() {
+        let export_json = || {
+            let fixture = swarm_dashboard_fixture();
+            serde_json::to_value(build_swarm_fleet_health_overview(
+                &fixture.extension_cards,
+                &fixture.active_incidents,
+                &fixture.attacker_roi_trend_millionths,
+                &fixture.recent_containment_actions,
+                fixture.evidence(),
+            ))
+            .expect("fixture export serializes")
+        };
+
+        let first = export_json();
+        let second = export_json();
+        assert_eq!(first, second);
+
+        let rows = first["swarm_dashboard_feed"]["rows"]
+            .as_array()
+            .expect("rows array");
+        assert_eq!(rows[0]["row_type"].as_str(), Some("lane_pressure"));
+        assert_eq!(rows[2]["row_type"].as_str(), Some("voi_budget_usage"));
+        assert_eq!(
+            rows[5]["row_type"].as_str(),
+            Some("admission_recommendation")
+        );
+        assert_eq!(
+            rows[6]["row_type"].as_str(),
+            Some("workload_drift_gate_state")
+        );
     }
 
     // ── build_policy_effectiveness_view ───────────────────────────
@@ -2794,6 +3400,7 @@ mod tests {
                 latency_ms: 45,
             }],
             extension_details: vec![],
+            swarm_dashboard_feed: None,
         };
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
         let back: FleetHealthOverview =

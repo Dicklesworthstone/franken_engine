@@ -2,6 +2,7 @@
 
 **Status:** Active
 **Bead:** bd-1npwf
+**Predictive orchestration follow-up:** bd-1y2bu
 **Policy ID:** policy-swarm-validation-control-plane-v1
 
 ## Scope
@@ -9,13 +10,22 @@
 This runbook is the fresh-operator workflow for the swarm validation control
 plane. It covers bead selection, file ownership, validation planning, resource
 admission, proof execution, artifact inspection, and status publication.
+The SWARM-CTRL-II extension adds predictive proof-cost, collision-risk,
+proof-freshness, and rch-incident evidence to that same workflow so operators
+can see why a run was admitted, narrowed, deferred, or failed closed.
 
 Implementation surfaces:
 
 - `docs/swarm_validation_control_plane_contract_v1.json`
+- `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`
+- `docs/swarm_predictive_dashboard_contract_v1.json`
 - `scripts/e2e/swarm_validation_control_plane_contract_smoke.sh`
 - `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh`
 - `scripts/e2e/swarm_validation_control_plane_e2e.sh`
+- `scripts/e2e/swarm_operator_status_report_smoke.sh`
+- `scripts/e2e/swarm_predictive_orchestration_e2e.sh`
+- `scripts/proof_freshness_decay_gate.sh`
+- `scripts/rch_incident_packet_gate.sh`
 - `scripts/swarm_validation_planner.sh`
 - `scripts/swarm_resource_governor.sh`
 - `scripts/swarm_operator_status_report.sh`
@@ -75,7 +85,23 @@ Reserved-file overlap is fail-closed. Missing Agent Mail snapshots or dirty
 overlap evidence must stay visibly degraded until the operator captures fresh
 reservation data or narrows the write set to a safe alternative.
 
-4. Run the resource governor before any heavy proof:
+4. For predictive orchestration work, keep the planner, freshness, incident,
+and status evidence connected by explicit artifact paths:
+
+```bash
+./scripts/e2e/swarm_predictive_orchestration_e2e.sh check
+./scripts/e2e/swarm_predictive_orchestration_e2e.sh selftest
+cat /tmp/franken-engine-swarm-predictive-orchestration/<run-id>/wrapper/report.json
+```
+
+The predictive drill is shell and JSON only. It must not execute Cargo. It
+proves that the validation planner can emit high-cost and collision-risk
+signals, that `scripts/proof_freshness_decay_gate.sh` rejects stale proof
+artifacts, that `scripts/rch_incident_packet_gate.sh` classifies remote proof
+failures, and that `scripts/swarm_operator_status_report.sh` publishes those
+signals in `franken-engine.swarm-predictive-dashboard.v1`.
+
+5. Run the resource governor before any heavy proof:
 
 ```bash
 ./scripts/swarm_resource_governor.sh --bead-id bd-zmuv5 --output-dir /tmp/franken-engine-swarm-resource-decision --active-compile-count 0 --disk-available-bytes 2147483648 --target-dir /tmp/rch_target_franken_engine_bd_zmuv5 --target-dir-writable true --memory-available-bytes 2147483648 --rch-present true --rch-status ok --rch-fallback-detected false --command-exit-code none --command-failure-kind none --ownership-state none --dirty-state clean
@@ -85,12 +111,15 @@ cat /tmp/franken-engine-swarm-resource-decision/decision.json
 If the decision is `defer` or `fail_closed`, do not start a heavy proof. Follow
 the remediation in the decision artifact and publish the blocker.
 
-5. Execute only admitted proof commands. Shell and docs gates can run directly:
+6. Execute only admitted proof commands. Shell and docs gates can run directly:
 
 ```bash
 ./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check
 ./scripts/e2e/swarm_validation_control_plane_e2e.sh check
+./scripts/e2e/proof_freshness_decay_gate_smoke.sh check
+./scripts/e2e/rch_incident_packet_gate_smoke.sh check
+./scripts/e2e/swarm_operator_status_report_smoke.sh check
 ```
 
 Heavy Rust proof commands must keep this shape:
@@ -99,7 +128,7 @@ Heavy Rust proof commands must keep this shape:
 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_swarm_validation PROOF_ARTIFACT_SOURCE_REVISION=smoke-rev cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture
 ```
 
-6. Inspect proof artifacts before reporting success:
+7. Inspect proof artifacts before reporting success:
 
 ```bash
 cat artifacts/swarm_validation_control_plane_e2e/<run-id>/wrapper/commands.txt
@@ -110,13 +139,24 @@ cat artifacts/swarm_validation_control_plane_e2e/<run-id>/wrapper/report.json
 If the newest artifact bundle is stale, incomplete, or from another source
 revision, mark the proof stale and refresh it before relying on it.
 
-7. Publish operator status from explicit snapshots:
+8. Publish operator status from explicit snapshots:
 
 ```bash
-./scripts/swarm_operator_status_report.sh --output-dir /tmp/franken-engine-swarm-operator-status --source-revision smoke-rev --agent-mail-status ok --rch-status ok --proof-index-status ok
+./scripts/swarm_operator_status_report.sh --output-dir /tmp/franken-engine-swarm-operator-status --source-revision smoke-rev --agent-mail-status ok --rch-status ok --proof-index-status ok --validation-plan-json /tmp/franken-engine-swarm-validation-plan/plan.json --collision-receipt-json /tmp/franken-engine-swarm-validation-plan/collision_receipt.json --proof-freshness-json /tmp/franken-engine-proof-freshness/proof_freshness_report.json --rch-incident-packet-json /tmp/franken-engine-rch-incident/incident_packet.json
 cat /tmp/franken-engine-swarm-operator-status/status.json
 cat /tmp/franken-engine-swarm-operator-status/report.md
 ```
+
+The predictive dashboard contract is a JSON feed contract only:
+
+- Schema: `franken-engine.swarm-predictive-dashboard.v1`
+- Contract: `docs/swarm_predictive_dashboard_contract_v1.json`
+- Human-readable contract: `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`
+
+FrankenEngine does not ship a local interactive dashboard for this feed. The
+future rich rendering implementation belongs in `/dp/frankentui`; until that
+implementation exists, treat the JSON and Markdown reports as the shipped
+operator surface.
 
 ## Failure Handling
 
@@ -138,8 +178,10 @@ the e2e wrapper changes:
 bash -n scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh selftest
+jq empty docs/swarm_predictive_dashboard_contract_v1.json
 ```
 
 The truth gate verifies that referenced docs and scripts exist, that the
-contract advertises the runbook surface, and that heavy Cargo examples remain
+contract advertises the runbook surface, that predictive dashboard fields are
+contract-only and `/dp/frankentui`-owned, and that heavy Cargo examples remain
 `rch exec -- env CARGO_TARGET_DIR=...` wrapped.

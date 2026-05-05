@@ -339,6 +339,56 @@ pub struct ExtensionFairnessRow {
     pub per_lane_scheduled: BTreeMap<String, u64>,
 }
 
+/// Schema version for cancel-lane latency reports.
+pub const CANCEL_LANE_LATENCY_REPORT_SCHEMA_VERSION: u32 = 1;
+
+/// Stable inclusive upper bounds for cancel-lane latency histogram buckets.
+pub const CANCEL_LANE_LATENCY_BUCKET_UPPER_BOUNDS_TICKS: &[u64] =
+    &[0, 1, 5, 10, 50, 100, 500, 1_000, 5_000, 10_000];
+
+/// Operator-visible cancel-lane latency evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelLaneLatencyReport {
+    /// Report schema version.
+    pub schema_version: u32,
+    /// Tick at which the report was generated.
+    pub current_ticks: u64,
+    /// Stable inclusive bucket upper bounds used by `buckets`.
+    pub bucket_upper_bounds_ticks: Vec<u64>,
+    /// Current cancel-lane queue depth.
+    pub cancel_queue_depth: usize,
+    /// Configured cancel-lane queue capacity.
+    pub cancel_max_depth: usize,
+    /// Whether the cancel lane is currently saturated.
+    pub cancel_lane_saturated: bool,
+    /// Scheduled cancel-lane forced-drain task count.
+    pub drain_count: u64,
+    /// Timed-lane tasks expired while scheduler pressure was being processed.
+    pub overdue_timeout_count: u64,
+    /// Scheduled cancel-lane tasks that have not completed through
+    /// `complete_task_at`.
+    pub inflight_count: usize,
+    /// Non-empty latency histogram buckets in deterministic phase/task/bucket order.
+    pub buckets: Vec<CancelLaneLatencyBucket>,
+}
+
+/// A populated cancel-lane latency histogram bucket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelLaneLatencyBucket {
+    /// Latency phase: `submit_to_schedule` or `schedule_to_complete`.
+    pub phase: String,
+    /// Cancel-lane task type.
+    pub task_type: String,
+    /// Inclusive lower bound for this bucket.
+    pub lower_bound_ticks: u64,
+    /// Inclusive upper bound for this bucket; `None` is the overflow bucket.
+    pub upper_bound_ticks: Option<u64>,
+    /// Number of observations in this bucket.
+    pub count: u64,
+    /// Maximum observed latency in this bucket.
+    pub max_latency_ticks: u64,
+}
+
 // ---------------------------------------------------------------------------
 // LaneConfig — configurable lane parameters
 // ---------------------------------------------------------------------------
@@ -474,6 +524,34 @@ struct ExtensionQueueObservation {
     per_lane_queued: BTreeMap<String, u64>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CancelLaneLatencyStats {
+    submit_to_schedule: BTreeMap<CancelLaneLatencyBucketKey, CancelLaneLatencyBucketStats>,
+    schedule_to_complete: BTreeMap<CancelLaneLatencyBucketKey, CancelLaneLatencyBucketStats>,
+    scheduled_tasks: BTreeMap<TaskId, CancelLaneScheduledTask>,
+    drain_count: u64,
+    overdue_timeout_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CancelLaneScheduledTask {
+    task_type: String,
+    scheduled_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CancelLaneLatencyBucketKey {
+    task_type: String,
+    lower_bound_ticks: u64,
+    upper_bound_ticks: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CancelLaneLatencyBucketStats {
+    count: u64,
+    max_latency_ticks: u64,
+}
+
 /// Prioritized multi-lane task scheduler.
 ///
 /// Dequeue order: all cancel-lane tasks first, then timed-lane tasks
@@ -510,6 +588,8 @@ pub struct LaneScheduler {
     task_extensions: BTreeMap<TaskId, String>,
     /// Per-extension fairness counters for operator ledgers.
     extension_fairness: BTreeMap<String, ExtensionFairnessStats>,
+    /// Cancel-lane latency evidence counters and in-flight completions.
+    cancel_lane_latency: CancelLaneLatencyStats,
 }
 
 impl LaneScheduler {
@@ -539,6 +619,7 @@ impl LaneScheduler {
             budget_enforcer: None,
             task_extensions: BTreeMap::new(),
             extension_fairness: BTreeMap::new(),
+            cancel_lane_latency: CancelLaneLatencyStats::default(),
         }
     }
 
@@ -777,7 +858,7 @@ impl LaneScheduler {
         // 1. Cancel lane: take all available (up to batch size).
         while batch.len() < batch_size {
             if let Some(task) = self.cancel_queue.pop_front() {
-                self.record_schedule(&task);
+                self.record_schedule(&task, current_ticks);
                 batch.push(task);
             } else {
                 break;
@@ -799,7 +880,7 @@ impl LaneScheduler {
             let Some(task) = self.pop_min_timed() else {
                 break;
             };
-            self.record_schedule(&task);
+            self.record_schedule(&task, current_ticks);
             batch.push(task);
         }
 
@@ -817,7 +898,7 @@ impl LaneScheduler {
         let ready_to_take = ready_slots.min(self.ready_queue.len());
         for _ in 0..ready_to_take {
             if let Some(task) = self.ready_queue.pop_front() {
-                self.record_schedule(&task);
+                self.record_schedule(&task, current_ticks);
                 batch.push(task);
             }
         }
@@ -847,6 +928,7 @@ impl LaneScheduler {
             if let Some(m) = self.metrics.get_mut("timed") {
                 m.tasks_timed_out += 1;
             }
+            self.cancel_lane_latency.overdue_timeout_count += 1;
             self.record_extension_shed_for_task(task);
             self.emit_event(SchedulerEvent {
                 task_id: task.task_id.0,
@@ -865,6 +947,33 @@ impl LaneScheduler {
 
     /// Mark a task as completed.
     pub fn complete_task(&mut self, task_id: TaskId, lane: SchedulerLane) {
+        self.record_completion(task_id, lane, None);
+    }
+
+    /// Mark a task as completed with a completion tick for latency evidence.
+    pub fn complete_task_at(&mut self, task_id: TaskId, lane: SchedulerLane, current_ticks: u64) {
+        self.record_completion(task_id, lane, Some(current_ticks));
+    }
+
+    fn record_completion(
+        &mut self,
+        task_id: TaskId,
+        lane: SchedulerLane,
+        current_ticks: Option<u64>,
+    ) {
+        let scheduled_cancel = if lane == SchedulerLane::Cancel {
+            self.cancel_lane_latency.scheduled_tasks.remove(&task_id)
+        } else {
+            None
+        };
+        if let (Some(current_ticks), Some(scheduled)) = (current_ticks, scheduled_cancel) {
+            let latency_ticks = current_ticks.saturating_sub(scheduled.scheduled_at);
+            Self::record_cancel_latency_observation(
+                &mut self.cancel_lane_latency.schedule_to_complete,
+                scheduled.task_type,
+                latency_ticks,
+            );
+        }
         if let Some(m) = self.metrics.get_mut(&lane.to_string()) {
             m.tasks_completed += 1;
         }
@@ -971,6 +1080,34 @@ impl LaneScheduler {
             current_ticks,
             report_id,
             extensions,
+        }
+    }
+
+    /// Build deterministic cancel-lane latency evidence for operators.
+    pub fn cancel_lane_latency_report(&self, current_ticks: u64) -> CancelLaneLatencyReport {
+        let mut buckets = Vec::new();
+        self.append_cancel_latency_buckets(
+            "submit_to_schedule",
+            &self.cancel_lane_latency.submit_to_schedule,
+            &mut buckets,
+        );
+        self.append_cancel_latency_buckets(
+            "schedule_to_complete",
+            &self.cancel_lane_latency.schedule_to_complete,
+            &mut buckets,
+        );
+
+        CancelLaneLatencyReport {
+            schema_version: CANCEL_LANE_LATENCY_REPORT_SCHEMA_VERSION,
+            current_ticks,
+            bucket_upper_bounds_ticks: CANCEL_LANE_LATENCY_BUCKET_UPPER_BOUNDS_TICKS.to_vec(),
+            cancel_queue_depth: self.cancel_queue.len(),
+            cancel_max_depth: self.config.cancel_max_depth,
+            cancel_lane_saturated: self.cancel_queue.len() >= self.config.cancel_max_depth,
+            drain_count: self.cancel_lane_latency.drain_count,
+            overdue_timeout_count: self.cancel_lane_latency.overdue_timeout_count,
+            inflight_count: self.cancel_lane_latency.scheduled_tasks.len(),
+            buckets,
         }
     }
 
@@ -1087,11 +1224,12 @@ impl LaneScheduler {
         }
     }
 
-    fn record_schedule(&mut self, task: &ScheduledTask) {
+    fn record_schedule(&mut self, task: &ScheduledTask, current_ticks: u64) {
         if let Some(m) = self.metrics.get_mut(&task.label.lane.to_string()) {
             m.tasks_scheduled += 1;
         }
         self.record_extension_schedule(task);
+        self.record_cancel_schedule_latency(task, current_ticks);
         self.emit_event(SchedulerEvent {
             task_id: task.task_id.0,
             lane: task.label.lane.to_string(),
@@ -1101,6 +1239,77 @@ impl LaneScheduler {
             event: "schedule".to_string(),
         });
         self.record_count("schedule");
+    }
+
+    fn record_cancel_schedule_latency(&mut self, task: &ScheduledTask, current_ticks: u64) {
+        if task.label.lane != SchedulerLane::Cancel {
+            return;
+        }
+
+        let task_type = task.label.task_type.to_string();
+        let latency_ticks = current_ticks.saturating_sub(task.submitted_at);
+        Self::record_cancel_latency_observation(
+            &mut self.cancel_lane_latency.submit_to_schedule,
+            task_type.clone(),
+            latency_ticks,
+        );
+        self.cancel_lane_latency.scheduled_tasks.insert(
+            task.task_id,
+            CancelLaneScheduledTask {
+                task_type,
+                scheduled_at: current_ticks,
+            },
+        );
+        if task.label.task_type == TaskType::ForcedDrain {
+            self.cancel_lane_latency.drain_count += 1;
+        }
+    }
+
+    fn record_cancel_latency_observation(
+        buckets: &mut BTreeMap<CancelLaneLatencyBucketKey, CancelLaneLatencyBucketStats>,
+        task_type: String,
+        latency_ticks: u64,
+    ) {
+        let (lower_bound_ticks, upper_bound_ticks) =
+            Self::cancel_latency_bucket_bounds(latency_ticks);
+        let stats = buckets
+            .entry(CancelLaneLatencyBucketKey {
+                task_type,
+                lower_bound_ticks,
+                upper_bound_ticks,
+            })
+            .or_default();
+        stats.count += 1;
+        stats.max_latency_ticks = stats.max_latency_ticks.max(latency_ticks);
+    }
+
+    fn cancel_latency_bucket_bounds(latency_ticks: u64) -> (u64, Option<u64>) {
+        let mut lower_bound_ticks = 0;
+        for upper_bound_ticks in CANCEL_LANE_LATENCY_BUCKET_UPPER_BOUNDS_TICKS {
+            if latency_ticks <= *upper_bound_ticks {
+                return (lower_bound_ticks, Some(*upper_bound_ticks));
+            }
+            lower_bound_ticks = upper_bound_ticks.saturating_add(1);
+        }
+        (lower_bound_ticks, None)
+    }
+
+    fn append_cancel_latency_buckets(
+        &self,
+        phase: &str,
+        source: &BTreeMap<CancelLaneLatencyBucketKey, CancelLaneLatencyBucketStats>,
+        buckets: &mut Vec<CancelLaneLatencyBucket>,
+    ) {
+        for (key, stats) in source {
+            buckets.push(CancelLaneLatencyBucket {
+                phase: phase.to_string(),
+                task_type: key.task_type.clone(),
+                lower_bound_ticks: key.lower_bound_ticks,
+                upper_bound_ticks: key.upper_bound_ticks,
+                count: stats.count,
+                max_latency_ticks: stats.max_latency_ticks,
+            });
+        }
     }
 
     fn extension_fairness_row(
@@ -1304,6 +1513,15 @@ mod tests {
         }
     }
 
+    fn forced_drain_label(trace: &str) -> TaskLabel {
+        TaskLabel {
+            lane: SchedulerLane::Cancel,
+            task_type: TaskType::ForcedDrain,
+            trace_id: trace.to_string(),
+            priority_sub_band: 0,
+        }
+    }
+
     fn timed_label(trace: &str) -> TaskLabel {
         TaskLabel {
             lane: SchedulerLane::Timed,
@@ -1342,6 +1560,23 @@ mod tests {
             .iter()
             .find(|row| row.extension_id == extension_id)
             .expect("extension fairness row should be present")
+    }
+
+    fn cancel_latency_bucket<'a>(
+        report: &'a CancelLaneLatencyReport,
+        phase: &str,
+        task_type: &str,
+        upper_bound_ticks: Option<u64>,
+    ) -> &'a CancelLaneLatencyBucket {
+        report
+            .buckets
+            .iter()
+            .find(|bucket| {
+                bucket.phase == phase
+                    && bucket.task_type == task_type
+                    && bucket.upper_bound_ticks == upper_bound_ticks
+            })
+            .expect("cancel-lane latency bucket should be present")
     }
 
     #[derive(Debug, Clone)]
@@ -2196,6 +2431,138 @@ mod tests {
             snapshot_lane(&throttled_snapshot, "ready").queued_tasks[0].trace_id,
             "trace-throttle"
         );
+    }
+
+    #[test]
+    fn cancel_lane_latency_report_empty_lane_has_stable_schema() {
+        let sched = LaneScheduler::new(LaneConfig::default());
+
+        let report = sched.cancel_lane_latency_report(42);
+
+        assert_eq!(
+            report.schema_version,
+            CANCEL_LANE_LATENCY_REPORT_SCHEMA_VERSION
+        );
+        assert_eq!(report.current_ticks, 42);
+        assert_eq!(
+            report.bucket_upper_bounds_ticks,
+            CANCEL_LANE_LATENCY_BUCKET_UPPER_BOUNDS_TICKS
+        );
+        assert_eq!(report.cancel_queue_depth, 0);
+        assert_eq!(
+            report.cancel_max_depth,
+            LaneConfig::default().cancel_max_depth
+        );
+        assert!(!report.cancel_lane_saturated);
+        assert_eq!(report.drain_count, 0);
+        assert_eq!(report.overdue_timeout_count, 0);
+        assert_eq!(report.inflight_count, 0);
+        assert!(report.buckets.is_empty());
+
+        let json = serde_json::to_string(&report).expect("latency report should serialize");
+        let roundtrip: CancelLaneLatencyReport =
+            serde_json::from_str(&json).expect("latency report should deserialize");
+        assert_eq!(roundtrip, report);
+    }
+
+    #[test]
+    fn cancel_lane_latency_report_captures_saturated_lane_and_completion_buckets() {
+        let mut sched = LaneScheduler::new(LaneConfig {
+            cancel_max_depth: 2,
+            ready_min_throughput: 0,
+            ..LaneConfig::default()
+        });
+        let cleanup_id = sched
+            .submit(cancel_label("cleanup"), 0, "cleanup", 0)
+            .expect("cleanup submit should succeed");
+        let drain_id = sched
+            .submit(forced_drain_label("drain"), 0, "drain", 3)
+            .expect("forced drain submit should succeed");
+
+        let saturated = sched.cancel_lane_latency_report(4);
+        assert_eq!(saturated.cancel_queue_depth, 2);
+        assert_eq!(saturated.cancel_max_depth, 2);
+        assert!(saturated.cancel_lane_saturated);
+        assert!(saturated.buckets.is_empty());
+
+        let overflow = sched.submit(cancel_label("overflow"), 0, "overflow", 4);
+        assert!(matches!(
+            overflow,
+            Err(LaneError::LaneFull { lane, max_depth })
+                if lane == "cancel" && max_depth == 2
+        ));
+
+        let batch = sched.schedule_batch(2, 10);
+        let payloads: Vec<_> = batch.iter().map(|task| task.payload_id.as_str()).collect();
+        assert_eq!(payloads, vec!["cleanup", "drain"]);
+        sched.complete_task_at(cleanup_id, SchedulerLane::Cancel, 14);
+        sched.complete_task_at(drain_id, SchedulerLane::Cancel, 21);
+
+        let report = sched.cancel_lane_latency_report(21);
+        assert_eq!(report.cancel_queue_depth, 0);
+        assert!(!report.cancel_lane_saturated);
+        assert_eq!(report.drain_count, 1);
+        assert_eq!(report.overdue_timeout_count, 0);
+        assert_eq!(report.inflight_count, 0);
+
+        let keys: Vec<_> = report
+            .buckets
+            .iter()
+            .map(|bucket| {
+                (
+                    bucket.phase.as_str(),
+                    bucket.task_type.as_str(),
+                    bucket.upper_bound_ticks,
+                    bucket.count,
+                    bucket.max_latency_ticks,
+                )
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("submit_to_schedule", "cancel_cleanup", Some(10), 1, 10),
+                ("submit_to_schedule", "forced_drain", Some(10), 1, 7),
+                ("schedule_to_complete", "cancel_cleanup", Some(5), 1, 4),
+                ("schedule_to_complete", "forced_drain", Some(50), 1, 11),
+            ]
+        );
+        assert_eq!(
+            cancel_latency_bucket(&report, "submit_to_schedule", "cancel_cleanup", Some(10))
+                .lower_bound_ticks,
+            6
+        );
+    }
+
+    #[test]
+    fn cancel_lane_latency_report_counts_overdue_timeout_under_cancel_pressure() {
+        let mut sched = LaneScheduler::new(LaneConfig {
+            ready_min_throughput: 0,
+            ..LaneConfig::default()
+        });
+        sched
+            .submit(cancel_label("cancel-a"), 0, "cancel-a", 0)
+            .expect("cancel submit should succeed");
+        sched
+            .submit(cancel_label("cancel-b"), 0, "cancel-b", 0)
+            .expect("cancel submit should succeed");
+        sched
+            .submit(timed_label("late"), 5, "late", 0)
+            .expect("timed submit should succeed");
+
+        let batch = sched.schedule_batch(1, 10);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].payload_id, "cancel-a");
+
+        let report = sched.cancel_lane_latency_report(10);
+        assert_eq!(report.cancel_queue_depth, 1);
+        assert_eq!(report.inflight_count, 1);
+        assert_eq!(report.overdue_timeout_count, 1);
+        let bucket =
+            cancel_latency_bucket(&report, "submit_to_schedule", "cancel_cleanup", Some(10));
+        assert_eq!(bucket.count, 1);
+        assert_eq!(bucket.max_latency_ticks, 10);
+        assert_eq!(sched.queue_depth(SchedulerLane::Timed), 0);
     }
 
     // -- Serialization round-trips --

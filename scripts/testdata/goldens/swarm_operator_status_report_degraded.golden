@@ -1,0 +1,166 @@
+{
+  "schema_version": "franken-engine.swarm-operator-status-report.v1",
+  "bead_id": "bd-jw854",
+  "source_revision": "smoke-rev",
+  "status": "degraded",
+  "tui_ready": true,
+  "summary": {
+    "ready_count": 1,
+    "in_progress_count": 1,
+    "reservation_count": 1,
+    "degraded_count": 9,
+    "planned_command_count": 0,
+    "stale_evidence_count": 1,
+    "dirty_reserved_count": 1,
+    "blocked_bead_count": 1
+  },
+  "services": {
+    "agent_mail": "missing",
+    "rch": "missing",
+    "proof_evidence_index": "missing"
+  },
+  "ready_beads": [
+    {
+      "id": "bd-4kwo8",
+      "title": "Dark matter board receipts",
+      "priority": 1,
+      "status": "open",
+      "assignee": null
+    }
+  ],
+  "in_progress_beads": [
+    {
+      "id": "bd-0ub12",
+      "title": "Semantic dark matter scoring",
+      "priority": 1,
+      "status": "in_progress",
+      "assignee": "CyanOak"
+    }
+  ],
+  "bv_tracks": [
+    {
+      "track_id": "track-A",
+      "items": [
+        {
+          "id": "bd-blocked",
+          "title": "Blocked dependent bead",
+          "priority": 1,
+          "status": "blocked"
+        }
+      ]
+    }
+  ],
+  "active_reservations": [
+    {
+      "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+      "holder": "CyanOak",
+      "exclusive": true
+    }
+  ],
+  "resource_decision": {
+    "decision": "defer",
+    "findings": [
+      {
+        "signal": "active_compile_count",
+        "decision": "defer"
+      }
+    ]
+  },
+  "validation_plan": {
+    "decision": "fail_closed",
+    "commands": [],
+    "omitted_commands": [
+      {
+        "kind": "unknown_path_mapping",
+        "path": "unknown/path.rs"
+      }
+    ]
+  },
+  "proof_evidence_index": {
+    "queries": []
+  },
+  "proof_outcomes": [
+    {
+      "bead_id": "bd-0ub12",
+      "artifact_id": "semantic-proof",
+      "status": "blocked"
+    }
+  ],
+  "stale_evidence": [
+    {
+      "artifact_id": "old-proof",
+      "stale": true,
+      "age_hours": 72
+    }
+  ],
+  "dirty_files": [
+    {
+      "path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+      "reserved": true,
+      "overlaps_ready": true
+    }
+  ],
+  "degraded": [
+    {
+      "component": "agent_mail",
+      "status": "missing",
+      "impact": "reservation and inbox data may be incomplete",
+      "remediation": "Use bead assignee and dirty paths as degraded fallback evidence."
+    },
+    {
+      "component": "rch",
+      "status": "missing",
+      "impact": "remote proof routing may be unavailable",
+      "remediation": "Defer heavy validation until rch status is ok or use script-only proof."
+    },
+    {
+      "component": "proof_evidence_index",
+      "status": "missing",
+      "impact": "proof queries may be incomplete",
+      "remediation": "Use explicit proof outcome snapshots until bd-p03vs lands."
+    },
+    {
+      "component": "validation_plan",
+      "status": "fail_closed",
+      "impact": "planned validation cannot run safely",
+      "remediation": "Fix unknown path mappings or ownership before running validation."
+    },
+    {
+      "component": "resource_governor",
+      "status": "defer",
+      "impact": "resource admission is not green",
+      "remediation": "Follow resource-governor remediation before starting heavy validation."
+    },
+    {
+      "component": "dirty_reserved_file",
+      "status": "degraded",
+      "impact": "crates/franken-engine/src/semantic_dark_matter_engine.rs is dirty or reserved",
+      "remediation": "Avoid this file or coordinate with the holder."
+    },
+    {
+      "component": "stale_proof_artifact",
+      "status": "degraded",
+      "impact": "old-proof is stale",
+      "remediation": "Refresh or mark the proof stale before relying on it."
+    },
+    {
+      "component": "proof_outcome",
+      "status": "blocked",
+      "impact": "bd-0ub12 proof is not passing",
+      "remediation": "Inspect the proof outcome before recommending dependent work."
+    },
+    {
+      "component": "blocked_bead_chain",
+      "status": "blocked",
+      "impact": "bd-blocked is blocked in the bv track",
+      "remediation": "Inspect dependencies before recommending this bead."
+    }
+  ],
+  "recommendations": [
+    {
+      "action": "avoid_dirty_reserved_files",
+      "bead_id": null,
+      "reason": "dirty or reserved files overlap active work"
+    }
+  ]
+}

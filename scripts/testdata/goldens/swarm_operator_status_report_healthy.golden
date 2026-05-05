@@ -1,0 +1,103 @@
+{
+  "schema_version": "franken-engine.swarm-operator-status-report.v1",
+  "bead_id": "bd-jw854",
+  "source_revision": "smoke-rev",
+  "status": "healthy",
+  "tui_ready": true,
+  "summary": {
+    "ready_count": 1,
+    "in_progress_count": 1,
+    "reservation_count": 1,
+    "degraded_count": 0,
+    "planned_command_count": 1,
+    "stale_evidence_count": 0,
+    "dirty_reserved_count": 0,
+    "blocked_bead_count": 0
+  },
+  "services": {
+    "agent_mail": "ok",
+    "rch": "ok",
+    "proof_evidence_index": "ok"
+  },
+  "ready_beads": [
+    {
+      "id": "bd-p03vs",
+      "title": "Typed proof-evidence index",
+      "priority": 1,
+      "status": "open",
+      "assignee": null
+    }
+  ],
+  "in_progress_beads": [
+    {
+      "id": "bd-0ub12",
+      "title": "Semantic dark matter scoring",
+      "priority": 1,
+      "status": "in_progress",
+      "assignee": "CyanOak"
+    }
+  ],
+  "bv_tracks": [
+    {
+      "track_id": "track-B",
+      "items": [
+        {
+          "id": "bd-p03vs",
+          "title": "Typed proof-evidence index",
+          "priority": 1,
+          "status": "open"
+        }
+      ]
+    }
+  ],
+  "active_reservations": [
+    {
+      "path": "scripts/swarm_operator_status_report.sh",
+      "holder": "SandyThrush",
+      "exclusive": true
+    }
+  ],
+  "resource_decision": {
+    "decision": "admit",
+    "findings": []
+  },
+  "validation_plan": {
+    "decision": "admit",
+    "commands": [
+      {
+        "command_id": "script-check",
+        "display": "bash -n scripts/swarm_operator_status_report.sh"
+      }
+    ],
+    "omitted_commands": []
+  },
+  "proof_evidence_index": {
+    "queries": [
+      {
+        "name": "recent_failed_gates",
+        "row_count": 0
+      },
+      {
+        "name": "proof_by_bead",
+        "row_count": 2
+      }
+    ]
+  },
+  "proof_outcomes": [
+    {
+      "bead_id": "bd-1onpa",
+      "artifact_id": "plan",
+      "status": "pass"
+    }
+  ],
+  "stale_evidence": [],
+  "dirty_files": [],
+  "degraded": [],
+  "recommendations": [
+    {
+      "action": "pick_next_ready_bead",
+      "bead_id": "bd-p03vs",
+      "reason": "resource governor admits validation and bead is ready"
+    }
+  ]
+}

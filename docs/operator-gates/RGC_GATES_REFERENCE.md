@@ -45,6 +45,17 @@ Pass an explicit waiver bundle with
 `RGC_ZERO_PLACEHOLDER_GATE_WAIVERS=/abs/path/waivers.json` when a time-bounded
 waiver is intentionally part of the evaluation.
 
+## Swarm Responsiveness Claim Map
+
+`bd-bdrwq.11` keeps the swarm-responsiveness track fail-closed by mapping each
+child claim surface to its current proof state. Published surfaces carry source
+or artifact links plus verification commands; implemented or blocked surfaces
+stay explicitly unpublished until their links and focused proof are complete.
+
+- `docs/rgc_swarm_responsiveness_claim_map_v1.json`
+- `./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh check`
+- `./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest`
+
 ## RGC Compound JSON Runtime Proof Lanes
 
 Compound `JSON.parse` / `JSON.stringify` semantics are defined in

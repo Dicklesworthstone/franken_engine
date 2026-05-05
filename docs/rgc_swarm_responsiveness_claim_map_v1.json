@@ -1,0 +1,308 @@
+{
+  "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-bdrwq.11",
+  "policy_id": "policy-swarm-responsiveness-claim-map-v1",
+  "generated_by": "bd-bdrwq.11",
+  "purpose": "Fail-closed claim-to-artifact map for the bd-bdrwq swarm responsiveness track so operators can see which child claim surfaces are published, which are only implemented, and which remain blocked.",
+  "mapped_child_bead_ids": [
+    "bd-bdrwq.1",
+    "bd-bdrwq.2",
+    "bd-bdrwq.3",
+    "bd-bdrwq.4",
+    "bd-bdrwq.5",
+    "bd-bdrwq.6",
+    "bd-bdrwq.7",
+    "bd-bdrwq.8",
+    "bd-bdrwq.9",
+    "bd-bdrwq.10"
+  ],
+  "status_semantics": {
+    "published": "Primary source paths, verifier commands, and any bundle-style artifact links are present and may be cited as an operator-visible claim surface.",
+    "implemented_pending_validation": "Implementation evidence exists in source or commits, but the claim must remain unpublished until focused validation or bundle proof is complete.",
+    "blocked": "The claim surface must not be cited as published; implementation or artifact links are incomplete and the blocking reason must remain explicit."
+  },
+  "claims": [
+    {
+      "child_bead_id": "bd-bdrwq.1",
+      "title": "Scheduler lane-pressure snapshot artifacts",
+      "claim_status": "published",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "Scheduler pressure claims are backed by deterministic queue-depth, wait-age, deadline-backlog, and budget-throttle snapshots in scheduler_lane source tests.",
+      "primary_paths": [
+        "crates/franken-engine/src/scheduler_lane.rs"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_pressure_snapshot_verify cargo test -p frankenengine-engine --lib pressure_snapshot -- --nocapture"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [],
+      "status_note": ""
+    },
+    {
+      "child_bead_id": "bd-bdrwq.2",
+      "title": "Orchestrator concurrency envelope validation",
+      "claim_status": "implemented_pending_validation",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "High-core orchestrator concurrency limits are enforced in source and recorded in evidence, but the track still lacks a dedicated replayable artifact bundle and fully clean focused proof.",
+      "primary_paths": [
+        "crates/franken-engine/src/execution_orchestrator.rs",
+        "crates/franken-engine/src/runtime_config.rs",
+        "scripts/gates.toml"
+      ],
+      "artifact_root": "artifacts/execution_orchestrator_gate",
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_execution_orchestrator_gate_verify cargo test -p frankenengine-engine --lib execution_orchestrator -- --nocapture"
+      ],
+      "implementation_commits": [
+        "67709c58",
+        "3e5aefbf",
+        "4cc466be"
+      ],
+      "blocking_beads": [],
+      "status_note": "Keep this claim unpublished until the orchestrator lane has a dedicated replayable artifact surface and a focused rch proof that covers the high-core evidence path."
+    },
+    {
+      "child_bead_id": "bd-bdrwq.3",
+      "title": "Deterministic high-core scheduler replay harness",
+      "claim_status": "published",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "High-core scheduler contention claims are backed by deterministic replay fixtures and seeded workload stability tests in scheduler_lane.",
+      "primary_paths": [
+        "crates/franken-engine/src/scheduler_lane.rs"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_replay_verify cargo test -p frankenengine-engine --lib scheduler_replay -- --nocapture"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [],
+      "status_note": ""
+    },
+    {
+      "child_bead_id": "bd-bdrwq.4",
+      "title": "Monitor-scheduler VOI budget evidence reports",
+      "claim_status": "published",
+      "surface_kind": "smoke_script_surface",
+      "claim_summary": "Monitor scheduling economics are published through deterministic operator evidence reports and a dedicated smoke script.",
+      "primary_paths": [
+        "crates/franken-engine/src/monitor_scheduler.rs",
+        "scripts/e2e/monitor_scheduler_voi_evidence_smoke.sh"
+      ],
+      "artifact_root": "artifacts/monitor_scheduler_voi_evidence_smoke/<timestamp>/",
+      "required_artifacts": [
+        "events.tsv",
+        "commands.txt",
+        "stdout.log",
+        "stderr.log",
+        "report.md"
+      ],
+      "gate_runner": {
+        "script": "scripts/e2e/monitor_scheduler_voi_evidence_smoke.sh",
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "./scripts/e2e/monitor_scheduler_voi_evidence_smoke.sh"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [],
+      "status_note": ""
+    },
+    {
+      "child_bead_id": "bd-bdrwq.5",
+      "title": "Benchmark/live workload drift gate",
+      "claim_status": "published",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "Broad performance claims are tied to current live-workload evidence through deterministic runtime-comparison drift tests and manifest documentation.",
+      "primary_paths": [
+        "crates/franken-engine/src/runtime_comparison_gate.rs",
+        "crates/franken-engine/tests/runtime_comparison_gate_integration.rs",
+        "benchmarks/runtime_comparison/README.md"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_runtime_comparison_drift_verify cargo test -p frankenengine-engine --test runtime_comparison_gate_integration workload_drift_gate -- --nocapture"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [],
+      "status_note": ""
+    },
+    {
+      "child_bead_id": "bd-bdrwq.6",
+      "title": "Per-extension scheduler fairness ledgers",
+      "claim_status": "implemented_pending_validation",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "Per-extension fairness accounting is implemented in scheduler_lane, but the claim remains unpublished until focused proof and tracker closeout are complete.",
+      "primary_paths": [
+        "crates/franken-engine/src/scheduler_lane.rs"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_fairness_verify cargo test -p frankenengine-engine --lib extension_fairness -- --nocapture"
+      ],
+      "implementation_commits": [
+        "338f86dd"
+      ],
+      "blocking_beads": [],
+      "status_note": "Do not cite fairness/deprivation claims as published until the focused rch proof clears and the tracker state reflects the landed scheduler_lane ledger surface."
+    },
+    {
+      "child_bead_id": "bd-bdrwq.7",
+      "title": "Cancel-lane latency histogram artifacts",
+      "claim_status": "blocked",
+      "surface_kind": "source_test_surface",
+      "claim_summary": "Cancel-lane cleanup latency histograms are still blocked on a non-overlapping scheduler implementation slice and must not be cited as published evidence yet.",
+      "primary_paths": [
+        "crates/franken-engine/src/scheduler_lane.rs"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_scheduler_lane_cancel_latency_verify cargo test -p frankenengine-engine --lib scheduler_lane -- --nocapture"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [
+        "bd-bdrwq.6"
+      ],
+      "status_note": "The cancel-lane histogram surface shares scheduler_lane with the fairness ledger lane and remains unpublished until that implementation and its focused coverage are landed without overlap."
+    },
+    {
+      "child_bead_id": "bd-bdrwq.8",
+      "title": "Cold-start memory envelope reports",
+      "claim_status": "implemented_pending_validation",
+      "surface_kind": "gate_bundle_surface",
+      "claim_summary": "The cold-start lane now emits a fail-closed cold-versus-warm memory envelope report, but the claim remains unpublished because focused rch proof is still blocked by remote sync state.",
+      "primary_paths": [
+        "crates/franken-engine/src/cold_start_compilation_lane.rs",
+        "crates/franken-engine/src/bin/franken_cold_start_compilation_lane.rs",
+        "docs/RGC_COLD_START_COMPILATION_LANE_V1.md",
+        "scripts/run_rgc_cold_start_compilation_lane.sh",
+        "scripts/e2e/rgc_cold_start_compilation_lane_replay.sh"
+      ],
+      "artifact_root": "artifacts/rgc_cold_start_compilation_lane/<timestamp>/",
+      "required_artifacts": [
+        "cold_start_compilation_report.json",
+        "cold_start_observability_delta.json",
+        "cold_start_memory_envelope_report.json",
+        "aot_bundle_compilation_report.json",
+        "runtime_image_manifest.json",
+        "trace_ids.json",
+        "summary.md",
+        "persistent_cache_contract/persistent_cache_contract.json"
+      ],
+      "gate_runner": {
+        "script": "scripts/run_rgc_cold_start_compilation_lane.sh",
+        "replay_wrapper": "scripts/e2e/rgc_cold_start_compilation_lane_replay.sh"
+      },
+      "verification_commands": [
+        "./scripts/run_rgc_cold_start_compilation_lane.sh ci",
+        "./scripts/e2e/rgc_cold_start_compilation_lane_replay.sh ci"
+      ],
+      "implementation_commits": [
+        "339178ba"
+      ],
+      "blocking_beads": [],
+      "status_note": "Keep the cold-start memory claim unpublished until the focused rch test or bundle run escapes dependency-closure sync failures and produces a clean remote proof."
+    },
+    {
+      "child_bead_id": "bd-bdrwq.9",
+      "title": "Admission-control publication bundles",
+      "claim_status": "implemented_pending_validation",
+      "surface_kind": "gate_bundle_surface",
+      "claim_summary": "Tail-latency control-plane bundles now expose admission publication data, but the swarm claim remains unpublished until focused proof can clear rch transport and sync blockers.",
+      "primary_paths": [
+        "crates/franken-engine/src/tail_latency_control_plane.rs",
+        "docs/RGC_TAIL_LATENCY_CONTROL_PLANE_V1.md",
+        "scripts/run_rgc_tail_latency_control_plane.sh",
+        "scripts/e2e/rgc_tail_latency_control_plane_replay.sh"
+      ],
+      "artifact_root": "artifacts/rgc_tail_latency_control_plane/<timestamp>/",
+      "required_artifacts": [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "latency_control_plane_report.json",
+        "admission_publication_bundle.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "step_logs/step_000.log"
+      ],
+      "gate_runner": {
+        "script": "scripts/run_rgc_tail_latency_control_plane.sh",
+        "replay_wrapper": "scripts/e2e/rgc_tail_latency_control_plane_replay.sh"
+      },
+      "verification_commands": [
+        "./scripts/run_rgc_tail_latency_control_plane.sh ci",
+        "./scripts/e2e/rgc_tail_latency_control_plane_replay.sh ci"
+      ],
+      "implementation_commits": [
+        "b640e78c"
+      ],
+      "blocking_beads": [],
+      "status_note": "Keep admission publication claims unpublished until the focused rch proof clears and the tracker stops advertising the lane as merely in progress."
+    },
+    {
+      "child_bead_id": "bd-bdrwq.10",
+      "title": "Swarm fleet-health dashboard feed",
+      "claim_status": "blocked",
+      "surface_kind": "operator_dashboard_surface",
+      "claim_summary": "The intended fleet-health export should aggregate pressure, VOI, fairness, admission, and drift surfaces, but the feed itself is not implemented and must not be cited as shipped.",
+      "primary_paths": [
+        "crates/franken-engine/src/policy_controller/operator_safety_copilot.rs"
+      ],
+      "artifact_root": null,
+      "required_artifacts": [],
+      "gate_runner": {
+        "script": null,
+        "replay_wrapper": null
+      },
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_fleet_health_verify cargo test -p frankenengine-engine --lib operator_safety_copilot -- --nocapture"
+      ],
+      "implementation_commits": [],
+      "blocking_beads": [
+        "bd-bdrwq.6",
+        "bd-bdrwq.9"
+      ],
+      "status_note": "The dashboard feed depends on fairness and admission publication surfaces being publishable first; until then this feed remains an explicit blocked follow-on."
+    }
+  ],
+  "operator_verification": [
+    "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+    "./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh check",
+    "./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest",
+    "rch exec -- env CARGO_TARGET_DIR=$PWD/target_rch_swarm_responsiveness_claim_map_verify bash ./scripts/e2e/rgc_swarm_responsiveness_claim_map_smoke.sh selftest"
+  ]
+}

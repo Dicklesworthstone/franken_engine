@@ -1,0 +1,148 @@
+{
+  "schema_version": "franken-engine.swarm-resource-pressure-fixtures.v1",
+  "bead_id": "bd-aq8nn",
+  "status": "pass",
+  "case_count": 12,
+  "failure_count": 0,
+  "cases": [
+    {
+      "case_id": "governor_agent_mail_unavailable",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_agent_mail_unavailable/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_cpu_pressure",
+      "component": "swarm_resource_governor",
+      "expected_decision": "defer",
+      "observed_decision": "defer",
+      "expected_exit": 75,
+      "observed_exit": 75,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_cpu_pressure/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_disk_pressure",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_disk_pressure/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_fallback_to_local",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_fallback_to_local/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_memory_pressure",
+      "component": "swarm_resource_governor",
+      "expected_decision": "defer",
+      "observed_decision": "defer",
+      "expected_exit": 75,
+      "observed_exit": 75,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_memory_pressure/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_missing_rch",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 2,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_missing_rch/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_reserved_overlap",
+      "component": "swarm_resource_governor",
+      "expected_decision": "defer",
+      "observed_decision": "defer",
+      "expected_exit": 75,
+      "observed_exit": 75,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_reserved_overlap/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_stale_proof_evidence",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_stale_proof_evidence/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "governor_unwritable_target",
+      "component": "swarm_resource_governor",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/governor_unwritable_target/decision.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "planner_package_fallback",
+      "component": "swarm_validation_planner",
+      "expected_decision": "admit_narrow",
+      "observed_decision": "admit_narrow",
+      "expected_exit": 0,
+      "observed_exit": 0,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/planner_package_fallback/plan.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "planner_script_only",
+      "component": "swarm_validation_planner",
+      "expected_decision": "admit",
+      "observed_decision": "admit",
+      "expected_exit": 0,
+      "observed_exit": 0,
+      "finding_count": 1,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/planner_script_only/plan.json",
+      "status": "pass"
+    },
+    {
+      "case_id": "planner_unknown_path_mapping",
+      "component": "swarm_validation_planner",
+      "expected_decision": "fail_closed",
+      "observed_decision": "fail_closed",
+      "expected_exit": 42,
+      "observed_exit": 42,
+      "finding_count": 2,
+      "artifact_path": "[SMOKE_ROOT]/fixtures/planner_unknown_path_mapping/plan.json",
+      "status": "pass"
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "path": "[SMOKE_ROOT]/fixtures/commands.txt",
+      "sha256": "[SHA256]",
+      "role": "fixture_command_transcript"
+    }
+  ]
+}

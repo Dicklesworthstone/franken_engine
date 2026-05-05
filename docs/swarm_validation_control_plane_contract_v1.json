@@ -1,0 +1,417 @@
+{
+  "schema_version": "franken-engine.swarm-validation-control-plane-contract.v1",
+  "contract_version": "0.1.0",
+  "bead_id": "bd-vcloy",
+  "policy_id": "policy-swarm-validation-control-plane-v1",
+  "generated_by": "SandyThrush",
+  "purpose": "Inventory the existing build, proof, test, artifact, bead, and coordination surfaces that future SWARM-CTRL implementation beads must compose. The contract is intentionally conservative: uncertain resource evidence, local rch fallback, stale proof evidence, or unknown path-to-target mapping must produce a visible safe-mode decision instead of a guessed green path.",
+  "verification_commands": [
+    "jq empty docs/swarm_validation_control_plane_contract_v1.json",
+    "bash -n scripts/e2e/swarm_validation_control_plane_contract_smoke.sh",
+    "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check",
+    "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh selftest",
+    "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json scripts/e2e/swarm_validation_control_plane_contract_smoke.sh"
+  ],
+  "safe_mode_semantics": {
+    "default_decision": "fail_closed",
+    "allowed_decisions": [
+      "admit",
+      "admit_narrow",
+      "defer",
+      "fail_closed"
+    ],
+    "missing_required_signal": "fail_closed",
+    "missing_optional_signal": "admit_narrow",
+    "operator_note_required_for_override": true
+  },
+  "workload_surfaces": [
+    {
+      "surface_id": "bead_graph_state",
+      "role": "Task selection and dependency truth for multi-agent scheduling.",
+      "source_kind": "beads",
+      "repo_paths": [
+        ".beads/issues.jsonl"
+      ],
+      "read_commands": [
+        "br ready --json --no-auto-import --no-auto-flush",
+        "br list --status=in_progress --json --no-auto-import --no-auto-flush",
+        "bv --robot-plan",
+        "bv --robot-insights"
+      ],
+      "artifacts_emitted": [
+        "ready_queue_snapshot",
+        "highest_impact_summary",
+        "dependency_cycle_report"
+      ],
+      "downstream_beads": [
+        "bd-1onpa",
+        "bd-jw854"
+      ]
+    },
+    {
+      "surface_id": "coordination_mail_reservations",
+      "role": "File ownership, active-agent coordination, and degraded coordination visibility.",
+      "source_kind": "agent_mail",
+      "repo_paths": [
+        ".beads/issues.jsonl"
+      ],
+      "read_commands": [
+        "fetch_inbox(project=/data/projects/franken_engine)",
+        "file_reservation_paths(paths=...)"
+      ],
+      "artifacts_emitted": [
+        "reservation_snapshot",
+        "inbox_coordination_snapshot"
+      ],
+      "downstream_beads": [
+        "bd-zmuv5",
+        "bd-jw854"
+      ]
+    },
+    {
+      "surface_id": "focused_proof_cost_gate",
+      "role": "Budget proof fanout and reject unexpected cargo target broadening.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "scripts/focused_proof_cost_gate.sh",
+        "scripts/e2e/focused_proof_cost_gate_smoke.sh"
+      ],
+      "read_commands": [
+        "./scripts/e2e/focused_proof_cost_gate_smoke.sh check",
+        "./scripts/e2e/focused_proof_cost_gate_smoke.sh selftest"
+      ],
+      "artifacts_emitted": [
+        "diagnostics.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "downstream_beads": [
+        "bd-7kc4g",
+        "bd-1onpa",
+        "bd-3snv2"
+      ]
+    },
+    {
+      "surface_id": "focused_proof_runner",
+      "role": "Capture focused command receipts and proof-cost manifests for narrow validation runs.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "scripts/focused_proof_runner.sh",
+        "scripts/e2e/focused_proof_runner_smoke.sh"
+      ],
+      "read_commands": [
+        "./scripts/e2e/focused_proof_runner_smoke.sh check",
+        "./scripts/e2e/focused_proof_runner_smoke.sh selftest"
+      ],
+      "artifacts_emitted": [
+        "proof_cost_manifest.json",
+        "commands.txt",
+        "events.jsonl",
+        "report.md"
+      ],
+      "downstream_beads": [
+        "bd-1onpa",
+        "bd-3snv2"
+      ]
+    },
+    {
+      "surface_id": "module_composition_claim_ledger",
+      "role": "Fail-closed truth ledger pattern for advertised composition claims.",
+      "source_kind": "json_contract",
+      "repo_paths": [
+        "docs/rgc_module_composition_claim_ledger_v1.json",
+        "scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh"
+      ],
+      "read_commands": [
+        "jq empty docs/rgc_module_composition_claim_ledger_v1.json",
+        "./scripts/e2e/rgc_module_composition_claim_ledger_smoke.sh check"
+      ],
+      "artifacts_emitted": [
+        "composition_claim_rows",
+        "drift_check_contract"
+      ],
+      "downstream_beads": [
+        "bd-1npwf",
+        "bd-3snv2"
+      ]
+    },
+    {
+      "surface_id": "proof_artifact_manifest",
+      "role": "Canonical proof manifest model, deterministic serialization, and artifact freshness metadata.",
+      "source_kind": "rust_contract",
+      "repo_paths": [
+        "crates/franken-engine/src/proof_artifact.rs",
+        "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+      ],
+      "read_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_proof_manifest cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts"
+      ],
+      "artifacts_emitted": [
+        "ProofManifest",
+        "ProofArtifactPaths",
+        "ProofFreshness",
+        "ProofCommand"
+      ],
+      "downstream_beads": [
+        "bd-p03vs",
+        "bd-jw854"
+      ]
+    },
+    {
+      "surface_id": "rch_wrapped_release_gate",
+      "role": "Existing proof-release and README contract gates that demonstrate approved rch command shape.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "scripts/run_proof_pipeline_release_gate.sh",
+        "scripts/e2e/readme_cli_proof_contract_validation.sh",
+        "scripts/e2e/readme_cli_workflow_smoke.sh"
+      ],
+      "read_commands": [
+        "bash -n scripts/run_proof_pipeline_release_gate.sh",
+        "bash -n scripts/e2e/readme_cli_proof_contract_validation.sh scripts/e2e/readme_cli_workflow_smoke.sh"
+      ],
+      "artifacts_emitted": [
+        "rch_wrapped_command_examples",
+        "readme_cli_proof_contract_validation"
+      ],
+      "downstream_beads": [
+        "bd-7kc4g",
+        "bd-1npwf"
+      ]
+    },
+    {
+      "surface_id": "reproduce_entrypoint",
+      "role": "Repository-level reproducibility entrypoint for significant claims.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "scripts/reproduce.sh"
+      ],
+      "read_commands": [
+        "bash -n scripts/reproduce.sh"
+      ],
+      "artifacts_emitted": [
+        "reproducibility_entrypoint"
+      ],
+      "downstream_beads": [
+        "bd-1npwf",
+        "bd-3snv2"
+      ]
+    }
+  ],
+  "capacity_signals": [
+    {
+      "signal_id": "active_cargo_rustc_count",
+      "source_kind": "process_scan",
+      "capture_command": "pgrep -af 'cargo|rustc' | wc -l",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "defer",
+      "notes": "A high local compiler count means a new heavy validation should wait or request a narrower rch-only plan."
+    },
+    {
+      "signal_id": "disk_available_bytes",
+      "source_kind": "filesystem",
+      "capture_command": "df -PB1 . /tmp",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "fail_closed",
+      "notes": "Low disk or unknown disk state can corrupt target dirs and proof artifacts; it must stop heavy validation."
+    },
+    {
+      "signal_id": "file_reservation_overlap",
+      "source_kind": "agent_mail",
+      "capture_command": "file_reservation_paths(paths=planned_write_set, exclusive=true)",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "defer",
+      "notes": "When Agent Mail is unavailable, bead assignee and dirty paths are fallback evidence but must be reported as degraded."
+    },
+    {
+      "signal_id": "git_dirty_state",
+      "source_kind": "git",
+      "capture_command": "git status --short",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "admit_narrow",
+      "notes": "Dirty unrelated files do not block narrow work, but dirty overlapping files require deferral or a different bead."
+    },
+    {
+      "signal_id": "memory_available_bytes",
+      "source_kind": "procfs",
+      "capture_command": "awk '/MemAvailable/ {print $2 * 1024}' /proc/meminfo",
+      "required_for_decision": false,
+      "missing_evidence_decision": "admit_narrow",
+      "degraded_decision": "defer",
+      "notes": "Memory is useful on large swarm hosts, but older environments may not expose it consistently."
+    },
+    {
+      "signal_id": "rch_local_fallback",
+      "source_kind": "rch_log",
+      "capture_command": "scan rch output for local fallback markers",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "fail_closed",
+      "notes": "Heavy commands must reject local fallback instead of silently consuming local disk and CPU."
+    },
+    {
+      "signal_id": "rch_status",
+      "source_kind": "rch",
+      "capture_command": "rch status",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "defer",
+      "notes": "If remote execution health is unknown, the planner can emit a plan but the governor must not admit heavy execution."
+    },
+    {
+      "signal_id": "target_dir_writable",
+      "source_kind": "filesystem",
+      "capture_command": "test -w \"$CARGO_TARGET_DIR\" || mkdir -p \"$CARGO_TARGET_DIR\"",
+      "required_for_decision": true,
+      "missing_evidence_decision": "fail_closed",
+      "degraded_decision": "fail_closed",
+      "notes": "Every heavy rch command must set a writable off-repo CARGO_TARGET_DIR."
+    }
+  ],
+  "downstream_contracts": [
+    {
+      "bead_id": "bd-7kc4g",
+      "title": "[SWARM-CTRL-B] Add rch policy compliance gate for heavy Cargo commands",
+      "requires_surfaces": [
+        "focused_proof_cost_gate",
+        "rch_wrapped_release_gate"
+      ],
+      "requires_signals": [
+        "rch_local_fallback",
+        "target_dir_writable"
+      ]
+    },
+    {
+      "bead_id": "bd-1onpa",
+      "title": "[SWARM-CTRL-C] Add graph-aware validation planner for bead and file changes",
+      "requires_surfaces": [
+        "bead_graph_state",
+        "focused_proof_runner",
+        "focused_proof_cost_gate"
+      ],
+      "requires_signals": [
+        "git_dirty_state",
+        "file_reservation_overlap",
+        "rch_status"
+      ]
+    },
+    {
+      "bead_id": "bd-zmuv5",
+      "title": "[SWARM-CTRL-D] Add deterministic resource-governor admission decisions",
+      "requires_surfaces": [
+        "coordination_mail_reservations"
+      ],
+      "requires_signals": [
+        "active_cargo_rustc_count",
+        "disk_available_bytes",
+        "file_reservation_overlap",
+        "git_dirty_state",
+        "memory_available_bytes",
+        "rch_local_fallback",
+        "rch_status",
+        "target_dir_writable"
+      ]
+    },
+    {
+      "bead_id": "bd-p03vs",
+      "title": "[SWARM-CTRL-E] Add typed proof-evidence index for artifacts and bead receipts",
+      "requires_surfaces": [
+        "proof_artifact_manifest",
+        "focused_proof_runner",
+        "focused_proof_cost_gate"
+      ],
+      "requires_signals": [
+        "git_dirty_state"
+      ]
+    },
+    {
+      "bead_id": "bd-jw854",
+      "title": "[SWARM-CTRL-F] Publish operator swarm status report and TUI-ready data feed",
+      "requires_surfaces": [
+        "bead_graph_state",
+        "coordination_mail_reservations",
+        "proof_artifact_manifest"
+      ],
+      "requires_signals": [
+        "file_reservation_overlap",
+        "rch_status"
+      ]
+    },
+    {
+      "bead_id": "bd-aq8nn",
+      "title": "[SWARM-CTRL-G] Add deterministic stress fixtures for resource-pressure decisions",
+      "requires_surfaces": [
+        "focused_proof_cost_gate"
+      ],
+      "requires_signals": [
+        "active_cargo_rustc_count",
+        "disk_available_bytes",
+        "file_reservation_overlap",
+        "memory_available_bytes",
+        "rch_local_fallback",
+        "rch_status",
+        "target_dir_writable"
+      ]
+    }
+  ],
+  "sibling_reuse_policy": [
+    {
+      "repo_id": "frankensqlite",
+      "declared_path": "/dp/frankensqlite",
+      "use_for": "SQLite-backed proof-evidence persistence and migration policy",
+      "local_reimplementation_allowed": false
+    },
+    {
+      "repo_id": "frankentui",
+      "declared_path": "/dp/frankentui",
+      "use_for": "Any rich terminal dashboard beyond machine-readable JSON or Markdown reports",
+      "local_reimplementation_allowed": false
+    },
+    {
+      "repo_id": "sqlmodel_rust",
+      "declared_path": "/dp/sqlmodel_rust",
+      "use_for": "Typed model/schema boundaries for proof-evidence index rows",
+      "local_reimplementation_allowed": false
+    }
+  ],
+  "output_artifact_contracts": [
+    {
+      "artifact_id": "resource_decision",
+      "schema_version": "franken-engine.swarm-resource-decision.v1",
+      "required_fields": [
+        "decision",
+        "reason",
+        "signals",
+        "remediation",
+        "source_revision"
+      ]
+    },
+    {
+      "artifact_id": "validation_plan",
+      "schema_version": "franken-engine.swarm-validation-plan.v1",
+      "required_fields": [
+        "bead_id",
+        "changed_paths",
+        "commands",
+        "expected_artifacts",
+        "proof_cost_budget"
+      ]
+    },
+    {
+      "artifact_id": "operator_status_report",
+      "schema_version": "franken-engine.swarm-operator-status-report.v1",
+      "required_fields": [
+        "ready_beads",
+        "in_progress_beads",
+        "reservations",
+        "resource_decisions",
+        "proof_outcomes"
+      ]
+    }
+  ]
+}

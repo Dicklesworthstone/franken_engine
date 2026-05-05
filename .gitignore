@@ -159,3 +159,26 @@ refactor_ternary.py
 # Old image asset locations — canonical under docs/assets/
 /franken_engine_illustration.webp
 /gh_og_share_image.png
+
+# Legacy root paths for docs that now live under docs/{audit,plans,performance}
+# (kept here so a fresh agent checkout that drops a stale copy at root won't
+# re-track it). Original homes documented per file:
+/UPGRADE_LOG.md
+/PLAN_TO_CREATE_FRANKEN_ENGINE.md
+/README_PERFORMANCE_SECTION.md
+/CONFORMANCE_REVIEW_FINDINGS.md
+/bd_csnqb_formal_claims_audit.md
+/formal_verification_followup_recommendations.md
+/CRITICAL_REVIEW_BEAD_*.md
+/MODES_OF_REASONING_REPORT_AND_ANALYSIS_OF_PROJECT.md
+/STDLIB_GAP_ANALYSIS.md
+/ga_success_criteria_gap_analysis.md
+/delegate_cell_execution_gap_analysis.md
+/execution_lanes_reality_check.md
+/mock_code_analysis_bd_2ubuf.md
+/follow_up_security_findings.md
+/REVIEW_FINDINGS_CopperLark.md
+
+# Legacy root paths for files moved to scripts/ and crates/.../tests/fixtures/
+/update_beads.sh
+/test262_high_water_mark.toml

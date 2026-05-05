@@ -162,7 +162,7 @@ FrankenEngine is the native runtime heart for `franken_node`, with goals:
 ## Working With Plans and Artifacts
 
 - Plan authority for this program lives in:
-  - `/dp/franken_engine/PLAN_TO_CREATE_FRANKEN_ENGINE.md`
+  - `/dp/franken_engine/docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md`
 - Keep plan updates coherent with actual repository topology.
 - When changing architecture-level decisions, update split-contract docs in both repos.
 

@@ -2,7 +2,7 @@
 //!
 //! This test validates that FrankenEngine properly rejects `with` statements
 //! in strict mode contexts with the correct SyntaxError, addressing the
-//! critical gap identified in CRITICAL_REVIEW_BEAD_STRICT_MODE_GAPS.md
+//! critical gap identified in docs/audit/CRITICAL_REVIEW_BEAD_STRICT_MODE_GAPS.md
 
 #![forbid(unsafe_code)]
 

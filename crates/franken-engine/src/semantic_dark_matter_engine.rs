@@ -24,7 +24,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dark_matter_saturation_gate::{BoardState, DarkMatterRegion, SaturationConfig};
+use crate::dark_matter_saturation_gate::{
+    BoardState, BurndownObservation, BurndownTracker, DarkMatterEstimate, DarkMatterRegion,
+    DarkMatterRegionKind, DecisionReceipt, SaturationConfig, SaturationGateEvaluator,
+};
 use crate::hash_tiers::ContentHash;
 use crate::novelty_scoring_contract::{
     CandidateKind, CompositeVerdict, NoveltyCandidate, NoveltyDimension, NoveltyVerdict,
@@ -41,6 +44,7 @@ pub const DARK_MATTER_ENGINE_COMPONENT: &str = "semantic_dark_matter_engine";
 pub const DARK_MATTER_ENGINE_POLICY_ID: &str = "RGC-707";
 
 const MILLION: u64 = 1_000_000;
+const DISCOVERY_OBSERVATION_STEP_SECS: u64 = 3600;
 
 /// Maximum discovery cycles retained in history.
 const MAX_DISCOVERY_HISTORY: usize = 256;
@@ -154,6 +158,10 @@ pub struct DiscoveryCycleResult {
     /// Per-candidate scoring receipts for auditing promotion decisions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_receipts: Vec<DiscoveryCandidateReceipt>,
+    /// Saturation-gate receipt binding the emitted board state to the
+    /// dark-matter estimate, freshness, and ratchet verdicts for this cycle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_state_receipt: Option<DecisionReceipt>,
     /// Number of dark-matter regions identified.
     pub dark_matter_regions: usize,
     /// Content hash.
@@ -181,6 +189,9 @@ pub struct DarkMatterEngineSummary {
     pub board_state: BoardState,
     /// Estimated dark-matter coverage (millionths).
     pub dark_matter_coverage_millionths: u64,
+    /// Latest derived board-state receipt hash, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_state_receipt_hash: Option<ContentHash>,
     /// Content hash.
     pub content_hash: ContentHash,
 }
@@ -210,6 +221,56 @@ pub struct DarkMatterEngineOrchestrator {
     history: Vec<DiscoveryCycleResult>,
     /// Epoch.
     epoch: SecurityEpoch,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingCycleObservation {
+    seq: u64,
+    candidates_evaluated: usize,
+    candidates_promoted: usize,
+    candidates_rejected: usize,
+}
+
+impl PendingCycleObservation {
+    fn from_result(result: &DiscoveryCycleResult) -> Self {
+        Self {
+            seq: result.seq,
+            candidates_evaluated: result.candidates_evaluated,
+            candidates_promoted: result.candidates_promoted,
+            candidates_rejected: result.candidates_rejected,
+        }
+    }
+
+    fn discovered_mass_millionths(self) -> u64 {
+        if self.candidates_evaluated == 0 {
+            return 0;
+        }
+        (self.candidates_rejected as u64).saturating_mul(MILLION) / self.candidates_evaluated as u64
+    }
+
+    fn retired_mass_millionths(self) -> u64 {
+        if self.candidates_evaluated == 0 {
+            return 0;
+        }
+        (self.candidates_promoted as u64).saturating_mul(MILLION) / self.candidates_evaluated as u64
+    }
+
+    fn observation_timestamp_epoch_secs(self, epoch: SecurityEpoch) -> u64 {
+        logical_cycle_timestamp(epoch, self.seq)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BoardStateEvaluation {
+    receipt: DecisionReceipt,
+    region_count: usize,
+}
+
+fn logical_cycle_timestamp(epoch: SecurityEpoch, seq: u64) -> u64 {
+    epoch
+        .as_u64()
+        .saturating_mul(1_000_000)
+        .saturating_add(seq.saturating_mul(DISCOVERY_OBSERVATION_STEP_SECS))
 }
 
 impl DarkMatterEngineOrchestrator {
@@ -308,20 +369,13 @@ impl DarkMatterEngineOrchestrator {
         self.total_promoted = self.total_promoted.saturating_add(promoted as u64);
         self.total_rejected = self.total_rejected.saturating_add(rejected as u64);
 
-        // Update board state based on promotion rate.
-        let promotion_rate = if candidates.is_empty() {
-            0
-        } else {
-            (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64
-        };
-
-        self.board_state = if promotion_rate > 700_000 {
-            BoardState::Saturated // high promotion = board is well-covered
-        } else if promotion_rate > 300_000 {
-            BoardState::ScopeLimited
-        } else {
-            BoardState::Stale
-        };
+        let board_state_evaluation = self.evaluate_board_state(Some(PendingCycleObservation {
+            seq,
+            candidates_evaluated: candidates.len(),
+            candidates_promoted: promoted,
+            candidates_rejected: rejected,
+        }));
+        self.board_state = board_state_evaluation.receipt.composite_state;
 
         let content_hash = {
             let mut buf = Vec::new();
@@ -348,6 +402,7 @@ impl DarkMatterEngineOrchestrator {
                 buf.extend_from_slice(receipt.certificate_hash.as_bytes());
                 buf.extend_from_slice(receipt.composite_score_hash.as_bytes());
             }
+            buf.extend_from_slice(board_state_evaluation.receipt.receipt_hash.as_bytes());
             ContentHash::compute(&buf)
         };
 
@@ -359,7 +414,8 @@ impl DarkMatterEngineOrchestrator {
             max_novelty_millionths: max_novelty,
             avg_novelty_millionths: avg_novelty,
             candidate_receipts,
-            dark_matter_regions: self.regions.len(),
+            board_state_receipt: Some(board_state_evaluation.receipt.clone()),
+            dark_matter_regions: board_state_evaluation.region_count,
             content_hash,
             epoch: self.epoch,
         };
@@ -376,29 +432,40 @@ impl DarkMatterEngineOrchestrator {
 
     /// Get the engine summary.
     pub fn summary(&self) -> DarkMatterEngineSummary {
+        let board_state_receipt = self.board_state_receipt();
         let coverage = self
             .total_promoted
             .saturating_mul(MILLION)
             .checked_div(self.total_candidates)
             .unwrap_or(0);
-        let hash_input = format!(
-            "summary:{}:{}:{}:{}",
-            self.cycle_count, self.total_candidates, self.total_promoted, self.total_rejected,
-        );
+        let mut hash_input = Vec::new();
+        hash_input.extend_from_slice(b"summary|");
+        hash_input.extend_from_slice(&self.cycle_count.to_le_bytes());
+        hash_input.extend_from_slice(&self.total_candidates.to_le_bytes());
+        hash_input.extend_from_slice(&self.total_promoted.to_le_bytes());
+        hash_input.extend_from_slice(&self.total_rejected.to_le_bytes());
+        hash_input.extend_from_slice(board_state_receipt.composite_state.as_str().as_bytes());
+        hash_input.extend_from_slice(board_state_receipt.receipt_hash.as_bytes());
         DarkMatterEngineSummary {
             total_cycles: self.cycle_count,
             total_candidates: self.total_candidates,
             total_promoted: self.total_promoted,
             total_rejected: self.total_rejected,
-            board_state: self.board_state,
+            board_state: board_state_receipt.composite_state,
             dark_matter_coverage_millionths: coverage,
-            content_hash: ContentHash::compute(hash_input.as_bytes()),
+            board_state_receipt_hash: Some(board_state_receipt.receipt_hash),
+            content_hash: ContentHash::compute(&hash_input),
         }
     }
 
     /// Get the current board state.
     pub fn board_state(&self) -> &BoardState {
         &self.board_state
+    }
+
+    /// Derive the latest board-state receipt from orchestrator state.
+    pub fn board_state_receipt(&self) -> DecisionReceipt {
+        self.evaluate_board_state(None).receipt
     }
 
     /// Get discovery history.
@@ -409,6 +476,7 @@ impl DarkMatterEngineOrchestrator {
     /// Add a dark-matter region.
     pub fn add_region(&mut self, region: DarkMatterRegion) {
         self.regions.push(region);
+        self.board_state = self.board_state_receipt().composite_state;
     }
 
     /// Get known dark-matter regions.
@@ -426,6 +494,80 @@ impl DarkMatterEngineOrchestrator {
         self.regions.clear();
         self.history.clear();
         self.epoch = new_epoch;
+    }
+
+    fn evaluate_board_state(
+        &self,
+        pending: Option<PendingCycleObservation>,
+    ) -> BoardStateEvaluation {
+        let tracker = self.derive_burndown_tracker(pending);
+        let now_epoch_secs = pending
+            .map(|cycle| cycle.observation_timestamp_epoch_secs(self.epoch))
+            .unwrap_or_else(|| logical_cycle_timestamp(self.epoch, self.cycle_count));
+        let estimate = self.derive_dark_matter_estimate(&tracker, now_epoch_secs);
+        let region_count = estimate.total_region_count();
+        let evaluator =
+            SaturationGateEvaluator::new(self.config.saturation_config.clone(), estimate, tracker);
+        let receipt = evaluator.evaluate(now_epoch_secs);
+        BoardStateEvaluation {
+            receipt,
+            region_count,
+        }
+    }
+
+    fn derive_burndown_tracker(&self, pending: Option<PendingCycleObservation>) -> BurndownTracker {
+        let mut tracker = BurndownTracker::new(MILLION, self.epoch);
+        let mut cumulative_discovered_millionths = 0u64;
+        let mut cumulative_retired_millionths = 0u64;
+
+        for cycle in self
+            .history
+            .iter()
+            .map(PendingCycleObservation::from_result)
+            .chain(pending)
+        {
+            let discovered_mass_millionths = cycle.discovered_mass_millionths();
+            let retired_mass_millionths = cycle.retired_mass_millionths();
+            cumulative_discovered_millionths =
+                cumulative_discovered_millionths.saturating_add(discovered_mass_millionths);
+            cumulative_retired_millionths =
+                cumulative_retired_millionths.saturating_add(retired_mass_millionths);
+            tracker.record(BurndownObservation {
+                timestamp_epoch_secs: cycle.observation_timestamp_epoch_secs(self.epoch),
+                active_mass_millionths: discovered_mass_millionths,
+                cumulative_discovered_millionths,
+                cumulative_retired_millionths,
+            });
+        }
+
+        tracker
+    }
+
+    fn derive_dark_matter_estimate(
+        &self,
+        tracker: &BurndownTracker,
+        now_epoch_secs: u64,
+    ) -> DarkMatterEstimate {
+        let mut estimate = DarkMatterEstimate::new(MILLION, self.epoch, now_epoch_secs);
+        for region in &self.regions {
+            estimate.add_region(region.clone());
+        }
+
+        let explicit_active_mass = estimate.active_mass();
+        let derived_active_mass = tracker.latest_active_mass();
+        if derived_active_mass > explicit_active_mass {
+            estimate.add_region(DarkMatterRegion {
+                region_id: "semantic_dark_matter_backlog".to_string(),
+                kind: DarkMatterRegionKind::UntestedCodePath,
+                mass_millionths: derived_active_mass.saturating_sub(explicit_active_mass),
+                retired: false,
+                discovered_at_epoch_secs: now_epoch_secs,
+                retired_at_epoch_secs: None,
+                priority_weight_millionths: MILLION,
+            });
+        }
+
+        estimate
     }
 }
 
@@ -756,7 +898,9 @@ pub fn run_dark_matter_corpus() -> DarkMatterEvidenceInventory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dark_matter_saturation_gate::DarkMatterRegionKind;
+    use crate::dark_matter_saturation_gate::{
+        DarkMatterRegionKind, FreshnessReason, SaturationReason,
+    };
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(1)
@@ -834,6 +978,13 @@ mod tests {
         }
 
         receipts
+    }
+
+    fn gate_ready_config(min_observations: u64) -> DarkMatterEngineConfig {
+        let mut config = DarkMatterEngineConfig::default();
+        config.saturation_config.min_observations = min_observations;
+        config.saturation_config.velocity_window = min_observations.max(1) as usize;
+        config
     }
 
     #[test]
@@ -1158,6 +1309,54 @@ mod tests {
     }
 
     #[test]
+    fn test_content_hash_covers_board_state_receipt_evidence() {
+        let config = gate_ready_config(2);
+        let mut saturated = DarkMatterEngineOrchestrator::new(test_epoch(), config.clone());
+        let mut insufficient = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+        let seed_rejections = vec![
+            make_candidate("low-1", CandidateKind::Program, 10_000),
+            make_candidate("low-2", CandidateKind::Program, 10_000),
+            make_candidate("low-3", CandidateKind::Program, 10_000),
+        ];
+        let promoted_batch = vec![
+            make_candidate("high-1", CandidateKind::Program, 900_000),
+            make_candidate("high-2", CandidateKind::Program, 900_000),
+            make_candidate("high-3", CandidateKind::Program, 900_000),
+        ];
+
+        saturated
+            .discover(&seed_rejections)
+            .expect("seed cycle should succeed");
+        let saturated_result = saturated
+            .discover(&promoted_batch)
+            .expect("second cycle should succeed");
+        let insufficient_result = insufficient
+            .discover(&promoted_batch)
+            .expect("single cycle should succeed");
+
+        assert_eq!(
+            saturated_result.candidate_receipts,
+            insufficient_result.candidate_receipts
+        );
+        assert_ne!(
+            saturated_result
+                .board_state_receipt
+                .as_ref()
+                .expect("receipt should be present")
+                .receipt_hash,
+            insufficient_result
+                .board_state_receipt
+                .as_ref()
+                .expect("receipt should be present")
+                .receipt_hash
+        );
+        assert_ne!(
+            saturated_result.content_hash,
+            insufficient_result.content_hash
+        );
+    }
+
+    #[test]
     fn test_avg_novelty_calculation() {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
         let candidates = vec![
@@ -1199,51 +1398,112 @@ mod tests {
     }
 
     #[test]
-    fn test_board_state_after_high_promotion() {
-        let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
-        let candidates = vec![
-            make_candidate("h1", CandidateKind::Program, 900_000),
-            make_candidate("h2", CandidateKind::Package, 800_000),
-            make_candidate("h3", CandidateKind::ReactComponent, 700_000),
-        ];
-        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let _ = engine
-            .discover(&candidates)
-            .expect("serde deserialization should succeed");
-        let (promoted, _, _, _) = expected_cycle_metrics(&engine.config, &candidates);
-        let promotion_rate = (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64;
-        let expected = if promotion_rate > 700_000 {
-            BoardState::Saturated
-        } else if promotion_rate > 300_000 {
-            BoardState::ScopeLimited
-        } else {
-            BoardState::Stale
-        };
-        assert_eq!(*engine.board_state(), expected);
+    fn test_board_state_receipt_stale_without_observations() {
+        let engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
+        let receipt = engine.board_state_receipt();
+
+        assert_eq!(receipt.composite_state, BoardState::Stale);
+        assert!(matches!(
+            receipt.freshness_verdict.reason,
+            FreshnessReason::NoObservations
+        ));
     }
 
     #[test]
-    fn test_board_state_after_low_promotion() {
-        let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
-        let candidates = vec![
-            make_candidate("l1", CandidateKind::Program, 100_000),
-            make_candidate("l2", CandidateKind::Program, 200_000),
-            make_candidate("l3", CandidateKind::Program, 300_000),
+    fn test_board_state_receipt_scope_limited_with_insufficient_observations() {
+        let config = gate_ready_config(2);
+        let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+        let result = engine
+            .discover(&[
+                make_candidate("high-1", CandidateKind::Program, 900_000),
+                make_candidate("high-2", CandidateKind::Program, 900_000),
+            ])
+            .expect("semantic dark matter discovery should succeed");
+        let receipt = result
+            .board_state_receipt
+            .expect("board-state receipt should be emitted");
+
+        assert_eq!(receipt.composite_state, BoardState::ScopeLimited);
+        assert!(
+            receipt
+                .saturation_verdict
+                .reasons
+                .iter()
+                .any(|reason| matches!(reason, SaturationReason::InsufficientObservations { .. }))
+        );
+    }
+
+    #[test]
+    fn test_board_state_receipt_saturated_with_positive_burndown_and_low_dark_matter() {
+        let config = gate_ready_config(2);
+        let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+        let first_cycle = vec![
+            make_candidate("low-1", CandidateKind::Program, 10_000),
+            make_candidate("low-2", CandidateKind::Program, 10_000),
+            make_candidate("low-3", CandidateKind::Program, 10_000),
         ];
-        // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let _ = engine
-            .discover(&candidates)
-            .expect("serde deserialization should succeed");
-        let (promoted, _, _, _) = expected_cycle_metrics(&engine.config, &candidates);
-        let promotion_rate = (promoted as u64).saturating_mul(MILLION) / candidates.len() as u64;
-        let expected = if promotion_rate > 700_000 {
-            BoardState::Saturated
-        } else if promotion_rate > 300_000 {
-            BoardState::ScopeLimited
-        } else {
-            BoardState::Stale
-        };
-        assert_eq!(*engine.board_state(), expected);
+        let second_cycle = vec![
+            make_candidate("high-1", CandidateKind::Program, 900_000),
+            make_candidate("high-2", CandidateKind::Program, 900_000),
+            make_candidate("high-3", CandidateKind::Program, 900_000),
+        ];
+
+        engine
+            .discover(&first_cycle)
+            .expect("seed cycle should succeed");
+        let result = engine
+            .discover(&second_cycle)
+            .expect("semantic dark matter discovery should succeed");
+        let receipt = result
+            .board_state_receipt
+            .expect("board-state receipt should be emitted");
+
+        assert_eq!(receipt.composite_state, BoardState::Saturated);
+        assert!(receipt.saturation_verdict.reasons.iter().any(|reason| {
+            matches!(reason, SaturationReason::LowDarkMatterWithPositiveBurndown)
+        }));
+        assert_eq!(*engine.board_state(), BoardState::Saturated);
+    }
+
+    #[test]
+    fn test_board_state_receipt_scope_limited_with_negative_burndown_and_high_dark_matter() {
+        let config = gate_ready_config(2);
+        let mut engine = DarkMatterEngineOrchestrator::new(test_epoch(), config);
+        let first_cycle = vec![
+            make_candidate("high-1", CandidateKind::Program, 900_000),
+            make_candidate("high-2", CandidateKind::Program, 900_000),
+            make_candidate("high-3", CandidateKind::Program, 900_000),
+        ];
+        let second_cycle = vec![
+            make_candidate("low-1", CandidateKind::Program, 10_000),
+            make_candidate("low-2", CandidateKind::Program, 10_000),
+            make_candidate("low-3", CandidateKind::Program, 10_000),
+        ];
+
+        engine
+            .discover(&first_cycle)
+            .expect("seed cycle should succeed");
+        let result = engine
+            .discover(&second_cycle)
+            .expect("semantic dark matter discovery should succeed");
+        let receipt = result
+            .board_state_receipt
+            .expect("board-state receipt should be emitted");
+
+        assert_eq!(receipt.composite_state, BoardState::ScopeLimited);
+        assert!(
+            receipt.saturation_verdict.reasons.iter().any(|reason| {
+                matches!(reason, SaturationReason::HighDarkMatterFraction { .. })
+            })
+        );
+        assert!(
+            receipt
+                .saturation_verdict
+                .reasons
+                .iter()
+                .any(|reason| { matches!(reason, SaturationReason::NegativeBurndown { .. }) })
+        );
+        assert_eq!(*engine.board_state(), BoardState::ScopeLimited);
     }
 
     #[test]

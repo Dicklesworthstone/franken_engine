@@ -8,9 +8,12 @@
   "verification_commands": [
     "jq empty docs/swarm_validation_control_plane_contract_v1.json",
     "bash -n scripts/e2e/swarm_validation_control_plane_contract_smoke.sh",
+    "bash -n scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh",
     "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check",
     "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh selftest",
-    "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json scripts/e2e/swarm_validation_control_plane_contract_smoke.sh"
+    "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check",
+    "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh selftest",
+    "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md scripts/e2e/swarm_validation_control_plane_contract_smoke.sh scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
   ],
   "safe_mode_semantics": {
     "default_decision": "fail_closed",
@@ -134,6 +137,29 @@
       "downstream_beads": [
         "bd-1npwf",
         "bd-3snv2"
+      ]
+    },
+    {
+      "surface_id": "operator_runbook_truth_gate",
+      "role": "Fresh-operator workflow and docs drift gate for the swarm validation control plane.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md",
+        "scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
+      ],
+      "read_commands": [
+        "bash -n scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh",
+        "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check",
+        "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh selftest"
+      ],
+      "artifacts_emitted": [
+        "docs_truth_gate_report",
+        "runbook_command_inventory",
+        "bare_cargo_rejection"
+      ],
+      "downstream_beads": [
+        "bd-1npwf",
+        "bd-ckrz1"
       ]
     },
     {
@@ -357,6 +383,22 @@
         "rch_status",
         "target_dir_writable"
       ]
+    },
+    {
+      "bead_id": "bd-1npwf",
+      "title": "[SWARM-CTRL-I] Add operator runbook and docs truth gate for swarm validation",
+      "requires_surfaces": [
+        "bead_graph_state",
+        "coordination_mail_reservations",
+        "operator_runbook_truth_gate",
+        "rch_wrapped_release_gate"
+      ],
+      "requires_signals": [
+        "git_dirty_state",
+        "file_reservation_overlap",
+        "rch_local_fallback",
+        "target_dir_writable"
+      ]
     }
   ],
   "sibling_reuse_policy": [
@@ -411,6 +453,16 @@
         "reservations",
         "resource_decisions",
         "proof_outcomes"
+      ]
+    },
+    {
+      "artifact_id": "docs_truth_gate_report",
+      "schema_version": "franken-engine.swarm-validation-docs-truth-gate.v1",
+      "required_fields": [
+        "checked_paths",
+        "required_runbook_topics",
+        "contract_surface",
+        "heavy_cargo_command_shape"
       ]
     }
   ]

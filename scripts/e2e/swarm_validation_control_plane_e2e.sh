@@ -59,9 +59,15 @@ run_check() {
   jq empty "${root_dir}/docs/swarm_validation_control_plane_contract_v1.json"
   record_pass "contract json parses"
 
+  bash -n "${root_dir}/scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
+  "${root_dir}/scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh" check
+  record_pass "docs truth gate"
+
   scope_file="${wrapper_dir}/rch-policy-scope.txt"
   printf '%s\n' \
     "scripts/e2e/swarm_validation_control_plane_e2e.sh" \
+    "scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh" \
+    "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md" \
     "docs/swarm_validation_control_plane_contract_v1.json" \
     >"${scope_file}"
   "${root_dir}/scripts/rch_policy_compliance_gate.sh" \

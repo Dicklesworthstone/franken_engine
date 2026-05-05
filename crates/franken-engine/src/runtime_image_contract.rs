@@ -873,21 +873,61 @@ impl ImageRegistry {
 
     /// Deterministic content hash over the entire registry state.
     pub fn content_hash(&self) -> ContentHash {
+        fn push_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
+            data.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            data.extend_from_slice(bytes);
+        }
+
+        fn push_str(data: &mut Vec<u8>, value: &str) {
+            push_bytes(data, value.as_bytes());
+        }
+
+        fn push_bool(data: &mut Vec<u8>, value: bool) {
+            data.push(u8::from(value));
+        }
+
+        fn push_u64(data: &mut Vec<u8>, value: u64) {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+
         let mut data = Vec::new();
-        data.extend_from_slice(self.schema_version.as_bytes());
+        push_str(&mut data, &self.schema_version);
+        push_u64(&mut data, self.policy.max_image_count);
+        push_u64(&mut data, self.policy.max_total_bytes);
+        push_u64(&mut data, self.policy.default_ttl_seconds);
+        push_bool(&mut data, self.policy.allow_zygote);
+        push_bool(&mut data, self.policy.allow_cow);
+        push_bool(&mut data, self.policy.allow_aot);
+        push_bool(&mut data, self.policy.require_integrity_check);
+        push_u64(&mut data, self.policy.min_module_count_for_image);
+
         let mut sorted_images: Vec<_> = self.images.iter().collect();
         sorted_images.sort_by_key(|img| &img.image_id);
         for img in &sorted_images {
-            data.extend_from_slice(img.image_id.as_bytes());
-            data.extend_from_slice(img.image_hash.as_bytes());
-            data.extend_from_slice(&img.total_size_bytes.to_le_bytes());
-            data.extend_from_slice(&img.module_count.to_le_bytes());
-            data.extend_from_slice(&img.creation_epoch.as_u64().to_le_bytes());
+            push_str(&mut data, &img.image_id);
+            push_str(&mut data, &img.kind.to_string());
+            push_str(&mut data, &img.state.to_string());
+            push_u64(&mut data, img.creation_epoch.as_u64());
+            push_bytes(&mut data, img.source_hash.as_bytes());
+            push_bytes(&mut data, img.image_hash.as_bytes());
+            push_u64(&mut data, img.module_count);
+            push_u64(&mut data, img.total_size_bytes);
+            push_str(&mut data, &img.warm_start_mode.to_string());
+            push_str(&mut data, &img.integrity_status.to_string());
+            match img.ttl_seconds {
+                Some(ttl_seconds) => {
+                    data.push(1);
+                    push_u64(&mut data, ttl_seconds);
+                }
+                None => data.push(0),
+            }
+            push_str(&mut data, &img.creation_reason);
         }
         for ev in &self.eviction_log {
-            data.extend_from_slice(ev.image_id.as_bytes());
-            data.extend_from_slice(&ev.bytes_freed.to_le_bytes());
-            data.extend_from_slice(&ev.evicted_epoch.as_u64().to_le_bytes());
+            push_str(&mut data, &ev.image_id);
+            push_str(&mut data, &ev.reason.to_string());
+            push_u64(&mut data, ev.evicted_epoch.as_u64());
+            push_u64(&mut data, ev.bytes_freed);
         }
         ContentHash::compute(&data)
     }
@@ -1619,6 +1659,42 @@ mod tests {
         let mut r2 = ImageRegistry::new(test_policy());
         r2.register(test_manifest("y"))
             .expect("serde deserialization should succeed");
+        assert_ne!(r1.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn registry_content_hash_differs_with_warm_start_mode() {
+        let mut r1 = ImageRegistry::new(test_policy());
+        let mut x1 = test_manifest("x");
+        x1.kind = ImageKind::Prewarmed;
+        x1.warm_start_mode = WarmStartMode::PrewarmedPool;
+        r1.register(x1)
+            .expect("serde deserialization should succeed");
+
+        let mut r2 = ImageRegistry::new(test_policy());
+        let mut x2 = test_manifest("x");
+        x2.kind = ImageKind::AotCompiled;
+        x2.warm_start_mode = WarmStartMode::AotRestore;
+        r2.register(x2)
+            .expect("serde deserialization should succeed");
+
+        assert_ne!(r1.content_hash(), r2.content_hash());
+    }
+
+    #[test]
+    fn registry_content_hash_differs_with_integrity_status() {
+        let mut r1 = ImageRegistry::new(test_policy());
+        let mut x1 = test_manifest("x");
+        x1.integrity_status = ImageIntegrityStatus::Verified;
+        r1.register(x1)
+            .expect("serde deserialization should succeed");
+
+        let mut r2 = ImageRegistry::new(test_policy());
+        let mut x2 = test_manifest("x");
+        x2.integrity_status = ImageIntegrityStatus::Unverified;
+        r2.register(x2)
+            .expect("serde deserialization should succeed");
+
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
 

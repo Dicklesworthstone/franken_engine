@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::resource_certificate_consumer::{
     BudgetEnforcer, EnforcedDimension, EnforcementDecision, EnforcementScope, SharedBudgetEnforcer,
@@ -293,6 +294,51 @@ pub struct TimedDeadlineBacklogSnapshot {
     pub trace_ids: Vec<String>,
 }
 
+/// Schema version for per-extension fairness ledgers.
+pub const EXTENSION_FAIRNESS_LEDGER_SCHEMA_VERSION: u32 = 1;
+
+/// Replayable per-extension scheduler fairness ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionFairnessLedger {
+    /// Ledger schema version.
+    pub schema_version: u32,
+    /// Scheduler tick used to compute queued wait ages.
+    pub current_ticks: u64,
+    /// Content-addressed identifier over the deterministic ledger payload.
+    pub report_id: String,
+    /// One compact row per extension, sorted by extension ID.
+    pub extensions: Vec<ExtensionFairnessRow>,
+}
+
+/// Per-extension scheduler fairness accounting row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionFairnessRow {
+    /// Extension identifier.
+    pub extension_id: String,
+    /// Admission attempts observed for this extension.
+    pub attempted_count: u64,
+    /// Attempts that reached the scheduler queue.
+    pub submitted_count: u64,
+    /// Attempts admitted by the admission policy.
+    pub admitted_count: u64,
+    /// Tasks currently queued for this extension.
+    pub queued_count: u64,
+    /// Tasks scheduled for execution.
+    pub scheduled_count: u64,
+    /// Admitted attempts that were throttled.
+    pub throttled_count: u64,
+    /// Attempts or queued tasks shed before execution.
+    pub shed_count: u64,
+    /// Wait age of the oldest currently queued task.
+    pub oldest_wait_ticks: Option<u64>,
+    /// Submitted tasks by scheduler lane.
+    pub per_lane_submitted: BTreeMap<String, u64>,
+    /// Currently queued tasks by scheduler lane.
+    pub per_lane_queued: BTreeMap<String, u64>,
+    /// Scheduled tasks by scheduler lane.
+    pub per_lane_scheduled: BTreeMap<String, u64>,
+}
+
 // ---------------------------------------------------------------------------
 // LaneConfig — configurable lane parameters
 // ---------------------------------------------------------------------------
@@ -409,6 +455,25 @@ impl std::error::Error for LaneError {}
 // LaneScheduler — the scheduler
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExtensionFairnessStats {
+    attempted_count: u64,
+    submitted_count: u64,
+    admitted_count: u64,
+    scheduled_count: u64,
+    throttled_count: u64,
+    shed_count: u64,
+    per_lane_submitted: BTreeMap<String, u64>,
+    per_lane_scheduled: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExtensionQueueObservation {
+    queued_count: u64,
+    oldest_wait_ticks: Option<u64>,
+    per_lane_queued: BTreeMap<String, u64>,
+}
+
 /// Prioritized multi-lane task scheduler.
 ///
 /// Dequeue order: all cancel-lane tasks first, then timed-lane tasks
@@ -441,6 +506,10 @@ pub struct LaneScheduler {
     event_counts: BTreeMap<String, u64>,
     /// Resource budget enforcer for task scheduling.
     budget_enforcer: Option<SharedBudgetEnforcer>,
+    /// Extension owner for queued tasks submitted through `submit_for_extension`.
+    task_extensions: BTreeMap<TaskId, String>,
+    /// Per-extension fairness counters for operator ledgers.
+    extension_fairness: BTreeMap<String, ExtensionFairnessStats>,
 }
 
 impl LaneScheduler {
@@ -468,6 +537,8 @@ impl LaneScheduler {
             events: Vec::new(),
             event_counts: BTreeMap::new(),
             budget_enforcer: None,
+            task_extensions: BTreeMap::new(),
+            extension_fairness: BTreeMap::new(),
         }
     }
 
@@ -601,12 +672,36 @@ impl LaneScheduler {
         payload_id: &str,
         current_ticks: u64,
     ) -> Result<TaskId, LaneError> {
-        self.validate_submission(&label)?;
+        let lane = label.lane;
+        if let Err(err) = self.validate_submission(&label) {
+            self.record_extension_shed(extension_id, lane);
+            return Err(err);
+        }
 
-        let throttled =
-            self.try_enforce_admission(extension_id, &label, deadline_tick, current_ticks)?;
+        let throttled = match self.try_enforce_admission(
+            extension_id,
+            &label,
+            deadline_tick,
+            current_ticks,
+        ) {
+            Ok(throttled) => throttled,
+            Err(err) => {
+                self.record_extension_shed(extension_id, lane);
+                return Err(err);
+            }
+        };
 
-        let task_id = self.submit(label.clone(), deadline_tick, payload_id, current_ticks)?;
+        let task_id = match self.submit(label.clone(), deadline_tick, payload_id, current_ticks) {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                self.record_extension_shed(extension_id, lane);
+                return Err(err);
+            }
+        };
+
+        self.task_extensions
+            .insert(task_id, extension_id.to_string());
+        self.record_extension_admission(extension_id, lane, throttled);
 
         if throttled {
             let queue_position = self.queue_depth(label.lane).saturating_sub(1);
@@ -614,7 +709,7 @@ impl LaneScheduler {
                 task_id: task_id.0,
                 lane: label.lane.to_string(),
                 task_type: label.task_type.to_string(),
-                trace_id: label.trace_id,
+                trace_id: label.trace_id.clone(),
                 queue_position,
                 event: "submit_throttled".to_string(),
             });
@@ -756,6 +851,7 @@ impl LaneScheduler {
             if let Some(m) = self.metrics.get_mut("timed") {
                 m.tasks_timed_out += 1;
             }
+            self.record_extension_shed_for_task(task);
             self.emit_event(SchedulerEvent {
                 task_id: task.task_id.0,
                 lane: "timed".to_string(),
@@ -848,6 +944,37 @@ impl LaneScheduler {
                 .get("submit_throttled")
                 .copied()
                 .unwrap_or(0),
+        }
+    }
+
+    /// Build a deterministic per-extension fairness ledger for operator use.
+    pub fn extension_fairness_ledger(&self, current_ticks: u64) -> ExtensionFairnessLedger {
+        let queue_observations = self.extension_queue_observations(current_ticks);
+        let mut rows = BTreeMap::new();
+
+        for (extension_id, stats) in &self.extension_fairness {
+            let observation = queue_observations.get(extension_id);
+            rows.insert(
+                extension_id.clone(),
+                Self::extension_fairness_row(extension_id, stats, observation),
+            );
+        }
+
+        for (extension_id, observation) in &queue_observations {
+            rows.entry(extension_id.clone()).or_insert_with(|| {
+                let stats = ExtensionFairnessStats::default();
+                Self::extension_fairness_row(extension_id, &stats, Some(observation))
+            });
+        }
+
+        let extensions: Vec<_> = rows.into_values().collect();
+        let report_id = Self::extension_fairness_report_id(current_ticks, &extensions);
+
+        ExtensionFairnessLedger {
+            schema_version: EXTENSION_FAIRNESS_LEDGER_SCHEMA_VERSION,
+            current_ticks,
+            report_id,
+            extensions,
         }
     }
 
@@ -968,6 +1095,7 @@ impl LaneScheduler {
         if let Some(m) = self.metrics.get_mut(&task.label.lane.to_string()) {
             m.tasks_scheduled += 1;
         }
+        self.record_extension_schedule(task);
         self.emit_event(SchedulerEvent {
             task_id: task.task_id.0,
             lane: task.label.lane.to_string(),
@@ -977,6 +1105,145 @@ impl LaneScheduler {
             event: "schedule".to_string(),
         });
         self.record_count("schedule");
+    }
+
+    fn extension_fairness_row(
+        extension_id: &str,
+        stats: &ExtensionFairnessStats,
+        observation: Option<&ExtensionQueueObservation>,
+    ) -> ExtensionFairnessRow {
+        ExtensionFairnessRow {
+            extension_id: extension_id.to_string(),
+            attempted_count: stats.attempted_count,
+            submitted_count: stats.submitted_count,
+            admitted_count: stats.admitted_count,
+            queued_count: observation
+                .map(|queued| queued.queued_count)
+                .unwrap_or_default(),
+            scheduled_count: stats.scheduled_count,
+            throttled_count: stats.throttled_count,
+            shed_count: stats.shed_count,
+            oldest_wait_ticks: observation.and_then(|queued| queued.oldest_wait_ticks),
+            per_lane_submitted: stats.per_lane_submitted.clone(),
+            per_lane_queued: observation
+                .map(|queued| queued.per_lane_queued.clone())
+                .unwrap_or_default(),
+            per_lane_scheduled: stats.per_lane_scheduled.clone(),
+        }
+    }
+
+    fn extension_fairness_report_id(
+        current_ticks: u64,
+        extensions: &[ExtensionFairnessRow],
+    ) -> String {
+        #[derive(Serialize)]
+        struct DigestEnvelope<'a> {
+            schema_version: u32,
+            current_ticks: u64,
+            extensions: &'a [ExtensionFairnessRow],
+        }
+
+        let bytes = serde_json::to_vec(&DigestEnvelope {
+            schema_version: EXTENSION_FAIRNESS_LEDGER_SCHEMA_VERSION,
+            current_ticks,
+            extensions,
+        })
+        .expect("extension fairness ledger rows are JSON-serializable");
+        format!(
+            "scheduler-fairness-sha256:{}",
+            hex::encode(Sha256::digest(&bytes))
+        )
+    }
+
+    fn extension_queue_observations(
+        &self,
+        current_ticks: u64,
+    ) -> BTreeMap<String, ExtensionQueueObservation> {
+        let mut observations = BTreeMap::new();
+        self.observe_extension_queue(&mut observations, self.cancel_queue.iter(), current_ticks);
+        self.observe_extension_queue(
+            &mut observations,
+            self.timed_queue.values().flat_map(|bucket| bucket.iter()),
+            current_ticks,
+        );
+        self.observe_extension_queue(&mut observations, self.ready_queue.iter(), current_ticks);
+        observations
+    }
+
+    fn observe_extension_queue<'a, I>(
+        &self,
+        observations: &mut BTreeMap<String, ExtensionQueueObservation>,
+        tasks: I,
+        current_ticks: u64,
+    ) where
+        I: IntoIterator<Item = &'a ScheduledTask>,
+    {
+        for task in tasks {
+            let Some(extension_id) = self.task_extensions.get(&task.task_id) else {
+                continue;
+            };
+            let observation = observations.entry(extension_id.clone()).or_default();
+            observation.queued_count += 1;
+            let wait_ticks = current_ticks.saturating_sub(task.submitted_at);
+            observation.oldest_wait_ticks = Some(
+                observation
+                    .oldest_wait_ticks
+                    .map(|oldest| oldest.max(wait_ticks))
+                    .unwrap_or(wait_ticks),
+            );
+            *observation
+                .per_lane_queued
+                .entry(task.label.lane.to_string())
+                .or_insert(0) += 1;
+        }
+    }
+
+    fn extension_stats_mut(&mut self, extension_id: &str) -> &mut ExtensionFairnessStats {
+        self.extension_fairness
+            .entry(extension_id.to_string())
+            .or_default()
+    }
+
+    fn record_extension_admission(
+        &mut self,
+        extension_id: &str,
+        lane: SchedulerLane,
+        throttled: bool,
+    ) {
+        let stats = self.extension_stats_mut(extension_id);
+        stats.attempted_count += 1;
+        stats.submitted_count += 1;
+        stats.admitted_count += 1;
+        if throttled {
+            stats.throttled_count += 1;
+        }
+        *stats
+            .per_lane_submitted
+            .entry(lane.to_string())
+            .or_insert(0) += 1;
+    }
+
+    fn record_extension_shed(&mut self, extension_id: &str, _lane: SchedulerLane) {
+        let stats = self.extension_stats_mut(extension_id);
+        stats.attempted_count += 1;
+        stats.shed_count += 1;
+    }
+
+    fn record_extension_shed_for_task(&mut self, task: &ScheduledTask) {
+        if let Some(extension_id) = self.task_extensions.remove(&task.task_id) {
+            self.extension_stats_mut(&extension_id).shed_count += 1;
+        }
+    }
+
+    fn record_extension_schedule(&mut self, task: &ScheduledTask) {
+        if let Some(extension_id) = self.task_extensions.remove(&task.task_id) {
+            let stats = self.extension_stats_mut(&extension_id);
+            stats.scheduled_count += 1;
+            *stats
+                .per_lane_scheduled
+                .entry(task.label.lane.to_string())
+                .or_insert(0) += 1;
+        }
     }
 
     fn update_queue_depths(&mut self) {
@@ -1068,6 +1335,17 @@ mod tests {
             .iter()
             .find(|entry| entry.lane.as_str() == lane)
             .expect("lane snapshot should be present")
+    }
+
+    fn fairness_row<'a>(
+        ledger: &'a ExtensionFairnessLedger,
+        extension_id: &str,
+    ) -> &'a ExtensionFairnessRow {
+        ledger
+            .extensions
+            .iter()
+            .find(|row| row.extension_id == extension_id)
+            .expect("extension fairness row should be present")
     }
 
     #[derive(Debug, Clone)]
@@ -3638,11 +3916,11 @@ mod tests {
     };
     use crate::security_epoch::SecurityEpoch;
 
-    fn admission_enforcer(extension_id: &str, time_bound: i64) -> BudgetEnforcer {
-        let mut enforcer = BudgetEnforcer::new(
-            BudgetEnforcementPolicy::default(),
-            SecurityEpoch::from_raw(1),
-        );
+    fn install_admission_certificate(
+        enforcer: &mut BudgetEnforcer,
+        extension_id: &str,
+        time_bound: i64,
+    ) {
         enforcer
             .install_certificate(
                 extension_id,
@@ -3670,7 +3948,21 @@ mod tests {
                 },
             )
             .expect("certificate install should succeed");
+    }
+
+    fn admission_enforcer_for(bounds: &[(&str, i64)]) -> BudgetEnforcer {
+        let mut enforcer = BudgetEnforcer::new(
+            BudgetEnforcementPolicy::default(),
+            SecurityEpoch::from_raw(1),
+        );
+        for (extension_id, time_bound) in bounds {
+            install_admission_certificate(&mut enforcer, extension_id, *time_bound);
+        }
         enforcer
+    }
+
+    fn admission_enforcer(extension_id: &str, time_bound: i64) -> BudgetEnforcer {
+        admission_enforcer_for(&[(extension_id, time_bound)])
     }
 
     #[test]
@@ -3869,6 +4161,147 @@ mod tests {
             .expect("submit_throttled event should be present");
         assert_eq!(throttled_event.task_id, task_id.0);
         assert_eq!(throttled_event.queue_position, 1);
+    }
+
+    #[test]
+    fn extension_fairness_ledger_orders_rows_and_counts_mixed_extensions() {
+        let mut sched = LaneScheduler::new(LaneConfig {
+            ready_min_throughput: 0,
+            ..LaneConfig::default()
+        });
+        sched.set_budget_enforcer(admission_enforcer_for(&[
+            ("ext-a", 100),
+            ("ext-b", 1_000_000),
+            ("ext-c", 1_000_000),
+        ]));
+
+        sched
+            .submit_for_extension("ext-b", ready_label("trace-b"), 0, "payload-b", 10)
+            .expect("ext-b ready admission should succeed");
+        sched
+            .submit_for_extension("ext-a", timed_label("trace-a"), 95, "payload-a", 0)
+            .expect("ext-a timed admission should throttle but queue");
+        sched
+            .submit_for_extension("ext-c", cancel_label("trace-c"), 0, "payload-c", 12)
+            .expect("ext-c cancel admission should succeed");
+        let rejected = sched.submit_for_extension(
+            "ext-a",
+            ready_label("trace-a-reject"),
+            1_000_000,
+            "payload-a-reject",
+            0,
+        );
+        assert!(matches!(rejected, Err(LaneError::BudgetExceeded { .. })));
+
+        let batch = sched.schedule_batch(2, 100);
+        let payloads: Vec<_> = batch.iter().map(|task| task.payload_id.as_str()).collect();
+        assert_eq!(payloads, vec!["payload-c", "payload-a"]);
+
+        let ledger = sched.extension_fairness_ledger(100);
+        assert_eq!(
+            ledger.schema_version,
+            EXTENSION_FAIRNESS_LEDGER_SCHEMA_VERSION
+        );
+        assert!(ledger
+            .report_id
+            .starts_with("scheduler-fairness-sha256:"));
+        assert_eq!(
+            ledger.report_id.len(),
+            "scheduler-fairness-sha256:".len() + 64
+        );
+        let extension_ids: Vec<_> = ledger
+            .extensions
+            .iter()
+            .map(|row| row.extension_id.as_str())
+            .collect();
+        assert_eq!(extension_ids, vec!["ext-a", "ext-b", "ext-c"]);
+
+        let ext_a = fairness_row(&ledger, "ext-a");
+        assert_eq!(ext_a.attempted_count, 2);
+        assert_eq!(ext_a.submitted_count, 1);
+        assert_eq!(ext_a.admitted_count, 1);
+        assert_eq!(ext_a.queued_count, 0);
+        assert_eq!(ext_a.scheduled_count, 1);
+        assert_eq!(ext_a.throttled_count, 1);
+        assert_eq!(ext_a.shed_count, 1);
+        assert_eq!(ext_a.oldest_wait_ticks, None);
+        assert_eq!(ext_a.per_lane_submitted.get("timed"), Some(&1));
+        assert_eq!(ext_a.per_lane_scheduled.get("timed"), Some(&1));
+
+        let ext_b = fairness_row(&ledger, "ext-b");
+        assert_eq!(ext_b.attempted_count, 1);
+        assert_eq!(ext_b.submitted_count, 1);
+        assert_eq!(ext_b.admitted_count, 1);
+        assert_eq!(ext_b.queued_count, 1);
+        assert_eq!(ext_b.scheduled_count, 0);
+        assert_eq!(ext_b.throttled_count, 0);
+        assert_eq!(ext_b.shed_count, 0);
+        assert_eq!(ext_b.oldest_wait_ticks, Some(90));
+        assert_eq!(ext_b.per_lane_submitted.get("ready"), Some(&1));
+        assert_eq!(ext_b.per_lane_queued.get("ready"), Some(&1));
+
+        let ext_c = fairness_row(&ledger, "ext-c");
+        assert_eq!(ext_c.attempted_count, 1);
+        assert_eq!(ext_c.submitted_count, 1);
+        assert_eq!(ext_c.admitted_count, 1);
+        assert_eq!(ext_c.queued_count, 0);
+        assert_eq!(ext_c.scheduled_count, 1);
+        assert_eq!(ext_c.throttled_count, 0);
+        assert_eq!(ext_c.shed_count, 0);
+        assert_eq!(ext_c.per_lane_submitted.get("cancel"), Some(&1));
+        assert_eq!(ext_c.per_lane_scheduled.get("cancel"), Some(&1));
+
+        let json = serde_json::to_string(&ledger).expect("ledger should serialize");
+        let roundtrip: ExtensionFairnessLedger =
+            serde_json::from_str(&json).expect("ledger should deserialize");
+        assert_eq!(roundtrip, ledger);
+    }
+
+    #[test]
+    fn extension_fairness_report_id_is_content_addressed() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched
+            .submit_for_extension("ext-a", ready_label("trace-a"), 0, "payload-a", 0)
+            .expect("extension submit should succeed");
+
+        let first = sched.extension_fairness_ledger(10);
+        let second = sched.extension_fairness_ledger(10);
+        assert_eq!(first.report_id, second.report_id);
+
+        sched
+            .submit_for_extension("ext-a", ready_label("trace-b"), 0, "payload-b", 1)
+            .expect("second extension submit should succeed");
+        let changed_payload = sched.extension_fairness_ledger(10);
+        assert_ne!(first.report_id, changed_payload.report_id);
+
+        let changed_tick = sched.extension_fairness_ledger(11);
+        assert_ne!(changed_payload.report_id, changed_tick.report_id);
+    }
+
+    #[test]
+    fn extension_fairness_ledger_counts_timed_out_tasks_as_shed() {
+        let mut sched = LaneScheduler::new(LaneConfig {
+            ready_min_throughput: 0,
+            ..LaneConfig::default()
+        });
+        sched
+            .submit_for_extension("ext-a", timed_label("trace-timeout"), 10, "payload-timeout", 0)
+            .expect("timed extension submit should succeed");
+
+        let batch = sched.schedule_batch(0, 20);
+        assert!(batch.is_empty());
+
+        let ledger = sched.extension_fairness_ledger(20);
+        let ext_a = fairness_row(&ledger, "ext-a");
+        assert_eq!(ext_a.attempted_count, 1);
+        assert_eq!(ext_a.submitted_count, 1);
+        assert_eq!(ext_a.admitted_count, 1);
+        assert_eq!(ext_a.queued_count, 0);
+        assert_eq!(ext_a.scheduled_count, 0);
+        assert_eq!(ext_a.throttled_count, 0);
+        assert_eq!(ext_a.shed_count, 1);
+        assert_eq!(ext_a.oldest_wait_ticks, None);
+        assert!(ext_a.per_lane_queued.is_empty());
     }
 
     // bd-3l528: timed-lane data structure switched from drain+sort+rebuild

@@ -22,12 +22,12 @@ use frankenengine_engine::cold_start_aot_governance::{
 use frankenengine_engine::cold_start_compilation_lane::{
     AOT_BUNDLE_FILE, AOT_BUNDLE_SCHEMA_VERSION, AotBundleCompilationReport, ArtifactContext,
     BEAD_ID, COMPONENT, ColdStartCompilationReport, ColdStartObservabilityDeltaArtifact,
-    ColdStartObservabilityDeltaRow, EntryKindSummary, OBSERVABILITY_DELTA_FILE,
-    OBSERVABILITY_DELTA_SCHEMA_VERSION, PERSISTENT_CACHE_CONTRACT_FILE, PERSISTENT_CACHE_DIR,
-    POLICY_ID, REPORT_FILE, REPORT_SCHEMA_VERSION, RUNTIME_IMAGE_MANIFEST_FILE,
-    RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION, RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC,
-    RuntimeImageManifestArtifact, SUMMARY_FILE, TRACE_IDS_FILE, TRACE_IDS_SCHEMA_VERSION,
-    TraceIdsArtifact, render_summary,
+    ColdStartObservabilityDeltaRow, EntryKindSummary, MemoryEnvelopeVerdict,
+    OBSERVABILITY_DELTA_FILE, OBSERVABILITY_DELTA_SCHEMA_VERSION, PERSISTENT_CACHE_CONTRACT_FILE,
+    PERSISTENT_CACHE_DIR, POLICY_ID, REPORT_FILE, REPORT_SCHEMA_VERSION,
+    RUNTIME_IMAGE_MANIFEST_FILE, RUNTIME_IMAGE_MANIFEST_SCHEMA_VERSION,
+    RUNTIME_IMAGE_PROOF_STATUS_PROVISIONAL_SYNTHETIC, RuntimeImageManifestArtifact, SUMMARY_FILE,
+    TRACE_IDS_FILE, TRACE_IDS_SCHEMA_VERSION, TraceIdsArtifact, render_summary,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_image_contract::{ImagePolicy, ImageRegistry};
@@ -52,6 +52,8 @@ fn make_report() -> ColdStartCompilationReport {
         aot_bundle_report_path: AOT_BUNDLE_FILE.to_string(),
         runtime_image_manifest_path: RUNTIME_IMAGE_MANIFEST_FILE.to_string(),
         observability_delta_path: OBSERVABILITY_DELTA_FILE.to_string(),
+        memory_envelope_report_path: "memory_envelope_report.json".to_string(),
+        memory_envelope_publication_verdict: MemoryEnvelopeVerdict::Matching,
         governance_verdict: GovernanceVerdict::Approved,
         aggregate_benchmark_verdict: BenchmarkVerdict::Faster,
         aggregate_speedup_millionths: 150_000,

@@ -73,15 +73,17 @@ run_check() {
 run_selftest() {
   local target_dir
   local exit_code
+  local source_revision
 
   run_check
   target_dir="${SWARM_VALIDATION_CONTROL_PLANE_E2E_TARGET_DIR:-/tmp/rch_target_franken_engine_bd_3snv2_e2e}"
+  source_revision="$(git -C "${root_dir}" rev-parse HEAD 2>/dev/null || printf unknown)"
 
-  printf '%q ' rch exec -- env "CARGO_TARGET_DIR=${target_dir}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_ARTIFACT_ROOT=${artifact_root}" cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture >"${commands_path}"
+  printf '%q ' rch exec -- env "CARGO_TARGET_DIR=${target_dir}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_ARTIFACT_ROOT=${artifact_root}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_SOURCE_REVISION=${source_revision}" cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture >"${commands_path}"
   printf '\n' >>"${commands_path}"
 
   set +e
-  rch exec -- env "CARGO_TARGET_DIR=${target_dir}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_ARTIFACT_ROOT=${artifact_root}" cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture >"${stdout_path}" 2>"${stderr_path}"
+  rch exec -- env "CARGO_TARGET_DIR=${target_dir}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_ARTIFACT_ROOT=${artifact_root}" "SWARM_VALIDATION_CONTROL_PLANE_E2E_SOURCE_REVISION=${source_revision}" cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture >"${stdout_path}" 2>"${stderr_path}"
   exit_code=$?
   set -e
 
@@ -106,9 +108,11 @@ run_selftest() {
     --arg events_path "${events_path}" \
     --arg stdout_path "${stdout_path}" \
     --arg stderr_path "${stderr_path}" \
+    --arg source_revision "${source_revision}" \
     '{
       schema_version: $schema_version,
       status: "pass",
+      source_revision: $source_revision,
       artifact_root: $artifact_root,
       artifact_paths: {
         commands_txt: $commands_path,

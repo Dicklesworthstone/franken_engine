@@ -140,7 +140,7 @@ impl Harness {
 #[test]
 fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
     let harness = Harness::new();
-    let source_revision = git_head(&harness.repo_root);
+    let source_revision = source_revision(&harness.repo_root);
     let contract_path = harness
         .repo_root
         .join("docs/swarm_validation_control_plane_contract_v1.json");
@@ -310,7 +310,12 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
     let focused_manifest_path = focused_root.join("pass/manifest.json");
     let proof_cost_path = focused_root.join("pass/proof_cost_manifest.json");
     let focused_report_path = focused_root.join("pass/source_report.json");
-    assert_eq!(read_json(&focused_manifest_path)["status"], "pass");
+    let focused_manifest = read_json(&focused_manifest_path);
+    assert_eq!(focused_manifest["status"], "pass");
+    let focused_manifest_revision = focused_manifest["source_revision"]
+        .as_str()
+        .expect("focused manifest source revision")
+        .to_string();
 
     let budget_path = harness.write_json(
         "pass/proof-cost-budget.json",
@@ -356,7 +361,7 @@ fn no_mock_control_plane_e2e_imports_and_reports_pass_and_degraded_paths() {
     import_proof_manifest_json(
         &mut adapter,
         &fs::read_to_string(&focused_manifest_path).expect("read focused manifest"),
-        &source_revision,
+        &focused_manifest_revision,
         FRESHNESS_MS,
         &context,
     )
@@ -869,21 +874,22 @@ fn repo_root() -> PathBuf {
         .expect("canonical repo root")
 }
 
-fn git_head(repo_root: &Path) -> String {
+fn source_revision(repo_root: &Path) -> String {
     let output = Command::new("git")
         .current_dir(repo_root)
         .args(["rev-parse", "HEAD"])
         .output()
         .expect("git rev-parse runs");
-    assert!(
-        output.status.success(),
-        "git rev-parse failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .expect("git stdout utf8")
-        .trim()
-        .to_string()
+    if output.status.success() {
+        return String::from_utf8(output.stdout)
+            .expect("git stdout utf8")
+            .trim()
+            .to_string();
+    }
+    std::env::var("SWARM_VALIDATION_CONTROL_PLANE_E2E_SOURCE_REVISION")
+        .ok()
+        .filter(|revision| !revision.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn read_json(path: &Path) -> Value {

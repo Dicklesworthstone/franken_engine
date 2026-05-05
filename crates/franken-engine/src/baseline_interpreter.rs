@@ -21785,6 +21785,92 @@ mod function_prototype_call_apply_tests_current {
     }
 }
 
+#[cfg(test)]
+mod numeric_error_message_tests {
+    use super::*;
+
+    fn test_core() -> InterpreterCore {
+        InterpreterCore::new(
+            InterpreterConfig::quickjs_defaults(),
+            "numeric-error-message-test",
+        )
+    }
+
+    #[test]
+    fn eval_numeric_helpers_preserve_type_error_messages() {
+        let mut core = test_core();
+        core.registers.resize(4, Value::Undefined);
+        core.registers[0] = Value::Str("not-a-number".to_string());
+        core.registers[1] = Value::Int(1);
+
+        let arith_err = core
+            .eval_arith(0, 1, "mul")
+            .expect_err("non-numeric string * int should remain a TypeError");
+        assert_eq!(
+            arith_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "string mul number".to_string(),
+            }
+        );
+
+        let div_err = core
+            .eval_div(0, 1)
+            .expect_err("non-numeric string / int should remain a TypeError");
+        assert_eq!(
+            div_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "string / number".to_string(),
+            }
+        );
+
+        let mod_err = core
+            .eval_mod(0, 1)
+            .expect_err("non-numeric string % int should remain a TypeError");
+        assert_eq!(
+            mod_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "string % number".to_string(),
+            }
+        );
+
+        let exp_err = core
+            .eval_exp(0, 1)
+            .expect_err("non-numeric string ** int should remain a TypeError");
+        assert_eq!(
+            exp_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "string ** number".to_string(),
+            }
+        );
+
+        let bitwise_err = core
+            .eval_bitwise(0, 1, "&")
+            .expect_err("non-numeric string bitwise int should remain a TypeError");
+        assert_eq!(
+            bitwise_err,
+            InterpreterError::TypeError {
+                expected: "number".to_string(),
+                got: "string".to_string(),
+            }
+        );
+
+        let relational_err = core
+            .eval_relational(0, 1, "<")
+            .expect_err("non-numeric string < int should remain a TypeError");
+        assert_eq!(
+            relational_err,
+            InterpreterError::TypeError {
+                expected: "comparable primitive".to_string(),
+                got: "string < number".to_string(),
+            }
+        );
+    }
+}
+
 #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
 mod tests {
     use super::*;
@@ -25554,69 +25640,6 @@ mod tests {
     }
 
     // -- Mixed Int/Float arithmetic tests --
-
-    #[test]
-    fn eval_numeric_helpers_preserve_type_error_messages() {
-        let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
-        core.registers[0] = Value::Object(ObjectId(7));
-        core.registers[1] = Value::Int(1);
-
-        let add_err = core
-            .eval_add(0, 1)
-            .expect_err("object + int should remain a TypeError");
-        assert_eq!(
-            add_err,
-            InterpreterError::TypeError {
-                expected: "number or string".to_string(),
-                got: "object + number".to_string(),
-            }
-        );
-
-        let arith_err = core
-            .eval_arith(0, 1, "mul")
-            .expect_err("object * int should remain a TypeError");
-        assert_eq!(
-            arith_err,
-            InterpreterError::TypeError {
-                expected: "number".to_string(),
-                got: "object mul number".to_string(),
-            }
-        );
-
-        let div_err = core
-            .eval_div(0, 1)
-            .expect_err("object / int should remain a TypeError");
-        assert_eq!(
-            div_err,
-            InterpreterError::TypeError {
-                expected: "number".to_string(),
-                got: "object / number".to_string(),
-            }
-        );
-
-        let bitwise_err = core
-            .eval_bitwise(0, 1, "&")
-            .expect_err("object bitwise int should remain a TypeError");
-        assert_eq!(
-            bitwise_err,
-            InterpreterError::TypeError {
-                expected: "number".to_string(),
-                got: "object".to_string(),
-            }
-        );
-
-        let relational_err = core
-            .eval_relational(0, 1, "<")
-            .expect_err("object < int should remain a TypeError");
-        assert_eq!(
-            relational_err,
-            InterpreterError::TypeError {
-                expected: "comparable primitive".to_string(),
-                got: "object < number".to_string(),
-            }
-        );
-    }
 
     #[test]
     fn eval_add_int_float_promotion() {

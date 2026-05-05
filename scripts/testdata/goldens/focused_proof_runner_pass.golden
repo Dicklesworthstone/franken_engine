@@ -1,0 +1,193 @@
+=== MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "bundle_id": "focused_proof_runner_smoke-stable",
+  "gate_name": "focused_proof_runner_smoke",
+  "status": "pass",
+  "generated_utc": "[GENERATED_UTC]",
+  "source_revision": "[SOURCE_REVISION]",
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/pass-a/stable",
+    "manifest_json": "[SMOKE_ROOT]/pass-a/stable/manifest.json",
+    "commands_txt": "[SMOKE_ROOT]/pass-a/stable/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/pass-a/stable/events.jsonl",
+    "report_json": "[SMOKE_ROOT]/pass-a/stable/report.json",
+    "report_md": "[SMOKE_ROOT]/pass-a/stable/report.md",
+    "redaction_policy_json": "[SMOKE_ROOT]/pass-a/stable/redaction_policy.json",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/pass-a/stable/proof_cost_manifest.json"
+  },
+  "claim_ids": [],
+  "bead_ids": [
+    "bd-fk5cb"
+  ],
+  "environment": {},
+  "commands": [
+    {
+      "command_id": "rerun",
+      "display": "./scripts/focused_proof_runner.sh",
+      "redacted_display": "./scripts/focused_proof_runner.sh",
+      "cwd": "[SMOKE_ROOT]/pass-a/stable",
+      "exit_code": null,
+      "duration_ms": null
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "path": "[SMOKE_ROOT]/pass-a/stable/commands.txt",
+      "sha256": "[SHA256]",
+      "role": "command_transcript"
+    },
+    {
+      "path": "[SMOKE_ROOT]/pass-a/stable/events.jsonl",
+      "sha256": "[SHA256]",
+      "role": "structured_events"
+    },
+    {
+      "path": "[SMOKE_ROOT]/pass-a/stable/source_report.json",
+      "sha256": "[SHA256]",
+      "role": "source_machine_report"
+    },
+    {
+      "path": "[SMOKE_ROOT]/pass-a/stable/redaction_policy.json",
+      "sha256": null,
+      "role": "redaction_policy"
+    },
+    {
+      "path": "[SMOKE_ROOT]/pass-a/stable/proof_cost_manifest.json",
+      "sha256": "[SHA256]",
+      "role": "proof_cost_manifest"
+    }
+  ],
+  "expected_artifacts": [],
+  "verifier_outputs": [
+    {
+      "verifier_id": "proof-artifact-contract",
+      "output_path": "[SMOKE_ROOT]/pass-a/stable/report.json",
+      "status": "pass",
+      "decision": "pass"
+    }
+  ],
+  "freshness": {
+    "generated_utc": "[GENERATED_UTC]",
+    "freshness_days": 0,
+    "max_freshness_days": 30
+  }
+}
+=== SOURCE REPORT ===
+{
+  "schema_version": "franken-engine.focused-proof-runner-report.v1",
+  "status": "pass",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke",
+  "command": "printf focused-proof-ok",
+  "command_hash": "a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b",
+  "cargo_package": "frankenengine-engine",
+  "worker": "smoke-worker",
+  "duration_ms": 0,
+  "sync_roots": [
+    "/data/projects/franken_engine",
+    "/data/projects/frankensqlite"
+  ],
+  "command_exit_code": 0,
+  "failure_reason": null,
+  "expected_targets": [
+    "focused_proof_runner_smoke",
+    "frankenengine-engine"
+  ],
+  "target_counts": {
+    "lib": 1,
+    "test": 1
+  },
+  "target_cardinality": 2,
+  "unexpected_targets": [],
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/pass-a/stable",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/pass-a/stable/proof_cost_manifest.json",
+    "command_output_log": "[SMOKE_ROOT]/pass-a/stable/command_output.log"
+  }
+}
+=== PROOF COST MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-cost-manifest.v1",
+  "manifest_id": "proof-cost-bcce3d26d7397e29",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke",
+  "command": "printf focused-proof-ok",
+  "command_hash": "a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b",
+  "cargo_package": "frankenengine-engine",
+  "expected_focus_targets": [
+    "focused_proof_runner_smoke",
+    "frankenengine-engine"
+  ],
+  "observed_targets": [
+    {
+      "package": "frankenengine-engine",
+      "kind": "lib",
+      "target": "frankenengine-engine",
+      "profile": "test",
+      "compiled": true,
+      "linked": false,
+      "dragged_by": [
+        "test harness dependency"
+      ]
+    },
+    {
+      "package": "frankenengine-engine",
+      "kind": "test",
+      "target": "focused_proof_runner_smoke",
+      "profile": "test",
+      "compiled": true,
+      "linked": true,
+      "dragged_by": [
+        "explicit smoke"
+      ]
+    }
+  ],
+  "target_counts": {
+    "lib": 1,
+    "test": 1
+  },
+  "total_compiled_targets": 2,
+  "total_linked_targets": 1,
+  "unexpected_targets": [],
+  "operator_log": [
+    "proof_cost suite=focused_proof_runner_smoke bead=bd-fk5cb package=frankenengine-engine compiled=2 linked=1 unexpected=0",
+    "proof_cost command_hash=a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b"
+  ]
+}
+=== REPORT JSON ===
+{
+  "schema_version": "franken-engine.proof-artifact-report.v1",
+  "bundle_id": "focused_proof_runner_smoke-stable",
+  "gate_name": "focused_proof_runner_smoke",
+  "status": "pass",
+  "event_count": 1,
+  "failure_count": 0,
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "manifest_path": "[SMOKE_ROOT]/pass-a/stable/manifest.json",
+  "report_json_path": "[SMOKE_ROOT]/pass-a/stable/report.json",
+  "report_md_path": "[SMOKE_ROOT]/pass-a/stable/report.md",
+  "source_report_path": "[SMOKE_ROOT]/pass-a/stable/source_report.json",
+  "findings": []
+}
+=== REPORT MD ===
+# Proof Artifact Report
+
+- Bundle: `focused_proof_runner_smoke-stable`
+- Gate: `focused_proof_runner_smoke`
+- Status: `pass`
+- Events: `1`
+- Failures: `0`
+- Rerun: `./scripts/focused_proof_runner.sh`
+- Manifest: `[SMOKE_ROOT]/pass-a/stable/manifest.json`
+- Machine report: `[SMOKE_ROOT]/pass-a/stable/report.json`
+
+The proof bundle satisfies the shared artifact contract.
+
+## Focused Proof Cost
+
+- Proof cost manifest: `[SMOKE_ROOT]/pass-a/stable/proof_cost_manifest.json`
+- Worker: `smoke-worker`
+- Target cardinality: `2`
+- Unexpected targets: `0`

@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 runner="${root_dir}/scripts/focused_proof_runner.sh"
+golden_dir="${root_dir}/scripts/testdata/goldens"
 # shellcheck source=scripts/lib/proof_artifact_contract.sh
 source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
@@ -12,6 +13,107 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL focused-proof-runner %s\n' "$1" >&2
+}
+
+canonicalize_json_with_paths() {
+  local path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "${tmp_root}" '
+    def scrub:
+      if type == "object" then
+        with_entries(.value |= scrub)
+      elif type == "array" then
+        map(scrub)
+      elif type == "string" then
+        split($tmp_root) | join("[SMOKE_ROOT]")
+      else
+        .
+      end;
+    scrub
+  ' "${path}"
+}
+
+canonicalize_manifest() {
+  local path="$1"
+  local tmp_root="$2"
+
+  canonicalize_json_with_paths "${path}" "${tmp_root}" \
+    | jq '
+      .generated_utc = "[GENERATED_UTC]"
+      | .source_revision = "[SOURCE_REVISION]"
+      | .freshness.generated_utc = "[GENERATED_UTC]"
+      | .generated_artifacts |= map(
+          if .sha256 == null then
+            .
+          else
+            .sha256 = "[SHA256]"
+          end
+        )
+    '
+}
+
+canonicalize_markdown_with_paths() {
+  local path="$1"
+  local tmp_root="$2"
+
+  jq -R -s -r -j --arg tmp_root "${tmp_root}" '
+    split($tmp_root) | join("[SMOKE_ROOT]")
+  ' "${path}"
+}
+
+write_case_golden() {
+  local tmp_root="$1"
+  local run_dir="$2"
+  local actual_path="$3"
+
+  {
+    printf '=== MANIFEST ===\n'
+    canonicalize_manifest "${run_dir}/manifest.json" "${tmp_root}"
+    printf '=== SOURCE REPORT ===\n'
+    canonicalize_json_with_paths "${run_dir}/source_report.json" "${tmp_root}"
+    printf '=== PROOF COST MANIFEST ===\n'
+    canonicalize_json_with_paths "${run_dir}/proof_cost_manifest.json" "${tmp_root}"
+    printf '=== REPORT JSON ===\n'
+    canonicalize_json_with_paths "${run_dir}/report.json" "${tmp_root}"
+    printf '=== REPORT MD ===\n'
+    canonicalize_markdown_with_paths "${run_dir}/report.md" "${tmp_root}"
+  } >"${actual_path}"
+}
+
+compare_case_golden() {
+  local case_name="$1"
+  local actual_path="$2"
+  local golden_path="$3"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    cp "${actual_path}" "${golden_path}"
+    record_pass "updated golden ${case_name}"
+    return 0
+  fi
+
+  if [[ ! -f "${golden_path}" ]]; then
+    record_failure "missing golden ${golden_path}"
+    return 1
+  fi
+
+  if ! diff -u "${golden_path}" "${actual_path}"; then
+    record_failure "golden drift for ${case_name}; set UPDATE_GOLDENS=1 only after reviewing the diff"
+    return 1
+  fi
+
+  record_pass "golden matches ${case_name}"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local tmp_root="$2"
+  local run_dir="$3"
+  local golden_path="$4"
+  local actual_path="${tmp_root}/${case_name}.actual.golden"
+
+  write_case_golden "${tmp_root}" "${run_dir}" "${actual_path}"
+  compare_case_golden "${case_name}" "${actual_path}" "${golden_path}"
 }
 
 run_pass_case() {
@@ -175,6 +277,11 @@ run_selftest() {
 
   run_pass_case "${pass_a}" "stable"
   validate_pass_bundle "${pass_a}/stable"
+  assert_case_golden \
+    "pass" \
+    "${tmp_root}" \
+    "${pass_a}/stable" \
+    "${golden_dir}/focused_proof_runner_pass.golden"
 
   run_pass_case "${pass_b}" "stable"
   if [[ "$(proof_contract_sha256_file "${pass_a}/stable/proof_cost_manifest.json")" != "$(proof_contract_sha256_file "${pass_b}/stable/proof_cost_manifest.json")" ]]; then
@@ -184,7 +291,17 @@ run_selftest() {
   record_pass "proof cost manifest is deterministic for identical inputs"
 
   run_broadening_case "${fail_root}" "broadening"
+  assert_case_golden \
+    "broadening-failure" \
+    "${tmp_root}" \
+    "${fail_root}/broadening" \
+    "${golden_dir}/focused_proof_runner_broadening_failure.golden"
   run_command_failure_case "${command_fail_root}" "command-failure"
+  assert_case_golden \
+    "command-failure" \
+    "${tmp_root}" \
+    "${command_fail_root}/command-failure" \
+    "${golden_dir}/focused_proof_runner_command_failure.golden"
   printf 'focused_proof_runner_smoke_artifacts=%s\n' "${tmp_root}"
 }
 

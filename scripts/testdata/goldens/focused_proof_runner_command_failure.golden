@@ -1,0 +1,175 @@
+=== MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "bundle_id": "focused_proof_runner_smoke_command_failure-command-failure",
+  "gate_name": "focused_proof_runner_smoke_command_failure",
+  "status": "fail",
+  "generated_utc": "[GENERATED_UTC]",
+  "source_revision": "[SOURCE_REVISION]",
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/command-fail/command-failure",
+    "manifest_json": "[SMOKE_ROOT]/command-fail/command-failure/manifest.json",
+    "commands_txt": "[SMOKE_ROOT]/command-fail/command-failure/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/command-fail/command-failure/events.jsonl",
+    "report_json": "[SMOKE_ROOT]/command-fail/command-failure/report.json",
+    "report_md": "[SMOKE_ROOT]/command-fail/command-failure/report.md",
+    "redaction_policy_json": "[SMOKE_ROOT]/command-fail/command-failure/redaction_policy.json",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/command-fail/command-failure/proof_cost_manifest.json"
+  },
+  "claim_ids": [],
+  "bead_ids": [
+    "bd-fk5cb"
+  ],
+  "environment": {},
+  "commands": [
+    {
+      "command_id": "rerun",
+      "display": "./scripts/focused_proof_runner.sh",
+      "redacted_display": "./scripts/focused_proof_runner.sh",
+      "cwd": "[SMOKE_ROOT]/command-fail/command-failure",
+      "exit_code": null,
+      "duration_ms": null
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "path": "[SMOKE_ROOT]/command-fail/command-failure/commands.txt",
+      "sha256": "[SHA256]",
+      "role": "command_transcript"
+    },
+    {
+      "path": "[SMOKE_ROOT]/command-fail/command-failure/events.jsonl",
+      "sha256": "[SHA256]",
+      "role": "structured_events"
+    },
+    {
+      "path": "[SMOKE_ROOT]/command-fail/command-failure/source_report.json",
+      "sha256": "[SHA256]",
+      "role": "source_machine_report"
+    },
+    {
+      "path": "[SMOKE_ROOT]/command-fail/command-failure/redaction_policy.json",
+      "sha256": null,
+      "role": "redaction_policy"
+    },
+    {
+      "path": "[SMOKE_ROOT]/command-fail/command-failure/proof_cost_manifest.json",
+      "sha256": "[SHA256]",
+      "role": "proof_cost_manifest"
+    }
+  ],
+  "expected_artifacts": [],
+  "verifier_outputs": [
+    {
+      "verifier_id": "proof-artifact-contract",
+      "output_path": "[SMOKE_ROOT]/command-fail/command-failure/report.json",
+      "status": "fail",
+      "decision": "fail"
+    }
+  ],
+  "freshness": {
+    "generated_utc": "[GENERATED_UTC]",
+    "freshness_days": 0,
+    "max_freshness_days": 30
+  }
+}
+=== SOURCE REPORT ===
+{
+  "schema_version": "franken-engine.focused-proof-runner-report.v1",
+  "status": "fail",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke_command_failure",
+  "command": "exit 7",
+  "command_hash": "9c56e8c42a9af6de518120b69aac591acee69fd36859619fd38542a6a795cfed",
+  "cargo_package": "frankenengine-engine",
+  "worker": "smoke-worker",
+  "duration_ms": 0,
+  "sync_roots": [],
+  "command_exit_code": 7,
+  "failure_reason": "command_exit_7",
+  "expected_targets": [
+    "focused_proof_runner_smoke"
+  ],
+  "target_counts": {
+    "test": 1
+  },
+  "target_cardinality": 1,
+  "unexpected_targets": [],
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/command-fail/command-failure",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/command-fail/command-failure/proof_cost_manifest.json",
+    "command_output_log": "[SMOKE_ROOT]/command-fail/command-failure/command_output.log"
+  }
+}
+=== PROOF COST MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-cost-manifest.v1",
+  "manifest_id": "proof-cost-edf3677a6fa40f57",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke_command_failure",
+  "command": "exit 7",
+  "command_hash": "9c56e8c42a9af6de518120b69aac591acee69fd36859619fd38542a6a795cfed",
+  "cargo_package": "frankenengine-engine",
+  "expected_focus_targets": [
+    "focused_proof_runner_smoke"
+  ],
+  "observed_targets": [
+    {
+      "package": "frankenengine-engine",
+      "kind": "test",
+      "target": "focused_proof_runner_smoke",
+      "profile": "test",
+      "compiled": true,
+      "linked": true,
+      "dragged_by": [
+        "explicit smoke"
+      ]
+    }
+  ],
+  "target_counts": {
+    "test": 1
+  },
+  "total_compiled_targets": 1,
+  "total_linked_targets": 1,
+  "unexpected_targets": [],
+  "operator_log": [
+    "proof_cost suite=focused_proof_runner_smoke_command_failure bead=bd-fk5cb package=frankenengine-engine compiled=1 linked=1 unexpected=0",
+    "proof_cost command_hash=9c56e8c42a9af6de518120b69aac591acee69fd36859619fd38542a6a795cfed"
+  ]
+}
+=== REPORT JSON ===
+{
+  "schema_version": "franken-engine.proof-artifact-report.v1",
+  "bundle_id": "focused_proof_runner_smoke_command_failure-command-failure",
+  "gate_name": "focused_proof_runner_smoke_command_failure",
+  "status": "fail",
+  "event_count": 1,
+  "failure_count": 1,
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "manifest_path": "[SMOKE_ROOT]/command-fail/command-failure/manifest.json",
+  "report_json_path": "[SMOKE_ROOT]/command-fail/command-failure/report.json",
+  "report_md_path": "[SMOKE_ROOT]/command-fail/command-failure/report.md",
+  "source_report_path": "[SMOKE_ROOT]/command-fail/command-failure/source_report.json",
+  "findings": []
+}
+=== REPORT MD ===
+# Proof Artifact Report
+
+- Bundle: `focused_proof_runner_smoke_command_failure-command-failure`
+- Gate: `focused_proof_runner_smoke_command_failure`
+- Status: `fail`
+- Events: `1`
+- Failures: `1`
+- Rerun: `./scripts/focused_proof_runner.sh`
+- Manifest: `[SMOKE_ROOT]/command-fail/command-failure/manifest.json`
+- Machine report: `[SMOKE_ROOT]/command-fail/command-failure/report.json`
+
+The proof bundle is not an observed proof until the failing or blocked rows are remediated.
+
+## Focused Proof Cost
+
+- Proof cost manifest: `[SMOKE_ROOT]/command-fail/command-failure/proof_cost_manifest.json`
+- Worker: `smoke-worker`
+- Target cardinality: `1`
+- Unexpected targets: `0`

@@ -1,0 +1,191 @@
+=== MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "bundle_id": "focused_proof_runner_smoke_broadening-broadening",
+  "gate_name": "focused_proof_runner_smoke_broadening",
+  "status": "fail",
+  "generated_utc": "[GENERATED_UTC]",
+  "source_revision": "[SOURCE_REVISION]",
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/fail/broadening",
+    "manifest_json": "[SMOKE_ROOT]/fail/broadening/manifest.json",
+    "commands_txt": "[SMOKE_ROOT]/fail/broadening/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/fail/broadening/events.jsonl",
+    "report_json": "[SMOKE_ROOT]/fail/broadening/report.json",
+    "report_md": "[SMOKE_ROOT]/fail/broadening/report.md",
+    "redaction_policy_json": "[SMOKE_ROOT]/fail/broadening/redaction_policy.json",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/fail/broadening/proof_cost_manifest.json"
+  },
+  "claim_ids": [],
+  "bead_ids": [
+    "bd-fk5cb"
+  ],
+  "environment": {},
+  "commands": [
+    {
+      "command_id": "rerun",
+      "display": "./scripts/focused_proof_runner.sh",
+      "redacted_display": "./scripts/focused_proof_runner.sh",
+      "cwd": "[SMOKE_ROOT]/fail/broadening",
+      "exit_code": null,
+      "duration_ms": null
+    }
+  ],
+  "generated_artifacts": [
+    {
+      "path": "[SMOKE_ROOT]/fail/broadening/commands.txt",
+      "sha256": "[SHA256]",
+      "role": "command_transcript"
+    },
+    {
+      "path": "[SMOKE_ROOT]/fail/broadening/events.jsonl",
+      "sha256": "[SHA256]",
+      "role": "structured_events"
+    },
+    {
+      "path": "[SMOKE_ROOT]/fail/broadening/source_report.json",
+      "sha256": "[SHA256]",
+      "role": "source_machine_report"
+    },
+    {
+      "path": "[SMOKE_ROOT]/fail/broadening/redaction_policy.json",
+      "sha256": null,
+      "role": "redaction_policy"
+    },
+    {
+      "path": "[SMOKE_ROOT]/fail/broadening/proof_cost_manifest.json",
+      "sha256": "[SHA256]",
+      "role": "proof_cost_manifest"
+    }
+  ],
+  "expected_artifacts": [],
+  "verifier_outputs": [
+    {
+      "verifier_id": "proof-artifact-contract",
+      "output_path": "[SMOKE_ROOT]/fail/broadening/report.json",
+      "status": "fail",
+      "decision": "fail"
+    }
+  ],
+  "freshness": {
+    "generated_utc": "[GENERATED_UTC]",
+    "freshness_days": 0,
+    "max_freshness_days": 30
+  }
+}
+=== SOURCE REPORT ===
+{
+  "schema_version": "franken-engine.focused-proof-runner-report.v1",
+  "status": "fail",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke_broadening",
+  "command": "printf focused-proof-ok",
+  "command_hash": "a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b",
+  "cargo_package": "frankenengine-engine",
+  "worker": "smoke-worker",
+  "duration_ms": 0,
+  "sync_roots": [],
+  "command_exit_code": 0,
+  "failure_reason": "unexpected_target_fanout",
+  "expected_targets": [
+    "focused_proof_runner_smoke"
+  ],
+  "target_counts": {
+    "test": 2
+  },
+  "target_cardinality": 2,
+  "unexpected_targets": [
+    "frankenengine-engine:test:unexpected_broad_target"
+  ],
+  "artifact_paths": {
+    "run_dir": "[SMOKE_ROOT]/fail/broadening",
+    "proof_cost_manifest_json": "[SMOKE_ROOT]/fail/broadening/proof_cost_manifest.json",
+    "command_output_log": "[SMOKE_ROOT]/fail/broadening/command_output.log"
+  }
+}
+=== PROOF COST MANIFEST ===
+{
+  "schema_version": "franken-engine.proof-cost-manifest.v1",
+  "manifest_id": "proof-cost-bf6f8f4e1ec62124",
+  "bead_id": "bd-fk5cb",
+  "focused_suite": "focused_proof_runner_smoke_broadening",
+  "command": "printf focused-proof-ok",
+  "command_hash": "a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b",
+  "cargo_package": "frankenengine-engine",
+  "expected_focus_targets": [
+    "focused_proof_runner_smoke"
+  ],
+  "observed_targets": [
+    {
+      "package": "frankenengine-engine",
+      "kind": "test",
+      "target": "focused_proof_runner_smoke",
+      "profile": "test",
+      "compiled": true,
+      "linked": true,
+      "dragged_by": [
+        "explicit smoke"
+      ]
+    },
+    {
+      "package": "frankenengine-engine",
+      "kind": "test",
+      "target": "unexpected_broad_target",
+      "profile": "test",
+      "compiled": true,
+      "linked": true,
+      "dragged_by": [
+        "hidden fanout"
+      ]
+    }
+  ],
+  "target_counts": {
+    "test": 2
+  },
+  "total_compiled_targets": 2,
+  "total_linked_targets": 2,
+  "unexpected_targets": [
+    "frankenengine-engine:test:unexpected_broad_target"
+  ],
+  "operator_log": [
+    "proof_cost suite=focused_proof_runner_smoke_broadening bead=bd-fk5cb package=frankenengine-engine compiled=2 linked=2 unexpected=1",
+    "proof_cost command_hash=a3296785424a5fd4caf7b036adbcec132095f21f2ed2e600300dd2c157dd520b",
+    "proof_cost unexpected_target=frankenengine-engine:test:unexpected_broad_target"
+  ]
+}
+=== REPORT JSON ===
+{
+  "schema_version": "franken-engine.proof-artifact-report.v1",
+  "bundle_id": "focused_proof_runner_smoke_broadening-broadening",
+  "gate_name": "focused_proof_runner_smoke_broadening",
+  "status": "fail",
+  "event_count": 1,
+  "failure_count": 1,
+  "rerun_command": "./scripts/focused_proof_runner.sh",
+  "manifest_path": "[SMOKE_ROOT]/fail/broadening/manifest.json",
+  "report_json_path": "[SMOKE_ROOT]/fail/broadening/report.json",
+  "report_md_path": "[SMOKE_ROOT]/fail/broadening/report.md",
+  "source_report_path": "[SMOKE_ROOT]/fail/broadening/source_report.json",
+  "findings": []
+}
+=== REPORT MD ===
+# Proof Artifact Report
+
+- Bundle: `focused_proof_runner_smoke_broadening-broadening`
+- Gate: `focused_proof_runner_smoke_broadening`
+- Status: `fail`
+- Events: `1`
+- Failures: `1`
+- Rerun: `./scripts/focused_proof_runner.sh`
+- Manifest: `[SMOKE_ROOT]/fail/broadening/manifest.json`
+- Machine report: `[SMOKE_ROOT]/fail/broadening/report.json`
+
+The proof bundle is not an observed proof until the failing or blocked rows are remediated.
+
+## Focused Proof Cost
+
+- Proof cost manifest: `[SMOKE_ROOT]/fail/broadening/proof_cost_manifest.json`
+- Worker: `smoke-worker`
+- Target cardinality: `2`
+- Unexpected targets: `1`

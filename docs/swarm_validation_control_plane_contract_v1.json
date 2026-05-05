@@ -9,10 +9,13 @@
     "jq empty docs/swarm_validation_control_plane_contract_v1.json",
     "bash -n scripts/e2e/swarm_validation_control_plane_contract_smoke.sh",
     "bash -n scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh",
+    "bash -n scripts/e2e/rch_incident_packet_gate_smoke.sh",
     "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check",
     "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh selftest",
     "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check",
     "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh selftest",
+    "./scripts/e2e/rch_incident_packet_gate_smoke.sh check",
+    "./scripts/e2e/rch_incident_packet_gate_smoke.sh selftest",
     "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md scripts/e2e/swarm_validation_control_plane_contract_smoke.sh scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
   ],
   "safe_mode_semantics": {
@@ -116,6 +119,30 @@
       "downstream_beads": [
         "bd-1onpa",
         "bd-3snv2"
+      ]
+    },
+    {
+      "surface_id": "rch_incident_packet_gate",
+      "role": "Classify rch remote-proof infrastructure failures into deterministic operator packets.",
+      "source_kind": "shell_gate",
+      "repo_paths": [
+        "scripts/rch_incident_packet_gate.sh",
+        "scripts/e2e/rch_incident_packet_gate_smoke.sh"
+      ],
+      "read_commands": [
+        "./scripts/e2e/rch_incident_packet_gate_smoke.sh check",
+        "./scripts/e2e/rch_incident_packet_gate_smoke.sh selftest"
+      ],
+      "artifacts_emitted": [
+        "incident_packet.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "downstream_beads": [
+        "bd-wlux9",
+        "bd-ad31e",
+        "bd-uhzkf"
       ]
     },
     {
@@ -344,6 +371,19 @@
       ]
     },
     {
+      "bead_id": "bd-wlux9",
+      "title": "[SWARM-CTRL-II-C] Add rch incident-packet gate for remote proof failures",
+      "requires_surfaces": [
+        "focused_proof_runner",
+        "rch_incident_packet_gate"
+      ],
+      "requires_signals": [
+        "rch_local_fallback",
+        "rch_status",
+        "target_dir_writable"
+      ]
+    },
+    {
       "bead_id": "bd-p03vs",
       "title": "[SWARM-CTRL-E] Add typed proof-evidence index for artifacts and bead receipts",
       "requires_surfaces": [
@@ -447,6 +487,24 @@
         "expected_artifacts",
         "proof_cost_budgets",
         "risk_flags"
+      ]
+    },
+    {
+      "artifact_id": "rch_incident_packet",
+      "schema_version": "franken-engine.rch-incident-packet.v1",
+      "required_fields": [
+        "incident_id",
+        "status",
+        "failure_kind",
+        "worker_id",
+        "command",
+        "target_dir",
+        "source_revision",
+        "exit_code",
+        "completion_marker",
+        "retry_safety",
+        "recommended_next_action",
+        "artifact_paths"
       ]
     },
     {

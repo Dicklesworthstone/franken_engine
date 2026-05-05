@@ -9,6 +9,7 @@ expected_surface_ids=(
   "coordination_mail_reservations"
   "focused_proof_cost_gate"
   "focused_proof_runner"
+  "rch_incident_packet_gate"
   "module_composition_claim_ledger"
   "operator_runbook_truth_gate"
   "proof_artifact_manifest"
@@ -89,12 +90,12 @@ validate_top_level() {
     .schema_version == "franken-engine.swarm-validation-control-plane-contract.v1"
     and .bead_id == "bd-vcloy"
     and .policy_id == "policy-swarm-validation-control-plane-v1"
-    and (.verification_commands | length) == 8
-    and (.workload_surfaces | length) == 9
+    and (.verification_commands | length) == 11
+    and (.workload_surfaces | length) == 10
     and (.capacity_signals | length) == 8
-    and (.downstream_contracts | length) == 7
+    and (.downstream_contracts | length) == 8
     and (.sibling_reuse_policy | length) == 3
-    and (.output_artifact_contracts | length) == 4
+    and (.output_artifact_contracts | length) == 5
   ' "$contract_path" >/dev/null; then
     record_failure "top-level schema/count contract mismatch"
   else

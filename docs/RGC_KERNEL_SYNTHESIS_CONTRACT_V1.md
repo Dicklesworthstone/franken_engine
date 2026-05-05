@@ -15,6 +15,9 @@ deterministic rollback semantics to the run manifest.
 
 - the corpus is mined from the shipped `kernel_synthesis_contract` baseline and
   must stay deterministic for identical source trees
+- the replayable lane must validate both `kernel_synthesis_contract` and the
+  dedicated `synthesis_eligibility_envelope` surface, because
+  `superoptimization_gate` consumes the latter downstream
 - the eligibility report must preserve explicit bucket membership for eligible,
   forbidden, and deferred kernels rather than collapsing them into a single
   scalar score
@@ -47,6 +50,12 @@ deterministic rollback semantics to the run manifest.
 The suite is `rch`-backed, defaults `CARGO_TARGET_DIR` to the stable external
 path `/data/tmp/rch_target_franken_engine_kernel_synthesis_contract`, and emits
 the bundle under `artifacts/kernel_synthesis_contract/<timestamp>/`.
+
+It exercises `kernel_synthesis_contract_integration`,
+`kernel_synthesis_contract_enrichment_integration`,
+`synthesis_eligibility_envelope_integration`,
+`synthesis_eligibility_envelope_enrichment_integration`, and
+`superoptimization_gate_integration` before emitting artifacts.
 
 Override `CARGO_TARGET_DIR=...` only when you need isolated experimentation.
 The suite manifest records both `cargo_target_dir` and

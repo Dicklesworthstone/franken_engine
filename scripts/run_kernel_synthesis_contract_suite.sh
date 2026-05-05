@@ -27,6 +27,15 @@ policy_id="${KERNEL_SYNTHESIS_CONTRACT_POLICY_ID:-policy.rgc.613a}"
 run_id="run-kernel-synthesis-contract-${timestamp}"
 source_commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 suite_commands_path="${run_dir}/suite_commands.txt"
+suite_target_text="--bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration --test synthesis_eligibility_envelope_integration --test synthesis_eligibility_envelope_enrichment_integration --test superoptimization_gate_integration"
+suite_target_args=(
+  --bin franken_kernel_synthesis_contract
+  --test kernel_synthesis_contract_integration
+  --test kernel_synthesis_contract_enrichment_integration
+  --test synthesis_eligibility_envelope_integration
+  --test synthesis_eligibility_envelope_enrichment_integration
+  --test superoptimization_gate_integration
+)
 
 mkdir -p "$run_dir"
 
@@ -100,26 +109,16 @@ verify_bundle() {
 run_mode() {
   case "$mode" in
     check)
-      run_step "cargo check -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration" \
-        cargo check -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration
+      run_step "cargo check -p frankenengine-engine ${suite_target_text}" \
+        cargo check -p frankenengine-engine "${suite_target_args[@]}"
       ;;
     test)
-      run_step "cargo test -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration" \
-        cargo test -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration
+      run_step "cargo test -p frankenengine-engine ${suite_target_text}" \
+        cargo test -p frankenengine-engine "${suite_target_args[@]}"
       ;;
     clippy)
-      run_step "cargo clippy -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration \
-          -- -D warnings
+      run_step "cargo clippy -p frankenengine-engine ${suite_target_text} -- -D warnings" \
+        cargo clippy -p frankenengine-engine "${suite_target_args[@]}" -- -D warnings
       ;;
     run)
       run_step "cargo run -p frankenengine-engine --bin franken_kernel_synthesis_contract -- --artifact-dir ${run_dir} --trace-id ${trace_id} --decision-id ${decision_id} --policy-id ${policy_id} --run-id ${run_id} --generated-at-utc ${generated_at_utc} --source-commit ${source_commit} --toolchain ${toolchain} --summary" \
@@ -136,22 +135,12 @@ run_mode() {
       verify_bundle
       ;;
     ci)
-      run_step "cargo check -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration" \
-        cargo check -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration
-      run_step "cargo test -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration" \
-        cargo test -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration
-      run_step "cargo clippy -p frankenengine-engine --bin franken_kernel_synthesis_contract --test kernel_synthesis_contract_integration --test kernel_synthesis_contract_enrichment_integration -- -D warnings" \
-        cargo clippy -p frankenengine-engine \
-          --bin franken_kernel_synthesis_contract \
-          --test kernel_synthesis_contract_integration \
-          --test kernel_synthesis_contract_enrichment_integration \
-          -- -D warnings
+      run_step "cargo check -p frankenengine-engine ${suite_target_text}" \
+        cargo check -p frankenengine-engine "${suite_target_args[@]}"
+      run_step "cargo test -p frankenengine-engine ${suite_target_text}" \
+        cargo test -p frankenengine-engine "${suite_target_args[@]}"
+      run_step "cargo clippy -p frankenengine-engine ${suite_target_text} -- -D warnings" \
+        cargo clippy -p frankenengine-engine "${suite_target_args[@]}" -- -D warnings
       run_step "cargo run -p frankenengine-engine --bin franken_kernel_synthesis_contract -- --artifact-dir ${run_dir} --trace-id ${trace_id} --decision-id ${decision_id} --policy-id ${policy_id} --run-id ${run_id} --generated-at-utc ${generated_at_utc} --source-commit ${source_commit} --toolchain ${toolchain} --summary" \
         cargo run -p frankenengine-engine --bin franken_kernel_synthesis_contract -- \
           --artifact-dir "${run_dir}" \

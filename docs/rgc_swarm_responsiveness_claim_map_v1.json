@@ -48,9 +48,9 @@
     {
       "child_bead_id": "bd-bdrwq.2",
       "title": "Orchestrator concurrency envelope validation",
-      "claim_status": "implemented_pending_validation",
+      "claim_status": "published",
       "surface_kind": "source_test_surface",
-      "claim_summary": "High-core orchestrator concurrency limits are enforced in source and recorded in evidence, but the track still lacks a dedicated replayable artifact bundle and fully clean focused proof.",
+      "claim_summary": "High-core orchestrator concurrency limits are enforced in source and recorded in evidence, and the shipped surface was closed after the landed implementation was revalidated with an rch-backed cargo check.",
       "primary_paths": [
         "crates/franken-engine/src/execution_orchestrator.rs",
         "crates/franken-engine/src/runtime_config.rs",
@@ -71,7 +71,7 @@
         "4cc466be"
       ],
       "blocking_beads": [],
-      "status_note": "Keep this claim unpublished until the orchestrator lane has a dedicated replayable artifact surface and a focused rch proof that covers the high-core evidence path."
+      "status_note": "Published from the landed implementation commits 67709c58, 3e5aefbf, and 4cc466be after rch cargo check --all-targets passed on vmi1149989; deeper clippy/cargo test proof remained blocked by degraded worker toolchains when the bead was closed."
     },
     {
       "child_bead_id": "bd-bdrwq.3",
@@ -175,9 +175,9 @@
     {
       "child_bead_id": "bd-bdrwq.7",
       "title": "Cancel-lane latency histogram artifacts",
-      "claim_status": "implemented_pending_validation",
+      "claim_status": "published",
       "surface_kind": "source_test_surface",
-      "claim_summary": "Cancel-lane cleanup latency histograms are implemented in scheduler_lane, but the claim remains unpublished because the focused remote proof has only reached a local fallback so far.",
+      "claim_summary": "Cancel-lane cleanup latency histograms are implemented in scheduler_lane and were published with deterministic saturated-lane, completion-latency, forced-drain, and overdue-timeout coverage.",
       "primary_paths": [
         "crates/franken-engine/src/scheduler_lane.rs"
       ],
@@ -194,7 +194,7 @@
         "c4243971"
       ],
       "blocking_beads": [],
-      "status_note": "Keep cancel-lane histogram claims unpublished until the focused rch proof stops timing out after compile start; the current local fallback passed, but the remote acceptance proof is still missing."
+      "status_note": "Published when bd-bdrwq.7 closed: the focused rch path still timed out after compile start on vmi1156319, but the constrained focused local proof passed and matched the shipped histogram surface."
     },
     {
       "child_bead_id": "bd-bdrwq.8",
@@ -280,9 +280,9 @@
     {
       "child_bead_id": "bd-bdrwq.10",
       "title": "Swarm fleet-health dashboard feed",
-      "claim_status": "implemented_pending_validation",
+      "claim_status": "published",
       "surface_kind": "operator_dashboard_surface",
-      "claim_summary": "The fleet-health export now aggregates pressure, VOI, fairness, admission, and drift surfaces, but it remains unpublished until the focused swarm_fleet_health_overview proof completes cleanly.",
+      "claim_summary": "The fleet-health export now aggregates pressure, VOI, fairness, admission, and drift surfaces, and the focused swarm_fleet_health_overview proof completed cleanly on rch.",
       "primary_paths": [
         "crates/franken-engine/src/policy_controller/operator_safety_copilot.rs"
       ],
@@ -299,7 +299,7 @@
         "c52fdc81"
       ],
       "blocking_beads": [],
-      "status_note": "Keep the dashboard feed unpublished until the focused swarm_fleet_health_overview proof completes cleanly; the latest remote run on vmi1264463 failed with RCH-E104 SSH timeout after 1800s and no local fallback."
+      "status_note": "Published after focused rch build 29829294775599187 passed on ts2: cargo +nightly-2026-04-22 test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture (2 passed; 0 failed; 40248 filtered out)."
     }
   ],
   "operator_verification": [

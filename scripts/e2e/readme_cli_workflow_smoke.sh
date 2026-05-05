@@ -94,7 +94,7 @@ resolve_frankenctl_bin() {
     cat >&2 <<EOF
 frankenctl binary is not executable: ${candidate}
 Set FRANKENCTL_BIN=/path/to/frankenctl or build it first, for example:
-  CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> cargo build -p frankenengine-engine --bin frankenctl
+  rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_readme_cli_workflow cargo build -p frankenengine-engine --bin frankenctl
 EOF
     exit 4
   fi
@@ -237,8 +237,9 @@ run_step() {
   local executable="$7"
   shift 7
   local exec_args=("$@")
-  local stdout_path="${step_logs_dir}/step_$(printf '%03d' "$step_index")_${step_name}.stdout"
-  local stderr_path="${step_logs_dir}/step_$(printf '%03d' "$step_index")_${step_name}.stderr"
+  local step_prefix
+  local stdout_path
+  local stderr_path
   local command_name
   local args_as_json
   local readme_line
@@ -262,6 +263,10 @@ run_step() {
     echo "invalid expected exit code for step ${step_name}: ${expected_exit_code}" >&2
     exit 5
   fi
+
+  step_prefix="$(printf '%03d' "$step_index")"
+  stdout_path="${step_logs_dir}/step_${step_prefix}_${step_name}.stdout"
+  stderr_path="${step_logs_dir}/step_${step_prefix}_${step_name}.stderr"
 
   if [[ "$executable" == "$frankenctl_bin" ]]; then
     command_name="frankenctl"
@@ -351,6 +356,7 @@ run_step() {
 }
 
 write_manifest() {
+  # shellcheck disable=SC2094
   jq -n \
     --arg schema_version "$manifest_schema" \
     --arg workflow_id "$workflow_id" \

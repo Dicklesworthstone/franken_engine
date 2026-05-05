@@ -12,16 +12,44 @@ test_id="readme-cli-proof-contract-validation-$(date -u +%Y%m%dT%H%M%SZ)"
 test_artifact_root="${root_dir}/artifacts/readme_cli_proof_contract_validation"
 test_run_dir="${test_artifact_root}/${test_id}"
 validation_log="${test_run_dir}/validation.log"
+rch_log_dir="${test_run_dir}/rch_logs"
 
 # Set up focused test environment
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/data/projects/franken_engine/target_PearlTower_focused}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_readme_cli_proof_contract_validation_${test_id}}"
 export README_CLI_WORKFLOW_ARTIFACT_ROOT="${test_run_dir}/cli_workflow"
 export README_CLI_WORKFLOW_RUN_ID="proof-contract-test"
 
 mkdir -p "${test_run_dir}"
+mkdir -p "${rch_log_dir}"
 mkdir -p "${CARGO_TARGET_DIR}"
 
 exec > >(tee "${validation_log}") 2>&1
+
+if ! command -v rch >/dev/null 2>&1; then
+    echo "❌ rch is required for README CLI proof-contract Cargo validation"
+    exit 2
+fi
+
+rch_reject_local_fallback() {
+    local log_path="$1"
+    if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|running locally|\[RCH\] local \(' "$log_path"; then
+        echo "❌ rch reported local fallback; refusing local Cargo execution"
+        return 1
+    fi
+}
+
+run_rch_cargo_step() {
+    local step_name="$1"
+    local log_path="${rch_log_dir}/${step_name}.log"
+    shift
+
+    echo "==> rch exec -- env CARGO_TARGET_DIR=${CARGO_TARGET_DIR} $*"
+    if ! RCH_VISIBILITY="${RCH_VISIBILITY:-summary}" \
+        rch exec -- env "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" "$@" 2>&1 | tee "$log_path"; then
+        return 1
+    fi
+    rch_reject_local_fallback "$log_path"
+}
 
 echo "README CLI Proof Contract Validation"
 echo "===================================="
@@ -35,7 +63,7 @@ echo "Step 1: Building frankenctl binary..."
 start_time=$(date +%s%3N)
 
 cd "${root_dir}"
-if ! cargo build -p frankenengine-engine --bin frankenctl --target-dir="${CARGO_TARGET_DIR}" 2>&1; then
+if ! run_rch_cargo_step "build-frankenctl" cargo build -p frankenengine-engine --bin frankenctl; then
     echo "❌ Failed to build frankenctl binary"
     exit 1
 fi
@@ -262,7 +290,7 @@ echo ""
 echo "Step 5: Running unit tests for proof contract integration..."
 test_start_time=$(date +%s%3N)
 
-if ! cargo test readme_cli_proof_contract_integration --lib --target-dir="${CARGO_TARGET_DIR}" 2>&1; then
+if ! run_rch_cargo_step "proof-contract-unit" cargo test readme_cli_proof_contract_integration --lib; then
     echo "❌ Unit tests failed for proof contract integration"
     exit 1
 fi

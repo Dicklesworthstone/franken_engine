@@ -841,6 +841,21 @@ fn build_client_entry_graph_structure() {
 }
 
 #[test]
+fn build_client_entry_graph_uses_react_dom_client_subpath() {
+    let graph = build_client_entry_graph(epoch(1));
+    let entry = graph
+        .nodes
+        .iter()
+        .find(|node| node.node_id.as_str() == "client-entry")
+        .expect("client-entry node should be present");
+    assert_eq!(entry.package, ReactPackage::ReactDom);
+    assert_eq!(entry.subpath, "./client");
+    assert_eq!(entry.condition, ExportCondition::Import);
+    assert_eq!(entry.role, ModuleRole::EntryPoint);
+    assert_eq!(entry.surface, RenderSurface::ClientEntry);
+}
+
+#[test]
 fn build_client_entry_graph_valid() {
     let receipt = verify_module_graph(&build_client_entry_graph(epoch(1)));
     assert_eq!(receipt.verdict, GraphVerificationVerdict::Valid);

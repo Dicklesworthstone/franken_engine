@@ -844,8 +844,8 @@ pub fn build_client_entry_graph(epoch: SecurityEpoch) -> ModuleGraph {
         build_module_node(
             "client-entry",
             ReactPackage::ReactDom,
-            ".",
-            ExportCondition::Browser,
+            "./client",
+            ExportCondition::Import,
             ModuleFormat::Esm,
             ModuleRole::EntryPoint,
             surface,
@@ -1680,6 +1680,21 @@ mod tests {
         assert_eq!(graph.surface, RenderSurface::ClientEntry);
         assert_eq!(graph.node_count(), 4);
         assert_eq!(graph.edge_count(), 4);
+    }
+
+    #[test]
+    fn build_client_entry_graph_binds_react_dom_client_entrypoint() {
+        let graph = build_client_entry_graph(SecurityEpoch::from_raw(1));
+        let entry = graph
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "client-entry")
+            .expect("client entry node should exist");
+        assert_eq!(entry.package, ReactPackage::ReactDom);
+        assert_eq!(entry.subpath, "./client");
+        assert_eq!(entry.condition, ExportCondition::Import);
+        assert_eq!(entry.role, ModuleRole::EntryPoint);
+        assert_eq!(entry.surface, RenderSurface::ClientEntry);
     }
 
     #[test]

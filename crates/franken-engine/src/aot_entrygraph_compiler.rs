@@ -684,7 +684,7 @@ fn compile_module(
     graph: &Entrygraph,
     config: &CompileConfig,
     epoch: SecurityEpoch,
-    _remaining_budget_micros: u64,
+    remaining_budget_micros: u64,
 ) -> ModuleCompileResult {
     // Check module size
     if module.source_size_bytes > config.max_module_source_bytes {
@@ -697,6 +697,21 @@ fn compile_module(
             skip_reason: Some(format!(
                 "source {} bytes exceeds max {}",
                 module.source_size_bytes, config.max_module_source_bytes
+            )),
+        };
+    }
+
+    // Simulate compile time proportional to source size.
+    let compile_time = module.source_size_bytes / 100 + 1;
+    if compile_time > remaining_budget_micros {
+        return ModuleCompileResult {
+            specifier: module.specifier.clone(),
+            status: CompileStatus::BudgetExhausted,
+            artifact_hash: None,
+            provenance: Vec::new(),
+            compile_time_micros: 0,
+            skip_reason: Some(format!(
+                "compile time {compile_time}us exceeds remaining budget {remaining_budget_micros}us"
             )),
         };
     }
@@ -715,9 +730,6 @@ fn compile_module(
     } else {
         Vec::new()
     };
-
-    // Simulate compile time proportional to source size
-    let compile_time = module.source_size_bytes / 100 + 1;
 
     ModuleCompileResult {
         specifier: module.specifier.clone(),

@@ -189,6 +189,73 @@ fn test_custom_threshold() {
 }
 
 // ---------------------------------------------------------------------------
+// Compile budget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_module_exceeding_remaining_budget_is_not_compiled() {
+    let graph = make_graph(
+        "budget1",
+        EntryKind::AppEntry,
+        vec![make_module("root.js", 500, true)],
+    );
+    let mut cfg = default_config();
+    cfg.min_module_count = 1;
+    cfg.max_compile_time_micros = 5;
+
+    let report = compile_entrygraph(&graph, &cfg, epoch()).unwrap();
+
+    assert_eq!(report.verdict, CompileVerdict::NoneCompiled);
+    assert_eq!(report.total_compile_time_micros, 0);
+    assert_eq!(report.compiled_count, 0);
+    assert_eq!(report.failed_count, 1);
+    assert_eq!(
+        report.module_results[0].status,
+        CompileStatus::BudgetExhausted
+    );
+    assert_eq!(report.module_results[0].artifact_hash, None);
+    assert!(report.module_results[0].provenance.is_empty());
+    assert!(
+        report.module_results[0]
+            .skip_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("exceeds remaining budget")
+    );
+}
+
+#[test]
+fn test_later_module_exhausts_remaining_budget_after_prior_compile() {
+    let graph = make_graph(
+        "budget2",
+        EntryKind::AppEntry,
+        vec![
+            make_module("root.js", 500, true),
+            make_module("dep1.js", 300, false),
+            make_module("dep2.js", 100, false),
+        ],
+    );
+    let mut cfg = default_config();
+    cfg.max_compile_time_micros = 7;
+
+    let report = compile_entrygraph(&graph, &cfg, epoch()).unwrap();
+
+    assert_eq!(report.verdict, CompileVerdict::PartiallyCompiled);
+    assert_eq!(report.total_compile_time_micros, 6);
+    assert_eq!(report.compiled_count, 1);
+    assert_eq!(report.failed_count, 2);
+    assert_eq!(report.module_results[0].status, CompileStatus::Compiled);
+    assert_eq!(
+        report.module_results[1].status,
+        CompileStatus::BudgetExhausted
+    );
+    assert_eq!(
+        report.module_results[2].status,
+        CompileStatus::BudgetExhausted
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Compile targets
 // ---------------------------------------------------------------------------
 

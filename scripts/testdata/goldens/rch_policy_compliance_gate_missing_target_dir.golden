@@ -1,0 +1,25 @@
+{
+  "schema_version": "franken-engine.rch-policy-compliance-gate.v1",
+  "status": "fail",
+  "checked_files": [
+    "[SMOKE_ROOT]/fixtures/missing-target.sh"
+  ],
+  "checked_file_count": 1,
+  "violation_count": 1,
+  "waiver_count": 0,
+  "violations": [
+    {
+      "file": "[SMOKE_ROOT]/fixtures/missing-target.sh",
+      "line": 3,
+      "kind": "missing_target_dir",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --lib",
+      "remediation": "Route heavy Cargo through 'rch exec -- env CARGO_TARGET_DIR=... cargo ...'."
+    }
+  ],
+  "waivers": [],
+  "remediation": [
+    "Use rch exec -- env CARGO_TARGET_DIR=... cargo ... for heavy build/check/test/clippy/bench/run commands.",
+    "Reject rch local fallback markers instead of continuing locally.",
+    "Use rch-policy-waive comments only for lightweight examples, and include a specific reason."
+  ]
+}

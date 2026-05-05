@@ -1,0 +1,32 @@
+{
+  "schema_version": "franken-engine.rch-policy-compliance-gate.v1",
+  "status": "fail",
+  "checked_files": [
+    "[SMOKE_ROOT]/fixtures/local-fallback.sh"
+  ],
+  "checked_file_count": 1,
+  "violation_count": 2,
+  "waiver_count": 0,
+  "violations": [
+    {
+      "file": "[SMOKE_ROOT]/fixtures/local-fallback.sh",
+      "line": 3,
+      "kind": "local_fallback_not_rejected",
+      "command": "if grep -q \"falling back to local\" \"$log_path\"; then",
+      "remediation": "Treat rch local fallback as a gate failure for heavy commands."
+    },
+    {
+      "file": "[SMOKE_ROOT]/fixtures/local-fallback.sh",
+      "line": 4,
+      "kind": "local_fallback_not_rejected",
+      "command": "  echo \"warning: local fallback accepted\"",
+      "remediation": "Treat rch local fallback as a gate failure for heavy commands."
+    }
+  ],
+  "waivers": [],
+  "remediation": [
+    "Use rch exec -- env CARGO_TARGET_DIR=... cargo ... for heavy build/check/test/clippy/bench/run commands.",
+    "Reject rch local fallback markers instead of continuing locally.",
+    "Use rch-policy-waive comments only for lightweight examples, and include a specific reason."
+  ]
+}

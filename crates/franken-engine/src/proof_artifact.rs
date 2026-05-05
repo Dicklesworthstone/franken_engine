@@ -11,6 +11,7 @@ use std::path::{Component, Path};
 pub const PROOF_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-manifest.v1";
 pub const PROOF_EVENT_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-event.v1";
 pub const PROOF_REPORT_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-report.v1";
+pub const PROOF_COST_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-cost-manifest.v1";
 pub const REDACTION_POLICY_SCHEMA_VERSION: &str =
     "franken-engine.proof-artifact-redaction-policy.v1";
 
@@ -317,6 +318,260 @@ impl ProofMachineReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProofCostTargetKind {
+    Lib,
+    Bin,
+    Test,
+    Bench,
+    Example,
+    BuildScript,
+    Dependency,
+}
+
+impl ProofCostTargetKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lib => "lib",
+            Self::Bin => "bin",
+            Self::Test => "test",
+            Self::Bench => "bench",
+            Self::Example => "example",
+            Self::BuildScript => "build_script",
+            Self::Dependency => "dependency",
+        }
+    }
+}
+
+impl fmt::Display for ProofCostTargetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofCostTarget {
+    pub package: String,
+    pub target: String,
+    pub kind: ProofCostTargetKind,
+    pub profile: String,
+    pub compiled: bool,
+    pub linked: bool,
+    pub dragged_by: Vec<String>,
+}
+
+impl ProofCostTarget {
+    #[must_use]
+    pub fn new(
+        package: impl Into<String>,
+        target: impl Into<String>,
+        kind: ProofCostTargetKind,
+        profile: impl Into<String>,
+        compiled: bool,
+        linked: bool,
+        dragged_by: Vec<String>,
+    ) -> Self {
+        Self {
+            package: package.into(),
+            target: target.into(),
+            kind,
+            profile: profile.into(),
+            compiled,
+            linked,
+            dragged_by,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProofArtifactError> {
+        require_non_empty(&self.package, "proof_cost_target.package")?;
+        require_non_empty(&self.target, "proof_cost_target.target")?;
+        require_non_empty(&self.profile, "proof_cost_target.profile")?;
+        if !self.compiled && !self.linked {
+            return Err(ProofArtifactError::InvalidState(format!(
+                "proof cost target `{}` was neither compiled nor linked",
+                self.target
+            )));
+        }
+        for source in &self.dragged_by {
+            require_non_empty(source, "proof_cost_target.dragged_by")?;
+        }
+        Ok(())
+    }
+
+    fn stable_key(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.package, self.kind, self.target, self.profile
+        )
+    }
+
+    fn operator_label(&self) -> String {
+        format!("{}:{}:{}", self.package, self.kind, self.target)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofCostManifest {
+    pub schema_version: String,
+    pub manifest_id: String,
+    pub bead_id: String,
+    pub focused_suite: String,
+    pub command: String,
+    pub command_hash: String,
+    pub cargo_package: String,
+    pub expected_focus_targets: Vec<String>,
+    pub observed_targets: Vec<ProofCostTarget>,
+    pub target_counts: BTreeMap<String, u64>,
+    pub total_compiled_targets: u64,
+    pub total_linked_targets: u64,
+    pub unexpected_targets: Vec<String>,
+    pub operator_log: Vec<String>,
+}
+
+impl ProofCostManifest {
+    #[must_use]
+    pub fn new(
+        bead_id: impl Into<String>,
+        focused_suite: impl Into<String>,
+        command: impl Into<String>,
+        cargo_package: impl Into<String>,
+        expected_focus_targets: Vec<String>,
+        observed_targets: Vec<ProofCostTarget>,
+    ) -> Self {
+        let bead_id = bead_id.into();
+        let focused_suite = focused_suite.into();
+        let command = command.into();
+        let cargo_package = cargo_package.into();
+        let command_hash = sha256_hex(command.as_bytes());
+        let expected_focus_targets = normalized_string_vec(expected_focus_targets);
+        let observed_targets = normalized_targets(observed_targets);
+        let target_counts = count_targets_by_kind(&observed_targets);
+        let total_compiled_targets = observed_targets
+            .iter()
+            .filter(|target| target.compiled)
+            .count() as u64;
+        let total_linked_targets = observed_targets
+            .iter()
+            .filter(|target| target.linked)
+            .count() as u64;
+        let unexpected_targets = unexpected_targets(&expected_focus_targets, &observed_targets);
+        let manifest_id =
+            proof_cost_manifest_id(&bead_id, &focused_suite, &command_hash, &observed_targets);
+
+        let mut manifest = Self {
+            schema_version: PROOF_COST_MANIFEST_SCHEMA_VERSION.to_string(),
+            manifest_id,
+            bead_id,
+            focused_suite,
+            command,
+            command_hash,
+            cargo_package,
+            expected_focus_targets,
+            observed_targets,
+            target_counts,
+            total_compiled_targets,
+            total_linked_targets,
+            unexpected_targets,
+            operator_log: Vec::new(),
+        };
+        manifest.operator_log = manifest.operator_log_lines();
+        manifest
+    }
+
+    pub fn validate(&self) -> Result<(), ProofArtifactError> {
+        require_schema(
+            &self.schema_version,
+            PROOF_COST_MANIFEST_SCHEMA_VERSION,
+            "proof_cost_manifest",
+        )?;
+        require_non_empty(&self.manifest_id, "manifest_id")?;
+        require_non_empty(&self.bead_id, "bead_id")?;
+        require_non_empty(&self.focused_suite, "focused_suite")?;
+        require_non_empty(&self.command, "command")?;
+        require_non_empty(&self.cargo_package, "cargo_package")?;
+        validate_sha256(&self.command_hash)?;
+        if self.observed_targets.is_empty() {
+            return Err(ProofArtifactError::MissingField("observed_targets"));
+        }
+        if self.target_counts != count_targets_by_kind(&self.observed_targets) {
+            return Err(ProofArtifactError::InvalidState(
+                "proof cost target_counts do not match observed_targets".to_string(),
+            ));
+        }
+        let compiled = self
+            .observed_targets
+            .iter()
+            .filter(|target| target.compiled)
+            .count() as u64;
+        if self.total_compiled_targets != compiled {
+            return Err(ProofArtifactError::InvalidState(
+                "proof cost total_compiled_targets does not match observed_targets".to_string(),
+            ));
+        }
+        let linked = self
+            .observed_targets
+            .iter()
+            .filter(|target| target.linked)
+            .count() as u64;
+        if self.total_linked_targets != linked {
+            return Err(ProofArtifactError::InvalidState(
+                "proof cost total_linked_targets does not match observed_targets".to_string(),
+            ));
+        }
+        let unexpected = unexpected_targets(&self.expected_focus_targets, &self.observed_targets);
+        if self.unexpected_targets != unexpected {
+            return Err(ProofArtifactError::InvalidState(
+                "proof cost unexpected_targets do not match expected_focus_targets".to_string(),
+            ));
+        }
+        let operator_log = self.operator_log_lines();
+        if self.operator_log != operator_log {
+            return Err(ProofArtifactError::InvalidState(
+                "proof cost operator_log is stale".to_string(),
+            ));
+        }
+        for target in &self.observed_targets {
+            target.validate()?;
+        }
+        Ok(())
+    }
+
+    pub fn canonical_json(&self) -> Result<String, ProofArtifactError> {
+        self.validate()?;
+        serde_json::to_string(self)
+            .map_err(|error| ProofArtifactError::JsonMalformed(error.to_string()))
+    }
+
+    pub fn content_hash(&self) -> Result<String, ProofArtifactError> {
+        Ok(sha256_hex(self.canonical_json()?))
+    }
+
+    #[must_use]
+    pub fn operator_log_text(&self) -> String {
+        self.operator_log.join("\n")
+    }
+
+    fn operator_log_lines(&self) -> Vec<String> {
+        let mut lines = Vec::with_capacity(2 + self.unexpected_targets.len());
+        lines.push(format!(
+            "proof_cost suite={} bead={} package={} compiled={} linked={} unexpected={}",
+            self.focused_suite,
+            self.bead_id,
+            self.cargo_package,
+            self.total_compiled_targets,
+            self.total_linked_targets,
+            self.unexpected_targets.len()
+        ));
+        lines.push(format!("proof_cost command_hash={}", self.command_hash));
+        for target in &self.unexpected_targets {
+            lines.push(format!("proof_cost unexpected_target={target}"));
+        }
+        lines
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedactionPolicy {
     pub schema_version: String,
@@ -607,6 +862,91 @@ fn require_non_empty(value: &str, field: &'static str) -> Result<(), ProofArtifa
     }
 }
 
+fn normalized_string_vec(values: Vec<String>) -> Vec<String> {
+    let mut values: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn normalized_targets(targets: Vec<ProofCostTarget>) -> Vec<ProofCostTarget> {
+    let mut targets = targets;
+    for target in &mut targets {
+        target.dragged_by = normalized_string_vec(std::mem::take(&mut target.dragged_by));
+    }
+    targets.sort_by_key(ProofCostTarget::stable_key);
+    targets.dedup_by_key(|target| target.stable_key());
+    targets
+}
+
+fn count_targets_by_kind(targets: &[ProofCostTarget]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for target in targets {
+        *counts.entry(target.kind.as_str().to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn unexpected_targets(
+    expected_focus_targets: &[String],
+    observed_targets: &[ProofCostTarget],
+) -> Vec<String> {
+    let mut unexpected = Vec::new();
+    for target in observed_targets {
+        if !expected_focus_targets
+            .iter()
+            .any(|expected| expected == &target.target)
+        {
+            unexpected.push(target.operator_label());
+        }
+    }
+    unexpected.sort();
+    unexpected.dedup();
+    unexpected
+}
+
+fn proof_cost_manifest_id(
+    bead_id: &str,
+    focused_suite: &str,
+    command_hash: &str,
+    observed_targets: &[ProofCostTarget],
+) -> String {
+    let mut input = String::new();
+    input.push_str(bead_id);
+    input.push('|');
+    input.push_str(focused_suite);
+    input.push('|');
+    input.push_str(command_hash);
+    for target in observed_targets {
+        input.push('|');
+        input.push_str(&target.stable_key());
+        input.push('|');
+        input.push_str(if target.compiled {
+            "compiled"
+        } else {
+            "not_compiled"
+        });
+        input.push('|');
+        input.push_str(if target.linked {
+            "linked"
+        } else {
+            "not_linked"
+        });
+        for source in &target.dragged_by {
+            input.push('|');
+            input.push_str(source);
+        }
+    }
+    format!(
+        "proof-cost-{}",
+        sha256_hex(input).chars().take(16).collect::<String>()
+    )
+}
+
 /// Validates a single line from events.jsonl with comprehensive safety checks
 pub fn validate_event_json_line(line: &str) -> Result<ProofEvent, ProofArtifactError> {
     // Check line size before parsing
@@ -866,6 +1206,45 @@ mod tests {
         }
     }
 
+    fn sample_proof_cost_manifest() -> ProofCostManifest {
+        ProofCostManifest::new(
+            "bd-fn2zh",
+            "dark_matter_saturation_gate",
+            "cargo +nightly-2026-04-22 test -p frankenengine-engine --test dark_matter_saturation_gate_integration -- --nocapture",
+            "frankenengine-engine",
+            vec!["dark_matter_saturation_gate_integration".to_string()],
+            vec![
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "dark_matter_saturation_gate_integration",
+                    ProofCostTargetKind::Test,
+                    "test",
+                    true,
+                    true,
+                    vec!["explicit --test".to_string()],
+                ),
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "frankenengine-engine",
+                    ProofCostTargetKind::Lib,
+                    "test",
+                    true,
+                    false,
+                    vec!["test harness dependency".to_string()],
+                ),
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "semantic_dark_matter_engine_integration",
+                    ProofCostTargetKind::Test,
+                    "test",
+                    true,
+                    true,
+                    vec!["unexpected fan-out".to_string()],
+                ),
+            ],
+        )
+    }
+
     #[test]
     fn proof_manifest_round_trips_and_validates() {
         let manifest = sample_manifest();
@@ -892,6 +1271,105 @@ mod tests {
             manifest.validate(),
             Err(ProofArtifactError::MissingField("bundle_id"))
         );
+    }
+
+    #[test]
+    fn proof_cost_manifest_round_trips_and_validates() {
+        let manifest = sample_proof_cost_manifest();
+        manifest.validate().expect("proof cost manifest validates");
+
+        assert_eq!(manifest.schema_version, PROOF_COST_MANIFEST_SCHEMA_VERSION);
+        assert_eq!(manifest.target_counts.get("test").copied(), Some(2));
+        assert_eq!(manifest.target_counts.get("lib").copied(), Some(1));
+        assert_eq!(manifest.total_compiled_targets, 3);
+        assert_eq!(manifest.total_linked_targets, 2);
+        assert!(
+            manifest
+                .unexpected_targets
+                .iter()
+                .any(|target| { target == "frankenengine-engine:lib:frankenengine-engine" })
+        );
+
+        let json = manifest.canonical_json().expect("canonical json");
+        let decoded: ProofCostManifest =
+            serde_json::from_str(&json).expect("decode proof cost manifest");
+        assert_eq!(decoded, manifest);
+    }
+
+    #[test]
+    fn proof_cost_manifest_is_deterministic_after_input_reordering() {
+        let a = sample_proof_cost_manifest();
+        let b = ProofCostManifest::new(
+            "bd-fn2zh",
+            "dark_matter_saturation_gate",
+            a.command.clone(),
+            "frankenengine-engine",
+            vec![
+                "dark_matter_saturation_gate_integration".to_string(),
+                "dark_matter_saturation_gate_integration".to_string(),
+            ],
+            vec![
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "semantic_dark_matter_engine_integration",
+                    ProofCostTargetKind::Test,
+                    "test",
+                    true,
+                    true,
+                    vec![
+                        "unexpected fan-out".to_string(),
+                        "unexpected fan-out".to_string(),
+                    ],
+                ),
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "dark_matter_saturation_gate_integration",
+                    ProofCostTargetKind::Test,
+                    "test",
+                    true,
+                    true,
+                    vec!["explicit --test".to_string()],
+                ),
+                ProofCostTarget::new(
+                    "frankenengine-engine",
+                    "frankenengine-engine",
+                    ProofCostTargetKind::Lib,
+                    "test",
+                    true,
+                    false,
+                    vec!["test harness dependency".to_string()],
+                ),
+            ],
+        );
+
+        assert_eq!(a.manifest_id, b.manifest_id);
+        assert_eq!(a.content_hash().unwrap(), b.content_hash().unwrap());
+        assert_eq!(a.observed_targets, b.observed_targets);
+    }
+
+    #[test]
+    fn proof_cost_manifest_rejects_stale_counts() {
+        let mut manifest = sample_proof_cost_manifest();
+        manifest.target_counts.insert("test".to_string(), 99);
+
+        assert!(matches!(
+            manifest.validate(),
+            Err(ProofArtifactError::InvalidState(message))
+                if message.contains("target_counts")
+        ));
+    }
+
+    #[test]
+    fn proof_cost_manifest_operator_log_names_fanout() {
+        let manifest = sample_proof_cost_manifest();
+        let log = manifest.operator_log_text();
+
+        assert!(log.contains("proof_cost suite=dark_matter_saturation_gate"));
+        assert!(log.contains("compiled=3"));
+        assert!(log.contains("linked=2"));
+        assert!(log.contains(
+            "unexpected_target=frankenengine-engine:test:semantic_dark_matter_engine_integration"
+        ));
     }
 
     #[test]

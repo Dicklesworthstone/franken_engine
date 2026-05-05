@@ -18,6 +18,11 @@ standard bundle:
 - `report.md`: human-readable summary for reviewers.
 - `redaction_policy.json`: the redaction policy used before commands are copied
   into standard proof reports.
+- `proof_cost_manifest.json`: optional focused-validation inventory using
+  `franken-engine.proof-cost-manifest.v1`. It records the requested suite, the
+  command hash, expected focus targets, observed compiled/linked targets,
+  per-kind target counts, unexpected fan-out, and operator log lines that name
+  dragged targets directly.
 
 The Rust schema lives in `crates/franken-engine/src/proof_artifact.rs`. Shell
 gates should source `scripts/lib/proof_artifact_contract.sh` and finish by
@@ -36,6 +41,12 @@ The first wired gates are:
 New proof gates should prefer repository-relative artifact paths. The helper
 normalizes paths under the repo root before writing the shared manifest so that
 artifacts remain reproducible across local and remote runners.
+
+Focused proof gates that are expensive or prone to hidden fan-out should emit a
+proof-cost manifest next to the standard bundle. The manifest is intentionally
+timestamp-free so reordering the same observed targets yields the same content
+hash. Use it to distinguish a real source regression from an unrelated compile
+surface pulled in by a nominally narrow `cargo test --test ...` command.
 
 Rerun example:
 

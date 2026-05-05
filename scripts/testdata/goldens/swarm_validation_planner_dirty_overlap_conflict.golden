@@ -2,26 +2,39 @@
   "schema_version": "franken-engine.swarm-validation-plan.v1",
   "bead_id": "bd-1onpa",
   "source_revision": "smoke-rev",
-  "decision": "admit",
+  "decision": "admit_narrow",
   "allow_broad": false,
   "reason_codes": [
-    "docs_only"
+    "dirty_overlap",
+    "in_progress_overlap",
+    "script_only"
   ],
   "risk_flags": [],
   "changed_paths": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+    "scripts/swarm_validation_planner.sh"
   ],
   "planned_write_paths": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+    "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md"
   ],
-  "collision_risk": "none",
-  "conflicting_agents": [],
-  "safe_alternatives": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+  "collision_risk": "dirty_or_in_progress_overlap",
+  "conflicting_agents": [
+    "PurpleRiver"
   ],
-  "reservation_recommendations": [],
+  "safe_alternatives": [],
+  "reservation_recommendations": [
+    {
+      "action": "inspect_dirty_overlap",
+      "scope": "planned_write_set",
+      "reason": "planned write paths overlap dirty worktree files"
+    },
+    {
+      "action": "coordinate_in_progress_beads",
+      "scope": "planned_write_set",
+      "reason": "planned write paths overlap in-progress bead path claims"
+    }
+  ],
   "collision_receipt": {
-    "path": "[SMOKE_ROOT]/docs-only/collision_receipt.json",
+    "path": "[SMOKE_ROOT]/dirty-overlap-conflict/collision_receipt.json",
     "schema_version": "franken-engine.swarm-validation-collision-receipt.v1",
     "agent_mail_snapshot": {
       "status": "present",
@@ -29,26 +42,26 @@
     },
     "in_progress_snapshot": {
       "status": "present",
-      "path": "[SMOKE_ROOT]/clean-in-progress.json"
+      "path": "[SMOKE_ROOT]/dirty-overlap-in-progress.json"
     }
   },
   "path_mappings": [
     {
-      "path": "docs/swarm_validation_control_plane_contract_v1.json",
-      "kind": "docs_only",
+      "path": "scripts/swarm_validation_planner.sh",
+      "kind": "script_only",
       "package": null,
       "target": null,
-      "rationale": "docs changes do not require Cargo"
+      "rationale": "shell script changes need syntax/static checks, not Cargo"
     }
   ],
   "commands": [
     {
-      "command_id": "diff-check-docs_swarm_validation_control_plane_contract_v1_json",
-      "display": "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json",
-      "command_kind": "diff_check",
+      "command_id": "bash-n-scripts_swarm_validation_planner_sh",
+      "display": "bash -n scripts/swarm_validation_planner.sh",
+      "command_kind": "shell_syntax",
       "package": null,
       "target": null,
-      "rationale": "docs whitespace validation",
+      "rationale": "script syntax validation",
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
         "state": "static",
@@ -72,12 +85,12 @@
       }
     },
     {
-      "command_id": "jq-empty-docs_swarm_validation_control_plane_contract_v1_json",
-      "display": "jq empty docs/swarm_validation_control_plane_contract_v1.json",
-      "command_kind": "json_syntax",
+      "command_id": "shellcheck-scripts_swarm_validation_planner_sh",
+      "display": "shellcheck -x scripts/swarm_validation_planner.sh",
+      "command_kind": "shellcheck",
       "package": null,
       "target": null,
-      "rationale": "JSON contract syntax validation",
+      "rationale": "script static analysis",
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
         "state": "static",
@@ -108,6 +121,19 @@
       "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
     }
   ],
-  "warnings": [],
+  "warnings": [
+    {
+      "kind": "unrelated_dirty_worktree",
+      "detail": "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md is dirty but outside the requested validation plan"
+    },
+    {
+      "kind": "dirty_overlap",
+      "detail": "planned write paths overlap dirty worktree files"
+    },
+    {
+      "kind": "in_progress_overlap",
+      "detail": "planned write paths overlap in-progress bead path claims"
+    }
+  ],
   "proof_cost_budgets": []
 }

@@ -8,10 +8,13 @@ run_dir="${SWARM_VALIDATION_PLANNER_RUN_DIR:-${artifact_root}/${run_id}}"
 bead_id="${SWARM_VALIDATION_PLANNER_BEAD_ID:-}"
 source_revision="${SWARM_VALIDATION_PLANNER_SOURCE_REVISION:-}"
 proof_cost_history_json="${SWARM_VALIDATION_PLANNER_PROOF_COST_HISTORY_JSON:-}"
+reservation_snapshot_json="${SWARM_VALIDATION_PLANNER_RESERVATION_SNAPSHOT_JSON:-}"
+in_progress_json="${SWARM_VALIDATION_PLANNER_IN_PROGRESS_JSON:-}"
 package_override=""
 test_target_override=""
 allow_broad="false"
 declare -a changed_paths=()
+declare -a planned_write_paths=()
 
 usage() {
   cat >&2 <<'EOF'
@@ -22,16 +25,21 @@ Options:
   --source-revision REV     Source revision to record. Defaults to git rev-parse --short HEAD.
   --proof-cost-history-json PATH
                             Optional franken-engine.proof-cost-history.v1 artifact for cost prediction.
+  --reservation-snapshot-json PATH
+                            Optional Agent Mail reservation snapshot JSON fixture.
+  --in-progress-json PATH   Optional br in-progress bead snapshot JSON fixture.
   --package PACKAGE         Optional package override for Rust path fallback.
   --test-target TARGET      Optional exact integration test target.
   --allow-broad             Permit broad all-targets planning. Default is fail-closed/no broad commands.
   --changed-path PATH       Path changed by the bead. May be repeated.
+  --planned-write-path PATH Planned write path for collision-risk planning. May be repeated.
 
 By default, artifacts are written outside the repository under TMPDIR.
 The planner does not execute validation. It writes:
   plan.json
   commands.txt
   report.md
+  collision_receipt.json
 EOF
 }
 
@@ -69,6 +77,22 @@ while [[ "$#" -gt 0 ]]; do
       proof_cost_history_json="$2"
       shift 2
       ;;
+    --reservation-snapshot-json)
+      [[ "$#" -ge 2 ]] || {
+        usage
+        exit 64
+      }
+      reservation_snapshot_json="$2"
+      shift 2
+      ;;
+    --in-progress-json)
+      [[ "$#" -ge 2 ]] || {
+        usage
+        exit 64
+      }
+      in_progress_json="$2"
+      shift 2
+      ;;
     --package)
       [[ "$#" -ge 2 ]] || {
         usage
@@ -95,6 +119,14 @@ while [[ "$#" -gt 0 ]]; do
         exit 64
       }
       changed_paths+=("$2")
+      shift 2
+      ;;
+    --planned-write-path)
+      [[ "$#" -ge 2 ]] || {
+        usage
+        exit 64
+      }
+      planned_write_paths+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -140,6 +172,7 @@ mkdir -p "$run_dir"
 plan_path="${run_dir}/plan.json"
 commands_path="${run_dir}/commands.txt"
 report_path="${run_dir}/report.md"
+collision_receipt_path="${run_dir}/collision_receipt.json"
 commands_jsonl="${run_dir}/commands.jsonl"
 budgets_jsonl="${run_dir}/proof_cost_budgets.jsonl"
 mappings_jsonl="${run_dir}/path_mappings.jsonl"
@@ -147,13 +180,25 @@ warnings_jsonl="${run_dir}/warnings.jsonl"
 omitted_jsonl="${run_dir}/omitted_commands.jsonl"
 reasons_jsonl="${run_dir}/reason_codes.jsonl"
 cost_rows_json="${run_dir}/proof_cost_history_rows.json"
+changed_paths_json="${run_dir}/changed_paths.json"
+planned_write_paths_json="${run_dir}/planned_write_paths.json"
+reservation_rows_json="${run_dir}/reservation_snapshot_rows.json"
+in_progress_rows_json="${run_dir}/in_progress_snapshot_rows.json"
+dirty_rows_json="${run_dir}/dirty_worktree_rows.json"
+dirty_rows_jsonl="${run_dir}/dirty_worktree_rows.jsonl"
 : >"$commands_jsonl"
 : >"$budgets_jsonl"
 : >"$mappings_jsonl"
 : >"$warnings_jsonl"
 : >"$omitted_jsonl"
 : >"$reasons_jsonl"
+: >"$dirty_rows_jsonl"
 printf '[]\n' >"$cost_rows_json"
+printf '[]\n' >"$changed_paths_json"
+printf '[]\n' >"$planned_write_paths_json"
+printf '[]\n' >"$reservation_rows_json"
+printf '[]\n' >"$in_progress_rows_json"
+printf '[]\n' >"$dirty_rows_json"
 
 safe_token() {
   tr -c '[:alnum:]_' '_' <<<"$1" | sed 's/_$//'
@@ -167,6 +212,26 @@ repo_relative_path() {
     printf '%s\n' "${path#./}"
   fi
 }
+
+write_path_array_json() {
+  local output_path="$1"
+  shift || true
+
+  if [[ "$#" -eq 0 ]]; then
+    printf '[]\n' >"$output_path"
+    return 0
+  fi
+
+  {
+    local raw_path
+    for raw_path in "$@"; do
+      repo_relative_path "$raw_path"
+    done
+  } | jq -R . | jq -s 'map(select(length > 0)) | sort | unique' >"$output_path"
+}
+
+reservation_snapshot_status="missing"
+in_progress_snapshot_status="missing"
 
 json_string_line() {
   jq -nc --arg value "$1" '$value'
@@ -214,6 +279,98 @@ emit_mapping() {
     '{path: $path, kind: $kind, package: (if $package == "" then null else $package end), target: (if $target == "" then null else $target end), rationale: $rationale}' >>"$mappings_jsonl"
 }
 
+emit_dirty_row() {
+  local path="$1"
+  local status="$2"
+
+  jq -nc \
+    --arg path "$path" \
+    --arg status "$status" \
+    '{path: $path, status: $status}' >>"$dirty_rows_jsonl"
+}
+
+normalize_reservation_snapshot() {
+  if [[ -z "$reservation_snapshot_json" ]]; then
+    reservation_snapshot_status="missing"
+    printf '[]\n' >"$reservation_rows_json"
+    return 0
+  fi
+
+  if [[ ! -f "$reservation_snapshot_json" ]]; then
+    reservation_snapshot_status="missing"
+    emit_warning "missing_reservation_snapshot" "Reservation snapshot file does not exist: ${reservation_snapshot_json}"
+    add_reason "missing_reservation_snapshot"
+    printf '[]\n' >"$reservation_rows_json"
+    return 0
+  fi
+
+  if ! jq empty "$reservation_snapshot_json" >/dev/null 2>&1; then
+    reservation_snapshot_status="invalid"
+    emit_warning "invalid_reservation_snapshot" "Reservation snapshot is not valid JSON: ${reservation_snapshot_json}"
+    add_reason "invalid_reservation_snapshot"
+    printf '[]\n' >"$reservation_rows_json"
+    return 0
+  fi
+
+  reservation_snapshot_status="present"
+  jq '
+    def rows:
+      if type == "array" then .
+      elif (.reservations? | type) == "array" then .reservations
+      elif (.granted? | type) == "array" then .granted
+      else []
+      end;
+    rows
+    | map({
+        path_pattern: (.path_pattern // .path // ""),
+        agent: (.agent_name // .agent // .holder // .assignee // ""),
+        bead_id: (.bead_id // .bead // .issue_id // .id // ""),
+        exclusive: (.exclusive // true)
+      })
+    | map(select(.path_pattern != ""))
+  ' "$reservation_snapshot_json" >"$reservation_rows_json"
+}
+
+normalize_in_progress_snapshot() {
+  if [[ -z "$in_progress_json" ]]; then
+    in_progress_snapshot_status="missing"
+    printf '[]\n' >"$in_progress_rows_json"
+    return 0
+  fi
+
+  if [[ ! -f "$in_progress_json" ]]; then
+    in_progress_snapshot_status="missing"
+    emit_warning "missing_in_progress_snapshot" "In-progress bead snapshot file does not exist: ${in_progress_json}"
+    add_reason "missing_in_progress_snapshot"
+    printf '[]\n' >"$in_progress_rows_json"
+    return 0
+  fi
+
+  if ! jq empty "$in_progress_json" >/dev/null 2>&1; then
+    in_progress_snapshot_status="invalid"
+    emit_warning "invalid_in_progress_snapshot" "In-progress bead snapshot is not valid JSON: ${in_progress_json}"
+    add_reason "invalid_in_progress_snapshot"
+    printf '[]\n' >"$in_progress_rows_json"
+    return 0
+  fi
+
+  in_progress_snapshot_status="present"
+  jq '
+    def rows:
+      if type == "array" then .
+      elif (.beads? | type) == "array" then .beads
+      else []
+      end;
+    rows
+    | map({
+        id: (.id // ""),
+        assignee: (.assignee // .agent_name // .agent // ""),
+        status: (.status // ""),
+        paths: ((.planned_write_paths // .changed_paths // .paths // []) | map(tostring))
+      })
+  ' "$in_progress_json" >"$in_progress_rows_json"
+}
+
 normalize_cost_history() {
   if [[ -z "$proof_cost_history_json" ]]; then
     printf '[]\n' >"$cost_rows_json"
@@ -256,6 +413,179 @@ normalize_cost_history() {
           evidence_source: $evidence_source
         }
     ]' "$proof_cost_history_json" >"$cost_rows_json"
+}
+
+build_collision_receipt() {
+  jq -n \
+    --arg schema_version "franken-engine.swarm-validation-collision-receipt.v1" \
+    --arg bead_id "$bead_id" \
+    --arg source_revision "$source_revision" \
+    --arg reservation_snapshot_status "$reservation_snapshot_status" \
+    --arg reservation_snapshot_path "$reservation_snapshot_json" \
+    --arg in_progress_snapshot_status "$in_progress_snapshot_status" \
+    --arg in_progress_snapshot_path "$in_progress_json" \
+    --slurpfile changed "$changed_paths_json" \
+    --slurpfile planned "$planned_write_paths_json" \
+    --slurpfile reservations "$reservation_rows_json" \
+    --slurpfile progress "$in_progress_rows_json" \
+    --slurpfile dirty "$dirty_rows_json" '
+      def glob_to_regex:
+        explode
+        | map(
+            if . == 42 then
+              ".*"
+            elif . == 63 then
+              "."
+            elif ((. >= 48 and . <= 57) or (. >= 65 and . <= 90) or (. >= 97 and . <= 122) or . == 47 or . == 95 or . == 45) then
+              [.] | implode
+            else
+              "\\" + ([.] | implode)
+            end
+          )
+        | join("");
+      def overlaps($left; $right):
+        ($left == $right)
+        or ($left | test("^" + ($right | glob_to_regex) + "$"))
+        or ($right | test("^" + ($left | glob_to_regex) + "$"));
+      ($changed[0] // []) as $changed_paths
+      | ($planned[0] // []) as $planned_paths
+      | ($reservations[0] // []) as $reservation_rows
+      | ($progress[0] // []) as $progress_rows
+      | ($dirty[0] // []) as $dirty_rows
+      | [
+          $planned_paths[] as $path
+          | $reservation_rows[]
+          | select(.exclusive != false)
+          | select(overlaps($path; .path_pattern))
+          | {
+              planned_path: $path,
+              path_pattern: .path_pattern,
+              agent: (.agent // null),
+              bead_id: (.bead_id // null),
+              source: "reservation"
+            }
+        ] as $reservation_conflicts_raw
+      | ($reservation_conflicts_raw | unique_by(.planned_path, .path_pattern, .agent, .bead_id)) as $reservation_conflicts
+      | [
+          $planned_paths[] as $path
+          | $dirty_rows[]
+          | select(overlaps($path; .path))
+          | {
+              planned_path: $path,
+              path: (.path // ""),
+              status: (.status // ""),
+              source: "dirty"
+            }
+        ] as $dirty_conflicts_raw
+      | ($dirty_conflicts_raw | unique_by(.planned_path, .path)) as $dirty_conflicts
+      | [
+          $planned_paths[] as $path
+          | $progress_rows[]
+          | select((.id // "") != $bead_id)
+          | . as $entry
+          | ($entry.paths // [])[]?
+          | select(overlaps($path; .))
+          | {
+              planned_path: $path,
+              path: .,
+              bead_id: ($entry.id // null),
+              assignee: ($entry.assignee // null),
+              source: "in_progress"
+            }
+        ] as $in_progress_conflicts_raw
+      | ($in_progress_conflicts_raw | unique_by(.planned_path, .path, .bead_id, .assignee)) as $in_progress_conflicts
+      | ([
+          $reservation_conflicts[]?.planned_path,
+          $dirty_conflicts[]?.planned_path,
+          $in_progress_conflicts[]?.planned_path
+        ] | unique | sort) as $conflict_paths
+      | ([ $planned_paths[] as $path | select(($conflict_paths | index($path)) | not) | $path ] | unique | sort) as $safe_alternatives
+      | ([
+          $reservation_conflicts[]?.agent,
+          $in_progress_conflicts[]?.assignee
+        ] | map(select(. != null and . != "")) | unique | sort) as $conflicting_agents
+      | ([
+          if ($reservation_conflicts | length) > 0 then
+            {
+              action: "coordinate_reservation_holder",
+              scope: "planned_write_set",
+              reason: "planned write paths overlap active exclusive reservations"
+            }
+          else
+            empty
+          end,
+          if (($reservation_snapshot_status != "present") and ($planned_paths | length) > 0) then
+            {
+              action: "capture_agent_mail_snapshot",
+              scope: "planned_write_set",
+              reason: "Agent Mail reservation snapshot is missing or invalid; bead ownership and dirty paths are only degraded evidence"
+            }
+          else
+            empty
+          end,
+          if ($dirty_conflicts | length) > 0 then
+            {
+              action: "inspect_dirty_overlap",
+              scope: "planned_write_set",
+              reason: "planned write paths overlap dirty worktree files"
+            }
+          else
+            empty
+          end,
+          if ($in_progress_conflicts | length) > 0 then
+            {
+              action: "coordinate_in_progress_beads",
+              scope: "planned_write_set",
+              reason: "planned write paths overlap in-progress bead path claims"
+            }
+          else
+            empty
+          end,
+          if (($safe_alternatives | length) > 0 and (($reservation_conflicts | length) > 0 or ($dirty_conflicts | length) > 0 or ($in_progress_conflicts | length) > 0)) then
+            {
+              action: "reserve_safe_alternatives_only",
+              scope: "planned_write_set",
+              reason: "non-conflicting planned write paths are available while other paths are contested"
+            }
+          else
+            empty
+          end
+        ]) as $reservation_recommendations
+      | {
+          schema_version: $schema_version,
+          bead_id: $bead_id,
+          source_revision: $source_revision,
+          changed_paths: $changed_paths,
+          planned_write_paths: $planned_paths,
+          agent_mail_snapshot: {
+            status: $reservation_snapshot_status,
+            path: (if $reservation_snapshot_path == "" then null else $reservation_snapshot_path end)
+          },
+          in_progress_snapshot: {
+            status: $in_progress_snapshot_status,
+            path: (if $in_progress_snapshot_path == "" then null else $in_progress_snapshot_path end)
+          },
+          collision_risk: (
+            if ($reservation_conflicts | length) > 0 then
+              "reserved_overlap"
+            elif (($dirty_conflicts | length) > 0 or ($in_progress_conflicts | length) > 0) then
+              "dirty_or_in_progress_overlap"
+            elif ($reservation_snapshot_status != "present") then
+              "agent_mail_snapshot_missing"
+            else
+              "none"
+            end
+          ),
+          conflicting_agents: $conflicting_agents,
+          safe_alternatives: $safe_alternatives,
+          reservation_recommendations: $reservation_recommendations,
+          conflicts: {
+            reservations: $reservation_conflicts,
+            dirty: $dirty_conflicts,
+            in_progress: $in_progress_conflicts
+          }
+        }
+    ' >"$collision_receipt_path"
 }
 
 cost_prediction_for_command() {
@@ -501,6 +831,14 @@ plan_docs() {
   add_reason "docs_only"
 }
 
+if [[ "${#planned_write_paths[@]}" -eq 0 ]]; then
+  planned_write_paths=("${changed_paths[@]}")
+fi
+
+write_path_array_json "$changed_paths_json" "${changed_paths[@]}"
+write_path_array_json "$planned_write_paths_json" "${planned_write_paths[@]}"
+normalize_reservation_snapshot
+normalize_in_progress_snapshot
 normalize_cost_history
 
 for raw_path in "${changed_paths[@]}"; do
@@ -556,10 +894,13 @@ fi
 if [[ -n "$dirty_status" ]]; then
   while IFS= read -r status_line; do
     [[ -z "$status_line" ]] && continue
+    status_code="${status_line:0:2}"
     dirty_path="${status_line:3}"
     dirty_path="${dirty_path# }"
     dirty_path="${dirty_path#\"}"
     dirty_path="${dirty_path%\"}"
+    dirty_path="$(repo_relative_path "$dirty_path")"
+    emit_dirty_row "$dirty_path" "$status_code"
     matched="false"
     for raw_path in "${changed_paths[@]}"; do
       rel_changed="$(repo_relative_path "$raw_path")"
@@ -575,6 +916,30 @@ if [[ -n "$dirty_status" ]]; then
   done <<<"$dirty_status"
 fi
 
+jq -s 'sort_by(.path, .status) | unique_by(.path, .status)' "$dirty_rows_jsonl" >"$dirty_rows_json"
+build_collision_receipt
+
+collision_risk="$(jq -r '.collision_risk' "$collision_receipt_path")"
+reservation_overlap_count="$(jq '.conflicts.reservations | length' "$collision_receipt_path")"
+dirty_overlap_count="$(jq '.conflicts.dirty | length' "$collision_receipt_path")"
+in_progress_overlap_count="$(jq '.conflicts.in_progress | length' "$collision_receipt_path")"
+if [[ "$reservation_overlap_count" -ne 0 ]]; then
+  emit_warning "reserved_file_overlap" "planned write paths overlap active exclusive reservations"
+  add_reason "reserved_file_overlap"
+fi
+if [[ "$dirty_overlap_count" -ne 0 ]]; then
+  emit_warning "dirty_overlap" "planned write paths overlap dirty worktree files"
+  add_reason "dirty_overlap"
+fi
+if [[ "$in_progress_overlap_count" -ne 0 ]]; then
+  emit_warning "in_progress_overlap" "planned write paths overlap in-progress bead path claims"
+  add_reason "in_progress_overlap"
+fi
+if [[ "$collision_risk" == "agent_mail_snapshot_missing" ]]; then
+  emit_warning "agent_mail_snapshot_missing" "Agent Mail reservation snapshot is missing or invalid; planner is using degraded ownership evidence"
+  add_reason "agent_mail_snapshot_missing"
+fi
+
 jq -s 'sort_by(.command_id) | unique_by(.command_id)' "$commands_jsonl" >"${commands_jsonl}.tmp"
 mv "${commands_jsonl}.tmp" "$commands_jsonl"
 jq -r '.[].display' "$commands_jsonl" >"$commands_path"
@@ -586,9 +951,9 @@ fallback_count="$(jq -s '[.[] | select(.kind == "package_lib_fallback")] | lengt
 risk_flags_json="$(jq '[.[].risk_flags[]?] | sort | unique' "$commands_jsonl")"
 cost_fail_closed_count="$(jq '[.[].risk_flags[]? | select(. == "mismatched_cost_evidence" or . == "contradictory_cost_evidence")] | length' "$commands_jsonl")"
 decision="admit"
-if [[ "$unknown_count" -ne 0 || "$cost_failure_count" -ne 0 || "$cost_fail_closed_count" -ne 0 || "$command_count" -eq 0 ]]; then
+if [[ "$unknown_count" -ne 0 || "$cost_failure_count" -ne 0 || "$cost_fail_closed_count" -ne 0 || "$command_count" -eq 0 || "$reservation_overlap_count" -ne 0 ]]; then
   decision="fail_closed"
-elif [[ "$fallback_count" -ne 0 ]]; then
+elif [[ "$fallback_count" -ne 0 || "$dirty_overlap_count" -ne 0 || "$in_progress_overlap_count" -ne 0 || "$collision_risk" == "agent_mail_snapshot_missing" ]]; then
   decision="admit_narrow"
 fi
 
@@ -602,15 +967,18 @@ jq -n \
   --arg plan_path "$plan_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
+  --arg collision_receipt_path "$collision_receipt_path" \
   --argjson allow_broad "$allow_broad" \
   --argjson risk_flags "$risk_flags_json" \
-  --argjson changed_paths "$(printf '%s\n' "${changed_paths[@]}" | while IFS= read -r p; do repo_relative_path "$p"; done | jq -R . | jq -s 'sort | unique')" \
   --slurpfile mappings "$mappings_jsonl" \
   --slurpfile commands "$commands_jsonl" \
   --slurpfile budgets "$budgets_jsonl" \
   --slurpfile warnings "$warnings_jsonl" \
   --slurpfile omitted "$omitted_jsonl" \
   --slurpfile reasons "$reasons_jsonl" \
+  --slurpfile changed_paths "$changed_paths_json" \
+  --slurpfile planned_write_paths "$planned_write_paths_json" \
+  --slurpfile collision "$collision_receipt_path" \
   '{
     schema_version: $schema_version,
     bead_id: $bead_id,
@@ -619,7 +987,18 @@ jq -n \
     allow_broad: $allow_broad,
     reason_codes: ($reasons | sort | unique),
     risk_flags: $risk_flags,
-    changed_paths: $changed_paths,
+    changed_paths: ($changed_paths[0] // []),
+    planned_write_paths: ($planned_write_paths[0] // []),
+    collision_risk: ($collision[0].collision_risk // "none"),
+    conflicting_agents: ($collision[0].conflicting_agents // []),
+    safe_alternatives: ($collision[0].safe_alternatives // []),
+    reservation_recommendations: ($collision[0].reservation_recommendations // []),
+    collision_receipt: {
+      path: $collision_receipt_path,
+      schema_version: ($collision[0].schema_version // null),
+      agent_mail_snapshot: ($collision[0].agent_mail_snapshot // {}),
+      in_progress_snapshot: ($collision[0].in_progress_snapshot // {})
+    },
     path_mappings: ($mappings | sort_by(.path, .kind)),
     commands: $commands[0],
     omitted_commands: ($omitted | sort_by(.kind, .path)),
@@ -628,13 +1007,15 @@ jq -n \
     expected_artifacts: [
       {path: $plan_path, role: "validation_plan"},
       {path: $commands_path, role: "command_transcript"},
-      {path: $report_path, role: "operator_report"}
+      {path: $report_path, role: "operator_report"},
+      {path: $collision_receipt_path, role: "collision_receipt"}
     ],
     artifact_paths: {
       run_dir: $run_dir,
       plan_json: $plan_path,
       commands_txt: $commands_path,
-      report_md: $report_path
+      report_md: $report_path,
+      collision_receipt_json: $collision_receipt_path
     }
   }' >"$plan_path"
 
@@ -642,19 +1023,32 @@ jq -n \
   printf '# Swarm Validation Plan\n\n'
   printf -- "- Bead: \`%s\`\n" "$bead_id"
   printf -- "- Decision: \`%s\`\n" "$decision"
+  printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.collision_risk' "$plan_path")"
+  printf -- "- Planned write paths: \`%s\`\n" "$(jq '.planned_write_paths | length' "$plan_path")"
+  printf -- "- Conflicting agents: \`%s\`\n" "$(jq -r 'if (.conflicting_agents | length) == 0 then "none" else (.conflicting_agents | join(", ")) end' "$plan_path")"
   printf -- "- Commands: \`%s\`\n" "$(jq '.commands | length' "$plan_path")"
   printf -- "- Omitted: \`%s\`\n" "$(jq '.omitted_commands | length' "$plan_path")"
   printf -- "- Warnings: \`%s\`\n\n" "$(jq '.warnings | length' "$plan_path")"
+  if [[ "$(jq '.safe_alternatives | length' "$plan_path")" -ne 0 ]]; then
+    printf '## Safe Alternatives\n\n'
+    jq -r '.safe_alternatives[] | "- `" + . + "`"' "$plan_path"
+    printf '\n'
+  fi
   jq -r '.commands[]? | "- `" + .command_id + "`: " + .display + " (cost: `" + .predicted_cost.cost_class + "`, evidence: `" + .cost_evidence.status + "`)"' "$plan_path"
   if [[ "$(jq '.omitted_commands | length' "$plan_path")" -ne 0 ]]; then
     printf '\n## Omitted\n\n'
     jq -r '.omitted_commands[] | "- `" + .kind + "` for `" + .path + "`: " + .reason' "$plan_path"
+  fi
+  if [[ "$(jq '.reservation_recommendations | length' "$plan_path")" -ne 0 ]]; then
+    printf '\n## Reservation Recommendations\n\n'
+    jq -r '.reservation_recommendations[] | "- `" + .action + "`: " + .reason' "$plan_path"
   fi
 } >"$report_path"
 
 printf 'swarm_validation_plan=%s\n' "$plan_path"
 printf 'swarm_validation_commands=%s\n' "$commands_path"
 printf 'swarm_validation_report=%s\n' "$report_path"
+printf 'swarm_validation_collision_receipt=%s\n' "$collision_receipt_path"
 
 if [[ "$decision" == "fail_closed" ]]; then
   exit 42

@@ -2,53 +2,60 @@
   "schema_version": "franken-engine.swarm-validation-plan.v1",
   "bead_id": "bd-1onpa",
   "source_revision": "smoke-rev",
-  "decision": "admit",
+  "decision": "admit_narrow",
   "allow_broad": false,
   "reason_codes": [
-    "docs_only"
+    "agent_mail_snapshot_missing",
+    "script_only"
   ],
   "risk_flags": [],
   "changed_paths": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+    "scripts/swarm_validation_planner.sh"
   ],
   "planned_write_paths": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+    "scripts/swarm_validation_planner.sh"
   ],
-  "collision_risk": "none",
+  "collision_risk": "agent_mail_snapshot_missing",
   "conflicting_agents": [],
   "safe_alternatives": [
-    "docs/swarm_validation_control_plane_contract_v1.json"
+    "scripts/swarm_validation_planner.sh"
   ],
-  "reservation_recommendations": [],
+  "reservation_recommendations": [
+    {
+      "action": "capture_agent_mail_snapshot",
+      "scope": "planned_write_set",
+      "reason": "Agent Mail reservation snapshot is missing or invalid; bead ownership and dirty paths are only degraded evidence"
+    }
+  ],
   "collision_receipt": {
-    "path": "[SMOKE_ROOT]/docs-only/collision_receipt.json",
+    "path": "[SMOKE_ROOT]/missing-agent-mail-degraded/collision_receipt.json",
     "schema_version": "franken-engine.swarm-validation-collision-receipt.v1",
     "agent_mail_snapshot": {
-      "status": "present",
-      "path": "[SMOKE_ROOT]/no-conflict-reservations.json"
+      "status": "missing",
+      "path": null
     },
     "in_progress_snapshot": {
-      "status": "present",
-      "path": "[SMOKE_ROOT]/clean-in-progress.json"
+      "status": "missing",
+      "path": null
     }
   },
   "path_mappings": [
     {
-      "path": "docs/swarm_validation_control_plane_contract_v1.json",
-      "kind": "docs_only",
+      "path": "scripts/swarm_validation_planner.sh",
+      "kind": "script_only",
       "package": null,
       "target": null,
-      "rationale": "docs changes do not require Cargo"
+      "rationale": "shell script changes need syntax/static checks, not Cargo"
     }
   ],
   "commands": [
     {
-      "command_id": "diff-check-docs_swarm_validation_control_plane_contract_v1_json",
-      "display": "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json",
-      "command_kind": "diff_check",
+      "command_id": "bash-n-scripts_swarm_validation_planner_sh",
+      "display": "bash -n scripts/swarm_validation_planner.sh",
+      "command_kind": "shell_syntax",
       "package": null,
       "target": null,
-      "rationale": "docs whitespace validation",
+      "rationale": "script syntax validation",
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
         "state": "static",
@@ -72,12 +79,12 @@
       }
     },
     {
-      "command_id": "jq-empty-docs_swarm_validation_control_plane_contract_v1_json",
-      "display": "jq empty docs/swarm_validation_control_plane_contract_v1.json",
-      "command_kind": "json_syntax",
+      "command_id": "shellcheck-scripts_swarm_validation_planner_sh",
+      "display": "shellcheck -x scripts/swarm_validation_planner.sh",
+      "command_kind": "shellcheck",
       "package": null,
       "target": null,
-      "rationale": "JSON contract syntax validation",
+      "rationale": "script static analysis",
       "predicted_cost": {
         "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
         "state": "static",
@@ -108,6 +115,11 @@
       "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
     }
   ],
-  "warnings": [],
+  "warnings": [
+    {
+      "kind": "agent_mail_snapshot_missing",
+      "detail": "Agent Mail reservation snapshot is missing or invalid; planner is using degraded ownership evidence"
+    }
+  ],
   "proof_cost_budgets": []
 }

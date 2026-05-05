@@ -11,6 +11,27 @@
   "changed_paths": [
     "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
   ],
+  "planned_write_paths": [
+    "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+  ],
+  "collision_risk": "none",
+  "conflicting_agents": [],
+  "safe_alternatives": [
+    "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+  ],
+  "reservation_recommendations": [],
+  "collision_receipt": {
+    "path": "[SMOKE_ROOT]/exact-test/collision_receipt.json",
+    "schema_version": "franken-engine.swarm-validation-collision-receipt.v1",
+    "agent_mail_snapshot": {
+      "status": "present",
+      "path": "[SMOKE_ROOT]/no-conflict-reservations.json"
+    },
+    "in_progress_snapshot": {
+      "status": "present",
+      "path": "[SMOKE_ROOT]/clean-in-progress.json"
+    }
+  },
   "path_mappings": [
     {
       "path": "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs",

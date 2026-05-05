@@ -5,27 +5,34 @@
   "decision": "fail_closed",
   "allow_broad": false,
   "reason_codes": [
+    "reserved_file_overlap",
     "unknown_path_mapping"
   ],
   "risk_flags": [],
   "changed_paths": [
-    "unknown/path.rs"
+    "scripts/testdata/goldens/swarm_validation_planner_exact_test.golden"
   ],
   "planned_write_paths": [
-    "unknown/path.rs"
+    "scripts/testdata/goldens/swarm_validation_planner_exact_test.golden"
   ],
-  "collision_risk": "none",
-  "conflicting_agents": [],
-  "safe_alternatives": [
-    "unknown/path.rs"
+  "collision_risk": "reserved_overlap",
+  "conflicting_agents": [
+    "BlueStone"
   ],
-  "reservation_recommendations": [],
+  "safe_alternatives": [],
+  "reservation_recommendations": [
+    {
+      "action": "coordinate_reservation_holder",
+      "scope": "planned_write_set",
+      "reason": "planned write paths overlap active exclusive reservations"
+    }
+  ],
   "collision_receipt": {
-    "path": "[SMOKE_ROOT]/unknown-path/collision_receipt.json",
+    "path": "[SMOKE_ROOT]/glob-reservation-conflict/collision_receipt.json",
     "schema_version": "franken-engine.swarm-validation-collision-receipt.v1",
     "agent_mail_snapshot": {
       "status": "present",
-      "path": "[SMOKE_ROOT]/no-conflict-reservations.json"
+      "path": "[SMOKE_ROOT]/glob-conflict-reservations.json"
     },
     "in_progress_snapshot": {
       "status": "present",
@@ -42,14 +49,14 @@
     },
     {
       "kind": "unknown_path_mapping",
-      "path": "unknown/path.rs",
+      "path": "scripts/testdata/goldens/swarm_validation_planner_exact_test.golden",
       "reason": "No focused validation mapping exists for this path"
     }
   ],
   "warnings": [
     {
-      "kind": "unrelated_dirty_worktree",
-      "detail": "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md is dirty but outside the requested validation plan"
+      "kind": "reserved_file_overlap",
+      "detail": "planned write paths overlap active exclusive reservations"
     }
   ],
   "proof_cost_budgets": []

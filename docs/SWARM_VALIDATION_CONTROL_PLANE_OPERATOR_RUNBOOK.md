@@ -35,28 +35,45 @@ bv --recipe actionable --robot-plan
 git status --short
 ```
 
-2. Coordinate file ownership before editing:
+2. Capture coordination snapshots before editing:
 
 ```bash
 file_reservation_paths(project=/data/projects/franken_engine, paths=planned_write_set, exclusive=true)
 fetch_inbox(project=/data/projects/franken_engine)
+br list --status=in_progress --json --no-auto-import --no-auto-flush > /tmp/swarm-in-progress.json
 ```
+
+Persist the Agent Mail reservation response to `/tmp/swarm-reservations.json`
+before invoking the planner so the collision receipt uses explicit snapshot
+evidence instead of live service calls.
 
 If Agent Mail is missing or degraded, continue only when the bead assignee and
 dirty-path evidence show no overlap. Record the degraded coordination state in
 the final status update.
 
-3. Ask the planner for the narrow validation command set:
+3. Ask the planner for the narrow validation command set and collision receipt:
 
 ```bash
-./scripts/swarm_validation_planner.sh --bead-id bd-1onpa --source-revision smoke-rev --output-dir /tmp/franken-engine-swarm-validation-plan --changed-path scripts/swarm_validation_planner.sh
+./scripts/swarm_validation_planner.sh --bead-id bd-1onpa --source-revision smoke-rev --output-dir /tmp/franken-engine-swarm-validation-plan --changed-path scripts/swarm_validation_planner.sh --planned-write-path scripts/swarm_validation_planner.sh --reservation-snapshot-json /tmp/swarm-reservations.json --in-progress-json /tmp/swarm-in-progress.json
 cat /tmp/franken-engine-swarm-validation-plan/plan.json
 cat /tmp/franken-engine-swarm-validation-plan/commands.txt
+cat /tmp/franken-engine-swarm-validation-plan/collision_receipt.json
 ```
 
 Unknown path mappings are fail-closed. Do not replace them with broad
 `cargo check --all-targets`; either add a precise mapping or choose a different
 bead.
+
+Before reserving files, inspect the planner receipt fields:
+
+- `collision_risk`
+- `conflicting_agents`
+- `safe_alternatives`
+- `reservation_recommendations`
+
+Reserved-file overlap is fail-closed. Missing Agent Mail snapshots or dirty
+overlap evidence must stay visibly degraded until the operator captures fresh
+reservation data or narrows the write set to a safe alternative.
 
 4. Run the resource governor before any heavy proof:
 
@@ -106,11 +123,11 @@ cat /tmp/franken-engine-swarm-operator-status/report.md
 | Condition | Decision | Operator action |
 | --- | --- | --- |
 | `rch` local fallback marker in stdout or stderr | `fail_closed` | Stop the proof, keep artifacts, report local fallback, and rerun only after remote routing is healthy. |
-| Missing or degraded Agent Mail | `admit_narrow` or `defer` | Use bead assignee plus dirty-path evidence as fallback; do not edit overlapping files. |
+| Missing or degraded Agent Mail | `admit_narrow` or `defer` | Use bead assignee plus dirty-path evidence as fallback, record the degraded collision receipt, and do not edit overlapping files. |
 | High compiler count, low disk, or low memory pressure | `defer` | Wait, narrow the command set, or publish the resource-pressure blocker. |
 | Unknown path mapping from the planner | `fail_closed` | Add a precise mapping or choose a mapped bead; do not broaden validation. |
 | Stale or incomplete proof artifacts | `fail_closed` | Refresh proof artifacts or clearly mark the evidence stale. |
-| Dirty overlapping files or reservations | `defer` | Coordinate with the holder or pick a non-overlapping bead. |
+| Dirty overlapping files or reservations | `defer` | Coordinate with the holder, inspect `safe_alternatives`, or pick a non-overlapping bead. |
 
 ## Truth Gate
 

@@ -33,6 +33,13 @@ pub const FOCUSED_PROOF_COST_GATE_REPORT_SCHEMA_VERSION: &str =
 pub const FOCUSED_PROOF_RUNNER_REPORT_SCHEMA_VERSION: &str =
     "franken-engine.focused-proof-runner-report.v1";
 
+/// Stable schema for normalized proof-cost history rows in the evidence index.
+pub const PROOF_COST_HISTORY_SCHEMA_VERSION: &str = "franken-engine.proof-cost-history.v1";
+
+/// Schema emitted by `scripts/e2e/swarm_validation_control_plane_e2e.sh`.
+pub const SWARM_VALIDATION_CONTROL_PLANE_E2E_WRAPPER_SCHEMA_VERSION: &str =
+    "franken-engine.swarm-validation-control-plane-e2e-wrapper.v1";
+
 const TYPED_EVIDENCE_KEY_PREFIX: &str = "typed/evidence_index/";
 
 type StorageResult<T> = Result<T, StorageError>;
@@ -89,6 +96,74 @@ pub struct GateReportImport<'a> {
     pub expected_source_revision: &'a str,
     pub generated_timestamp_ms: i64,
     pub freshness_policy_ms: i64,
+}
+
+/// Import metadata for proof-cost history artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProofCostHistoryImport<'a> {
+    /// Optional bead override for artifacts that do not carry a bead ID.
+    pub bead_id: Option<&'a str>,
+    pub source_revision: &'a str,
+    pub artifact_path: &'a str,
+    pub expected_source_revision: &'a str,
+    pub generated_timestamp_ms: i64,
+    pub freshness_policy_ms: i64,
+}
+
+/// Stable JSON row for proof-cost history queries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofCostHistoryRow {
+    pub schema_version: String,
+    pub bead_id: String,
+    pub source_revision: String,
+    pub command_id: String,
+    pub package: String,
+    pub target: String,
+    pub elapsed_ms: u64,
+    pub compiled_target_count: u64,
+    pub linked_target_count: u64,
+    pub rch_worker: String,
+    pub rch_status: String,
+    pub fallback_detected: bool,
+    pub artifact_paths: Vec<String>,
+    pub changed_paths: Vec<String>,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProofCostHistorySeed {
+    bead_id: String,
+    source_revision: String,
+    command_id: String,
+    package: String,
+    target: String,
+    elapsed_ms: u64,
+    compiled_target_count: u64,
+    linked_target_count: u64,
+    rch_worker: String,
+    rch_status: String,
+    fallback_detected: bool,
+    artifact_paths: Vec<String>,
+    changed_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProofCostHistoryFingerprint<'a> {
+    schema_version: &'a str,
+    bead_id: &'a str,
+    source_revision: &'a str,
+    command_id: &'a str,
+    package: &'a str,
+    target: &'a str,
+    elapsed_ms: u64,
+    compiled_target_count: u64,
+    linked_target_count: u64,
+    rch_worker: &'a str,
+    rch_status: &'a str,
+    fallback_detected: bool,
+    artifact_paths: &'a [String],
+    changed_paths: &'a [String],
+    source_schema_version: &'a str,
 }
 
 /// Import a proof artifact manifest JSON document into the typed index.
@@ -387,6 +462,47 @@ where
     )
 }
 
+/// Import proof-cost history from normalized or native validation artifacts.
+pub fn import_proof_cost_history_json<S>(
+    storage: &mut S,
+    artifact_json: &str,
+    request: ProofCostHistoryImport<'_>,
+    context: &EventContext,
+) -> StorageResult<Vec<ProofEvidenceIndexEntry>>
+where
+    S: StorageAdapter,
+{
+    let artifact = parse_json_document(artifact_json, "proof cost history artifact")?;
+    let source_schema_version = required_string(&artifact, &["schema_version"])?;
+    validate_source_revision(request.source_revision, request.expected_source_revision)?;
+    if let Some(bead_id) = request.bead_id {
+        require_non_empty("bead_id", bead_id)?;
+    }
+    require_non_empty("artifact_path", request.artifact_path)?;
+    let generated_timestamp_ms = require_non_negative_timestamp(request.generated_timestamp_ms)?;
+    let freshness_deadline_ms =
+        freshness_deadline(generated_timestamp_ms, request.freshness_policy_ms)?;
+    let history_rows =
+        proof_cost_history_seeds_from_artifact(&artifact, &source_schema_version, request)?;
+    if history_rows.is_empty() {
+        return Err(integrity(
+            "proof cost history artifact must produce at least one row",
+        ));
+    }
+
+    let mut seeds = Vec::with_capacity(history_rows.len());
+    for history_row in history_rows {
+        seeds.push(history_row.into_evidence_seed(
+            &source_schema_version,
+            request.artifact_path,
+            generated_timestamp_ms,
+            freshness_deadline_ms,
+        )?);
+    }
+
+    persist_evidence_seeds(storage, seeds, context)
+}
+
 /// Query all indexed proof evidence for one bead.
 pub fn query_proof_by_bead<S>(
     storage: &mut S,
@@ -419,6 +535,69 @@ where
         BTreeMap::from([("source_revision".to_string(), source_revision.to_string())]),
         context,
     )
+}
+
+/// Query proof-cost history rows for one bead.
+pub fn query_proof_cost_history_by_bead<S>(
+    storage: &mut S,
+    bead_id: &str,
+    context: &EventContext,
+) -> StorageResult<Vec<ProofCostHistoryRow>>
+where
+    S: StorageAdapter,
+{
+    require_non_empty("bead_id", bead_id)?;
+    let rows = query_entries(
+        storage,
+        BTreeMap::from([
+            ("bead_id".to_string(), bead_id.to_string()),
+            ("receipt_kind".to_string(), "proof_cost_history".to_string()),
+        ]),
+        context,
+    )?;
+    proof_cost_history_rows_from_entries(rows)
+}
+
+/// Query proof-cost history rows for one source revision.
+pub fn query_proof_cost_history_by_source_revision<S>(
+    storage: &mut S,
+    source_revision: &str,
+    context: &EventContext,
+) -> StorageResult<Vec<ProofCostHistoryRow>>
+where
+    S: StorageAdapter,
+{
+    require_non_empty("source_revision", source_revision)?;
+    let rows = query_entries(
+        storage,
+        BTreeMap::from([
+            ("source_revision".to_string(), source_revision.to_string()),
+            ("receipt_kind".to_string(), "proof_cost_history".to_string()),
+        ]),
+        context,
+    )?;
+    proof_cost_history_rows_from_entries(rows)
+}
+
+/// Query proof-cost history rows that mention one changed path.
+pub fn query_proof_cost_history_by_changed_path<S>(
+    storage: &mut S,
+    changed_path: &str,
+    context: &EventContext,
+) -> StorageResult<Vec<ProofCostHistoryRow>>
+where
+    S: StorageAdapter,
+{
+    require_non_empty("changed_path", changed_path)?;
+    let rows = query_entries(
+        storage,
+        BTreeMap::from([("receipt_kind".to_string(), "proof_cost_history".to_string())]),
+        context,
+    )?;
+    let mut history_rows = proof_cost_history_rows_from_entries(rows)?;
+    history_rows.retain(|row| row.changed_paths.iter().any(|path| path == changed_path));
+    history_rows.sort_by(proof_cost_history_row_order);
+    Ok(history_rows)
 }
 
 /// Query recent failed gate/artifact evidence in stable newest-first order.
@@ -492,6 +671,375 @@ pub fn proof_evidence_query_report_json(
             "failed to serialize proof evidence query report: {err}"
         ))
     })
+}
+
+impl ProofCostHistorySeed {
+    fn into_evidence_seed(
+        self,
+        source_schema_version: &str,
+        source_artifact_path: &str,
+        generated_timestamp_ms: i64,
+        freshness_deadline_ms: i64,
+    ) -> StorageResult<EvidenceSeed> {
+        validate_proof_cost_history_seed(&self)?;
+        let content_hash = proof_cost_history_content_hash(&self, source_schema_version)?;
+        let row = ProofCostHistoryRow {
+            schema_version: PROOF_COST_HISTORY_SCHEMA_VERSION.to_string(),
+            bead_id: self.bead_id.clone(),
+            source_revision: self.source_revision.clone(),
+            command_id: self.command_id.clone(),
+            package: self.package.clone(),
+            target: self.target.clone(),
+            elapsed_ms: self.elapsed_ms,
+            compiled_target_count: self.compiled_target_count,
+            linked_target_count: self.linked_target_count,
+            rch_worker: self.rch_worker.clone(),
+            rch_status: self.rch_status.clone(),
+            fallback_detected: self.fallback_detected,
+            artifact_paths: self.artifact_paths.clone(),
+            changed_paths: self.changed_paths.clone(),
+            content_hash: content_hash.clone(),
+        };
+        let metadata_json = metadata_json(serde_json::to_value(&row).map_err(|err| {
+            integrity(format!(
+                "failed to encode proof cost history metadata: {err}"
+            ))
+        })?)?;
+        Ok(EvidenceSeed {
+            natural_key: natural_key(&[
+                "proof_cost_history",
+                &row.bead_id,
+                &row.source_revision,
+                &row.command_id,
+                &row.content_hash,
+            ]),
+            bead_id: row.bead_id,
+            source_revision: row.source_revision,
+            artifact_id: format!("proof-cost-history:{content_hash}"),
+            artifact_path: source_artifact_path.to_string(),
+            artifact_role: "proof_cost_history".to_string(),
+            artifact_sha256: content_hash,
+            receipt_kind: "proof_cost_history".to_string(),
+            gate_status: proof_cost_history_gate_status(&row.rch_status, row.fallback_detected),
+            generated_timestamp_ms,
+            freshness_deadline_ms,
+            metadata_json,
+        })
+    }
+}
+
+fn proof_cost_history_seeds_from_artifact(
+    artifact: &Value,
+    source_schema_version: &str,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    match source_schema_version {
+        PROOF_COST_HISTORY_SCHEMA_VERSION => normalized_proof_cost_history_seeds(artifact, request),
+        SWARM_VALIDATION_PLAN_SCHEMA_VERSION => {
+            validation_plan_cost_history_seeds(artifact, request)
+        }
+        FOCUSED_PROOF_RUNNER_REPORT_SCHEMA_VERSION => {
+            focused_runner_cost_history_seed(artifact, request)
+        }
+        FOCUSED_PROOF_COST_GATE_REPORT_SCHEMA_VERSION => {
+            focused_cost_gate_history_seed(artifact, request)
+        }
+        PROOF_COST_MANIFEST_SCHEMA_VERSION => proof_cost_manifest_history_seed(artifact, request),
+        SWARM_VALIDATION_CONTROL_PLANE_E2E_WRAPPER_SCHEMA_VERSION => {
+            swarm_control_plane_e2e_history_seed(artifact, request)
+        }
+        _ => Err(integrity(format!(
+            "unsupported proof cost history artifact schema_version `{source_schema_version}`"
+        ))),
+    }
+}
+
+fn normalized_proof_cost_history_seeds(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    let changed_paths = optional_normalized_string_array(artifact, &["changed_paths"])?;
+    let rows = required_array(artifact, &["rows"])?;
+    if rows.is_empty() {
+        return Err(integrity(
+            "proof cost history artifact must include at least one row",
+        ));
+    }
+
+    rows.iter()
+        .map(|row| {
+            let row_changed_paths = optional_normalized_string_array(row, &["changed_paths"])?;
+            Ok(ProofCostHistorySeed {
+                bead_id: bead_id.clone(),
+                source_revision: source_revision.clone(),
+                command_id: required_string(row, &["command_id"])?,
+                package: required_string(row, &["package"])?,
+                target: required_string(row, &["target"])?,
+                elapsed_ms: required_u64(row, &["elapsed_ms"])?,
+                compiled_target_count: required_u64(row, &["compiled_target_count"])?,
+                linked_target_count: required_u64(row, &["linked_target_count"])?,
+                rch_worker: required_string(row, &["rch_worker"])?,
+                rch_status: required_string(row, &["rch_status"])?,
+                fallback_detected: required_bool(row, &["fallback_detected"])?,
+                artifact_paths: required_normalized_string_array(row, &["artifact_paths"])?,
+                changed_paths: if row_changed_paths.is_empty() {
+                    changed_paths.clone()
+                } else {
+                    row_changed_paths
+                },
+            })
+        })
+        .collect()
+}
+
+fn validation_plan_cost_history_seeds(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    let decision = required_string(artifact, &["decision"])?;
+    let changed_paths = optional_normalized_string_array(artifact, &["changed_paths"])?;
+    let artifact_paths = expected_artifact_paths(artifact)?;
+    let commands = required_array(artifact, &["commands"])?;
+    if commands.is_empty() {
+        return Err(integrity(
+            "swarm validation plan must include at least one command",
+        ));
+    }
+
+    commands
+        .iter()
+        .map(|command| {
+            Ok(ProofCostHistorySeed {
+                bead_id: bead_id.clone(),
+                source_revision: source_revision.clone(),
+                command_id: required_string(command, &["command_id"])?,
+                package: required_string(command, &["package"])?,
+                target: required_string(command, &["target"])?,
+                elapsed_ms: 0,
+                compiled_target_count: 0,
+                linked_target_count: 0,
+                rch_worker: "planner".to_string(),
+                rch_status: format!("planned:{decision}"),
+                fallback_detected: false,
+                artifact_paths: artifact_paths.clone(),
+                changed_paths: changed_paths.clone(),
+            })
+        })
+        .collect()
+}
+
+fn focused_runner_cost_history_seed(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    let rch_worker = required_string(artifact, &["worker"])?;
+    let rch_status = required_string(artifact, &["status"])?;
+    let target_count = optional_u64(artifact, &["target_cardinality"])?
+        .unwrap_or(sum_u64_object(artifact, &["target_counts"])?);
+    Ok(vec![ProofCostHistorySeed {
+        bead_id,
+        source_revision,
+        command_id: required_string(artifact, &["command_hash"])?,
+        package: required_string(artifact, &["cargo_package"])?,
+        target: required_string(artifact, &["focused_suite"])?,
+        elapsed_ms: required_u64(artifact, &["duration_ms"])?,
+        compiled_target_count: target_count,
+        linked_target_count: 0,
+        fallback_detected: rch_worker == "local",
+        rch_worker,
+        rch_status,
+        artifact_paths: required_string_values_from_object(artifact, &["artifact_paths"])?,
+        changed_paths: optional_normalized_string_array(artifact, &["changed_paths"])?,
+    }])
+}
+
+fn focused_cost_gate_history_seed(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    Ok(vec![ProofCostHistorySeed {
+        bead_id,
+        source_revision,
+        command_id: required_string(artifact, &["diagnostics_id"])?,
+        package: "focused_proof_cost_gate".to_string(),
+        target: required_string(artifact, &["focused_suite"])?,
+        elapsed_ms: 0,
+        compiled_target_count: required_u64(artifact, &["observed", "total_compiled_targets"])?,
+        linked_target_count: required_u64(artifact, &["observed", "total_linked_targets"])?,
+        rch_worker: "focused_proof_cost_gate".to_string(),
+        rch_status: required_string(artifact, &["status"])?,
+        fallback_detected: false,
+        artifact_paths: required_string_values_from_object(artifact, &["artifact_paths"])?,
+        changed_paths: optional_normalized_string_array(artifact, &["changed_paths"])?,
+    }])
+}
+
+fn proof_cost_manifest_history_seed(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    let unexpected_targets = required_array(artifact, &["unexpected_targets"])?;
+    Ok(vec![ProofCostHistorySeed {
+        bead_id,
+        source_revision,
+        command_id: required_string(artifact, &["command_hash"])?,
+        package: required_string(artifact, &["cargo_package"])?,
+        target: required_string(artifact, &["focused_suite"])?,
+        elapsed_ms: 0,
+        compiled_target_count: required_u64(artifact, &["total_compiled_targets"])?,
+        linked_target_count: required_u64(artifact, &["total_linked_targets"])?,
+        rch_worker: "focused_proof_runner".to_string(),
+        rch_status: if unexpected_targets.is_empty() {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
+        fallback_detected: false,
+        artifact_paths: normalize_string_list(
+            "artifact_paths",
+            vec![request.artifact_path.to_string()],
+        )?,
+        changed_paths: optional_normalized_string_array(artifact, &["changed_paths"])?,
+    }])
+}
+
+fn swarm_control_plane_e2e_history_seed(
+    artifact: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<Vec<ProofCostHistorySeed>> {
+    let bead_id = bead_id_from_document_or_request(artifact, request)?;
+    let source_revision = source_revision_from_document_or_request(artifact, request)?;
+    Ok(vec![ProofCostHistorySeed {
+        bead_id,
+        source_revision,
+        command_id: "swarm-validation-control-plane-e2e".to_string(),
+        package: "frankenengine-engine".to_string(),
+        target: "swarm_validation_control_plane_e2e".to_string(),
+        elapsed_ms: 0,
+        compiled_target_count: 0,
+        linked_target_count: 0,
+        rch_worker: "unknown".to_string(),
+        rch_status: required_string(artifact, &["status"])?,
+        fallback_detected: false,
+        artifact_paths: required_string_values_from_object(artifact, &["artifact_paths"])?,
+        changed_paths: optional_normalized_string_array(artifact, &["changed_paths"])?,
+    }])
+}
+
+fn proof_cost_history_content_hash(
+    seed: &ProofCostHistorySeed,
+    source_schema_version: &str,
+) -> StorageResult<String> {
+    let fingerprint = ProofCostHistoryFingerprint {
+        schema_version: PROOF_COST_HISTORY_SCHEMA_VERSION,
+        bead_id: &seed.bead_id,
+        source_revision: &seed.source_revision,
+        command_id: &seed.command_id,
+        package: &seed.package,
+        target: &seed.target,
+        elapsed_ms: seed.elapsed_ms,
+        compiled_target_count: seed.compiled_target_count,
+        linked_target_count: seed.linked_target_count,
+        rch_worker: &seed.rch_worker,
+        rch_status: &seed.rch_status,
+        fallback_detected: seed.fallback_detected,
+        artifact_paths: &seed.artifact_paths,
+        changed_paths: &seed.changed_paths,
+        source_schema_version,
+    };
+    let bytes = serde_json::to_vec(&fingerprint).map_err(|err| {
+        integrity(format!(
+            "failed to serialize proof cost history fingerprint: {err}"
+        ))
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
+fn validate_proof_cost_history_seed(seed: &ProofCostHistorySeed) -> StorageResult<()> {
+    require_non_empty("bead_id", &seed.bead_id)?;
+    require_non_empty("source_revision", &seed.source_revision)?;
+    require_non_empty("command_id", &seed.command_id)?;
+    require_non_empty("package", &seed.package)?;
+    require_non_empty("target", &seed.target)?;
+    require_non_empty("rch_worker", &seed.rch_worker)?;
+    require_non_empty("rch_status", &seed.rch_status)?;
+    if seed.artifact_paths.is_empty() {
+        return Err(integrity("artifact_paths must not be empty"));
+    }
+    Ok(())
+}
+
+fn proof_cost_history_gate_status(rch_status: &str, fallback_detected: bool) -> String {
+    if fallback_detected {
+        return "fail".to_string();
+    }
+    match rch_status {
+        "planned" => "skipped".to_string(),
+        status if status.starts_with("planned:") => {
+            normalize_planner_decision(status.strip_prefix("planned:").unwrap_or(status))
+        }
+        status => normalize_gate_status(status),
+    }
+}
+
+fn proof_cost_history_rows_from_entries(
+    rows: Vec<ProofEvidenceIndexEntry>,
+) -> StorageResult<Vec<ProofCostHistoryRow>> {
+    let mut history_rows = rows
+        .into_iter()
+        .map(proof_cost_history_row_from_entry)
+        .collect::<StorageResult<Vec<_>>>()?;
+    history_rows.sort_by(proof_cost_history_row_order);
+    Ok(history_rows)
+}
+
+fn proof_cost_history_row_from_entry(
+    entry: ProofEvidenceIndexEntry,
+) -> StorageResult<ProofCostHistoryRow> {
+    if entry.receipt_kind != "proof_cost_history" {
+        return Err(integrity(format!(
+            "expected proof_cost_history receipt, got `{}`",
+            entry.receipt_kind
+        )));
+    }
+    let row: ProofCostHistoryRow = serde_json::from_str(&entry.metadata_json).map_err(|err| {
+        integrity(format!(
+            "proof cost history metadata_json is malformed: {err}"
+        ))
+    })?;
+    if row.schema_version != PROOF_COST_HISTORY_SCHEMA_VERSION {
+        return Err(integrity(format!(
+            "unsupported proof cost history row schema_version `{}`",
+            row.schema_version
+        )));
+    }
+    if row.content_hash != entry.artifact_sha256 {
+        return Err(integrity(
+            "proof cost history content_hash does not match artifact_sha256",
+        ));
+    }
+    Ok(row)
+}
+
+fn proof_cost_history_row_order(
+    a: &ProofCostHistoryRow,
+    b: &ProofCostHistoryRow,
+) -> std::cmp::Ordering {
+    a.bead_id
+        .cmp(&b.bead_id)
+        .then(a.source_revision.cmp(&b.source_revision))
+        .then(a.command_id.cmp(&b.command_id))
+        .then(a.content_hash.cmp(&b.content_hash))
 }
 
 fn persist_evidence_seeds<S>(
@@ -584,6 +1132,50 @@ fn optional_string(document: &Value, path: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn bead_id_from_document_or_request(
+    document: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<String> {
+    match (optional_string(document, &["bead_id"]), request.bead_id) {
+        (Some(document_bead_id), Some(request_bead_id)) => {
+            require_non_empty("bead_id", request_bead_id)?;
+            if document_bead_id != request_bead_id {
+                return Err(integrity(format!(
+                    "bead_id `{document_bead_id}` does not match requested bead_id `{request_bead_id}`"
+                )));
+            }
+            Ok(document_bead_id)
+        }
+        (Some(document_bead_id), None) => Ok(document_bead_id),
+        (None, Some(request_bead_id)) => {
+            require_non_empty("bead_id", request_bead_id)?;
+            Ok(request_bead_id.to_string())
+        }
+        (None, None) => Err(integrity(
+            "proof cost history artifact must include bead_id",
+        )),
+    }
+}
+
+fn source_revision_from_document_or_request(
+    document: &Value,
+    request: ProofCostHistoryImport<'_>,
+) -> StorageResult<String> {
+    match optional_string(document, &["source_revision"]) {
+        Some(source_revision) => {
+            validate_source_revision(&source_revision, request.expected_source_revision)?;
+            if source_revision != request.source_revision {
+                return Err(integrity(format!(
+                    "source_revision `{source_revision}` does not match requested source_revision `{}`",
+                    request.source_revision
+                )));
+            }
+            Ok(source_revision)
+        }
+        None => Ok(request.source_revision.to_string()),
+    }
+}
+
 fn required_string_array(document: &Value, path: &[&str]) -> StorageResult<Vec<String>> {
     required_array(document, path)?
         .iter()
@@ -599,6 +1191,85 @@ fn required_string_array(document: &Value, path: &[&str]) -> StorageResult<Vec<S
             Ok(string.to_string())
         })
         .collect()
+}
+
+fn optional_normalized_string_array(document: &Value, path: &[&str]) -> StorageResult<Vec<String>> {
+    match value_at(document, path) {
+        Ok(value) => {
+            let array = value
+                .as_array()
+                .ok_or_else(|| integrity(format!("`{}` must be an array", path.join("."))))?;
+            let mut values = Vec::with_capacity(array.len());
+            for (index, value) in array.iter().enumerate() {
+                let Some(string) = value.as_str() else {
+                    return Err(integrity(format!(
+                        "`{}[{index}]` must be a string",
+                        path.join(".")
+                    )));
+                };
+                values.push(string.to_string());
+            }
+            normalize_string_list(&path.join("."), values)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+fn required_normalized_string_array(document: &Value, path: &[&str]) -> StorageResult<Vec<String>> {
+    let values = required_string_array(document, path)?;
+    if values.is_empty() {
+        return Err(integrity(format!("`{}` must not be empty", path.join("."))));
+    }
+    normalize_string_list(&path.join("."), values)
+}
+
+fn expected_artifact_paths(document: &Value) -> StorageResult<Vec<String>> {
+    let artifacts = required_array(document, &["expected_artifacts"])?;
+    if artifacts.is_empty() {
+        return Err(integrity(
+            "swarm validation plan must include expected_artifacts",
+        ));
+    }
+    let mut paths = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        paths.push(required_string(artifact, &["path"])?);
+    }
+    normalize_string_list("expected_artifacts.path", paths)
+}
+
+fn required_string_values_from_object(
+    document: &Value,
+    path: &[&str],
+) -> StorageResult<Vec<String>> {
+    let value = value_at(document, path)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| integrity(format!("`{}` must be an object", path.join("."))))?;
+    let mut values = Vec::with_capacity(object.len());
+    for (key, value) in object {
+        let Some(string) = value.as_str() else {
+            return Err(integrity(format!(
+                "`{}.{key}` must be a string",
+                path.join(".")
+            )));
+        };
+        values.push(string.to_string());
+    }
+    if values.is_empty() {
+        return Err(integrity(format!("`{}` must not be empty", path.join("."))));
+    }
+    normalize_string_list(&path.join("."), values)
+}
+
+fn normalize_string_list(field: &str, values: Vec<String>) -> StorageResult<Vec<String>> {
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        require_non_empty(field, &value)?;
+        normalized.push(value);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
 }
 
 fn required_array<'a>(document: &'a Value, path: &[&str]) -> StorageResult<&'a Vec<Value>> {
@@ -628,6 +1299,53 @@ fn required_rfc3339_timestamp_ms(document: &Value, path: &[&str]) -> StorageResu
                 path.join(".")
             ))
         })
+}
+
+fn required_u64(document: &Value, path: &[&str]) -> StorageResult<u64> {
+    value_at(document, path)?.as_u64().ok_or_else(|| {
+        integrity(format!(
+            "`{}` must be a non-negative integer",
+            path.join(".")
+        ))
+    })
+}
+
+fn optional_u64(document: &Value, path: &[&str]) -> StorageResult<Option<u64>> {
+    match value_at(document, path) {
+        Ok(value) => value.as_u64().map(Some).ok_or_else(|| {
+            integrity(format!(
+                "`{}` must be a non-negative integer",
+                path.join(".")
+            ))
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+fn required_bool(document: &Value, path: &[&str]) -> StorageResult<bool> {
+    value_at(document, path)?
+        .as_bool()
+        .ok_or_else(|| integrity(format!("`{}` must be a boolean", path.join("."))))
+}
+
+fn sum_u64_object(document: &Value, path: &[&str]) -> StorageResult<u64> {
+    let value = value_at(document, path)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| integrity(format!("`{}` must be an object", path.join("."))))?;
+    let mut total = 0_u64;
+    for (key, value) in object {
+        let count = value.as_u64().ok_or_else(|| {
+            integrity(format!(
+                "`{}.{key}` must be a non-negative integer",
+                path.join(".")
+            ))
+        })?;
+        total = total
+            .checked_add(count)
+            .ok_or_else(|| integrity("target count overflow"))?;
+    }
+    Ok(total)
 }
 
 fn require_non_empty(field: &str, value: &str) -> StorageResult<()> {
@@ -682,8 +1400,9 @@ fn validate_source_revision(
 
 fn normalize_gate_status(raw: &str) -> String {
     match raw {
-        "pass" | "passed" | "ok" | "success" | "admit" | "admit_narrow" => "pass",
-        "fail" | "failed" | "error" => "fail",
+        "pass" | "passed" | "ok" | "success" | "admit" | "admit_narrow" | "remote"
+        | "remote_success" | "healthy" => "pass",
+        "fail" | "failed" | "error" | "local_fallback" | "fallback_to_local" => "fail",
         "blocked" | "fail_closed" | "defer" | "deferred" => "blocked",
         "skipped" => "skipped",
         "stale" => "stale",

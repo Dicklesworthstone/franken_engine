@@ -1824,6 +1824,7 @@ impl TypedStoreRecord for ProofEvidenceIndexEntry {
                 "command_receipt",
                 "gate_report",
                 "proof_artifact",
+                "proof_cost_history",
                 "proof_cost_manifest",
                 "proof_manifest",
                 "validation_command",

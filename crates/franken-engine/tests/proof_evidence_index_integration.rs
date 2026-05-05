@@ -3,10 +3,14 @@
 use frankenengine_engine::proof_artifact::PROOF_MANIFEST_SCHEMA_VERSION;
 use frankenengine_engine::proof_evidence_index::{
     FOCUSED_PROOF_RUNNER_REPORT_SCHEMA_VERSION, GateReportImport,
-    PROOF_EVIDENCE_QUERY_SCHEMA_VERSION, SWARM_VALIDATION_PLAN_SCHEMA_VERSION,
-    import_gate_report_json, import_proof_manifest_json, import_validation_plan_json,
-    proof_evidence_query_report_json, query_artifacts_older_than_freshness_policy,
-    query_proof_by_bead, query_proof_by_source_revision, query_recent_failed_gates,
+    PROOF_COST_HISTORY_SCHEMA_VERSION, PROOF_EVIDENCE_QUERY_SCHEMA_VERSION, ProofCostHistoryImport,
+    SWARM_VALIDATION_CONTROL_PLANE_E2E_WRAPPER_SCHEMA_VERSION,
+    SWARM_VALIDATION_PLAN_SCHEMA_VERSION, import_gate_report_json, import_proof_cost_history_json,
+    import_proof_manifest_json, import_validation_plan_json, proof_evidence_query_report_json,
+    query_artifacts_older_than_freshness_policy, query_proof_by_bead,
+    query_proof_by_source_revision, query_proof_cost_history_by_bead,
+    query_proof_cost_history_by_changed_path, query_proof_cost_history_by_source_revision,
+    query_recent_failed_gates,
 };
 use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter};
 use serde_json::{Value, json};
@@ -98,6 +102,65 @@ fn gate_report(status: &str) -> String {
         "status": status,
         "focused_suite": "proof-evidence-index",
         "diagnostics_id": "diag-proof-index-1"
+    })
+    .to_string()
+}
+
+fn cost_history_import<'a>(
+    bead_id: Option<&'a str>,
+    artifact_path: &'a str,
+) -> ProofCostHistoryImport<'a> {
+    ProofCostHistoryImport {
+        bead_id,
+        source_revision: SOURCE_REVISION,
+        artifact_path,
+        expected_source_revision: SOURCE_REVISION,
+        generated_timestamp_ms: 1_777_000_000_000,
+        freshness_policy_ms: 86_400_000,
+    }
+}
+
+fn normalized_cost_history(rows: Vec<Value>) -> String {
+    json!({
+        "schema_version": PROOF_COST_HISTORY_SCHEMA_VERSION,
+        "bead_id": "bd-tgc6r",
+        "source_revision": SOURCE_REVISION,
+        "changed_paths": [
+            "crates/franken-engine/src/proof_evidence_index.rs",
+            "crates/franken-engine/tests/proof_evidence_index_integration.rs"
+        ],
+        "rows": rows
+    })
+    .to_string()
+}
+
+fn normalized_cost_row(command_id: &str, artifact_paths: Vec<&str>) -> Value {
+    json!({
+        "command_id": command_id,
+        "package": "frankenengine-engine",
+        "target": "proof_evidence_index_integration",
+        "elapsed_ms": 3210,
+        "compiled_target_count": 2,
+        "linked_target_count": 1,
+        "rch_worker": "rch-worker-7",
+        "rch_status": "remote_success",
+        "fallback_detected": false,
+        "artifact_paths": artifact_paths
+    })
+}
+
+fn control_plane_e2e_wrapper_report() -> String {
+    json!({
+        "schema_version": SWARM_VALIDATION_CONTROL_PLANE_E2E_WRAPPER_SCHEMA_VERSION,
+        "status": "pass",
+        "source_revision": SOURCE_REVISION,
+        "changed_paths": ["scripts/e2e/swarm_validation_control_plane_e2e.sh"],
+        "artifact_paths": {
+            "commands_txt": "artifacts/swarm_validation_control_plane_e2e/run/commands.txt",
+            "events_jsonl": "artifacts/swarm_validation_control_plane_e2e/run/events.jsonl",
+            "stdout_log": "artifacts/swarm_validation_control_plane_e2e/run/stdout.log",
+            "stderr_log": "artifacts/swarm_validation_control_plane_e2e/run/stderr.log"
+        }
     })
     .to_string()
 }
@@ -277,6 +340,174 @@ fn query_output_is_stable_json_and_ordered_deterministically() {
     assert_eq!(json_a, json_b);
     assert!(json_a.contains(PROOF_EVIDENCE_QUERY_SCHEMA_VERSION));
     assert!(json_a.contains("\"rows\""));
+}
+
+#[test]
+fn proof_cost_history_imports_two_artifact_bundles_and_queries_dimensions() {
+    let context = ctx();
+    let mut adapter = InMemoryStorageAdapter::new();
+
+    import_proof_cost_history_json(
+        &mut adapter,
+        &normalized_cost_history(vec![normalized_cost_row(
+            "proof-index-focused-test",
+            vec![
+                "artifacts/proof-cost-history/run-a/commands.txt",
+                "artifacts/proof-cost-history/run-a/report.json",
+            ],
+        )]),
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/proof-cost-history/run-a/history.json",
+        ),
+        &context,
+    )
+    .expect("normalized proof cost history imports");
+    import_proof_cost_history_json(
+        &mut adapter,
+        &control_plane_e2e_wrapper_report(),
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/swarm_validation_control_plane_e2e/run/report.json",
+        ),
+        &context,
+    )
+    .expect("control plane e2e wrapper imports");
+
+    let by_bead =
+        query_proof_cost_history_by_bead(&mut adapter, "bd-tgc6r", &context).expect("by bead");
+    assert_eq!(by_bead.len(), 2);
+    assert_eq!(by_bead[0].schema_version, PROOF_COST_HISTORY_SCHEMA_VERSION);
+    assert_eq!(by_bead[0].compiled_target_count, 2);
+    assert_eq!(by_bead[0].linked_target_count, 1);
+    assert_eq!(by_bead[0].rch_status, "remote_success");
+    assert!(!by_bead[0].content_hash.is_empty());
+
+    let by_source =
+        query_proof_cost_history_by_source_revision(&mut adapter, SOURCE_REVISION, &context)
+            .expect("by source");
+    assert_eq!(by_source.len(), 2);
+
+    let by_changed_path = query_proof_cost_history_by_changed_path(
+        &mut adapter,
+        "crates/franken-engine/src/proof_evidence_index.rs",
+        &context,
+    )
+    .expect("by changed path");
+    assert_eq!(by_changed_path.len(), 1);
+    assert_eq!(by_changed_path[0].command_id, "proof-index-focused-test");
+}
+
+#[test]
+fn proof_cost_history_hashing_and_duplicate_command_receipts_are_stable() {
+    let context = ctx();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let history = normalized_cost_history(vec![
+        normalized_cost_row(
+            "proof-index-focused-test",
+            vec![
+                "artifacts/proof-cost-history/run-a/report.json",
+                "artifacts/proof-cost-history/run-a/commands.txt",
+            ],
+        ),
+        normalized_cost_row(
+            "proof-index-focused-test",
+            vec![
+                "artifacts/proof-cost-history/run-a/commands.txt",
+                "artifacts/proof-cost-history/run-a/report.json",
+            ],
+        ),
+    ]);
+
+    let first = import_proof_cost_history_json(
+        &mut adapter,
+        &history,
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/proof-cost-history/run-a/history.json",
+        ),
+        &context,
+    )
+    .expect("first import succeeds");
+    let second = import_proof_cost_history_json(
+        &mut adapter,
+        &history,
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/proof-cost-history/run-a/history.json",
+        ),
+        &context,
+    )
+    .expect("duplicate import succeeds");
+
+    assert_eq!(first.len(), 1, "same command receipt must dedupe");
+    assert_eq!(first[0].evidence_id, second[0].evidence_id);
+    assert_eq!(first[0].artifact_sha256, second[0].artifact_sha256);
+
+    let rows =
+        query_proof_cost_history_by_bead(&mut adapter, "bd-tgc6r", &context).expect("by bead");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].artifact_paths,
+        vec![
+            "artifacts/proof-cost-history/run-a/commands.txt".to_string(),
+            "artifacts/proof-cost-history/run-a/report.json".to_string()
+        ]
+    );
+}
+
+#[test]
+fn proof_cost_history_missing_fields_and_fallback_fail_closed() {
+    let context = ctx();
+    let mut adapter = InMemoryStorageAdapter::new();
+    let missing_command_id = normalized_cost_history(vec![json!({
+        "package": "frankenengine-engine",
+        "target": "proof_evidence_index_integration",
+        "elapsed_ms": 3210,
+        "compiled_target_count": 2,
+        "linked_target_count": 1,
+        "rch_worker": "rch-worker-7",
+        "rch_status": "remote_success",
+        "fallback_detected": false,
+        "artifact_paths": ["artifacts/proof-cost-history/run-a/report.json"]
+    })]);
+
+    let err = import_proof_cost_history_json(
+        &mut adapter,
+        &missing_command_id,
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/proof-cost-history/run-a/history.json",
+        ),
+        &context,
+    )
+    .expect_err("missing command_id must fail closed");
+    assert!(err.to_string().contains("command_id"));
+
+    let fallback_history = normalized_cost_history(vec![json!({
+        "command_id": "proof-index-fallback",
+        "package": "frankenengine-engine",
+        "target": "proof_evidence_index_integration",
+        "elapsed_ms": 3210,
+        "compiled_target_count": 2,
+        "linked_target_count": 1,
+        "rch_worker": "local",
+        "rch_status": "local_fallback",
+        "fallback_detected": true,
+        "artifact_paths": ["artifacts/proof-cost-history/run-b/report.json"]
+    })]);
+
+    let imported = import_proof_cost_history_json(
+        &mut adapter,
+        &fallback_history,
+        cost_history_import(
+            Some("bd-tgc6r"),
+            "artifacts/proof-cost-history/run-b/history.json",
+        ),
+        &context,
+    )
+    .expect("fallback receipt imports as failed evidence");
+    assert_eq!(imported[0].gate_status, "fail");
 }
 
 #[test]

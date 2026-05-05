@@ -895,7 +895,7 @@ fn workload_scenario(profile: StressProfile, epoch: u64) -> WorkloadScenario {
             admission_plan: vec![
                 AdmissionInvocation {
                     stage: ExecutionStage::ExecutionQuantum,
-                    priority: AdmissionPriority::Normal,
+                    priority: AdmissionPriority::High,
                     count: 3,
                 },
                 AdmissionInvocation {

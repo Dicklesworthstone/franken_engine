@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "bead_id": "bd-1onpa",
+  "source_revision": "smoke-rev",
+  "decision": "admit",
+  "allow_broad": false,
+  "reason_codes": [
+    "docs_only"
+  ],
+  "changed_paths": [
+    "docs/swarm_validation_control_plane_contract_v1.json"
+  ],
+  "path_mappings": [
+    {
+      "path": "docs/swarm_validation_control_plane_contract_v1.json",
+      "kind": "docs_only",
+      "package": null,
+      "target": null,
+      "rationale": "docs changes do not require Cargo"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "diff-check-docs_swarm_validation_control_plane_contract_v1_json",
+      "display": "git diff --check -- docs/swarm_validation_control_plane_contract_v1.json",
+      "command_kind": "diff_check",
+      "package": null,
+      "target": null,
+      "rationale": "docs whitespace validation"
+    },
+    {
+      "command_id": "jq-empty-docs_swarm_validation_control_plane_contract_v1_json",
+      "display": "jq empty docs/swarm_validation_control_plane_contract_v1.json",
+      "command_kind": "json_syntax",
+      "package": null,
+      "target": null,
+      "rationale": "JSON contract syntax validation"
+    }
+  ],
+  "omitted_commands": [
+    {
+      "kind": "broad_all_targets",
+      "path": "*",
+      "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
+    }
+  ],
+  "warnings": [],
+  "proof_cost_budgets": []
+}

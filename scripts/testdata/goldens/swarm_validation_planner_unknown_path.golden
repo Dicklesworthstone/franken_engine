@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "bead_id": "bd-1onpa",
+  "source_revision": "smoke-rev",
+  "decision": "fail_closed",
+  "allow_broad": false,
+  "reason_codes": [
+    "unknown_path_mapping"
+  ],
+  "changed_paths": [
+    "unknown/path.rs"
+  ],
+  "path_mappings": [],
+  "commands": [],
+  "omitted_commands": [
+    {
+      "kind": "broad_all_targets",
+      "path": "*",
+      "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
+    },
+    {
+      "kind": "unknown_path_mapping",
+      "path": "unknown/path.rs",
+      "reason": "No focused validation mapping exists for this path"
+    }
+  ],
+  "warnings": [],
+  "proof_cost_budgets": []
+}

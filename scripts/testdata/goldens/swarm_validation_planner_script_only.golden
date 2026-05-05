@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "bead_id": "bd-1onpa",
+  "source_revision": "smoke-rev",
+  "decision": "admit",
+  "allow_broad": false,
+  "reason_codes": [
+    "script_only"
+  ],
+  "changed_paths": [
+    "scripts/rch_policy_compliance_gate.sh"
+  ],
+  "path_mappings": [
+    {
+      "path": "scripts/rch_policy_compliance_gate.sh",
+      "kind": "script_only",
+      "package": null,
+      "target": null,
+      "rationale": "shell script changes need syntax/static checks, not Cargo"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "bash-n-scripts_rch_policy_compliance_gate_sh",
+      "display": "bash -n scripts/rch_policy_compliance_gate.sh",
+      "command_kind": "shell_syntax",
+      "package": null,
+      "target": null,
+      "rationale": "script syntax validation"
+    },
+    {
+      "command_id": "shellcheck-scripts_rch_policy_compliance_gate_sh",
+      "display": "shellcheck -x scripts/rch_policy_compliance_gate.sh",
+      "command_kind": "shellcheck",
+      "package": null,
+      "target": null,
+      "rationale": "script static analysis"
+    }
+  ],
+  "omitted_commands": [
+    {
+      "kind": "broad_all_targets",
+      "path": "*",
+      "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
+    }
+  ],
+  "warnings": [],
+  "proof_cost_budgets": []
+}

@@ -1,0 +1,82 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "bead_id": "bd-1onpa",
+  "source_revision": "smoke-rev",
+  "decision": "admit_narrow",
+  "allow_broad": false,
+  "reason_codes": [
+    "package_lib_fallback"
+  ],
+  "changed_paths": [
+    "crates/franken-engine/src/proof_artifact.rs",
+    "crates/franken-extension-host/src/lib.rs"
+  ],
+  "path_mappings": [
+    {
+      "path": "crates/franken-engine/src/proof_artifact.rs",
+      "kind": "package_lib_fallback",
+      "package": "frankenengine-engine",
+      "target": "lib",
+      "rationale": "source path maps to package-level lib check without broad all-targets fanout"
+    },
+    {
+      "path": "crates/franken-extension-host/src/lib.rs",
+      "kind": "package_lib_fallback",
+      "package": "frankenengine-extension-host",
+      "target": "lib",
+      "rationale": "source path maps to package-level lib check without broad all-targets fanout"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "cargo-check-frankenengine_engine-lib",
+      "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_lib cargo check -p frankenengine-engine --lib",
+      "command_kind": "rch_cargo_check_lib",
+      "package": "frankenengine-engine",
+      "target": "lib",
+      "rationale": "package lib fallback for source changes without an exact test target"
+    },
+    {
+      "command_id": "cargo-check-frankenengine_extension_host-lib",
+      "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_extension_host_lib cargo check -p frankenengine-extension-host --lib",
+      "command_kind": "rch_cargo_check_lib",
+      "package": "frankenengine-extension-host",
+      "target": "lib",
+      "rationale": "package lib fallback for source changes without an exact test target"
+    }
+  ],
+  "omitted_commands": [
+    {
+      "kind": "broad_all_targets",
+      "path": "*",
+      "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
+    }
+  ],
+  "warnings": [],
+  "proof_cost_budgets": [
+    {
+      "schema_version": "franken-engine.focused-proof-cost-budget.v1",
+      "suite": "frankenengine-engine_lib",
+      "package": "frankenengine-engine",
+      "max_total_compiled_targets": 1,
+      "max_total_linked_targets": 0,
+      "max_unexpected_targets": 0,
+      "max_targets_by_kind": {
+        "test": 0,
+        "lib": 1
+      }
+    },
+    {
+      "schema_version": "franken-engine.focused-proof-cost-budget.v1",
+      "suite": "frankenengine-extension-host_lib",
+      "package": "frankenengine-extension-host",
+      "max_total_compiled_targets": 1,
+      "max_total_linked_targets": 0,
+      "max_unexpected_targets": 0,
+      "max_targets_by_kind": {
+        "test": 0,
+        "lib": 1
+      }
+    }
+  ]
+}

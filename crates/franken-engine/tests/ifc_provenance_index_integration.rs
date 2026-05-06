@@ -1647,7 +1647,6 @@ fn join_events_with_matching_receipt() {
         FlowDecision::Declassified,
     );
     ev.receipt_ref = Some("r1".to_string());
-    idx.insert_flow_event(&ev, &ctx).unwrap();
 
     idx.insert_declass_receipt(
         &declass_receipt(
@@ -1660,6 +1659,7 @@ fn join_events_with_matching_receipt() {
         &ctx,
     )
     .unwrap();
+    idx.insert_flow_event(&ev, &ctx).unwrap();
 
     let joined = idx.join_events_with_receipts("ext-a", &ctx).unwrap();
     assert_eq!(joined.len(), 1);
@@ -1695,7 +1695,7 @@ fn join_events_without_receipt_ref() {
 }
 
 #[test]
-fn join_events_with_dangling_receipt_ref() {
+fn declassified_event_with_dangling_receipt_ref_is_rejected() {
     let mut idx = make_index();
     let ctx = test_ctx();
 
@@ -1707,11 +1707,11 @@ fn join_events_with_dangling_receipt_ref() {
         FlowDecision::Declassified,
     );
     ev.receipt_ref = Some("nonexistent".to_string());
-    idx.insert_flow_event(&ev, &ctx).unwrap();
-
-    let joined = idx.join_events_with_receipts("ext-a", &ctx).unwrap();
-    assert_eq!(joined.len(), 1);
-    assert!(joined[0].1.is_none()); // No matching receipt
+    let err = idx.insert_flow_event(&ev, &ctx).unwrap_err();
+    assert!(matches!(
+        err,
+        ProvenanceError::MissingDeclassificationReceipt { .. }
+    ));
 }
 
 #[test]
@@ -1727,7 +1727,6 @@ fn join_events_with_padded_receipt_ref_and_receipt_id() {
         FlowDecision::Declassified,
     );
     ev.receipt_ref = Some("  r1  ".to_string());
-    idx.insert_flow_event(&ev, &ctx).unwrap();
 
     let mut receipt = declass_receipt(
         "  r1  ",
@@ -1739,6 +1738,7 @@ fn join_events_with_padded_receipt_ref_and_receipt_id() {
     receipt.declassification_route_ref = "  route-r1  ".to_string();
     receipt.decision_contract_id = "  decision-r1  ".to_string();
     idx.insert_declass_receipt(&receipt, &ctx).unwrap();
+    idx.insert_flow_event(&ev, &ctx).unwrap();
 
     let stored_event = idx.get_flow_event("ev1", &ctx).unwrap().unwrap();
     let stored_receipt = idx.get_declass_receipt("r1", &ctx).unwrap().unwrap();
@@ -2303,6 +2303,19 @@ fn all_flow_decision_variants_insert_and_query() {
     .iter()
     .enumerate()
     {
+        if matches!(dec, FlowDecision::Declassified) {
+            idx.insert_declass_receipt(
+                &declass_receipt(
+                    &format!("r{i}"),
+                    "ext-a",
+                    Label::Public,
+                    Label::Internal,
+                    DeclassificationDecision::Allow,
+                ),
+                &ctx,
+            )
+            .unwrap();
+        }
         idx.insert_flow_event(
             &{
                 let mut ev = flow_event(
@@ -2404,6 +2417,17 @@ fn end_to_end_multi_extension_scenario() {
     .unwrap();
 
     // Extension B: Secret -> Public (declassification)
+    idx.insert_declass_receipt(
+        &declass_receipt(
+            "b-r1",
+            "ext-b",
+            Label::Secret,
+            Label::Public,
+            DeclassificationDecision::Allow,
+        ),
+        &ctx,
+    )
+    .unwrap();
     idx.insert_flow_event(
         &{
             let mut ev = flow_event(
@@ -2416,17 +2440,6 @@ fn end_to_end_multi_extension_scenario() {
             ev.receipt_ref = Some("b-r1".to_string());
             ev
         },
-        &ctx,
-    )
-    .unwrap();
-    idx.insert_declass_receipt(
-        &declass_receipt(
-            "b-r1",
-            "ext-b",
-            Label::Secret,
-            Label::Public,
-            DeclassificationDecision::Allow,
-        ),
         &ctx,
     )
     .unwrap();

@@ -1659,6 +1659,27 @@ impl TypedStoreRecord for IfcProvenanceEntry {
             ("target_label".to_string(), self.target_label.clone()),
             ("trace_id".to_string(), self.trace_id.clone()),
         ]);
+        if let Ok(serde_json::Value::Object(payload)) =
+            serde_json::from_str::<serde_json::Value>(&self.metadata_json)
+        {
+            for key in [
+                "schema_version",
+                "record_type",
+                "extension_id",
+                "event_id",
+                "proof_id",
+                "receipt_id",
+                "epoch_id",
+            ] {
+                if let Some(value) = payload.get(key) {
+                    if let Some(value) = value.as_str() {
+                        metadata.insert(key.to_string(), value.to_string());
+                    } else if value.is_number() || value.is_boolean() {
+                        metadata.insert(key.to_string(), value.to_string());
+                    }
+                }
+            }
+        }
         if let Some(declassification_ref) = &self.declassification_ref {
             metadata.insert(
                 "declassification_ref".to_string(),

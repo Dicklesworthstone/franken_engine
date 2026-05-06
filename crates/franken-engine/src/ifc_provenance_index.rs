@@ -20,7 +20,9 @@ use crate::ifc_artifacts::{ClaimStrength, DeclassificationDecision, Label, Proof
 use crate::storage_adapter::{
     EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
 };
-use crate::typed_persistence_models::{IfcProvenanceEntry, TypedStorageAdapterExt};
+use crate::typed_persistence_models::{
+    IfcProvenanceEntry, TypedStorageAdapterExt, allocate_typed_record_id,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -34,6 +36,10 @@ const FLOW_EVENT_PREFIX: &str = "flow_event::";
 const FLOW_PROOF_PREFIX: &str = "flow_proof::";
 const DECLASS_RECEIPT_PREFIX: &str = "declass_receipt::";
 const CONFINEMENT_CLAIM_PREFIX: &str = "confinement_claim::";
+const TYPED_IFC_SCHEMA_VERSION: &str = "ifc_provenance_typed_primary_v1";
+const TYPED_FLOW_EVENT_RECORD_TYPE: &str = "flow_event";
+const TYPED_FLOW_PROOF_RECORD_TYPE: &str = "flow_proof";
+const TYPED_DECLASS_RECEIPT_RECORD_TYPE: &str = "declass_receipt";
 
 // ---------------------------------------------------------------------------
 // Record types
@@ -270,6 +276,188 @@ impl From<StorageError> for ProvenanceError {
     }
 }
 
+fn typed_ifc_key_prefix() -> String {
+    format!("typed/{}/", STORE.as_str())
+}
+
+fn provenance_storage_error(detail: impl Into<String>) -> ProvenanceError {
+    ProvenanceError::StorageError(detail.into())
+}
+
+fn label_json(field_name: &str, label: &Label) -> Result<String, ProvenanceError> {
+    serde_json::to_string(label).map_err(|err| {
+        ProvenanceError::SerializationError(format!(
+            "failed to serialize typed IFC {field_name}: {err}"
+        ))
+    })
+}
+
+fn parse_label(field_name: &str, value: &str) -> Result<Label, ProvenanceError> {
+    serde_json::from_str(value).map_err(|err| {
+        provenance_storage_error(format!(
+            "typed IFC field `{field_name}` is not valid Label JSON: {err}"
+        ))
+    })
+}
+
+fn u64_to_i64(field_name: &str, value: u64) -> Result<i64, ProvenanceError> {
+    i64::try_from(value).map_err(|_| {
+        provenance_storage_error(format!(
+            "typed IFC field `{field_name}` value {value} does not fit in i64"
+        ))
+    })
+}
+
+fn i64_to_u64(field_name: &str, value: i64) -> Result<u64, ProvenanceError> {
+    u64::try_from(value).map_err(|_| {
+        provenance_storage_error(format!(
+            "typed IFC field `{field_name}` value {value} is negative"
+        ))
+    })
+}
+
+fn parse_typed_metadata(entry: &IfcProvenanceEntry) -> Result<serde_json::Value, ProvenanceError> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(&entry.metadata_json).map_err(|err| {
+            provenance_storage_error(format!(
+                "typed IFC metadata for id {} is not valid JSON: {err}",
+                entry.provenance_id
+            ))
+        })?;
+    if metadata.is_object() {
+        Ok(metadata)
+    } else {
+        Err(provenance_storage_error(format!(
+            "typed IFC metadata for id {} is not a JSON object",
+            entry.provenance_id
+        )))
+    }
+}
+
+fn metadata_payload(metadata: &serde_json::Value) -> Option<&serde_json::Value> {
+    metadata.get("legacy_payload")
+}
+
+fn metadata_string<'a>(metadata: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    metadata
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            metadata_payload(metadata)
+                .and_then(|payload| payload.get(key))
+                .and_then(serde_json::Value::as_str)
+        })
+}
+
+fn metadata_u64(metadata: &serde_json::Value, key: &str) -> Option<u64> {
+    metadata
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            metadata_payload(metadata)
+                .and_then(|payload| payload.get(key))
+                .and_then(serde_json::Value::as_u64)
+        })
+}
+
+fn typed_record_type(
+    entry: &IfcProvenanceEntry,
+    metadata: &serde_json::Value,
+) -> Option<&'static str> {
+    if let Some(record_type) = metadata
+        .get("record_type")
+        .and_then(serde_json::Value::as_str)
+    {
+        return match record_type {
+            TYPED_FLOW_EVENT_RECORD_TYPE => Some(TYPED_FLOW_EVENT_RECORD_TYPE),
+            TYPED_FLOW_PROOF_RECORD_TYPE => Some(TYPED_FLOW_PROOF_RECORD_TYPE),
+            TYPED_DECLASS_RECEIPT_RECORD_TYPE => Some(TYPED_DECLASS_RECEIPT_RECORD_TYPE),
+            _ => None,
+        };
+    }
+    if let Some(legacy_record_type) = metadata
+        .get("legacy_record_type")
+        .and_then(serde_json::Value::as_str)
+    {
+        return match legacy_record_type {
+            "ifc_flow_event" => Some(TYPED_FLOW_EVENT_RECORD_TYPE),
+            "ifc_declass_receipt" => Some(TYPED_DECLASS_RECEIPT_RECORD_TYPE),
+            _ => None,
+        };
+    }
+    if entry.flow_operation.starts_with("flow_event:") {
+        Some(TYPED_FLOW_EVENT_RECORD_TYPE)
+    } else if entry.flow_operation.starts_with("flow_proof:") {
+        Some(TYPED_FLOW_PROOF_RECORD_TYPE)
+    } else if entry.flow_operation.starts_with("declass_receipt:") {
+        Some(TYPED_DECLASS_RECEIPT_RECORD_TYPE)
+    } else {
+        None
+    }
+}
+
+fn required_metadata_string(
+    entry: &IfcProvenanceEntry,
+    metadata: &serde_json::Value,
+    key: &str,
+) -> Result<String, ProvenanceError> {
+    metadata_string(metadata, key)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            provenance_storage_error(format!(
+                "typed IFC entry {} is missing `{key}` metadata",
+                entry.provenance_id
+            ))
+        })
+}
+
+fn required_metadata_u64(
+    entry: &IfcProvenanceEntry,
+    metadata: &serde_json::Value,
+    key: &str,
+) -> Result<u64, ProvenanceError> {
+    metadata_u64(metadata, key).ok_or_else(|| {
+        provenance_storage_error(format!(
+            "typed IFC entry {} is missing `{key}` metadata",
+            entry.provenance_id
+        ))
+    })
+}
+
+fn parse_flow_decision(raw: &str) -> Result<FlowDecision, ProvenanceError> {
+    match raw {
+        "allowed" | "Allowed" => Ok(FlowDecision::Allowed),
+        "blocked" | "Blocked" => Ok(FlowDecision::Blocked),
+        "declassified" | "Declassified" => Ok(FlowDecision::Declassified),
+        other => Err(provenance_storage_error(format!(
+            "typed IFC flow decision `{other}` is unsupported"
+        ))),
+    }
+}
+
+fn parse_proof_method(raw: &str) -> Result<ProofMethod, ProvenanceError> {
+    match raw {
+        "static_analysis" | "StaticAnalysis" => Ok(ProofMethod::StaticAnalysis),
+        "runtime_check" | "RuntimeCheck" => Ok(ProofMethod::RuntimeCheck),
+        "declassification" | "Declassification" => Ok(ProofMethod::Declassification),
+        other => Err(provenance_storage_error(format!(
+            "typed IFC proof method `{other}` is unsupported"
+        ))),
+    }
+}
+
+fn parse_declassification_decision(raw: &str) -> Result<DeclassificationDecision, ProvenanceError> {
+    match raw {
+        "allow" | "Allow" => Ok(DeclassificationDecision::Allow),
+        "deny" | "Deny" => Ok(DeclassificationDecision::Deny),
+        other => Err(provenance_storage_error(format!(
+            "typed IFC declassification decision `{other}` is unsupported"
+        ))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Provenance index
 // ---------------------------------------------------------------------------
@@ -307,6 +495,324 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         }
     }
 
+    fn legacy_primary_key(prefix: &str, record_id: &str) -> String {
+        format!("{prefix}{record_id}")
+    }
+
+    fn legacy_primary_error(record_type: &str, key: &str) -> ProvenanceError {
+        provenance_storage_error(format!(
+            "legacy generic IFC provenance {record_type} `{key}` requires explicit typed mapping before primary IfcProvenance reads"
+        ))
+    }
+
+    fn fail_if_legacy_primary_exists(
+        &mut self,
+        prefix: &str,
+        record_type: &str,
+        record_id: &str,
+        ctx: &EventContext,
+    ) -> Result<(), ProvenanceError> {
+        let key = Self::legacy_primary_key(prefix, record_id);
+        if self.store.get(STORE, &key, ctx)?.is_some() {
+            return Err(Self::legacy_primary_error(record_type, &key));
+        }
+        Ok(())
+    }
+
+    fn fail_if_legacy_primaries_exist(
+        &mut self,
+        prefix: &str,
+        record_type: &str,
+        ctx: &EventContext,
+    ) -> Result<(), ProvenanceError> {
+        let records = self.store.query(
+            STORE,
+            &StoreQuery {
+                key_prefix: Some(prefix.to_string()),
+                metadata_filters: BTreeMap::new(),
+                limit: Some(1),
+            },
+            ctx,
+        )?;
+        if let Some(record) = records.first() {
+            return Err(Self::legacy_primary_error(record_type, &record.key));
+        }
+        Ok(())
+    }
+
+    fn query_typed_entries(
+        &mut self,
+        ctx: &EventContext,
+    ) -> Result<Vec<IfcProvenanceEntry>, ProvenanceError> {
+        let mut entries = self
+            .store
+            .query_typed::<IfcProvenanceEntry>(
+                &StoreQuery {
+                    key_prefix: Some(typed_ifc_key_prefix()),
+                    metadata_filters: BTreeMap::new(),
+                    limit: None,
+                },
+                ctx,
+            )
+            .map_err(|err| provenance_storage_error(err.to_string()))?;
+        entries.sort_by(|a, b| {
+            a.trace_id
+                .cmp(&b.trace_id)
+                .then(a.provenance_id.cmp(&b.provenance_id))
+        });
+        Ok(entries)
+    }
+
+    fn typed_entries_for_record(
+        &mut self,
+        record_type: &'static str,
+        trace_id: &str,
+        ctx: &EventContext,
+    ) -> Result<Vec<IfcProvenanceEntry>, ProvenanceError> {
+        let entries = self
+            .store
+            .query_typed::<IfcProvenanceEntry>(
+                &StoreQuery {
+                    key_prefix: Some(typed_ifc_key_prefix()),
+                    metadata_filters: BTreeMap::from([(
+                        "trace_id".to_string(),
+                        trace_id.to_string(),
+                    )]),
+                    limit: None,
+                },
+                ctx,
+            )
+            .map_err(|err| provenance_storage_error(err.to_string()))?;
+        let mut filtered = Vec::new();
+        for entry in entries {
+            let metadata = parse_typed_metadata(&entry)?;
+            if typed_record_type(&entry, &metadata) == Some(record_type) {
+                filtered.push(entry);
+            }
+        }
+        filtered.sort_by_key(|entry| entry.provenance_id);
+        Ok(filtered)
+    }
+
+    fn typed_metadata_json(metadata: serde_json::Value) -> Result<String, ProvenanceError> {
+        serde_json::to_string(&metadata).map_err(|err| {
+            ProvenanceError::SerializationError(format!(
+                "failed to serialize typed IFC metadata: {err}"
+            ))
+        })
+    }
+
+    fn typed_entry_from_flow_event(
+        &mut self,
+        record: &FlowEventRecord,
+        ctx: &EventContext,
+    ) -> Result<IfcProvenanceEntry, ProvenanceError> {
+        let provenance_id = allocate_typed_record_id::<IfcProvenanceEntry, _>(
+            &mut self.store,
+            &format!("{TYPED_FLOW_EVENT_RECORD_TYPE}/{}", record.event_id),
+            ctx,
+        )?;
+        let declassification_ref = record
+            .receipt_ref
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        Ok(IfcProvenanceEntry {
+            provenance_id,
+            source_label: label_json("source_label", &record.source_label)?,
+            target_label: label_json("sink_clearance", &record.sink_clearance)?,
+            edge_type: if matches!(record.decision, FlowDecision::Declassified) {
+                "declassification".to_string()
+            } else {
+                "flow_event".to_string()
+            },
+            flow_operation: format!("flow_event:{}", record.decision),
+            security_level: format!("source_level:{}", record.source_label.level()),
+            declassification_ref,
+            timestamp_ms: u64_to_i64("timestamp_ms", record.timestamp_ms)?,
+            trace_id: record.event_id.clone(),
+            metadata_json: Self::typed_metadata_json(serde_json::json!({
+                "schema_version": TYPED_IFC_SCHEMA_VERSION,
+                "record_type": TYPED_FLOW_EVENT_RECORD_TYPE,
+                "event_id": record.event_id,
+                "extension_id": record.extension_id,
+                "flow_location": record.flow_location,
+                "decision": record.decision.to_string(),
+                "receipt_ref": record.receipt_ref,
+            }))?,
+        })
+    }
+
+    fn typed_entry_from_flow_proof(
+        &mut self,
+        record: &FlowProofRecord,
+        ctx: &EventContext,
+    ) -> Result<IfcProvenanceEntry, ProvenanceError> {
+        let provenance_id = allocate_typed_record_id::<IfcProvenanceEntry, _>(
+            &mut self.store,
+            &format!("{TYPED_FLOW_PROOF_RECORD_TYPE}/{}", record.proof_id),
+            ctx,
+        )?;
+        Ok(IfcProvenanceEntry {
+            provenance_id,
+            source_label: label_json("source_label", &record.source_label)?,
+            target_label: label_json("sink_clearance", &record.sink_clearance)?,
+            edge_type: "flow".to_string(),
+            flow_operation: format!("flow_proof:{}", record.proof_method),
+            security_level: format!("source_level:{}", record.source_label.level()),
+            declassification_ref: None,
+            timestamp_ms: 0,
+            trace_id: record.proof_id.clone(),
+            metadata_json: Self::typed_metadata_json(serde_json::json!({
+                "schema_version": TYPED_IFC_SCHEMA_VERSION,
+                "record_type": TYPED_FLOW_PROOF_RECORD_TYPE,
+                "proof_id": record.proof_id,
+                "extension_id": record.extension_id,
+                "proof_method": record.proof_method.to_string(),
+                "epoch_id": record.epoch_id,
+            }))?,
+        })
+    }
+
+    fn typed_entry_from_declass_receipt(
+        &mut self,
+        record: &DeclassReceiptRecord,
+        ctx: &EventContext,
+    ) -> Result<IfcProvenanceEntry, ProvenanceError> {
+        let provenance_id = allocate_typed_record_id::<IfcProvenanceEntry, _>(
+            &mut self.store,
+            &format!("{TYPED_DECLASS_RECEIPT_RECORD_TYPE}/{}", record.receipt_id),
+            ctx,
+        )?;
+        Ok(IfcProvenanceEntry {
+            provenance_id,
+            source_label: label_json("source_label", &record.source_label)?,
+            target_label: label_json("sink_clearance", &record.sink_clearance)?,
+            edge_type: "declassification".to_string(),
+            flow_operation: format!("declass_receipt:{}", record.decision),
+            security_level: format!("source_level:{}", record.source_label.level()),
+            declassification_ref: Some(record.receipt_id.clone()),
+            timestamp_ms: u64_to_i64("timestamp_ms", record.timestamp_ms)?,
+            trace_id: record.receipt_id.clone(),
+            metadata_json: Self::typed_metadata_json(serde_json::json!({
+                "schema_version": TYPED_IFC_SCHEMA_VERSION,
+                "record_type": TYPED_DECLASS_RECEIPT_RECORD_TYPE,
+                "receipt_id": record.receipt_id,
+                "extension_id": record.extension_id,
+                "decision": record.decision.to_string(),
+                "declassification_route_ref": record.declassification_route_ref,
+                "decision_contract_id": record.decision_contract_id,
+            }))?,
+        })
+    }
+
+    fn flow_event_from_typed_entry(
+        entry: &IfcProvenanceEntry,
+    ) -> Result<Option<FlowEventRecord>, ProvenanceError> {
+        let metadata = parse_typed_metadata(entry)?;
+        if typed_record_type(entry, &metadata) != Some(TYPED_FLOW_EVENT_RECORD_TYPE) {
+            return Ok(None);
+        }
+        let decision_raw = metadata_string(&metadata, "decision")
+            .or_else(|| entry.flow_operation.strip_prefix("flow_event:"))
+            .ok_or_else(|| {
+                provenance_storage_error(format!(
+                    "typed IFC flow event {} is missing decision metadata",
+                    entry.provenance_id
+                ))
+            })?;
+        let receipt_ref = entry
+            .declassification_ref
+            .clone()
+            .or_else(|| metadata_string(&metadata, "receipt_ref").map(str::to_string))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        Ok(Some(FlowEventRecord {
+            event_id: metadata_string(&metadata, "event_id")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(entry.trace_id.as_str())
+                .to_string(),
+            extension_id: required_metadata_string(entry, &metadata, "extension_id")?,
+            source_label: parse_label("source_label", &entry.source_label)?,
+            sink_clearance: parse_label("sink_clearance", &entry.target_label)?,
+            flow_location: required_metadata_string(entry, &metadata, "flow_location")?,
+            decision: parse_flow_decision(decision_raw)?,
+            receipt_ref,
+            timestamp_ms: i64_to_u64("timestamp_ms", entry.timestamp_ms)?,
+        }))
+    }
+
+    fn flow_proof_from_typed_entry(
+        entry: &IfcProvenanceEntry,
+    ) -> Result<Option<FlowProofRecord>, ProvenanceError> {
+        let metadata = parse_typed_metadata(entry)?;
+        if typed_record_type(entry, &metadata) != Some(TYPED_FLOW_PROOF_RECORD_TYPE) {
+            return Ok(None);
+        }
+        let proof_method_raw = metadata_string(&metadata, "proof_method")
+            .or_else(|| entry.flow_operation.strip_prefix("flow_proof:"))
+            .ok_or_else(|| {
+                provenance_storage_error(format!(
+                    "typed IFC flow proof {} is missing proof_method metadata",
+                    entry.provenance_id
+                ))
+            })?;
+        Ok(Some(FlowProofRecord {
+            proof_id: metadata_string(&metadata, "proof_id")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(entry.trace_id.as_str())
+                .to_string(),
+            extension_id: required_metadata_string(entry, &metadata, "extension_id")?,
+            source_label: parse_label("source_label", &entry.source_label)?,
+            sink_clearance: parse_label("sink_clearance", &entry.target_label)?,
+            proof_method: parse_proof_method(proof_method_raw)?,
+            epoch_id: required_metadata_u64(entry, &metadata, "epoch_id")?,
+        }))
+    }
+
+    fn declass_receipt_from_typed_entry(
+        entry: &IfcProvenanceEntry,
+    ) -> Result<Option<DeclassReceiptRecord>, ProvenanceError> {
+        let metadata = parse_typed_metadata(entry)?;
+        if typed_record_type(entry, &metadata) != Some(TYPED_DECLASS_RECEIPT_RECORD_TYPE) {
+            return Ok(None);
+        }
+        let decision_raw = metadata_string(&metadata, "decision")
+            .or_else(|| entry.flow_operation.strip_prefix("declass_receipt:"))
+            .ok_or_else(|| {
+                provenance_storage_error(format!(
+                    "typed IFC declassification receipt {} is missing decision metadata",
+                    entry.provenance_id
+                ))
+            })?;
+        Ok(Some(DeclassReceiptRecord {
+            receipt_id: metadata_string(&metadata, "receipt_id")
+                .or(entry.declassification_ref.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(entry.trace_id.as_str())
+                .to_string(),
+            extension_id: required_metadata_string(entry, &metadata, "extension_id")?,
+            decision: parse_declassification_decision(decision_raw)?,
+            source_label: parse_label("source_label", &entry.source_label)?,
+            sink_clearance: parse_label("sink_clearance", &entry.target_label)?,
+            declassification_route_ref: required_metadata_string(
+                entry,
+                &metadata,
+                "declassification_route_ref",
+            )?,
+            decision_contract_id: required_metadata_string(
+                entry,
+                &metadata,
+                "decision_contract_id",
+            )?,
+            timestamp_ms: i64_to_u64("timestamp_ms", entry.timestamp_ms)?,
+        }))
+    }
+
     // -- Write operations ---------------------------------------------------
 
     /// Insert a flow event record.
@@ -323,8 +829,24 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
             stored.receipt_ref = Some(receipt_ref.clone());
             self.validate_declassified_receipt_ref(&stored, &receipt_ref, ctx)?;
         }
-        let key = format!("{FLOW_EVENT_PREFIX}{}", stored.event_id);
-        self.put_record(&key, &stored, ctx)?;
+        self.fail_if_legacy_primary_exists(
+            FLOW_EVENT_PREFIX,
+            TYPED_FLOW_EVENT_RECORD_TYPE,
+            &stored.event_id,
+            ctx,
+        )?;
+        if !self
+            .typed_entries_for_record(TYPED_FLOW_EVENT_RECORD_TYPE, &stored.event_id, ctx)?
+            .is_empty()
+        {
+            return Err(ProvenanceError::DuplicateRecord {
+                key: stored.event_id.clone(),
+            });
+        }
+        let entry = self.typed_entry_from_flow_event(&stored, ctx)?;
+        self.store
+            .put_typed(&entry, ctx)
+            .map_err(|err| provenance_storage_error(err.to_string()))?;
         self.push_event(&ctx.trace_id, "flow_event_inserted", "ok", None);
         Ok(())
     }
@@ -338,8 +860,24 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         let mut stored = record.clone();
         stored.proof_id = Self::normalize_record_id(&stored.proof_id, "flow_proof")?;
         stored.extension_id = Self::normalize_extension_id(&stored.extension_id)?;
-        let key = format!("{FLOW_PROOF_PREFIX}{}", stored.proof_id);
-        self.put_record(&key, &stored, ctx)?;
+        self.fail_if_legacy_primary_exists(
+            FLOW_PROOF_PREFIX,
+            TYPED_FLOW_PROOF_RECORD_TYPE,
+            &stored.proof_id,
+            ctx,
+        )?;
+        if !self
+            .typed_entries_for_record(TYPED_FLOW_PROOF_RECORD_TYPE, &stored.proof_id, ctx)?
+            .is_empty()
+        {
+            return Err(ProvenanceError::DuplicateRecord {
+                key: stored.proof_id.clone(),
+            });
+        }
+        let entry = self.typed_entry_from_flow_proof(&stored, ctx)?;
+        self.store
+            .put_typed(&entry, ctx)
+            .map_err(|err| provenance_storage_error(err.to_string()))?;
         self.push_event(&ctx.trace_id, "flow_proof_inserted", "ok", None);
         Ok(())
     }
@@ -367,8 +905,24 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
                 field_name: "decision_contract_id".to_string(),
             });
         }
-        let key = format!("{DECLASS_RECEIPT_PREFIX}{}", stored.receipt_id);
-        self.put_record(&key, &stored, ctx)?;
+        self.fail_if_legacy_primary_exists(
+            DECLASS_RECEIPT_PREFIX,
+            TYPED_DECLASS_RECEIPT_RECORD_TYPE,
+            &stored.receipt_id,
+            ctx,
+        )?;
+        if !self
+            .typed_entries_for_record(TYPED_DECLASS_RECEIPT_RECORD_TYPE, &stored.receipt_id, ctx)?
+            .is_empty()
+        {
+            return Err(ProvenanceError::DuplicateRecord {
+                key: stored.receipt_id.clone(),
+            });
+        }
+        let entry = self.typed_entry_from_declass_receipt(&stored, ctx)?;
+        self.store
+            .put_typed(&entry, ctx)
+            .map_err(|err| provenance_storage_error(err.to_string()))?;
         self.push_event(&ctx.trace_id, "declass_receipt_inserted", "ok", None);
         Ok(())
     }
@@ -400,10 +954,13 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if extension_id.is_empty() {
             return Ok(Vec::new());
         }
-        let records = self.query_prefix(FLOW_EVENT_PREFIX, ctx)?;
+        self.fail_if_legacy_primaries_exist(FLOW_EVENT_PREFIX, TYPED_FLOW_EVENT_RECORD_TYPE, ctx)?;
+        let entries = self.query_typed_entries(ctx)?;
         let mut results = Vec::new();
-        for r in records {
-            let mut rec: FlowEventRecord = Self::decode_aggregate_record(&r, "flow_event")?;
+        for entry in entries {
+            let Some(mut rec) = Self::flow_event_from_typed_entry(&entry)? else {
+                continue;
+            };
             rec.extension_id = rec.extension_id.trim().to_string();
             if rec.extension_id.is_empty() {
                 continue;
@@ -426,10 +983,13 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if extension_id.is_empty() {
             return Ok(Vec::new());
         }
-        let records = self.query_prefix(FLOW_PROOF_PREFIX, ctx)?;
+        self.fail_if_legacy_primaries_exist(FLOW_PROOF_PREFIX, TYPED_FLOW_PROOF_RECORD_TYPE, ctx)?;
+        let entries = self.query_typed_entries(ctx)?;
         let mut results = Vec::new();
-        for r in records {
-            let mut rec: FlowProofRecord = Self::decode_aggregate_record(&r, "flow_proof")?;
+        for entry in entries {
+            let Some(mut rec) = Self::flow_proof_from_typed_entry(&entry)? else {
+                continue;
+            };
             rec.extension_id = rec.extension_id.trim().to_string();
             if rec.extension_id.is_empty() {
                 continue;
@@ -452,11 +1012,17 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if extension_id.is_empty() {
             return Ok(Vec::new());
         }
-        let records = self.query_prefix(DECLASS_RECEIPT_PREFIX, ctx)?;
+        self.fail_if_legacy_primaries_exist(
+            DECLASS_RECEIPT_PREFIX,
+            TYPED_DECLASS_RECEIPT_RECORD_TYPE,
+            ctx,
+        )?;
+        let entries = self.query_typed_entries(ctx)?;
         let mut results = Vec::new();
-        for r in records {
-            let mut rec: DeclassReceiptRecord =
-                Self::decode_aggregate_record(&r, "declass_receipt")?;
+        for entry in entries {
+            let Some(mut rec) = Self::declass_receipt_from_typed_entry(&entry)? else {
+                continue;
+            };
             rec.extension_id = rec.extension_id.trim().to_string();
             if rec.extension_id.is_empty() {
                 continue;
@@ -631,8 +1197,19 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if event_id.is_empty() {
             return Ok(None);
         }
-        let key = format!("{FLOW_EVENT_PREFIX}{event_id}");
-        self.get_record(&key, ctx)
+        let entries = self.typed_entries_for_record(TYPED_FLOW_EVENT_RECORD_TYPE, event_id, ctx)?;
+        for entry in entries {
+            if let Some(record) = Self::flow_event_from_typed_entry(&entry)? {
+                return Ok(Some(record));
+            }
+        }
+        self.fail_if_legacy_primary_exists(
+            FLOW_EVENT_PREFIX,
+            TYPED_FLOW_EVENT_RECORD_TYPE,
+            event_id,
+            ctx,
+        )?;
+        Ok(None)
     }
 
     /// Get a single flow proof by ID.
@@ -645,8 +1222,19 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if proof_id.is_empty() {
             return Ok(None);
         }
-        let key = format!("{FLOW_PROOF_PREFIX}{proof_id}");
-        self.get_record(&key, ctx)
+        let entries = self.typed_entries_for_record(TYPED_FLOW_PROOF_RECORD_TYPE, proof_id, ctx)?;
+        for entry in entries {
+            if let Some(record) = Self::flow_proof_from_typed_entry(&entry)? {
+                return Ok(Some(record));
+            }
+        }
+        self.fail_if_legacy_primary_exists(
+            FLOW_PROOF_PREFIX,
+            TYPED_FLOW_PROOF_RECORD_TYPE,
+            proof_id,
+            ctx,
+        )?;
+        Ok(None)
     }
 
     /// Get a single declassification receipt by ID.
@@ -659,8 +1247,20 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
         if receipt_id.is_empty() {
             return Ok(None);
         }
-        let key = format!("{DECLASS_RECEIPT_PREFIX}{receipt_id}");
-        self.get_record(&key, ctx)
+        let entries =
+            self.typed_entries_for_record(TYPED_DECLASS_RECEIPT_RECORD_TYPE, receipt_id, ctx)?;
+        for entry in entries {
+            if let Some(record) = Self::declass_receipt_from_typed_entry(&entry)? {
+                return Ok(Some(record));
+            }
+        }
+        self.fail_if_legacy_primary_exists(
+            DECLASS_RECEIPT_PREFIX,
+            TYPED_DECLASS_RECEIPT_RECORD_TYPE,
+            receipt_id,
+            ctx,
+        )?;
+        Ok(None)
     }
 
     /// Get a single confinement claim by ID.
@@ -1206,6 +1806,23 @@ mod tests {
         );
     }
 
+    fn assert_legacy_primary_error(err: ProvenanceError, record_type: &str, key: &str) {
+        assert_eq!(error_code(&err), "PROV_STORAGE_ERROR");
+        let message = err.to_string();
+        assert!(
+            message.contains("legacy generic IFC provenance"),
+            "error should explain legacy primary rejection: {message}"
+        );
+        assert!(
+            message.contains(record_type),
+            "error should name record type {record_type}: {message}"
+        );
+        assert!(
+            message.contains(key),
+            "error should include legacy storage key {key}: {message}"
+        );
+    }
+
     // -- insert / query tests -----------------------------------------------
 
     #[test]
@@ -1265,6 +1882,161 @@ mod tests {
         assert_eq!(results[0].receipt_id, "r1");
         assert_eq!(results[0].declassification_route_ref, "route-r1");
         assert_eq!(results[0].decision_contract_id, "decision-r1");
+    }
+
+    #[test]
+    fn insert_flow_event_uses_typed_primary_rows() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let ev = flow_event(
+            "ev-typed",
+            "ext-a",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        );
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("typed flow event insertion should succeed");
+
+        let legacy_key = format!("{FLOW_EVENT_PREFIX}{}", ev.event_id);
+        assert!(
+            idx.store
+                .get(STORE, &legacy_key, &ctx)
+                .expect("legacy inspection should succeed")
+                .is_none()
+        );
+
+        let rows = idx
+            .store
+            .query(
+                STORE,
+                &StoreQuery {
+                    key_prefix: Some(typed_ifc_key_prefix()),
+                    metadata_filters: BTreeMap::from([
+                        (
+                            "record_type".to_string(),
+                            TYPED_FLOW_EVENT_RECORD_TYPE.to_string(),
+                        ),
+                        ("trace_id".to_string(), ev.event_id.clone()),
+                    ]),
+                    limit: None,
+                },
+                &ctx,
+            )
+            .expect("typed row query should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metadata.get("record_format").map(String::as_str),
+            Some("sqlmodel_rust_typed_v1")
+        );
+        assert_eq!(
+            rows[0].metadata.get("typed_model").map(String::as_str),
+            Some("IfcProvenanceEntry")
+        );
+        assert_eq!(
+            rows[0].metadata.get("extension_id").map(String::as_str),
+            Some("ext-a")
+        );
+    }
+
+    #[test]
+    fn insert_flow_proof_uses_typed_primary_rows() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let proof = flow_proof("proof-typed", "ext-a", Label::Public, Label::Internal, 7);
+        idx.insert_flow_proof(&proof, &ctx)
+            .expect("typed flow proof insertion should succeed");
+
+        let legacy_key = format!("{FLOW_PROOF_PREFIX}{}", proof.proof_id);
+        assert!(
+            idx.store
+                .get(STORE, &legacy_key, &ctx)
+                .expect("legacy inspection should succeed")
+                .is_none()
+        );
+        let rows = idx
+            .store
+            .query(
+                STORE,
+                &StoreQuery {
+                    key_prefix: Some(typed_ifc_key_prefix()),
+                    metadata_filters: BTreeMap::from([
+                        (
+                            "record_type".to_string(),
+                            TYPED_FLOW_PROOF_RECORD_TYPE.to_string(),
+                        ),
+                        ("epoch_id".to_string(), "7".to_string()),
+                    ]),
+                    limit: None,
+                },
+                &ctx,
+            )
+            .expect("typed row query should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metadata.get("trace_id").map(String::as_str),
+            Some("proof-typed")
+        );
+    }
+
+    #[test]
+    fn declassified_flow_event_validates_typed_receipt() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        idx.insert_declass_receipt(
+            &declass_receipt(
+                "receipt-typed",
+                "ext-a",
+                Label::Confidential,
+                Label::Public,
+                DeclassificationDecision::Allow,
+            ),
+            &ctx,
+        )
+        .expect("typed declassification receipt should insert");
+        let mut ev = flow_event(
+            "ev-declass",
+            "ext-a",
+            Label::Confidential,
+            Label::Public,
+            FlowDecision::Declassified,
+        );
+        ev.receipt_ref = Some("  receipt-typed  ".to_string());
+
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("typed declassified event should validate typed receipt");
+
+        let stored = idx
+            .get_flow_event("ev-declass", &ctx)
+            .expect("typed event read should succeed")
+            .expect("typed event should exist");
+        assert_eq!(stored.receipt_ref.as_deref(), Some("receipt-typed"));
+    }
+
+    #[test]
+    fn legacy_generic_flow_event_fails_closed_on_primary_read() {
+        let mut idx = make_index();
+        let ctx = test_ctx();
+        let ev = flow_event(
+            "legacy-ev",
+            "ext-a",
+            Label::Public,
+            Label::Internal,
+            FlowDecision::Allowed,
+        );
+        let legacy_key = format!("{FLOW_EVENT_PREFIX}{}", ev.event_id);
+        idx.store
+            .put(
+                STORE,
+                legacy_key.clone(),
+                serde_json::to_vec(&ev).expect("legacy flow event should serialize"),
+                BTreeMap::new(),
+                &ctx,
+            )
+            .expect("legacy seed should write");
+
+        let err = idx.get_flow_event(&ev.event_id, &ctx).unwrap_err();
+        assert_legacy_primary_error(err, TYPED_FLOW_EVENT_RECORD_TYPE, &legacy_key);
     }
 
     #[test]
@@ -1401,6 +2173,17 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev.receipt_ref = Some("  r1  ".to_string());
+        idx.insert_declass_receipt(
+            &declass_receipt(
+                "r1",
+                "ext-a",
+                Label::Confidential,
+                Label::Public,
+                DeclassificationDecision::Allow,
+            ),
+            &ctx,
+        )
+        .expect("serde deserialization should succeed");
 
         idx.insert_flow_event(&ev, &ctx)
             .expect("serde deserialization should succeed");
@@ -1675,17 +2458,17 @@ mod tests {
         inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
 
         let err = idx.flow_events_by_extension("ext-a", &ctx).unwrap_err();
-        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_EVENT_RECORD_TYPE, &corrupt_key);
 
         let err = idx
             .sink_provenance("ext-a", &Label::Internal, &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_EVENT_RECORD_TYPE, &corrupt_key);
 
         let err = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "flow_event", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_EVENT_RECORD_TYPE, &corrupt_key);
     }
 
     #[test]
@@ -1701,15 +2484,15 @@ mod tests {
         inject_corrupt_record(&mut idx, &corrupt_key, &ctx);
 
         let err = idx.flow_proofs_by_extension("ext-a", &ctx).unwrap_err();
-        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_PROOF_RECORD_TYPE, &corrupt_key);
 
         let err = idx
             .sink_provenance("ext-a", &Label::Internal, &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_PROOF_RECORD_TYPE, &corrupt_key);
 
         let err = idx.confinement_status("ext-a", &ctx).unwrap_err();
-        assert_corrupt_record_error(err, "flow_proof", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_FLOW_PROOF_RECORD_TYPE, &corrupt_key);
     }
 
     #[test]
@@ -1744,20 +2527,20 @@ mod tests {
         let err = idx
             .declass_receipts_by_extension("ext-a", &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_DECLASS_RECEIPT_RECORD_TYPE, &corrupt_key);
 
         let err = idx
             .sink_provenance("ext-a", &Label::Public, &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_DECLASS_RECEIPT_RECORD_TYPE, &corrupt_key);
 
         let err = idx.join_events_with_receipts("ext-a", &ctx).unwrap_err();
-        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_DECLASS_RECEIPT_RECORD_TYPE, &corrupt_key);
 
         let err = idx
             .source_to_sink_lineage("ext-a", &Label::Secret, &ctx)
             .unwrap_err();
-        assert_corrupt_record_error(err, "declass_receipt", &corrupt_key);
+        assert_legacy_primary_error(err, TYPED_DECLASS_RECEIPT_RECORD_TYPE, &corrupt_key);
     }
 
     #[test]
@@ -2083,8 +2866,6 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev.receipt_ref = Some("r1".to_string());
-        idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
 
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -2097,6 +2878,8 @@ mod tests {
             &ctx,
         )
         .expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
         let joined = idx
             .join_events_with_receipts("ext-a", &ctx)
@@ -3111,6 +3894,17 @@ mod tests {
             &ctx,
         )
         .expect("serde deserialization should succeed");
+        idx.insert_declass_receipt(
+            &declass_receipt(
+                "r-ev-m",
+                "ext-a",
+                Label::Internal,
+                Label::Confidential,
+                DeclassificationDecision::Allow,
+            ),
+            &ctx,
+        )
+        .expect("serde deserialization should succeed");
         idx.insert_flow_event(
             &{
                 let mut ev = flow_event(
@@ -3314,8 +4108,6 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev1.receipt_ref = Some("r1".to_string());
-        idx.insert_flow_event(&ev1, &ctx)
-            .expect("serde deserialization should succeed");
 
         let mut ev2 = flow_event(
             "ev2",
@@ -3325,8 +4117,6 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev2.receipt_ref = Some("r2".to_string());
-        idx.insert_flow_event(&ev2, &ctx)
-            .expect("serde deserialization should succeed");
 
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -3350,6 +4140,10 @@ mod tests {
             &ctx,
         )
         .expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev1, &ctx)
+            .expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev2, &ctx)
+            .expect("serde deserialization should succeed");
 
         let joined = idx
             .join_events_with_receipts("ext-a", &ctx)

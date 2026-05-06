@@ -5,6 +5,6 @@
   "source_evidence": false,
   "expected_exit_code": 42,
   "selected_worker": "vmi1149989",
-  "capture_decision": "captured_degraded",
+  "capture_decision": "fail_closed",
   "truth_state": "contaminated"
 }

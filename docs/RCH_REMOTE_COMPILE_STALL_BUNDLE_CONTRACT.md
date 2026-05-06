@@ -4,8 +4,11 @@
 contract-only evidence bundle for a real `frankenengine-engine` remote compile
 stall.
 
-This bead does not ship the capture script yet. Later beads must implement
-`scripts/rch_remote_compile_stall_bundle_capture.sh` against this contract.
+The current producer chain is:
+
+- `scripts/rch_remote_compile_stall_bundle_capture.sh`
+- `scripts/e2e/rch_remote_compile_stall_repro_harness.sh`
+- `scripts/e2e/rch_remote_compile_stall_truth_gate.sh`
 
 It is evidence only. The bundle must not be described as a live fix, tracker
 mutation surface, reservation mutation surface, Agent Mail mutation surface, or
@@ -51,15 +54,16 @@ bundle into a confirmed remote stall.
 ## Truth States
 
 - `confirmed`: all required and optional snapshots are present, queue and worker
-  snapshots agree on the same build and worker, and local fallback was not
-  observed
+  snapshots agree on the same build and worker, and the local-fallback fail-closed
+  marker was not observed
 - `degraded`: the required stall tuple is present, no contradictions are
-  observed, local fallback was not observed, but one or more optional snapshots
-  are missing
+  observed, the local-fallback fail-closed marker was not observed, but one or
+  more optional snapshots are missing
 - `blocked`: required snapshots are missing or contradictory queue or worker
   snapshots prevent a truthful remote stall claim
-- `contaminated`: local fallback was observed, so the bundle is not valid remote
-  stall truth even if the other snapshots appear internally consistent
+- `contaminated`: local fallback was observed and must fail closed, so the bundle
+  is not valid remote stall truth even if the other snapshots appear internally
+  consistent
 
 `contaminated` is stricter than `blocked`: the evidence is present, but it is no
 longer safe to present as remote-only proof.
@@ -93,7 +97,7 @@ Expected enumerations:
 
 - Missing required remote snapshots fail closed.
 - contradictory queue or worker snapshots fail closed.
-- local fallback observed forces `truth_state=contaminated` and
+- local fallback observed fails closed by forcing `truth_state=contaminated` and
   `capture_decision=fail_closed`.
 - `progress_age_seconds` must not contradict `last_progress_epoch_seconds` and
   the snapshot timestamps.
@@ -102,15 +106,17 @@ Expected enumerations:
 
 ## Expected Outputs
 
-When the future capture script lands, it must emit at least:
+The capture script emits at least:
 
 - `stall_bundle.json`
 - `events.jsonl`
 - `commands.txt`
 - `summary.md`
 
-Later beads add the bundle writer, repro harness, truth gate, and operator
-integration.
+The repro harness composes the bundle into `repro_report.json`, and the truth
+gate composes the contract, bundle, and repro report across healthy remote
+completion, explicit timeout, fresh-heartbeat/frozen-progress stall, and
+local-fallback fail-closed contamination fixtures.
 
 ## Validation
 
@@ -120,5 +126,9 @@ bash -n scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh
 shellcheck -x scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh
 bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh check
 bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh selftest
-git diff --check -- docs/RCH_REMOTE_COMPILE_STALL_BUNDLE_CONTRACT.md docs/rch_remote_compile_stall_bundle_contract_v1.json scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh
+bash -n scripts/rch_remote_compile_stall_bundle_capture.sh scripts/e2e/rch_remote_compile_stall_repro_harness.sh scripts/e2e/rch_remote_compile_stall_truth_gate.sh scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh
+shellcheck -x scripts/rch_remote_compile_stall_bundle_capture.sh scripts/e2e/rch_remote_compile_stall_repro_harness.sh scripts/e2e/rch_remote_compile_stall_truth_gate.sh scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh
+bash scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh check
+bash scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh selftest
+git diff --check -- docs/RCH_REMOTE_COMPILE_STALL_BUNDLE_CONTRACT.md docs/rch_remote_compile_stall_bundle_contract_v1.json scripts/rch_remote_compile_stall_bundle_capture.sh scripts/e2e/rch_remote_compile_stall_repro_harness.sh scripts/e2e/rch_remote_compile_stall_truth_gate.sh scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh scripts/testdata/rch_remote_compile_stall_truth_gate
 ```

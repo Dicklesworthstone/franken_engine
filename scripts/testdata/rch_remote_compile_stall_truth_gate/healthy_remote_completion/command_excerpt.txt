@@ -1,0 +1,3 @@
+Selected worker: vmi1293453
+Executing command remotely:
+Remote command finished: exit=0

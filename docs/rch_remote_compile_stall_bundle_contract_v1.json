@@ -7,7 +7,11 @@
   "future_surfaces": [
     "scripts/rch_remote_compile_stall_bundle_capture.sh",
     "scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
-    "scripts/e2e/rch_remote_compile_stall_truth_gate.sh"
+    "scripts/e2e/rch_remote_compile_stall_repro_harness.sh",
+    "scripts/e2e/rch_remote_compile_stall_repro_harness_smoke.sh",
+    "scripts/e2e/rch_remote_compile_stall_truth_gate.sh",
+    "scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh",
+    "scripts/testdata/rch_remote_compile_stall_truth_gate/cases.json"
   ],
   "required_snapshot_contracts": [
     {
@@ -105,7 +109,7 @@
   ],
   "degraded_semantics": [
     "required stall tuple is present",
-    "local fallback was not observed",
+    "local-fallback fail-closed marker was not observed",
     "one or more optional snapshots are missing",
     "capture decision stays captured_degraded"
   ],
@@ -116,7 +120,7 @@
     "capture decision stays fail_closed"
   ],
   "contaminated_semantics": [
-    "local fallback observed",
+    "local fallback observed fails closed",
     "remote-only truth claim is invalidated",
     "capture decision stays fail_closed",
     "truth state stays contaminated"
@@ -140,7 +144,7 @@
     "It is evidence only.",
     "Missing required remote snapshots fail closed.",
     "contradictory queue or worker snapshots fail closed.",
-    "local fallback observed forces `truth_state=contaminated` and",
+    "local fallback observed fails closed by forcing `truth_state=contaminated` and",
     "The bundle must not claim it mutates beads, reservations, Agent Mail, or workers."
   ],
   "fixture_examples": [
@@ -170,6 +174,10 @@
     "bash -n scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
     "shellcheck -x scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
     "bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh check",
-    "bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh selftest"
+    "bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh selftest",
+    "bash -n scripts/rch_remote_compile_stall_bundle_capture.sh scripts/e2e/rch_remote_compile_stall_repro_harness.sh scripts/e2e/rch_remote_compile_stall_truth_gate.sh scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh",
+    "shellcheck -x scripts/rch_remote_compile_stall_bundle_capture.sh scripts/e2e/rch_remote_compile_stall_repro_harness.sh scripts/e2e/rch_remote_compile_stall_truth_gate.sh scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh",
+    "bash scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh check",
+    "bash scripts/e2e/rch_remote_compile_stall_truth_gate_smoke.sh selftest"
   ]
 }

@@ -200,6 +200,22 @@ if [[ "$fixture_mode" == true ]]; then
     echo "fixture mode requires queue/status/bead metadata/command log inputs" >&2
     exit 64
   fi
+  if [[ -z "$captured_at_epoch_seconds" ]]; then
+    captured_at_epoch_seconds="$(
+      jq -n \
+        --slurpfile queue "$queue_json" \
+        --slurpfile status "$status_json" '
+          def epochish:
+            if . == null or . == "" then 0
+            else ((sub("\\.[0-9]+(?=[+-Z])"; "")) | fromdateiso8601? // 0)
+            end;
+          [
+            (($queue[0].timestamp // $queue[0].data.timestamp // "") | epochish),
+            (($status[0].timestamp // $status[0].data.timestamp // "") | epochish)
+          ] | max
+        '
+    )"
+  fi
   cp "$command_log" "$harness_log_path"
   printf 'fixture_command_log=%s\n' "$command_log" >>"$commands_path"
 else

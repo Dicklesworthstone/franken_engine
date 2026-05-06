@@ -1,0 +1,61 @@
+{
+  "schema_version": "franken-engine.rch-remote-compile-stall-truth-gate-suite.v1",
+  "cases": [
+    {
+      "case_id": "healthy_remote_completion",
+      "category": "healthy_remote_completion",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_truth_gate/healthy_remote_completion",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "source_pass",
+      "expected_reason_code": "remote_command_exit_zero",
+      "expected_source_evidence": true,
+      "expected_exit_code": 0,
+      "expected_selected_worker": "vmi1293453",
+      "expected_capture_decision": "captured",
+      "expected_truth_state": "confirmed",
+      "expected_local_fallback_observed": false
+    },
+    {
+      "case_id": "transport_timeout_check_lib",
+      "category": "explicit_timeout",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_repro/transport_timeout_check_lib",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "transport_timeout",
+      "expected_reason_code": "ssh_timeout_no_final_verdict",
+      "expected_source_evidence": false,
+      "expected_exit_code": 0,
+      "expected_selected_worker": "vmi1149989",
+      "expected_capture_decision": "captured_degraded",
+      "expected_truth_state": "degraded",
+      "expected_local_fallback_observed": false
+    },
+    {
+      "case_id": "fresh_heartbeat_frozen_progress_test",
+      "category": "fresh_heartbeat_frozen_progress_stall",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_repro/fresh_heartbeat_frozen_progress_test",
+      "harness_case_id": "focused-engine-test",
+      "expected_final_verdict": "fresh_heartbeat_frozen_progress_stall",
+      "expected_reason_code": "fresh_heartbeat_frozen_progress",
+      "expected_source_evidence": false,
+      "expected_exit_code": 0,
+      "expected_selected_worker": "ts2",
+      "expected_capture_decision": "captured_degraded",
+      "expected_truth_state": "degraded",
+      "expected_local_fallback_observed": false
+    },
+    {
+      "case_id": "contaminated_local_fallback_check_lib",
+      "category": "local_fallback_contamination",
+      "fixture_dir": "scripts/testdata/rch_remote_compile_stall_repro/contaminated_local_fallback_check_lib",
+      "harness_case_id": "cargo-check-lib",
+      "expected_final_verdict": "contaminated_local_fallback",
+      "expected_reason_code": "local_fallback_contaminated",
+      "expected_source_evidence": false,
+      "expected_exit_code": 42,
+      "expected_selected_worker": "vmi1149989",
+      "expected_capture_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_local_fallback_observed": true
+    }
+  ]
+}

@@ -3,11 +3,12 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `26`
+- Degraded fields: `27`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
 - Admission budget: `unknown` with `0` deferred
+- Resource envelope: `degraded` / `missing` with `0` admitted and `0` deferred
 - Lease exchange posture: `missing`
 - Prefetch advisory: `missing`
 - Starvation rescue escalation: `unknown` via `null`
@@ -25,6 +26,8 @@
 
 - Capacity forecast: `missing`
 - Admission budget plan: `missing`
+- Swarm resource envelope: ``
+- Swarm fair-share batch plan: ``
 - Lease exchange salvage simulation: `missing`
 - Warm target prefetch ROI advisory: `missing`
 - Starvation rescue plan: `missing`
@@ -54,7 +57,7 @@
 - Causal trace graph: `missing`
 - Causal trace anomalies: `missing`
 
-- `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
+- `refresh_resource_envelope`: resource envelope or fair-share plan is missing or degraded
 
 ## Degraded
 
@@ -74,6 +77,7 @@
 - `staged_contamination` `missing`: staged ownership guard artifact is missing. Provide --staged-ownership-report-json before commit or closeout.
 - `capacity_forecast` `missing`: predictive capacity forecast artifact is missing. Provide --capacity-forecast-json before publishing forecast confidence.
 - `admission_budgets` `missing`: admission budget plan artifact is missing. Provide --admission-budget-plan-json before summarizing budget posture.
+- `swarm_resource_envelope` `missing`: resource envelope and fair-share artifacts are missing. Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness.
 - `lease_exchange_salvage` `missing`: lease-exchange salvage simulation artifact is missing. Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles.
 - `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
 - `starvation_rescue_handoff` `missing`: starvation rescue handoff artifacts are incomplete. Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness.

@@ -40,6 +40,13 @@
     "telemetry_missing_input_count": 0,
     "admission_budget_profile": "balanced",
     "admission_deferred_count": 0,
+    "resource_envelope_readiness": "ready",
+    "resource_envelope_decision": "pass",
+    "resource_envelope_severity": "ok",
+    "fair_share_decision": "admit",
+    "fair_share_admitted_count": 3,
+    "fair_share_deferred_count": 0,
+    "fair_share_heavy_admitted_count": 2,
     "lease_exchange_decision": "retain_current_assignments",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -404,6 +411,54 @@
         }
       ],
       "artifact_path": "[SMOKE_ROOT]/causal_trace_degraded-fixtures/admission_budget_plan.json"
+    },
+    "swarm_resource_envelope": {
+      "artifact_statuses": {
+        "resource_envelope": "provided",
+        "fair_share_batch_plan": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "decision": "pass",
+      "fair_share_decision": "admit",
+      "host_id": "host-64c-256g",
+      "capacity_budget": {
+        "script_lane_limit": 12,
+        "proof_lane_limit": 12,
+        "build_lane_limit": 6,
+        "remote_rch_slot_limit": 12,
+        "memory_bytes_budget": 171798691840,
+        "target_dir_bytes_budget": 311385128960,
+        "defer_reasons": []
+      },
+      "capacity": {
+        "script_lane_limit": 12,
+        "proof_lane_limit": 12,
+        "build_lane_limit": 6,
+        "remote_rch_slot_limit": 12,
+        "memory_bytes_budget": 171798691840,
+        "target_dir_bytes_budget": 311385128960,
+        "rch_slots_available": 12,
+        "target_dir_min_available_bytes": 322122547200
+      },
+      "fair_share": {
+        "requested_count": 3,
+        "admitted_count": 3,
+        "deferred_count": 0,
+        "heavy_admitted_count": 2,
+        "rch_slots_used": 2,
+        "fairness_rationale": [
+          "fixture fair-share rationale"
+        ]
+      },
+      "contaminating_classes": [],
+      "degraded_reason_count": 0,
+      "blocked_reason_count": 0,
+      "fail_closed_reason_count": 0,
+      "artifact_paths": {
+        "resource_envelope_json": "[SMOKE_ROOT]/causal_trace_degraded-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/causal_trace_degraded-fixtures/swarm_fair_share_batch_plan.json"
+      }
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -804,7 +859,11 @@
         "queue_policy_adoption_expiry_required",
         "queue_policy_adoption_supersession_required",
         "causal_trace_degraded",
-        "causal_trace_contaminated"
+        "causal_trace_contaminated",
+        "resource_envelope_healthy",
+        "resource_envelope_degraded",
+        "resource_envelope_blocked",
+        "resource_envelope_contaminated"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

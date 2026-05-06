@@ -296,7 +296,12 @@ consumption:
 | `queue_tuning_promotion` | `swarm-execution-queue-tuning-policy-bundle.v1` plus promotion guard, manual rollout, rollback comparator, and canary verdict artifacts | Show bundle readiness, canary recommendation, rollback readiness, manual-approval blockers, and evidence links without automatic promotion. |
 | `queue_policy_adoption` | `swarm-execution-queue-policy-adoption-receipt.v1` plus adoption snapshot, sustained-gain receipt, expiry/supersession plan, and expiry/supersession ledger artifacts | Show adoption state, sustained-gain verdict, expiry decision, and supersession advisory state without executing retirement or supersession. |
 | `swarm_agent_causal_trace` | `swarm-agent-causal-trace-graph.v1` plus `swarm-agent-causal-trace-anomaly-report.v1` | Show handoff readiness, required causal-edge coverage, and fail-closed coordination anomalies without querying live services or mutating ownership state. |
+| `swarm_resource_envelope` | `swarm-resource-envelope.v1` plus `swarm-fair-share-batch-plan.v1` from `scripts/swarm_resource_envelope_normalizer.sh` and `scripts/swarm_fair_share_batch_planner.sh` | Show host resource-envelope readiness, capacity summaries, admitted/deferred fair-share counts, and contaminated capacity classes without running Cargo, RCH, queue mutation, or worker mutation. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
+
+The resource-envelope input contract is fixed by
+`docs/swarm_resource_envelope_contract_v1.json`; its human-readable contract is
+`docs/SWARM_RESOURCE_ENVELOPE.md`.
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
 adding a parallel TUI framework inside `franken_engine`.
@@ -331,6 +336,10 @@ The smoke test publishes deterministic goldens for:
 - `queue_policy_adoption_supersession_required`
 - `causal_trace_degraded`
 - `causal_trace_contaminated`
+- `resource_envelope_healthy`
+- `resource_envelope_degraded`
+- `resource_envelope_blocked`
+- `resource_envelope_contaminated`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.

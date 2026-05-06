@@ -146,6 +146,135 @@ write_predictive_extension_fixtures() {
   write_execution_queue_advisory_fixtures "$fixture_dir" "healthy"
 }
 
+write_resource_envelope_fixtures() {
+  local fixture_dir="$1"
+  local mode="${2:-healthy}"
+  local envelope_decision="pass"
+  local envelope_readiness="ready"
+  local plan_decision="admit"
+  local admitted_count=3
+  local deferred_count=0
+  local heavy_admitted_count=2
+  local build_lane_limit=6
+  local remote_rch_slot_limit=12
+  local rch_slots_used=2
+  local degraded_reasons='[]'
+  local blocked_reasons='[]'
+  local fail_closed_reasons='[]'
+  local fair_fail_closed_reasons='[]'
+
+  case "$mode" in
+    healthy)
+      ;;
+    degraded)
+      envelope_decision="degraded"
+      envelope_readiness="ready_degraded"
+      plan_decision="admit_narrow"
+      admitted_count=2
+      deferred_count=1
+      heavy_admitted_count=1
+      degraded_reasons='[{"code":"optional_snapshot_missing","message":"proof cache hints were missing"}]'
+      ;;
+    blocked)
+      envelope_decision="blocked"
+      envelope_readiness="defer"
+      plan_decision="defer"
+      admitted_count=0
+      deferred_count=3
+      heavy_admitted_count=0
+      rch_slots_used=0
+      blocked_reasons='[{"code":"rch_slots_saturated","message":"remote RCH slots are saturated"}]'
+      ;;
+    contaminated)
+      envelope_decision="fail_closed"
+      envelope_readiness="not_ready"
+      plan_decision="fail_closed"
+      admitted_count=0
+      deferred_count=3
+      heavy_admitted_count=0
+      build_lane_limit=0
+      remote_rch_slot_limit=0
+      rch_slots_used=0
+      fail_closed_reasons='[{"code":"rch_local_fallback_contaminates_capacity","message":"RCH snapshots contain a local fallback marker"}]'
+      fair_fail_closed_reasons='[{"code":"contaminated_resource_envelope","detail":"resource envelope contains fail-closed or contaminated evidence"}]'
+      ;;
+    *)
+      record_failure "unknown resource envelope mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg envelope_path "${fixture_dir}/swarm_resource_envelope.json" \
+    --arg decision "$envelope_decision" \
+    --arg readiness "$envelope_readiness" \
+    --argjson build_lane_limit "$build_lane_limit" \
+    --argjson remote_rch_slot_limit "$remote_rch_slot_limit" \
+    --argjson degraded_reasons "$degraded_reasons" \
+    --argjson blocked_reasons "$blocked_reasons" \
+    --argjson fail_closed_reasons "$fail_closed_reasons" \
+    '{
+      schema_version:"franken-engine.swarm-resource-envelope.v1",
+      envelope_id:"swarm-resource-envelope-smoke",
+      source_revision:"smoke-rev",
+      observed_at:"2026-05-06T20:00:00Z",
+      decision:$decision,
+      readiness:$readiness,
+      host_identity:{host_id:"host-64c-256g", hostname:"swarm-host-a"},
+      cpu_topology:{logical_cores:96, physical_cores:48, numa_nodes:2},
+      memory_pressure:{total_bytes:274877906944, available_bytes:206158430208},
+      target_dir_pressure:{min_available_bytes:322122547200, below_safe_budget:false},
+      rch_slots:{available:$remote_rch_slot_limit, total:16, active:4},
+      proof_cache:{decision:"cache_hit"},
+      capacity_budget:{
+        script_lane_limit:12,
+        proof_lane_limit:$remote_rch_slot_limit,
+        build_lane_limit:$build_lane_limit,
+        remote_rch_slot_limit:$remote_rch_slot_limit,
+        memory_bytes_budget:171798691840,
+        target_dir_bytes_budget:311385128960,
+        defer_reasons:($blocked_reasons | map(.code))
+      },
+      degraded_reasons:$degraded_reasons,
+      blocked_reasons:$blocked_reasons,
+      fail_closed_reasons:$fail_closed_reasons,
+      artifact_paths:{envelope_json:$envelope_path},
+      mutation_policy:{fixture_fed_only:true, runs_cargo:false, runs_rch:false, mutates_remote_workers:false, changes_live_queue_policy:false}
+    }' >"${fixture_dir}/swarm_resource_envelope.json"
+
+  jq -n \
+    --arg plan_path "${fixture_dir}/swarm_fair_share_batch_plan.json" \
+    --arg decision "$plan_decision" \
+    --argjson admitted_count "$admitted_count" \
+    --argjson deferred_count "$deferred_count" \
+    --argjson heavy_admitted_count "$heavy_admitted_count" \
+    --argjson build_lane_limit "$build_lane_limit" \
+    --argjson remote_rch_slot_limit "$remote_rch_slot_limit" \
+    --argjson rch_slots_used "$rch_slots_used" \
+    --argjson fail_closed_reasons "$fair_fail_closed_reasons" \
+    '{
+      schema_version:"franken-engine.swarm-fair-share-batch-plan.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      summary:{
+        requested_count:3,
+        admitted_count:$admitted_count,
+        deferred_count:$deferred_count,
+        heavy_admitted_count:$heavy_admitted_count,
+        heavy_lane_limit:$build_lane_limit,
+        remote_rch_slot_limit:$remote_rch_slot_limit,
+        rch_slots_used:$rch_slots_used,
+        contaminated_input:(($fail_closed_reasons | length) > 0)
+      },
+      admitted_lanes:(if $admitted_count == 0 then [] else [{bead_id:"bd-heavy-a", decision:"admit_narrow", heavy_lane:true}] end),
+      deferred_lanes:(if $deferred_count == 0 then [] else [{bead_id:"bd-heavy-b", decision:"defer", reasons:["resource_envelope_blocked"]}] end),
+      fairness_rationale:["fixture fair-share rationale"],
+      fail_closed_reasons:$fail_closed_reasons,
+      artifact_paths:{swarm_fair_share_batch_plan_json:$plan_path},
+      mutation_policy:{fixture_fed_only:true, runs_cargo:false, runs_rch:false, mutates_remote_workers:false, changes_live_queue_policy:false}
+    }' >"${fixture_dir}/swarm_fair_share_batch_plan.json"
+}
+
 write_starvation_rescue_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -1259,6 +1388,7 @@ write_healthy_fixtures() {
   write_queue_tuning_promotion_fixtures "$fixture_dir" "healthy"
   write_queue_policy_adoption_fixtures "$fixture_dir" "healthy"
   write_causal_trace_fixtures "$fixture_dir" "complete"
+  write_resource_envelope_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -1599,6 +1729,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_causal_trace_fixtures "$fixture_dir" "contaminated"
       ;;
+    resource_envelope_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_resource_envelope_fixtures "$fixture_dir" "healthy"
+      ;;
+    resource_envelope_degraded)
+      write_healthy_fixtures "$fixture_dir"
+      write_resource_envelope_fixtures "$fixture_dir" "degraded"
+      ;;
+    resource_envelope_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_resource_envelope_fixtures "$fixture_dir" "blocked"
+      ;;
+    resource_envelope_contaminated)
+      write_healthy_fixtures "$fixture_dir"
+      write_resource_envelope_fixtures "$fixture_dir" "contaminated"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1641,6 +1787,8 @@ run_case() {
   [[ -f "${fixture_dir}/expiry_supersession_ledger.json" ]] && extra_args+=(--queue-policy-expiry-supersession-ledger-json "${fixture_dir}/expiry_supersession_ledger.json")
   [[ -f "${fixture_dir}/causal_trace_graph.json" ]] && extra_args+=(--swarm-agent-causal-trace-graph-json "${fixture_dir}/causal_trace_graph.json")
   [[ -f "${fixture_dir}/causal_trace_anomalies.json" ]] && extra_args+=(--swarm-agent-causal-trace-anomaly-report-json "${fixture_dir}/causal_trace_anomalies.json")
+  [[ -f "${fixture_dir}/swarm_resource_envelope.json" ]] && extra_args+=(--swarm-resource-envelope-json "${fixture_dir}/swarm_resource_envelope.json")
+  [[ -f "${fixture_dir}/swarm_fair_share_batch_plan.json" ]] && extra_args+=(--swarm-fair-share-batch-plan-json "${fixture_dir}/swarm_fair_share_batch_plan.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1738,6 +1886,14 @@ run_case() {
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.mutates_br == false)
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.sends_agent_mail == false)
     and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.runs_rch == false)
+    and (.predictive_dashboard.swarm_resource_envelope.readiness | type == "string")
+    and (.predictive_dashboard.swarm_resource_envelope.decision | type == "string")
+    and (.predictive_dashboard.swarm_resource_envelope.fair_share_decision | type == "string")
+    and (.predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit | type == "number")
+    and (.predictive_dashboard.swarm_resource_envelope.capacity.remote_rch_slot_limit | type == "number")
+    and (.predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count | type == "number")
+    and (.predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count | type == "number")
+    and (.predictive_dashboard.swarm_resource_envelope.contaminating_classes | type == "array")
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1769,6 +1925,8 @@ run_case() {
     and ((.artifact_paths.queue_policy_expiry_supersession_ledger_json == null) or (.artifact_paths.queue_policy_expiry_supersession_ledger_json | type == "string"))
     and ((.artifact_paths.swarm_agent_causal_trace_graph_json == null) or (.artifact_paths.swarm_agent_causal_trace_graph_json | type == "string"))
     and ((.artifact_paths.swarm_agent_causal_trace_anomaly_report_json == null) or (.artifact_paths.swarm_agent_causal_trace_anomaly_report_json | type == "string"))
+    and ((.artifact_paths.swarm_resource_envelope_json == null) or (.artifact_paths.swarm_resource_envelope_json | type == "string"))
+    and ((.artifact_paths.swarm_fair_share_batch_plan_json == null) or (.artifact_paths.swarm_fair_share_batch_plan_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1819,7 +1977,14 @@ run_case() {
         and .predictive_dashboard.swarm_agent_causal_trace.decision == "pass"
         and .predictive_dashboard.swarm_agent_causal_trace.anomaly_count == 0
         and (.predictive_dashboard.swarm_agent_causal_trace.missing_required_edges | length) == 0
+        and .predictive_dashboard.swarm_resource_envelope.readiness == "ready"
+        and .predictive_dashboard.swarm_resource_envelope.decision == "pass"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "admit"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 3
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 0
         and .summary.causal_trace_readiness == "complete"
+        and .summary.resource_envelope_readiness == "ready"
+        and .summary.fair_share_admitted_count == 3
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1844,6 +2009,8 @@ run_case() {
         and .predictive_dashboard.swarm_agent_causal_trace.artifact_statuses.graph == "missing"
         and .predictive_dashboard.swarm_agent_causal_trace.artifact_statuses.anomaly_report == "missing"
         and .predictive_dashboard.swarm_agent_causal_trace.readiness == "degraded"
+        and .predictive_dashboard.swarm_resource_envelope.artifact_statuses.resource_envelope == "missing"
+        and .predictive_dashboard.swarm_resource_envelope.readiness == "degraded"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -2032,6 +2199,85 @@ run_case() {
         and any(.degraded[]; .component == "swarm_agent_causal_trace")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    resource_envelope_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_resource_envelope.artifact_statuses.resource_envelope == "provided"
+        and .predictive_dashboard.swarm_resource_envelope.artifact_statuses.fair_share_batch_plan == "provided"
+        and .predictive_dashboard.swarm_resource_envelope.readiness == "ready"
+        and .predictive_dashboard.swarm_resource_envelope.severity == "ok"
+        and .predictive_dashboard.swarm_resource_envelope.decision == "pass"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "admit"
+        and .predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit == 6
+        and .predictive_dashboard.swarm_resource_envelope.capacity.remote_rch_slot_limit == 12
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 3
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 0
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.heavy_admitted_count == 2
+        and (.predictive_dashboard.swarm_resource_envelope.contaminating_classes | length) == 0
+        and .summary.resource_envelope_readiness == "ready"
+        and .summary.resource_envelope_decision == "pass"
+        and .summary.fair_share_decision == "admit"
+        and .summary.fair_share_admitted_count == 3
+        and .summary.fair_share_deferred_count == 0
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    resource_envelope_degraded)
+      jq -e '
+        .predictive_dashboard.swarm_resource_envelope.artifact_statuses.resource_envelope == "provided"
+        and .predictive_dashboard.swarm_resource_envelope.artifact_statuses.fair_share_batch_plan == "provided"
+        and .predictive_dashboard.swarm_resource_envelope.readiness == "degraded"
+        and .predictive_dashboard.swarm_resource_envelope.severity == "warning"
+        and .predictive_dashboard.swarm_resource_envelope.decision == "degraded"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "admit_narrow"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 2
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 1
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.heavy_admitted_count == 1
+        and .predictive_dashboard.swarm_resource_envelope.degraded_reason_count == 1
+        and .summary.resource_envelope_readiness == "degraded"
+        and .summary.resource_envelope_decision == "degraded"
+        and .summary.fair_share_decision == "admit_narrow"
+        and .summary.fair_share_admitted_count == 2
+        and .summary.fair_share_deferred_count == 1
+        and .recommendations[0].action == "refresh_resource_envelope"
+        and any(.degraded[]; .component == "swarm_resource_envelope")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    resource_envelope_blocked)
+      jq -e '
+        .predictive_dashboard.swarm_resource_envelope.readiness == "blocked"
+        and .predictive_dashboard.swarm_resource_envelope.severity == "warning"
+        and .predictive_dashboard.swarm_resource_envelope.decision == "blocked"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "defer"
+        and .predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit == 6
+        and .predictive_dashboard.swarm_resource_envelope.capacity.remote_rch_slot_limit == 12
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 0
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 3
+        and .predictive_dashboard.swarm_resource_envelope.blocked_reason_count == 1
+        and .summary.resource_envelope_readiness == "blocked"
+        and .summary.fair_share_decision == "defer"
+        and .recommendations[0].action == "respect_resource_envelope_block"
+        and any(.degraded[]; .component == "swarm_resource_envelope")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    resource_envelope_contaminated)
+      jq -e '
+        .predictive_dashboard.swarm_resource_envelope.readiness == "contaminated"
+        and .predictive_dashboard.swarm_resource_envelope.severity == "critical"
+        and .predictive_dashboard.swarm_resource_envelope.decision == "fail_closed"
+        and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "fail_closed"
+        and .predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit == 0
+        and .predictive_dashboard.swarm_resource_envelope.capacity.remote_rch_slot_limit == 0
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 0
+        and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 3
+        and .predictive_dashboard.swarm_resource_envelope.fail_closed_reason_count == 1
+        and (.predictive_dashboard.swarm_resource_envelope.contaminating_classes | index("rch_local_fallback_contaminates_capacity"))
+        and (.predictive_dashboard.swarm_resource_envelope.contaminating_classes | index("contaminated_resource_envelope"))
+        and .summary.resource_envelope_readiness == "contaminated"
+        and .summary.resource_envelope_decision == "fail_closed"
+        and .summary.fair_share_decision == "fail_closed"
+        and .recommendations[0].action == "respect_resource_envelope_contamination"
+        and any(.degraded[]; .component == "swarm_resource_envelope")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -2074,6 +2320,10 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("queue_policy_adoption_supersession_required"))
     and (.golden_fixture_cases | index("causal_trace_degraded"))
     and (.golden_fixture_cases | index("causal_trace_contaminated"))
+    and (.golden_fixture_cases | index("resource_envelope_healthy"))
+    and (.golden_fixture_cases | index("resource_envelope_degraded"))
+    and (.golden_fixture_cases | index("resource_envelope_blocked"))
+    and (.golden_fixture_cases | index("resource_envelope_contaminated"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -2112,6 +2362,12 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.missing_required_edges"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.anomaly_classes"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.fair_share_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.contaminating_classes"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -2146,11 +2402,15 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_agent_causal_trace_graph.sh' "$contract_doc"
   grep -Fq 'docs/swarm_agent_causal_trace_spine_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_resource_envelope_normalizer.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_fair_share_batch_planner.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_resource_envelope_contract_v1.json' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
   grep -Fq 'queue_policy_adoption' "$contract_doc"
   grep -Fq 'swarm_agent_causal_trace' "$contract_doc"
+  grep -Fq 'swarm_resource_envelope' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -2187,6 +2447,10 @@ run_selftest() {
   run_case "queue_policy_adoption_supersession_required" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "causal_trace_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "causal_trace_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "resource_envelope_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "resource_envelope_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "resource_envelope_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "resource_envelope_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

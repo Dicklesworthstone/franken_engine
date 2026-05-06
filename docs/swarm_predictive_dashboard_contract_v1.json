@@ -167,6 +167,24 @@
     },
     "handoff_note": "The operator status report integrates causal trace graph and anomaly artifacts as advisory-only handoff evidence. It must not be described as live Agent Mail querying, automatic reservation release, automatic bead repair, rch execution, Cargo execution, or queue mutation."
   },
+  "swarm_resource_envelope_handoff": {
+    "normalizer_script": "scripts/swarm_resource_envelope_normalizer.sh",
+    "fair_share_planner_script": "scripts/swarm_fair_share_batch_planner.sh",
+    "contract_doc": "docs/SWARM_RESOURCE_ENVELOPE.md",
+    "contract_json": "docs/swarm_resource_envelope_contract_v1.json",
+    "resource_envelope_schema_version": "franken-engine.swarm-resource-envelope.v1",
+    "fair_share_batch_plan_schema_version": "franken-engine.swarm-fair-share-batch-plan.v1",
+    "operator_status_section": "swarm_resource_envelope",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "ready": "resource envelope and fair-share plan are present, coherent, and admit work",
+      "degraded": "optional resource evidence is missing or degraded but not saturated or contaminated",
+      "blocked": "capacity evidence is trustworthy but saturated, so heavy work should be deferred",
+      "contaminated": "fail-closed or local-fallback capacity evidence invalidates admission"
+    },
+    "handoff_note": "The operator status report integrates resource envelope and fair-share batch-plan artifacts as advisory-only admission evidence. It must not be described as live queue mutation, automatic bead reassignment, automatic RCH or Cargo execution, target-dir cleanup, worker mutation, or a second dashboard producer."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -248,6 +266,15 @@
     "predictive_dashboard.swarm_agent_causal_trace.missing_required_edges",
     "predictive_dashboard.swarm_agent_causal_trace.anomaly_classes",
     "predictive_dashboard.swarm_agent_causal_trace.mutation_policy",
+    "predictive_dashboard.swarm_resource_envelope.readiness",
+    "predictive_dashboard.swarm_resource_envelope.severity",
+    "predictive_dashboard.swarm_resource_envelope.decision",
+    "predictive_dashboard.swarm_resource_envelope.fair_share_decision",
+    "predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit",
+    "predictive_dashboard.swarm_resource_envelope.capacity.remote_rch_slot_limit",
+    "predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count",
+    "predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count",
+    "predictive_dashboard.swarm_resource_envelope.contaminating_classes",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -286,6 +313,8 @@
     "franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1",
     "franken-engine.swarm-agent-causal-trace-graph.v1",
     "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+    "franken-engine.swarm-resource-envelope.v1",
+    "franken-engine.swarm-fair-share-batch-plan.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -313,7 +342,11 @@
     "queue_policy_adoption_expiry_required",
     "queue_policy_adoption_supersession_required",
     "causal_trace_degraded",
-    "causal_trace_contaminated"
+    "causal_trace_contaminated",
+    "resource_envelope_healthy",
+    "resource_envelope_degraded",
+    "resource_envelope_blocked",
+    "resource_envelope_contaminated"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",

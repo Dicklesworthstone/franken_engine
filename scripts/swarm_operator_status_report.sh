@@ -58,6 +58,8 @@ queue_policy_expiry_supersession_plan_json=""
 queue_policy_expiry_supersession_ledger_json=""
 swarm_agent_causal_trace_graph_json=""
 swarm_agent_causal_trace_anomaly_report_json=""
+swarm_resource_envelope_json=""
+swarm_fair_share_batch_plan_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -123,6 +125,8 @@ Options:
   --queue-policy-expiry-supersession-ledger-json FILE
   --swarm-agent-causal-trace-graph-json FILE
   --swarm-agent-causal-trace-anomaly-report-json FILE
+  --swarm-resource-envelope-json FILE
+  --swarm-fair-share-batch-plan-json FILE
 EOF
 }
 
@@ -356,6 +360,14 @@ while [[ "$#" -gt 0 ]]; do
       swarm_agent_causal_trace_anomaly_report_json="$2"
       shift 2
       ;;
+    --swarm-resource-envelope-json)
+      swarm_resource_envelope_json="$2"
+      shift 2
+      ;;
+    --swarm-fair-share-batch-plan-json)
+      swarm_fair_share_batch_plan_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -445,6 +457,8 @@ queue_policy_expiry_supersession_plan_status="missing"
 queue_policy_expiry_supersession_ledger_status="missing"
 swarm_agent_causal_trace_graph_status="missing"
 swarm_agent_causal_trace_anomaly_report_status="missing"
+swarm_resource_envelope_status="missing"
+swarm_fair_share_batch_plan_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -480,6 +494,8 @@ if [[ -n "$queue_policy_expiry_supersession_plan_json" ]]; then queue_policy_exp
 if [[ -n "$queue_policy_expiry_supersession_ledger_json" ]]; then queue_policy_expiry_supersession_ledger_status="provided"; fi
 if [[ -n "$swarm_agent_causal_trace_graph_json" ]]; then swarm_agent_causal_trace_graph_status="provided"; fi
 if [[ -n "$swarm_agent_causal_trace_anomaly_report_json" ]]; then swarm_agent_causal_trace_anomaly_report_status="provided"; fi
+if [[ -n "$swarm_resource_envelope_json" ]]; then swarm_resource_envelope_status="provided"; fi
+if [[ -n "$swarm_fair_share_batch_plan_json" ]]; then swarm_fair_share_batch_plan_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -515,6 +531,8 @@ queue_policy_expiry_supersession_plan_data="$(json_or_default "$queue_policy_exp
 queue_policy_expiry_supersession_ledger_data="$(json_or_default "$queue_policy_expiry_supersession_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1","decision":"missing","ledger_rows":[],"ownership_rows":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-ledger')"
 swarm_agent_causal_trace_graph_data="$(json_or_default "$swarm_agent_causal_trace_graph_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-graph.v1","trace_id":null,"bead_id":null,"source_revision":null,"nodes":[],"edges":[],"anomaly_summary":{"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[]},"mutation_policy":{"fixture_fed_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"queries_live_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"rewrites_historical_outcomes":false,"operator_wording_required":"advisory-only"},"artifact_paths":{}}' 'swarm-agent-causal-trace-graph')"
 swarm_agent_causal_trace_anomaly_report_data="$(json_or_default "$swarm_agent_causal_trace_anomaly_report_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-anomaly-report.v1","trace_id":null,"bead_id":null,"source_revision":null,"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[],"anomalies":[],"artifact_paths":{}}' 'swarm-agent-causal-trace-anomaly-report')"
+swarm_resource_envelope_data="$(json_or_default "$swarm_resource_envelope_json" '{"schema_version":"franken-engine.swarm-resource-envelope.v1","decision":"missing","readiness":"missing","host_identity":{},"cpu_topology":{},"memory_pressure":{},"target_dir_pressure":{},"rch_slots":{},"capacity_budget":{"script_lane_limit":0,"proof_lane_limit":0,"build_lane_limit":0,"remote_rch_slot_limit":0,"memory_bytes_budget":0,"target_dir_bytes_budget":0,"defer_reasons":[]},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-resource-envelope')"
+swarm_fair_share_batch_plan_data="$(json_or_default "$swarm_fair_share_batch_plan_json" '{"schema_version":"franken-engine.swarm-fair-share-batch-plan.v1","decision":"missing","summary":{"requested_count":0,"admitted_count":0,"deferred_count":0,"heavy_admitted_count":0,"heavy_lane_limit":0,"remote_rch_slot_limit":0,"rch_slots_used":0,"contaminated_input":false},"admitted_lanes":[],"deferred_lanes":[],"fairness_rationale":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-fair-share-batch-plan')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -559,6 +577,10 @@ jq -n \
   --arg queue_policy_expiry_supersession_ledger_status "$queue_policy_expiry_supersession_ledger_status" \
   --arg swarm_agent_causal_trace_graph_status "$swarm_agent_causal_trace_graph_status" \
   --arg swarm_agent_causal_trace_anomaly_report_status "$swarm_agent_causal_trace_anomaly_report_status" \
+  --arg swarm_resource_envelope_status "$swarm_resource_envelope_status" \
+  --arg swarm_fair_share_batch_plan_status "$swarm_fair_share_batch_plan_status" \
+  --arg swarm_resource_envelope_json "$swarm_resource_envelope_json" \
+  --arg swarm_fair_share_batch_plan_json "$swarm_fair_share_batch_plan_json" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -610,6 +632,8 @@ jq -n \
   --argjson queue_policy_expiry_supersession_ledger "$queue_policy_expiry_supersession_ledger_data" \
   --argjson swarm_agent_causal_trace_graph "$swarm_agent_causal_trace_graph_data" \
   --argjson swarm_agent_causal_trace_anomaly_report "$swarm_agent_causal_trace_anomaly_report_data" \
+  --argjson swarm_resource_envelope "$swarm_resource_envelope_data" \
+  --argjson swarm_fair_share_batch_plan "$swarm_fair_share_batch_plan_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -1531,6 +1555,80 @@ jq -n \
         anomaly_report_json: ($swarm_agent_causal_trace_anomaly_report.artifact_paths.anomaly_report_json // $swarm_agent_causal_trace_graph.artifact_paths.anomaly_report_json // null)
       }
     }) as $causal_trace_summary
+  | (($swarm_resource_envelope.fail_closed_reasons // []) | map(.code // .kind // .)) as $resource_envelope_fail_classes
+  | (($swarm_fair_share_batch_plan.fail_closed_reasons // []) | map(.code // .kind // .)) as $fair_share_fail_classes
+  | (($resource_envelope_fail_classes + $fair_share_fail_classes)
+      | map(select(. == "rch_local_fallback_contaminates_capacity"
+          or . == "rch_slot_snapshot_contradiction"
+          or . == "contradictory_cpu_or_memory_capacity"
+          or . == "causal_trace_contamination_blocks_admission"
+          or . == "heavy_command_missing_budget"
+          or . == "unsafe_live_mutation_claim"
+          or . == "contaminated_resource_envelope"
+          or . == "local_rch_fallback_contamination"
+          or . == "causal_trace_contamination"
+          or . == "unsafe_auto_run_claim"))
+      | unique | sort) as $resource_envelope_contaminating_classes
+  | ({
+      artifact_statuses: {
+        resource_envelope: $swarm_resource_envelope_status,
+        fair_share_batch_plan: $swarm_fair_share_batch_plan_status
+      },
+      readiness: (
+        if (($resource_envelope_contaminating_classes | length) > 0)
+          or (($swarm_resource_envelope.decision // "") == "fail_closed")
+          or (($swarm_fair_share_batch_plan.decision // "") == "fail_closed") then "contaminated"
+        elif (($swarm_resource_envelope.decision // "") == "blocked")
+          or (($swarm_resource_envelope.readiness // "") == "defer")
+          or (($swarm_fair_share_batch_plan.decision // "") == "defer") then "blocked"
+        elif $swarm_resource_envelope_status == "missing"
+          or $swarm_fair_share_batch_plan_status == "missing"
+          or (($swarm_resource_envelope.decision // "") == "degraded") then "degraded"
+        else "ready"
+        end
+      ),
+      severity: (
+        if (($resource_envelope_contaminating_classes | length) > 0)
+          or (($swarm_resource_envelope.decision // "") == "fail_closed")
+          or (($swarm_fair_share_batch_plan.decision // "") == "fail_closed") then "critical"
+        elif $swarm_resource_envelope_status == "missing"
+          or $swarm_fair_share_batch_plan_status == "missing"
+          or (($swarm_resource_envelope.decision // "") | IN("blocked", "degraded"))
+          or (($swarm_fair_share_batch_plan.decision // "") == "defer") then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($swarm_resource_envelope.decision // "missing"),
+      fair_share_decision: ($swarm_fair_share_batch_plan.decision // "missing"),
+      host_id: ($swarm_resource_envelope.host_identity.host_id // null),
+      capacity_budget: ($swarm_resource_envelope.capacity_budget // {}),
+      capacity: {
+        script_lane_limit: ($swarm_resource_envelope.capacity_budget.script_lane_limit // 0),
+        proof_lane_limit: ($swarm_resource_envelope.capacity_budget.proof_lane_limit // 0),
+        build_lane_limit: ($swarm_resource_envelope.capacity_budget.build_lane_limit // 0),
+        remote_rch_slot_limit: ($swarm_resource_envelope.capacity_budget.remote_rch_slot_limit // 0),
+        memory_bytes_budget: ($swarm_resource_envelope.capacity_budget.memory_bytes_budget // 0),
+        target_dir_bytes_budget: ($swarm_resource_envelope.capacity_budget.target_dir_bytes_budget // 0),
+        rch_slots_available: ($swarm_resource_envelope.rch_slots.available // 0),
+        target_dir_min_available_bytes: ($swarm_resource_envelope.target_dir_pressure.min_available_bytes // 0)
+      },
+      fair_share: {
+        requested_count: ($swarm_fair_share_batch_plan.summary.requested_count // 0),
+        admitted_count: ($swarm_fair_share_batch_plan.summary.admitted_count // (($swarm_fair_share_batch_plan.admitted_lanes // []) | length)),
+        deferred_count: ($swarm_fair_share_batch_plan.summary.deferred_count // (($swarm_fair_share_batch_plan.deferred_lanes // []) | length)),
+        heavy_admitted_count: ($swarm_fair_share_batch_plan.summary.heavy_admitted_count // 0),
+        rch_slots_used: ($swarm_fair_share_batch_plan.summary.rch_slots_used // 0),
+        fairness_rationale: ($swarm_fair_share_batch_plan.fairness_rationale // [])
+      },
+      contaminating_classes: $resource_envelope_contaminating_classes,
+      degraded_reason_count: (($swarm_resource_envelope.degraded_reasons // []) | length),
+      blocked_reason_count: (($swarm_resource_envelope.blocked_reasons // []) | length),
+      fail_closed_reason_count: (($swarm_resource_envelope.fail_closed_reasons // []) | length),
+      artifact_paths: {
+        resource_envelope_json: ($swarm_resource_envelope.artifact_paths.envelope_json // $swarm_resource_envelope_json),
+        fair_share_batch_plan_json: ($swarm_fair_share_batch_plan.artifact_paths.swarm_fair_share_batch_plan_json // $swarm_fair_share_batch_plan_json)
+      }
+    }) as $resource_envelope_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -1581,6 +1679,11 @@ jq -n \
         [{component: "admission_budgets", status: "missing", impact: "admission budget plan artifact is missing", remediation: "Provide --admission-budget-plan-json before summarizing budget posture."}]
       elif $admission_budget_summary.severity != "ok" then
         [{component: "admission_budgets", status: $admission_budget_summary.decision, impact: "admission budget planning is constrained or deferred", remediation: "Follow the budget recommendations before admitting more work."}]
+      else [] end)
+    + (if $swarm_resource_envelope_status == "missing" then
+        [{component: "swarm_resource_envelope", status: "missing", impact: "resource envelope and fair-share artifacts are missing", remediation: "Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness."}]
+      elif $resource_envelope_summary.severity != "ok" then
+        [{component: "swarm_resource_envelope", status: $resource_envelope_summary.readiness, impact: "host resource envelope or fair-share admission is degraded, blocked, or contaminated", remediation: "Refresh the resource envelope and respect the fair-share plan before admitting more work."}]
       else [] end)
     + (if $lease_exchange_salvage_simulation_status == "missing" then
         [{component: "lease_exchange_salvage", status: "missing", impact: "lease-exchange salvage simulation artifact is missing", remediation: "Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles."}]
@@ -1708,6 +1811,13 @@ jq -n \
         telemetry_missing_input_count: $telemetry_quality_summary.missing_input_count,
         admission_budget_profile: $admission_budget_summary.budget_profile,
         admission_deferred_count: $admission_budget_summary.deferred_count,
+        resource_envelope_readiness: $resource_envelope_summary.readiness,
+        resource_envelope_decision: $resource_envelope_summary.decision,
+        resource_envelope_severity: $resource_envelope_summary.severity,
+        fair_share_decision: $resource_envelope_summary.fair_share_decision,
+        fair_share_admitted_count: $resource_envelope_summary.fair_share.admitted_count,
+        fair_share_deferred_count: $resource_envelope_summary.fair_share.deferred_count,
+        fair_share_heavy_admitted_count: $resource_envelope_summary.fair_share.heavy_admitted_count,
         lease_exchange_decision: $lease_exchange_salvage_summary.decision,
         lease_exchange_candidate_count: $lease_exchange_salvage_summary.lease_exchange_candidate_count,
         salvage_promotion_candidate_count: $lease_exchange_salvage_summary.salvage_promotion_candidate_count,
@@ -1806,6 +1916,7 @@ jq -n \
         telemetry_quality: $telemetry_quality_summary,
         capacity_forecast: $capacity_forecast_summary,
         admission_budgets: $admission_budget_summary,
+        swarm_resource_envelope: $resource_envelope_summary,
         lease_exchange_salvage: $lease_exchange_salvage_summary,
         prefetch_roi: $prefetch_roi_summary,
         starvation_rescue: $starvation_rescue_summary,
@@ -1817,7 +1928,7 @@ jq -n \
         swarm_agent_causal_trace: $causal_trace_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1830,6 +1941,12 @@ jq -n \
           [recommendation("respect_causal_trace_contamination"; $causal_trace_summary.bead_id; "causal trace handoff is contaminated by fail-closed anomaly evidence")]
         elif $causal_trace_summary.readiness == "blocked" then
           [recommendation("complete_causal_trace_edges"; $causal_trace_summary.bead_id; "in-progress causal trace is missing required handoff edges")]
+        elif $resource_envelope_summary.readiness == "contaminated" then
+          [recommendation("respect_resource_envelope_contamination"; null; "resource envelope or fair-share plan is contaminated by fail-closed capacity evidence")]
+        elif $resource_envelope_summary.readiness == "blocked" then
+          [recommendation("respect_resource_envelope_block"; null; "resource envelope reports saturated but trustworthy capacity")]
+        elif $resource_envelope_summary.readiness == "degraded" then
+          [recommendation("refresh_resource_envelope"; null; "resource envelope or fair-share plan is missing or degraded")]
         elif $checkpoint_restore_summary.severity == "critical" then
           [recommendation("respect_checkpoint_restore_fail_closed"; null; "checkpoint restore handoff is fail-closed or contradicted by conformance evidence")]
         elif $starvation_rescue_summary.severity == "critical" then
@@ -1913,6 +2030,8 @@ jq -n \
         report_md: $report_path,
         capacity_forecast_json: $capacity_forecast_summary.artifact_path,
         admission_budget_plan_json: $admission_budget_summary.artifact_path,
+        swarm_resource_envelope_json: $resource_envelope_summary.artifact_paths.resource_envelope_json,
+        swarm_fair_share_batch_plan_json: $resource_envelope_summary.artifact_paths.fair_share_batch_plan_json,
         lease_exchange_salvage_simulation_json: $lease_exchange_salvage_summary.artifact_path,
         warm_target_prefetch_roi_advisory_json: $prefetch_roi_summary.artifact_path,
         starvation_rescue_plan_json: $starvation_rescue_summary.artifact_path,
@@ -1954,6 +2073,7 @@ jq -n \
   printf -- "- Dashboard contract: \`%s\` via \`%s\`\n" "$(jq -r '.dashboard_contract.schema_version' "$status_path")" "$(jq -r '.dashboard_contract.renderer.provider' "$status_path")"
   printf -- "- Forecast confidence: \`%s\` / \`%s\`\n" "$(jq -r '.summary.forecast_confidence_band' "$status_path")" "$(jq -r '.summary.forecast_overall_state' "$status_path")"
   printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
+  printf -- "- Resource envelope: \`%s\` / \`%s\` with \`%s\` admitted and \`%s\` deferred\n" "$(jq -r '.summary.resource_envelope_readiness' "$status_path")" "$(jq -r '.summary.fair_share_decision' "$status_path")" "$(jq '.summary.fair_share_admitted_count' "$status_path")" "$(jq '.summary.fair_share_deferred_count' "$status_path")"
   printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
   printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"
   printf -- "- Starvation rescue escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.starvation_rescue_escalation_band' "$status_path")" "$(jq -r '.summary.starvation_rescue_top_action' "$status_path")"
@@ -1971,6 +2091,8 @@ jq -n \
     [
       {label:"Capacity forecast", path:.artifact_paths.capacity_forecast_json},
       {label:"Admission budget plan", path:.artifact_paths.admission_budget_plan_json},
+      {label:"Swarm resource envelope", path:.artifact_paths.swarm_resource_envelope_json},
+      {label:"Swarm fair-share batch plan", path:.artifact_paths.swarm_fair_share_batch_plan_json},
       {label:"Lease exchange salvage simulation", path:.artifact_paths.lease_exchange_salvage_simulation_json},
       {label:"Warm target prefetch ROI advisory", path:.artifact_paths.warm_target_prefetch_roi_advisory_json},
       {label:"Starvation rescue plan", path:.artifact_paths.starvation_rescue_plan_json},

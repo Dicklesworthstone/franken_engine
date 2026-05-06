@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 26,
+    "degraded_count": 27,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -40,6 +40,13 @@
     "telemetry_missing_input_count": 0,
     "admission_budget_profile": "unknown",
     "admission_deferred_count": 0,
+    "resource_envelope_readiness": "degraded",
+    "resource_envelope_decision": "missing",
+    "resource_envelope_severity": "warning",
+    "fair_share_decision": "missing",
+    "fair_share_admitted_count": 0,
+    "fair_share_deferred_count": 0,
+    "fair_share_heavy_admitted_count": 0,
     "lease_exchange_decision": "missing",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -339,6 +346,52 @@
       "proof_obligation_count": 0,
       "recommendations": [],
       "artifact_path": null
+    },
+    "swarm_resource_envelope": {
+      "artifact_statuses": {
+        "resource_envelope": "missing",
+        "fair_share_batch_plan": "missing"
+      },
+      "readiness": "degraded",
+      "severity": "warning",
+      "decision": "missing",
+      "fair_share_decision": "missing",
+      "host_id": null,
+      "capacity_budget": {
+        "script_lane_limit": 0,
+        "proof_lane_limit": 0,
+        "build_lane_limit": 0,
+        "remote_rch_slot_limit": 0,
+        "memory_bytes_budget": 0,
+        "target_dir_bytes_budget": 0,
+        "defer_reasons": []
+      },
+      "capacity": {
+        "script_lane_limit": 0,
+        "proof_lane_limit": 0,
+        "build_lane_limit": 0,
+        "remote_rch_slot_limit": 0,
+        "memory_bytes_budget": 0,
+        "target_dir_bytes_budget": 0,
+        "rch_slots_available": 0,
+        "target_dir_min_available_bytes": 0
+      },
+      "fair_share": {
+        "requested_count": 0,
+        "admitted_count": 0,
+        "deferred_count": 0,
+        "heavy_admitted_count": 0,
+        "rch_slots_used": 0,
+        "fairness_rationale": []
+      },
+      "contaminating_classes": [],
+      "degraded_reason_count": 0,
+      "blocked_reason_count": 0,
+      "fail_closed_reason_count": 0,
+      "artifact_paths": {
+        "resource_envelope_json": "",
+        "fair_share_batch_plan_json": ""
+      }
     },
     "lease_exchange_salvage": {
       "artifact_status": "missing",
@@ -640,7 +693,11 @@
         "queue_policy_adoption_expiry_required",
         "queue_policy_adoption_supersession_required",
         "causal_trace_degraded",
-        "causal_trace_contaminated"
+        "causal_trace_contaminated",
+        "resource_envelope_healthy",
+        "resource_envelope_degraded",
+        "resource_envelope_blocked",
+        "resource_envelope_contaminated"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -744,6 +801,12 @@
       "remediation": "Provide --admission-budget-plan-json before summarizing budget posture."
     },
     {
+      "component": "swarm_resource_envelope",
+      "status": "missing",
+      "impact": "resource envelope and fair-share artifacts are missing",
+      "remediation": "Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness."
+    },
+    {
       "component": "lease_exchange_salvage",
       "status": "missing",
       "impact": "lease-exchange salvage simulation artifact is missing",
@@ -806,9 +869,9 @@
   ],
   "recommendations": [
     {
-      "action": "review_checkpoint_restore_handoff",
+      "action": "refresh_resource_envelope",
       "bead_id": null,
-      "reason": "checkpoint restore handoff requires manual review before resume"
+      "reason": "resource envelope or fair-share plan is missing or degraded"
     }
   ]
 }

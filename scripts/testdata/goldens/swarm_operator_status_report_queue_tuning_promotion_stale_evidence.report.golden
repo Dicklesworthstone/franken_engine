@@ -8,6 +8,7 @@
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `high` / `nominal`
 - Admission budget: `balanced` with `0` deferred
+- Resource envelope: `ready` / `admit` with `3` admitted and `0` deferred
 - Lease exchange posture: `retain_current_assignments`
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
@@ -25,6 +26,8 @@
 
 - Capacity forecast: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/capacity_forecast.json`
 - Admission budget plan: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/admission_budget_plan.json`
+- Swarm resource envelope: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/swarm_resource_envelope.json`
+- Swarm fair-share batch plan: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/swarm_fair_share_batch_plan.json`
 - Lease exchange salvage simulation: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/lease_exchange_salvage_simulation.json`
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/warm_target_prefetch_roi_advisory.json`
 - Starvation rescue plan: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/starvation_rescue_plan.json`

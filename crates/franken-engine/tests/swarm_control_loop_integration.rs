@@ -33,6 +33,8 @@ use frankenengine_engine::swarm_control_loop::{
 // ---------------------------------------------------------------------------
 
 const MILLION: i64 = 1_000_000;
+const MASSIVE_BACKLOG_TASKS: usize = 4_096;
+const MASSIVE_BACKLOG_QUEUE_DEPTH: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +64,33 @@ fn make_unassigned_task(id: &str, deps: &[&str]) -> TaskNode {
     let mut t = make_task(id, deps);
     t.assignee = String::new();
     t
+}
+
+fn make_scored_backlog_task(ordinal: usize) -> TaskNode {
+    let id = format!("task-{ordinal:04}");
+    let mut task = make_task(&id, &[]);
+    task.impact_millionths = 200_000 + ordinal as i64;
+    task.confidence_millionths = MILLION;
+    task.reuse_millionths = 0;
+    task.effort_millionths = 0;
+    task.friction_millionths = 0;
+    task.primary_risk = "scale regression".to_string();
+    task.countermeasure = "bounded queue and deterministic ordering".to_string();
+    task.fallback_trigger = "invalid backlog evidence".to_string();
+    task.first_action = format!("start {id}");
+    task
+}
+
+fn add_scored_backlog(ctrl: &mut SwarmControlLoop, count: usize, reverse: bool) {
+    if reverse {
+        for ordinal in (0..count).rev() {
+            ctrl.add_task(make_scored_backlog_task(ordinal)).unwrap();
+        }
+    } else {
+        for ordinal in 0..count {
+            ctrl.add_task(make_scored_backlog_task(ordinal)).unwrap();
+        }
+    }
 }
 
 fn default_loop() -> SwarmControlLoop {
@@ -748,6 +777,24 @@ fn new_rejects_over_million_min_health() {
 }
 
 #[test]
+fn new_rejects_invalid_conservative_threshold() {
+    for conservative_threshold_millionths in [-1, MILLION + 1] {
+        let err = SwarmControlLoop::new(ControlLoopConfig {
+            conservative_threshold_millionths,
+            ..Default::default()
+        })
+        .unwrap_err();
+        match err {
+            ControlLoopError::InvalidConfig { detail } => {
+                assert!(detail.contains("conservative_threshold_millionths"));
+                assert!(detail.contains("0..=1000000"));
+            }
+            other => panic!("expected InvalidConfig, got {other}"),
+        }
+    }
+}
+
+#[test]
 fn new_propagates_conservative_threshold() {
     let ctrl = SwarmControlLoop::new(ControlLoopConfig {
         conservative_threshold_millionths: 500_000,
@@ -1426,4 +1473,164 @@ fn lifecycle_risk_budget_degrades_over_bad_iterations() {
         .unwrap();
     assert!(art2.is_conservative());
     assert!(ctrl.risk_budget.remaining_millionths <= art1.risk_budget.remaining_millionths);
+}
+
+// ===========================================================================
+// 27. Massive backlog scale conformance
+// ===========================================================================
+
+#[test]
+fn massive_backlog_recompute_bounds_queue_and_preserves_deterministic_order() {
+    let mut ctrl = SwarmControlLoop::new(ControlLoopConfig {
+        queue_depth: MASSIVE_BACKLOG_QUEUE_DEPTH,
+        ..Default::default()
+    })
+    .unwrap();
+    add_scored_backlog(&mut ctrl, MASSIVE_BACKLOG_TASKS, false);
+
+    let artifact = ctrl
+        .recompute(
+            default_epoch(42),
+            42_000,
+            default_signals(),
+            vec!["bd-2ivmm-scale".into()],
+        )
+        .unwrap();
+
+    assert_eq!(artifact.total_tasks, MASSIVE_BACKLOG_TASKS as u64);
+    assert_eq!(artifact.queue.len(), MASSIVE_BACKLOG_QUEUE_DEPTH);
+    assert_eq!(artifact.ready_now_count, MASSIVE_BACKLOG_TASKS as u64);
+    assert_eq!(artifact.ready_next_count, 0);
+    assert_eq!(artifact.gated_count, 0);
+    assert_eq!(artifact.queue[0].task_id, "task-4095");
+    assert_eq!(
+        artifact.queue[MASSIVE_BACKLOG_QUEUE_DEPTH - 1].task_id,
+        "task-4032"
+    );
+
+    for (index, entry) in artifact.queue.iter().enumerate() {
+        assert_eq!(entry.rank, (index + 1) as u64);
+        assert_eq!(entry.wave, Wave::ReadyNow);
+        assert_eq!(entry.open_blocker_count, 0);
+    }
+    for pair in artifact.queue.windows(2) {
+        assert!(
+            pair[0].relevance_millionths >= pair[1].relevance_millionths,
+            "queue relevance must be monotonically descending"
+        );
+    }
+}
+
+#[test]
+fn massive_backlog_hash_and_rationale_stable_across_insert_order() {
+    let mut forward = SwarmControlLoop::new(ControlLoopConfig {
+        queue_depth: MASSIVE_BACKLOG_QUEUE_DEPTH,
+        ..Default::default()
+    })
+    .unwrap();
+    add_scored_backlog(&mut forward, MASSIVE_BACKLOG_TASKS, false);
+    let forward_artifact = forward
+        .recompute(default_epoch(7), 777, default_signals(), vec![])
+        .unwrap();
+
+    let mut reverse = SwarmControlLoop::new(ControlLoopConfig {
+        queue_depth: MASSIVE_BACKLOG_QUEUE_DEPTH,
+        ..Default::default()
+    })
+    .unwrap();
+    add_scored_backlog(&mut reverse, MASSIVE_BACKLOG_TASKS, true);
+    let reverse_artifact = reverse
+        .recompute(default_epoch(7), 777, default_signals(), vec![])
+        .unwrap();
+
+    let forward_ids: Vec<&str> = forward_artifact
+        .queue
+        .iter()
+        .map(|entry| entry.task_id.as_str())
+        .collect();
+    let reverse_ids: Vec<&str> = reverse_artifact
+        .queue
+        .iter()
+        .map(|entry| entry.task_id.as_str())
+        .collect();
+    assert_eq!(forward_ids, reverse_ids);
+    assert_eq!(
+        forward_artifact.artifact_hash,
+        reverse_artifact.artifact_hash
+    );
+
+    let repeated = forward
+        .recompute(default_epoch(7), 777, default_signals(), vec![])
+        .unwrap();
+    assert_eq!(forward_artifact.artifact_hash, repeated.artifact_hash);
+    assert!(
+        repeated.rationale_deltas.is_empty(),
+        "unchanged massive backlog should not emit rationale churn"
+    );
+}
+
+#[test]
+fn massive_backlog_risk_budget_conservation_across_low_health_iterations() {
+    let mut ctrl = SwarmControlLoop::new(ControlLoopConfig {
+        queue_depth: MASSIVE_BACKLOG_QUEUE_DEPTH,
+        min_health_millionths: 900_000,
+        conservative_threshold_millionths: 250_000,
+        ..Default::default()
+    })
+    .unwrap();
+    add_scored_backlog(&mut ctrl, 2_048, false);
+
+    let bad_signals = CrossCuttingSignals {
+        observability_quality_millionths: 0,
+        catastrophic_tail_score_millionths: MILLION,
+        bifurcation_distance_millionths: 0,
+        unit_depth_score_millionths: 0,
+        e2e_stability_score_millionths: 0,
+        logging_integrity_score_millionths: 0,
+    };
+
+    let mut last_artifact = None;
+    for epoch in 1..=3 {
+        let artifact = ctrl
+            .recompute(
+                default_epoch(100 + epoch),
+                epoch * 1_000,
+                bad_signals.clone(),
+                vec!["bd-2ivmm-risk-budget".into()],
+            )
+            .unwrap();
+        assert_eq!(
+            artifact.risk_budget.remaining_millionths + artifact.risk_budget.consumed_millionths,
+            MILLION
+        );
+        assert!(artifact.risk_budget.consumed_millionths <= MILLION);
+        assert!(artifact.risk_budget.remaining_millionths >= 0);
+        assert_eq!(artifact.queue.len(), MASSIVE_BACKLOG_QUEUE_DEPTH);
+        last_artifact = Some(artifact);
+    }
+
+    let last_artifact = last_artifact.unwrap();
+    assert!(last_artifact.is_conservative());
+    assert_eq!(last_artifact.risk_budget.remaining_millionths, 0);
+    assert_eq!(last_artifact.risk_budget.consumed_millionths, MILLION);
+}
+
+#[test]
+fn massive_backlog_rejects_task_past_hard_cap_without_growth() {
+    let mut ctrl = default_loop();
+    add_scored_backlog(&mut ctrl, MASSIVE_BACKLOG_TASKS, false);
+
+    let err = ctrl
+        .add_task(make_scored_backlog_task(MASSIVE_BACKLOG_TASKS))
+        .unwrap_err();
+    match err {
+        ControlLoopError::TooManyTasks { count, max } => {
+            assert_eq!(count, MASSIVE_BACKLOG_TASKS + 1);
+            assert_eq!(max, MASSIVE_BACKLOG_TASKS);
+        }
+        other => panic!("expected TooManyTasks, got {other}"),
+    }
+
+    assert_eq!(ctrl.task_count(), MASSIVE_BACKLOG_TASKS);
+    assert!(!ctrl.graph.contains_key("task-4096"));
 }

@@ -578,6 +578,16 @@ impl SwarmControlLoop {
                 ),
             });
         }
+        if config.conservative_threshold_millionths < 0
+            || config.conservative_threshold_millionths > MILLION
+        {
+            return Err(ControlLoopError::InvalidConfig {
+                detail: format!(
+                    "conservative_threshold_millionths {} must be in 0..={}",
+                    config.conservative_threshold_millionths, MILLION
+                ),
+            });
+        }
         let risk_budget = SwarmRiskBudget {
             conservative_threshold_millionths: config.conservative_threshold_millionths,
             ..Default::default()

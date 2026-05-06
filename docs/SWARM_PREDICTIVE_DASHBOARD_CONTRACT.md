@@ -36,6 +36,20 @@ chaos, and swarm-responsiveness evidence for downstream calibration lanes. That
 extension is still report-only and must not be described as live tuning or
 worker mutation.
 
+The SWARM-CTRL-IX calibration track also adds a standalone reviewed golden
+surface:
+
+- Script: `scripts/swarm_high_core_slo_scenario_matrix.sh`
+- Matrix schema: `franken-engine.swarm-high-core-scenario-matrix.v1`
+- Report schema: `franken-engine.swarm-high-core-scenario-matrix-report.v1`
+- Static contract: `docs/swarm_high_core_scenario_matrix_contract_v1.json`
+
+That matrix replays deterministic high-core calibration scenarios through the
+telemetry snapshot normalizer and freezes scrubbed representative outputs as
+reviewed goldens. It is not another dashboard producer and must not be
+described as live scheduler tuning, live worker execution, or automatic worker
+mutation.
+
 The telemetry snapshot also feeds a standalone predictive capacity forecaster:
 
 - Script: `scripts/swarm_capacity_forecaster.sh`
@@ -133,6 +147,21 @@ They are not evidence that an interactive renderer exists in this repository.
 The smoke harness also freezes the markdown operator report so summary bullets
 and source-artifact references stay stable.
 
+The standalone high-core scenario matrix publishes a separate reviewed golden
+set for:
+
+- `healthy_64plus_admission`
+- `disk_pressure_memory_headroom`
+- `degraded_worker_pool_local_fallback`
+- `manual_confirmation_lock_pressure`
+- `proof_cache_hit`
+- `proof_cache_stale_miss`
+- `chaos_recovery_saturated_queue`
+
+Those are calibration fixtures and downstream SWARM-CTRL-IX handoff payloads.
+They are not evidence that the current predictive dashboard producer already
+renders or consumes the matrix directly.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -140,6 +169,9 @@ and source-artifact references stay stable.
 - `dashboard_contract.renderer.local_renderer` must be `false`.
 - The docs must name `scripts/swarm_operator_status_report.sh` as the only
   predictive dashboard producer in `franken_engine`.
+- The docs must describe the high-core scenario matrix as a reviewed fixture
+  and golden surface only, not as a live tuning or worker-mutation control
+  plane.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -206,4 +238,14 @@ bash -n scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh
 ./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh selftest
 ./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh check
 ./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh selftest
+```
+
+When changing the SWARM-CTRL-IX high-core scenario matrix, also run:
+
+```bash
+bash -n scripts/swarm_high_core_slo_scenario_matrix.sh
+bash -n scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh
+./scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh check
+./scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh selftest
+jq empty docs/swarm_high_core_scenario_matrix_contract_v1.json
 ```

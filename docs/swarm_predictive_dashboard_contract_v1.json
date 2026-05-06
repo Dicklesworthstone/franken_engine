@@ -22,6 +22,15 @@
     "producer_integration": false,
     "handoff_note": "The standalone snapshot normalizer reuses admission, archive, proof-economy, and SWARM-CTRL-IX high-core evidence artifacts directly. The current swarm_operator_status_report producer does not emit either snapshot yet."
   },
+  "high_core_scenario_matrix": {
+    "script": "scripts/swarm_high_core_slo_scenario_matrix.sh",
+    "matrix_schema_version": "franken-engine.swarm-high-core-scenario-matrix.v1",
+    "report_schema_version": "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+    "contract_json": "docs/swarm_high_core_scenario_matrix_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone high-core scenario matrix replays deterministic SWARM-CTRL-IX calibration scenarios through the telemetry snapshot normalizer and freezes scrubbed representative outputs as reviewed goldens. The current swarm_operator_status_report producer does not emit or compare this matrix yet."
+  },
   "capacity_forecaster": {
     "script": "scripts/swarm_capacity_forecaster.sh",
     "forecast_schema_version": "franken-engine.swarm-capacity-forecast.v1",
@@ -84,12 +93,12 @@
     "franken-engine.build-storm-batch-plan.v1",
     "franken-engine.swarm-admission-budget-plan.v1",
     "franken-engine.stale-lock-recommendations.v1",
-    "franken-engine.staged-ownership-report.v1"
-    ,
+    "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
     "franken-engine.tail-latency-control-plane.v1",
     "franken-engine.rgc-fault-injection-chaos-verification-pack.report.v1",
-    "franken-engine.swarm-responsiveness-claim-map.v1"
+    "franken-engine.swarm-responsiveness-claim-map.v1",
+    "franken-engine.swarm-high-core-scenario-matrix-report.v1"
   ],
   "golden_fixture_cases": [
     "healthy",
@@ -100,11 +109,21 @@
     "overloaded",
     "forecast_low_confidence"
   ],
+  "high_core_scenario_fixture_cases": [
+    "healthy_64plus_admission",
+    "disk_pressure_memory_headroom",
+    "degraded_worker_pool_local_fallback",
+    "manual_confirmation_lock_pressure",
+    "proof_cache_hit",
+    "proof_cache_stale_miss",
+    "chaos_recovery_saturated_queue"
+  ],
   "truth_constraints": [
     "No rich interactive renderer is implemented in franken_engine by this contract.",
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
     "scripts/swarm_operator_status_report.sh remains the single predictive dashboard producer in franken_engine; do not add a second dashboard implementation here.",
+    "The high-core scenario matrix is a reviewed fixture and golden surface backed by scripts/swarm_high_core_slo_scenario_matrix.sh; it must not be described as live scheduler tuning, live worker execution, or automatic worker mutation.",
     "The telemetry quality and capacity forecast sections are advisory snapshots backed by scripts/swarm_capacity_forecaster.sh; they must not be described as live scheduling or automatic worker mutation.",
     "The admission budget section is advisory snapshot evidence backed by scripts/swarm_admission_budget_planner.sh; it must not be described as live worker allocation, queue mutation, or automatic bead claiming.",
     "The lease exchange and salvage section is advisory snapshot evidence backed by scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh; it must not be described as automatic ownership transfer or cancellation.",

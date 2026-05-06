@@ -1,0 +1,1468 @@
+{
+  "schema_version": "franken-engine.swarm-high-core-scenario-matrix.v1",
+  "required_scenario_classes": [
+    "healthy_64plus_admission",
+    "disk_pressure_memory_headroom",
+    "degraded_worker_pool_local_fallback",
+    "manual_confirmation_lock_pressure",
+    "proof_cache_hit",
+    "proof_cache_stale_miss",
+    "chaos_recovery_saturated_queue"
+  ],
+  "golden_policy": {
+    "comparison_mode": "exact_scrubbed",
+    "update_goldens_review_command": "UPDATE_GOLDENS=1 bash scripts/e2e/swarm_high_core_slo_scenario_matrix_smoke.sh selftest",
+    "review_diff_checklist": [
+      "Review the diff for scripts/testdata/goldens/swarm_high_core_slo_scenario_matrix.golden before accepting any update.",
+      "Reject any unexpected decision, traceability, or fail-closed drift that is not justified by an intentional contract change.",
+      "Confirm timestamps, run ids, source revisions, and output roots remain scrubbed placeholders rather than live values.",
+      "Reject any new bare cargo or local-fallback command unless the scenario intentionally models fail-closed degraded-worker behavior."
+    ],
+    "scrubbed_fields": [
+      "source_revision",
+      "snapshot_id",
+      "parent_snapshot_id",
+      "artifact_paths"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "healthy_64plus_admission",
+      "scenario_class": "healthy_64plus_admission",
+      "description": "Healthy 64+ CPU admission path with fresh proof reuse and fully rch-backed high-core evidence.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-alpha",
+          "title": "High-core calibration smoke",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-beta",
+          "title": "Scenario matrix review",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-gamma",
+            "title": "Active predictive lane",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentGamma"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "none",
+        "conflicting_agents": [],
+        "safe_alternatives": [],
+        "reservation_recommendations": [],
+        "commands": [
+          {
+            "command_id": "cargo-test-healthy-64plus",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": []
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-healthy-64plus",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_full",
+        "findings": [
+          {
+            "decision": "admit_full",
+            "signal": "cpu_available_cores",
+            "reason": "healthy_64plus_core_headroom",
+            "remediation": "Admit planned validation without brownout or queue deferral."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": []
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "fresh",
+        "reusable": true,
+        "recommended_next_action": "reuse proof",
+        "changed_paths": [
+          "scripts/swarm_telemetry_snapshot_normalizer.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/healthy_64plus_admission/tail"
+          ],
+          "run_manifest": {
+            "profile": "healthy-64plus",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 64,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 7200000,
+              "observed_p99_ns": 17500000,
+              "queue_adjusted_p99_ns": 22000000
+            },
+            "guardrails": {
+              "state": "healthy",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "healthy-64plus",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-heat-1",
+            "bd-heat-2",
+            "bd-heat-3",
+            "bd-heat-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/healthy_64plus_admission/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    },
+    {
+      "case_id": "disk_pressure_memory_headroom",
+      "scenario_class": "disk_pressure_memory_headroom",
+      "description": "Disk pressure with large memory headroom should stay advisory and preserve a passing high-core SLO path.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-gamma",
+          "title": "Disk pressure forecast review",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-delta",
+          "title": "Archive pressure calibration",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-disk",
+            "title": "Archive retention lane",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentArchive"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "none",
+        "conflicting_agents": [],
+        "safe_alternatives": [
+          "docs/swarm_predictive_dashboard_contract_v1.json"
+        ],
+        "reservation_recommendations": [],
+        "commands": [
+          {
+            "command_id": "cargo-test-disk-pressure",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "disk_pressure"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-disk-pressure",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_narrow",
+        "findings": [
+          {
+            "decision": "admit_narrow",
+            "signal": "disk_free_bytes",
+            "reason": "disk_pressure_large_memory_headroom",
+            "remediation": "Keep admission narrow and archive-heavy work deferred while memory headroom remains available."
+          },
+          {
+            "decision": "admit_narrow",
+            "signal": "memory_available_bytes",
+            "reason": "memory_headroom_preserved",
+            "remediation": "Do not promote disk pressure into synthetic memory brownout."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": []
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "fresh",
+        "reusable": true,
+        "recommended_next_action": "reuse proof",
+        "changed_paths": [
+          "scripts/swarm_capacity_forecaster.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/disk_pressure_memory_headroom/tail"
+          ],
+          "run_manifest": {
+            "profile": "disk-pressure-memory-headroom",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 65,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 7600000,
+              "observed_p99_ns": 19000000,
+              "queue_adjusted_p99_ns": 24500000
+            },
+            "guardrails": {
+              "state": "healthy",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "disk-pressure-memory-headroom",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-disk-1",
+            "bd-disk-2",
+            "bd-disk-3",
+            "bd-disk-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/disk_pressure_memory_headroom/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    },
+    {
+      "case_id": "degraded_worker_pool_local_fallback",
+      "scenario_class": "degraded_worker_pool_local_fallback",
+      "description": "Degraded worker pool with local-fallback high-core evidence must fail closed instead of being treated as calibrated proof.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-epsilon",
+          "title": "Degraded pool triage",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-zeta",
+          "title": "Fallback incident receipt",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-fallback",
+            "title": "Degraded worker recovery lane",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentFallback"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "degraded_worker_pool",
+        "conflicting_agents": [],
+        "safe_alternatives": [
+          "docs/swarm_predictive_dashboard_contract_v1.json"
+        ],
+        "reservation_recommendations": [
+          {
+            "action": "reduce_parallelism",
+            "scope": "worker_pool",
+            "reason": "worker pool degraded and local fallback evidence must not be promoted into calibration truth"
+          }
+        ],
+        "commands": [
+          {
+            "command_id": "cargo-test-fallback",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/degraded_worker_pool_local_fallback cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "worker_pool_degraded",
+              "fallback_local"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-fallback",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_narrow",
+        "findings": [
+          {
+            "decision": "admit_narrow",
+            "signal": "rch_degraded_pool",
+            "reason": "worker_pool_fallback_detected",
+            "remediation": "Treat local-fallback evidence as fail-closed until rch-backed proof is restored."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": [
+          "bd-active-fallback"
+        ]
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "mixed",
+        "reusable": false,
+        "recommended_next_action": "rerun proof",
+        "changed_paths": [
+          "scripts/swarm_telemetry_snapshot_normalizer.sh",
+          "scripts/run_rgc_tail_latency_control_plane.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /tmp/local-tail"
+          ],
+          "run_manifest": {
+            "profile": "degraded-worker-pool-local-fallback",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 66,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 9100000,
+              "observed_p99_ns": 34000000,
+              "queue_adjusted_p99_ns": 78000000
+            },
+            "guardrails": {
+              "state": "near_limit",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "degraded-worker-pool-local-fallback",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-fallback-1",
+            "bd-fallback-2",
+            "bd-fallback-3",
+            "bd-fallback-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 42,
+        "capacity_decision": "fail_closed",
+        "slo_decision": "fail_closed",
+        "traceability": {
+          "stress": "local_or_unknown",
+          "tail": "local_or_unknown",
+          "chaos": "local_or_unknown",
+          "claim_map": "local_or_unknown"
+        }
+      }
+    },
+    {
+      "case_id": "manual_confirmation_lock_pressure",
+      "scenario_class": "manual_confirmation_lock_pressure",
+      "description": "Active-owner lock pressure should stay advisory when ownership is internally consistent and evidence stays rch-backed.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-eta",
+          "title": "Manual confirmation queue",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-theta",
+          "title": "Reservation pressure review",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-lock",
+            "title": "Manual confirmation holder",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentLock"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "manual_confirmation",
+        "conflicting_agents": [
+          "AgentLock"
+        ],
+        "safe_alternatives": [
+          "docs/SWARM_HIGH_CORE_SCENARIO_MATRIX.md"
+        ],
+        "reservation_recommendations": [
+          {
+            "action": "request_manual_confirmation",
+            "scope": "planned_write_set",
+            "reason": "active owner lock pressure requires explicit coordination before broadening the lane"
+          }
+        ],
+        "commands": [
+          {
+            "command_id": "cargo-test-lock-pressure",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "manual_confirmation"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-lock-pressure",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "manual_review",
+        "findings": [
+          {
+            "decision": "manual_review",
+            "signal": "active_owner_lock_pressure",
+            "reason": "manual_confirmation_required",
+            "remediation": "Coordinate with the active owner before broadening validation writes."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": [
+          {
+            "path_pattern": "docs/SWARM_HIGH_CORE_SCENARIO_MATRIX.md",
+            "agent_name": "AgentLock",
+            "bead_id": "bd-active-lock",
+            "exclusive": true
+          }
+        ]
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": [
+          "bd-active-lock"
+        ]
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "fresh",
+        "reusable": true,
+        "recommended_next_action": "reuse proof",
+        "changed_paths": [
+          "docs/SWARM_HIGH_CORE_SCENARIO_MATRIX.md"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/manual_confirmation_lock_pressure/tail"
+          ],
+          "run_manifest": {
+            "profile": "manual-confirmation-lock-pressure",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 67,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 7500000,
+              "observed_p99_ns": 18200000,
+              "queue_adjusted_p99_ns": 24800000
+            },
+            "guardrails": {
+              "state": "healthy",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "manual-confirmation-lock-pressure",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-lock-1",
+            "bd-lock-2",
+            "bd-lock-3",
+            "bd-lock-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/manual_confirmation_lock_pressure/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    },
+    {
+      "case_id": "proof_cache_hit",
+      "scenario_class": "proof_cache_hit",
+      "description": "Proof-cache hit should preserve a passing advisory result with reusable proof freshness.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-iota",
+          "title": "Proof-cache hit review",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-kappa",
+          "title": "Warm target ROI follow-up",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-cache-hit",
+            "title": "Warm target advisory lane",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentCache"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "none",
+        "conflicting_agents": [],
+        "safe_alternatives": [],
+        "reservation_recommendations": [],
+        "commands": [
+          {
+            "command_id": "cargo-test-proof-cache-hit",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "proof_cache_hit"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-proof-cache-hit",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_full",
+        "findings": [
+          {
+            "decision": "admit_full",
+            "signal": "proof_cache_hit",
+            "reason": "warm_target_roi_realized",
+            "remediation": "Reuse the fresh proof bundle and avoid unnecessary re-execution."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": []
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "fresh",
+        "reusable": true,
+        "recommended_next_action": "reuse proof",
+        "changed_paths": [
+          "scripts/swarm_warm_target_prefetch_roi_advisory.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/proof_cache_hit/tail"
+          ],
+          "run_manifest": {
+            "profile": "proof-cache-hit",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 68,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 7150000,
+              "observed_p99_ns": 17100000,
+              "queue_adjusted_p99_ns": 21000000
+            },
+            "guardrails": {
+              "state": "healthy",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "proof-cache-hit",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-cache-hit-1",
+            "bd-cache-hit-2",
+            "bd-cache-hit-3",
+            "bd-cache-hit-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_hit/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    },
+    {
+      "case_id": "proof_cache_stale_miss",
+      "scenario_class": "proof_cache_stale_miss",
+      "description": "Proof-cache stale miss should stay advisory, mark proof freshness stale, and still preserve rch-backed evidence truth.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-lambda",
+          "title": "Proof-cache stale miss review",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-mu",
+          "title": "Fallback proof refresh planning",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-cache-miss",
+            "title": "Proof refresh lane",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentRefresh"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "none",
+        "conflicting_agents": [],
+        "safe_alternatives": [],
+        "reservation_recommendations": [],
+        "commands": [
+          {
+            "command_id": "cargo-test-proof-cache-stale",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "stale",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "stale_proof",
+              "proof_cache_miss"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-proof-cache-stale",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_narrow",
+        "findings": [
+          {
+            "decision": "admit_narrow",
+            "signal": "proof_cache_stale_miss",
+            "reason": "stale_receipt_requires_refresh",
+            "remediation": "Refresh proof artifacts before treating the scenario as reusable evidence."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": []
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "stale",
+        "reusable": false,
+        "recommended_next_action": "rerun proof",
+        "changed_paths": [
+          "scripts/swarm_warm_target_prefetch_roi_advisory.sh",
+          "scripts/swarm_capacity_forecaster.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 6,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/proof_cache_stale_miss/tail"
+          ],
+          "run_manifest": {
+            "profile": "proof-cache-stale-miss",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 69,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 7350000,
+              "observed_p99_ns": 18600000,
+              "queue_adjusted_p99_ns": 23200000
+            },
+            "guardrails": {
+              "state": "healthy",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "proof-cache-stale-miss",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 4,
+            "unique_class_count": 4
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-cache-stale-1",
+            "bd-cache-stale-2",
+            "bd-cache-stale-3",
+            "bd-cache-stale-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/proof_cache_stale_miss/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    },
+    {
+      "case_id": "chaos_recovery_saturated_queue",
+      "scenario_class": "chaos_recovery_saturated_queue",
+      "description": "Chaos recovery under a saturated queue should remain passing when evidence is fresh, rch-backed, and bounded by explicit guardrails.",
+      "now_epoch_seconds": 1778045400,
+      "stale_after_seconds": 86400,
+      "tail_dir_timestamp": "20260506T041500Z",
+      "ready": [
+        {
+          "id": "bd-highcore-nu",
+          "title": "Chaos saturation replay",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-xi",
+          "title": "Queue fairness audit",
+          "priority": 1,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-omicron",
+          "title": "Fallback remediation follow-up",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        },
+        {
+          "id": "bd-highcore-pi",
+          "title": "Chaos conformance review",
+          "priority": 2,
+          "status": "open",
+          "assignee": null
+        }
+      ],
+      "in_progress": {
+        "issues": [
+          {
+            "id": "bd-active-chaos",
+            "title": "Chaos replay triage",
+            "priority": 2,
+            "status": "in_progress",
+            "assignee": "AgentChaos"
+          }
+        ]
+      },
+      "validation_plan": {
+        "schema_version": "franken-engine.swarm-validation-plan.v1",
+        "decision": "planned",
+        "collision_risk": "saturated_queue",
+        "conflicting_agents": [
+          "AgentChaos"
+        ],
+        "safe_alternatives": [
+          "docs/SWARM_HIGH_CORE_SCENARIO_MATRIX.md"
+        ],
+        "reservation_recommendations": [
+          {
+            "action": "narrow_queue_scope",
+            "scope": "saturated_queue",
+            "reason": "high ready depth and chaos recovery should stay bounded while preserving reviewed proof reuse."
+          }
+        ],
+        "commands": [
+          {
+            "command_id": "cargo-test-chaos-saturated",
+            "display": "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture",
+            "predicted_cost": {
+              "cost_class": "high",
+              "state": "fresh",
+              "sample_count": 2
+            },
+            "risk_flags": [
+              "high_queue_depth",
+              "chaos_recovery"
+            ]
+          },
+          {
+            "command_id": "bash-n-high-core-matrix",
+            "display": "bash -n scripts/swarm_high_core_slo_scenario_matrix.sh",
+            "predicted_cost": {
+              "cost_class": "low",
+              "state": "static",
+              "sample_count": 0
+            },
+            "risk_flags": []
+          }
+        ],
+        "proof_cost_budgets": [
+          {
+            "command_id": "cargo-test-chaos-saturated",
+            "max_elapsed_ms": 900000
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "resource_decision": {
+        "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+        "decision": "admit_narrow",
+        "findings": [
+          {
+            "decision": "admit_narrow",
+            "signal": "queue_depth",
+            "reason": "saturated_queue_under_chaos_recovery",
+            "remediation": "Admit the chaos replay narrowly and preserve bounded fairness."
+          }
+        ],
+        "snapshot_epoch_seconds": 1778200200
+      },
+      "reservations": {
+        "snapshot_epoch_seconds": 1778200200,
+        "reservations": []
+      },
+      "stale_lock_recommendations": {
+        "schema_version": "franken-engine.stale-lock-recommendations.v1",
+        "stale_lock_recommendations": [],
+        "safe_to_reopen": [],
+        "contact_first": [
+          "bd-active-chaos"
+        ]
+      },
+      "proof_freshness": {
+        "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+        "freshness_state": "fresh",
+        "reusable": true,
+        "recommended_next_action": "reuse proof",
+        "changed_paths": [
+          "scripts/run_rgc_fault_injection_chaos_verification_pack.sh"
+        ]
+      },
+      "high_core": {
+        "stress": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/stress cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture"
+          ],
+          "run_manifest": {
+            "scenario_count": 8,
+            "aggregate_invariant_violations": 0
+          }
+        },
+        "tail": {
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/tail cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir /matrix-target/chaos_recovery_saturated_queue/tail"
+          ],
+          "run_manifest": {
+            "profile": "chaos-recovery-saturated-queue",
+            "result": "pass"
+          },
+          "report": {
+            "schema_version": "franken-engine.tail-latency-control-plane.v1",
+            "bundle_epoch": 70,
+            "end_to_end_bounds": {
+              "observed_p95_ns": 8300000,
+              "observed_p99_ns": 29800000,
+              "queue_adjusted_p99_ns": 65500000
+            },
+            "guardrails": {
+              "state": "near_limit",
+              "violated_stage_count": 0
+            }
+          }
+        },
+        "chaos": {
+          "generated_at_utc": "2026-05-06T04:15:00Z",
+          "outcome": "pass",
+          "commands": [
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/chaos cargo check -p frankenengine-engine --test rgc_fault_injection_chaos_verification_pack"
+          ],
+          "run_manifest": {
+            "profile": "chaos-recovery-saturated-queue",
+            "result": "pass"
+          },
+          "summary": {
+            "vector_count": 6,
+            "unique_class_count": 5
+          }
+        },
+        "claim_map": {
+          "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+          "mapped_child_bead_ids": [
+            "bd-chaos-1",
+            "bd-chaos-2",
+            "bd-chaos-3",
+            "bd-chaos-4"
+          ],
+          "claims": [
+            {
+              "title": "Swarm fleet-health dashboard feed",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/claim cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+              ]
+            },
+            {
+              "title": "Admission-control publication bundles",
+              "claim_status": "published",
+              "verification_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/claim cargo test -p frankenengine-engine --lib admission_publication_bundle -- --nocapture"
+              ]
+            }
+          ],
+          "operator_verification": [
+            "jq empty docs/rgc_swarm_responsiveness_claim_map_v1.json",
+            "rch exec -- env CARGO_TARGET_DIR=/matrix-target/chaos_recovery_saturated_queue/claim cargo test -p frankenengine-engine --lib synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "capacity_decision": "pass",
+        "slo_decision": "pass",
+        "traceability": {
+          "stress": "rch_backed",
+          "tail": "rch_backed",
+          "chaos": "rch_backed",
+          "claim_map": "rch_backed"
+        }
+      }
+    }
+  ]
+}

@@ -147,6 +147,21 @@ jq -n \
       []
     end;
 
+  def command_kind($cmd):
+    if ($cmd | test("cargo clippy")) then
+      "cargo_clippy"
+    elif ($cmd | test("cargo check")) then
+      "cargo_check"
+    elif ($cmd | test("cargo test")) then
+      "cargo_test"
+    elif ($cmd | test("cargo fmt")) then
+      "cargo_fmt"
+    elif ($cmd | test("cargo doc")) then
+      "rustdoc"
+    else
+      "unknown"
+    end;
+
   def operator_category($verdict):
     {
       "source_pass": "source evidence",
@@ -162,12 +177,14 @@ jq -n \
        | select(.case_id == $case_id or .validation_command == $case.validation_command)
      ][0] // null) as $pre
   | (safe_validation_command($case.validation_command)) as $safe_command
+  | (command_kind($case.validation_command)) as $command_kind
   | {
       schema_version: "franken-engine.rch-validation-run-manifest.v1",
       bead_id: $bead_id,
       parent_bead_id: $parent_bead_id,
       thread_id: $thread_id,
       case_id: $case.case_id,
+      validation_id: ("validation-rch-" + $case.case_id),
       generated_at_utc: $generated_at,
       input_contracts: [
         {
@@ -183,6 +200,7 @@ jq -n \
       ],
       preflight_case_id: ($pre.case_id // null),
       selected_worker: $case.selected_worker,
+      command_kind: $command_kind,
       remote_command: $case.validation_command,
       safe_validation_command: $safe_command,
       cargo_target_dir_policy: {
@@ -225,6 +243,7 @@ jq -c '
   {
     schema_version: "franken-engine.rch-validation-run.event.v1",
     trace_id: .trace_ids.trace_id,
+    validation_id: .validation_id,
     decision_id: .trace_ids.decision_id,
     policy_id: .trace_ids.policy_id,
     event: "validation_run_classified",
@@ -233,10 +252,13 @@ jq -c '
     thread_id: .thread_id,
     case_id: .case_id,
     selected_worker: .selected_worker,
+    worker_id: (.selected_worker // "none"),
+    command_kind: .command_kind,
     verdict: .verdict,
     reason_code: .reason_code,
     source_evidence: .source_evidence,
     operator_category: .operator_category,
+    remediation: .remediation,
     suggested_next_command: .suggested_next_command
   }
 ' "$manifest_path" >"$events_path"
@@ -248,6 +270,7 @@ jq '
     parent_bead_id: .parent_bead_id,
     thread_id: .thread_id,
     case_id: .case_id,
+    validation_id: .validation_id,
     trace_ids: .trace_ids
   }
 ' "$manifest_path" >"$trace_ids_path"
@@ -261,7 +284,9 @@ jq -r '
   ("- Parent bead: `" + .parent_bead_id + "`"),
   ("- Thread: `" + .thread_id + "`"),
   ("- Case: `" + .case_id + "`"),
+  ("- Validation: `" + .validation_id + "`"),
   ("- Selected worker: `" + (.selected_worker // "none") + "`"),
+  ("- Command kind: `" + .command_kind + "`"),
   ("- Verdict: `" + .verdict + "`"),
   ("- Reason: `" + .reason_code + "`"),
   ("- Category: `" + .operator_category + "`"),

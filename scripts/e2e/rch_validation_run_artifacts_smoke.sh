@@ -37,6 +37,16 @@ assert_contract() {
       "trace_ids.json"
     ] | sort)
     and (.required_verdict_categories | length) == 6
+    and (.smoke_modes | sort) == (["check", "replay", "selftest"] | sort)
+    and (.required_event_fields | sort) == ([
+      "command_kind",
+      "reason_code",
+      "remediation",
+      "trace_id",
+      "validation_id",
+      "verdict",
+      "worker_id"
+    ] | sort)
     and (.fixture_case_ids | length) == 6
   ' "$contract_path" >/dev/null
 }
@@ -62,9 +72,11 @@ assert_manifest() {
       and .parent_bead_id == "bd-zk8ji"
       and .thread_id == "rch-validation-control-plane"
       and .case_id == $case_id
+      and .validation_id == ("validation-rch-" + $case_id)
       and .operator_category == $expected_category
       and .source_evidence == $expected_source_evidence
       and (.input_contracts | length) == 2
+      and (.command_kind | test("^(cargo_check|cargo_test|cargo_clippy)$"))
       and (.remote_command | length) > 0
       and (.safe_validation_command | startswith("rch exec -- "))
       and (.cargo_target_dir_policy | has("isolated") and has("path") and has("source"))
@@ -84,6 +96,12 @@ assert_manifest() {
       .schema_version == "franken-engine.rch-validation-run.event.v1"
       and .event == "validation_run_classified"
       and .case_id == $case_id
+      and .validation_id == ("validation-rch-" + $case_id)
+      and (.worker_id | length) > 0
+      and (.command_kind | test("^(cargo_check|cargo_test|cargo_clippy)$"))
+      and (.verdict | length) > 0
+      and (.reason_code | length) > 0
+      and (.remediation | length) > 0
       and .operator_category == $expected_category
     ' "${case_dir}/events.jsonl" >/dev/null
 
@@ -91,6 +109,7 @@ assert_manifest() {
     --arg case_id "$case_id" '
       .schema_version == "franken-engine.rch-validation-run-trace-ids.v1"
       and .case_id == $case_id
+      and .validation_id == ("validation-rch-" + $case_id)
       and (.trace_ids.policy_id == "policy-rch-validation-run-artifacts-v1")
     ' "${case_dir}/trace_ids.json" >/dev/null
 
@@ -127,6 +146,7 @@ run_case() {
     --generated-at "2026-05-06T00:00:00Z" >/dev/null
 
   assert_manifest "$case_dir" "$case_id" "$expected_category" "$expected_source_evidence"
+  run_replay "$case_dir" >/dev/null
   record_pass "${case_id}"
 }
 
@@ -178,6 +198,97 @@ assert_refuses_overwrite() {
   record_pass "overwrite refusal"
 }
 
+run_replay() {
+  local bundle_dir="${1:-}"
+
+  require_jq
+  if [[ -z "$bundle_dir" ]]; then
+    record_failure "replay requires a bundle directory"
+    return 64
+  fi
+
+  for artifact in run_manifest.json events.jsonl commands.txt trace_ids.json summary.md; do
+    if [[ ! -s "${bundle_dir}/${artifact}" ]]; then
+      record_failure "replay missing required artifact: ${bundle_dir}/${artifact}"
+      return 1
+    fi
+  done
+
+  jq -e '
+    .schema_version == "franken-engine.rch-validation-run-manifest.v1"
+    and (.validation_id | startswith("validation-rch-"))
+    and (.thread_id | length) > 0
+    and (.command_kind | test("^(cargo_check|cargo_test|cargo_clippy)$"))
+    and (.remote_proof.observed_log_markers | length) > 0
+    and (.verdict | length) > 0
+    and (.reason_code | length) > 0
+    and (.remediation | length) > 0
+    and (.suggested_next_command | startswith("rch exec -- "))
+  ' "${bundle_dir}/run_manifest.json" >/dev/null
+
+  jq -e \
+    --slurpfile manifest "${bundle_dir}/run_manifest.json" '
+      .schema_version == "franken-engine.rch-validation-run.event.v1"
+      and .trace_id == $manifest[0].trace_ids.trace_id
+      and .validation_id == $manifest[0].validation_id
+      and .worker_id == ($manifest[0].selected_worker // "none")
+      and .command_kind == $manifest[0].command_kind
+      and .verdict == $manifest[0].verdict
+      and .reason_code == $manifest[0].reason_code
+      and .remediation == $manifest[0].remediation
+    ' "${bundle_dir}/events.jsonl" >/dev/null
+
+  jq -e \
+    --slurpfile manifest "${bundle_dir}/run_manifest.json" '
+      .schema_version == "franken-engine.rch-validation-run-trace-ids.v1"
+      and .validation_id == $manifest[0].validation_id
+      and .trace_ids.trace_id == $manifest[0].trace_ids.trace_id
+    ' "${bundle_dir}/trace_ids.json" >/dev/null
+
+  if awk '/cargo / && $0 !~ /^rch exec -- / { found=1 } END { exit found ? 0 : 1 }' "${bundle_dir}/commands.txt"; then
+    record_failure "replay commands.txt contains bare cargo"
+    cat "${bundle_dir}/commands.txt" >&2
+    return 1
+  fi
+
+  for category in \
+    "source evidence" \
+    "source failure" \
+    "remote toolchain failure" \
+    "remote timeout" \
+    "local fallback refusal" \
+    "missing proof"; do
+    if ! grep -Fq "$category" "${bundle_dir}/summary.md"; then
+      record_failure "replay summary missing category: ${category}"
+      return 1
+    fi
+  done
+
+  record_pass "replay ${bundle_dir}"
+}
+
+assert_replay_fails_missing_artifact() {
+  local tmp_root="$1"
+  local source_dir="${tmp_root}/remote-cargo-check-pass"
+  local incomplete_dir="${tmp_root}/missing-artifact-replay"
+  local actual_exit
+
+  mkdir -p "$incomplete_dir"
+  cp "${source_dir}/run_manifest.json" "${incomplete_dir}/run_manifest.json"
+
+  set +e
+  run_replay "$incomplete_dir" >/dev/null 2>&1
+  actual_exit=$?
+  set -e
+
+  if [[ "$actual_exit" -eq 0 ]]; then
+    record_failure "replay accepted a bundle with missing artifacts"
+    exit 1
+  fi
+
+  record_pass "replay missing artifact fail-closed"
+}
+
 run_check() {
   require_jq
   bash -n "$generator"
@@ -203,19 +314,25 @@ run_selftest() {
   run_case "$tmp_root" "missing-worker-or-command-evidence" "missing proof" false
   assert_byte_stable "$tmp_root"
   assert_refuses_overwrite "$tmp_root"
+  assert_replay_fails_missing_artifact "$tmp_root"
 
   printf 'rch_validation_run_artifacts_smoke_artifacts=%s\n' "$tmp_root"
 }
 
-case "${1:-check}" in
+mode="${1:-check}"
+case "$mode" in
   check)
     run_check
     ;;
   selftest)
     run_selftest
     ;;
+  replay)
+    shift
+    run_replay "${1:-}"
+    ;;
   *)
-    record_failure "unknown mode: ${1:-}"
+    record_failure "unknown mode: ${mode:-}"
     exit 64
     ;;
 esac

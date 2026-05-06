@@ -30,9 +30,11 @@
     "parent_bead_id",
     "thread_id",
     "case_id",
+    "validation_id",
     "generated_at_utc",
     "input_contracts",
     "selected_worker",
+    "command_kind",
     "remote_command",
     "safe_validation_command",
     "cargo_target_dir_policy",
@@ -61,6 +63,20 @@
     "local_fallback_default": "refuse",
     "overwrite_existing_artifacts": false
   },
+  "smoke_modes": [
+    "check",
+    "selftest",
+    "replay"
+  ],
+  "required_event_fields": [
+    "trace_id",
+    "validation_id",
+    "worker_id",
+    "command_kind",
+    "verdict",
+    "reason_code",
+    "remediation"
+  ],
   "fixture_case_ids": [
     "remote-cargo-check-pass",
     "remote-source-diagnostic",

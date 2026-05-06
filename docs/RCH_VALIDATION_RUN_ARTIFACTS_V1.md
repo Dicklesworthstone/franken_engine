@@ -34,6 +34,7 @@ directory per run so validation evidence remains append-only.
 `run_manifest.json` records:
 
 - selected worker and remote command evidence
+- stable validation id and command kind
 - `CARGO_TARGET_DIR` policy and required worker components
 - observed verdict, reason code, and source-evidence boolean
 - remediation text and a safe rerun command
@@ -57,3 +58,19 @@ command instead of copying the bare command into `commands.txt`.
 
 Only `source evidence` and `source failure` may be treated as source validation
 evidence. All other states are blocker evidence.
+
+## Replay Gate
+
+The smoke gate supports:
+
+```bash
+scripts/e2e/rch_validation_run_artifacts_smoke.sh check
+scripts/e2e/rch_validation_run_artifacts_smoke.sh selftest
+scripts/e2e/rch_validation_run_artifacts_smoke.sh replay artifacts/rch_validation_runs/example
+```
+
+Replay mode validates a preserved bundle without running live heavy Cargo
+commands. It fails closed when any required artifact is missing, when
+`events.jsonl` lacks `trace_id`, `validation_id`, `worker_id`, `command_kind`,
+`verdict`, `reason_code`, or `remediation`, or when `commands.txt` contains a
+heavy Cargo command that is not prefixed with `rch exec --`.

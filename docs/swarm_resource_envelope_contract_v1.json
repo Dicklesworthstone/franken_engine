@@ -1,0 +1,289 @@
+{
+  "schema_version": "franken-engine.swarm-resource-envelope-contract.v1",
+  "bead_id": "bd-b5rjs",
+  "parent_bead_id": "bd-g7vyo",
+  "track": "SWARM-SCALE-I",
+  "resource_envelope_schema_version": "franken-engine.swarm-resource-envelope.v1",
+  "resource_input_schema_version": "franken-engine.swarm-resource-envelope-input.v1",
+  "resource_sources_schema_version": "franken-engine.swarm-resource-envelope-sources.v1",
+  "fair_share_plan_schema_version": "franken-engine.swarm-fair-share-batch-plan.v1",
+  "receipt_schema_version": "franken-engine.swarm-resource-envelope-receipt.v1",
+  "operator_status_section": "swarm_resource_envelope",
+  "docs": {
+    "runbook": "docs/SWARM_RESOURCE_ENVELOPE.md",
+    "contract": "docs/swarm_resource_envelope_contract_v1.json"
+  },
+  "planned_surfaces": [
+    "scripts/swarm_resource_envelope_normalizer.sh",
+    "scripts/e2e/swarm_resource_envelope_normalizer_smoke.sh",
+    "scripts/swarm_fair_share_batch_planner.sh",
+    "scripts/e2e/swarm_fair_share_batch_planner_smoke.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_operator_status_report_smoke.sh",
+    "scripts/e2e/swarm_resource_envelope_no_mock_drill.sh",
+    "scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh"
+  ],
+  "source_snapshot_contracts": [
+    {
+      "source_id": "host_topology_json",
+      "capture_command": "preserved host topology snapshot",
+      "required": true,
+      "missing_decision": "fail_closed",
+      "required_fields": [
+        "host_id",
+        "cpu_logical_cores",
+        "cpu_physical_cores",
+        "numa_nodes",
+        "observed_at"
+      ]
+    },
+    {
+      "source_id": "memory_pressure_json",
+      "capture_command": "preserved memory pressure snapshot",
+      "required": true,
+      "missing_decision": "fail_closed",
+      "required_fields": [
+        "total_bytes",
+        "available_bytes",
+        "observed_at"
+      ]
+    },
+    {
+      "source_id": "disk_pressure_json",
+      "capture_command": "preserved disk and inode pressure snapshot",
+      "required": true,
+      "missing_decision": "fail_closed",
+      "required_fields": [
+        "filesystems",
+        "target_dirs",
+        "observed_at"
+      ]
+    },
+    {
+      "source_id": "rch_queue_status_json",
+      "capture_command": "preserved RCH queue/status snapshot",
+      "required": true,
+      "missing_decision": "blocked",
+      "required_fields": [
+        "workers",
+        "build_slots",
+        "observed_at"
+      ]
+    },
+    {
+      "source_id": "rch_build_slot_json",
+      "capture_command": "preserved active build-slot lease snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "proof_cache_plan_json",
+      "capture_command": "proof cache plan or reuse advisory",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "warm_target_prefetch_roi_json",
+      "capture_command": "warm-target prefetch ROI advisory",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "archive_pressure_scoreboard_json",
+      "capture_command": "remote proof/archive pressure scoreboard",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "br_ready_json",
+      "capture_command": "br ready --json",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "br_in_progress_json",
+      "capture_command": "br list --status=in_progress --json",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "br_sync_status_json",
+      "capture_command": "br sync --status --json",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "bv_actionable_plan_json",
+      "capture_command": "bv --recipe actionable --robot-plan",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "agent_mail_file_reservations_json",
+      "capture_command": "Agent Mail active file reservation snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "causal_trace_summary_json",
+      "capture_command": "predictive_dashboard.swarm_agent_causal_trace or causal trace graph/anomaly artifacts",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "validation_cost_hints_json",
+      "capture_command": "validation plan or command-cost hint snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    }
+  ],
+  "required_envelope_fields": [
+    "schema_version",
+    "source_revision",
+    "envelope_id",
+    "observed_at",
+    "decision",
+    "readiness",
+    "host_identity",
+    "cpu_topology",
+    "memory_pressure",
+    "disk_pressure",
+    "target_dir_pressure",
+    "rch_slots",
+    "proof_cache",
+    "queue_pressure",
+    "reservation_pressure",
+    "causal_trace_pressure",
+    "validation_cost_pressure",
+    "capacity_budget",
+    "degraded_reasons",
+    "blocked_reasons",
+    "fail_closed_reasons",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "capacity_budget_fields": [
+    "script_lane_limit",
+    "proof_lane_limit",
+    "build_lane_limit",
+    "remote_rch_slot_limit",
+    "memory_bytes_budget",
+    "target_dir_bytes_budget",
+    "defer_reasons"
+  ],
+  "decision_policy": {
+    "pass": "required host identity, CPU, memory, disk, target-dir, and RCH slot snapshots are fresh and internally consistent",
+    "degraded": "optional proof-cache, reservation, causal-trace, or validation-cost hints are missing but core host capacity evidence is coherent",
+    "blocked": "capacity evidence is trustworthy but saturated or below configured safety thresholds",
+    "fail_closed": "required evidence is missing, contradictory, stale beyond the accepted window, locally executed when remote proof is claimed, or unsafe automation wording is detected"
+  },
+  "fail_closed_classes": [
+    "missing_required_host_identity",
+    "stale_required_capacity_snapshot",
+    "contradictory_cpu_or_memory_capacity",
+    "target_dir_pressure_exceeds_safe_budget",
+    "rch_local_fallback_contaminates_capacity",
+    "rch_slot_snapshot_contradiction",
+    "reservation_pressure_without_write_set",
+    "causal_trace_contamination_blocks_admission",
+    "heavy_command_missing_budget",
+    "unsafe_live_mutation_claim"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "deletes_target_dirs": false,
+    "repairs_stalled_builds": false,
+    "changes_live_queue_policy": false
+  },
+  "normalizer": {
+    "script": "scripts/swarm_resource_envelope_normalizer.sh",
+    "smoke_script": "scripts/e2e/swarm_resource_envelope_normalizer_smoke.sh",
+    "artifacts": [
+      "swarm_resource_envelope_input.json",
+      "swarm_resource_envelope_sources.json",
+      "swarm_resource_envelope.json",
+      "events.jsonl",
+      "commands.txt",
+      "report.md"
+    ]
+  },
+  "fair_share_planner": {
+    "script": "scripts/swarm_fair_share_batch_planner.sh",
+    "smoke_script": "scripts/e2e/swarm_fair_share_batch_planner_smoke.sh",
+    "artifacts": [
+      "swarm_fair_share_batch_plan.json",
+      "events.jsonl",
+      "commands.txt",
+      "report.md"
+    ],
+    "required_plan_fields": [
+      "decision",
+      "admitted_lanes",
+      "deferred_lanes",
+      "capacity_budget",
+      "fairness_rationale",
+      "fail_closed_reasons",
+      "mutation_policy",
+      "artifact_paths"
+    ]
+  },
+  "no_mock_drill": {
+    "script": "scripts/e2e/swarm_resource_envelope_no_mock_drill.sh",
+    "truth_gate_script": "scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh",
+    "required_cases": [
+      "healthy_high_core_host",
+      "missing_optional_host_telemetry",
+      "blocked_saturated_capacity",
+      "contaminated_local_rch_fallback",
+      "contradictory_slot_or_memory_evidence",
+      "unsafe_mutation_wording"
+    ],
+    "required_artifacts": [
+      "swarm_resource_envelope_receipt.json",
+      "swarm_resource_envelope.json",
+      "swarm_fair_share_batch_plan.json",
+      "status.json",
+      "commands.txt",
+      "events.jsonl",
+      "report.md"
+    ]
+  },
+  "truth_gate": {
+    "required_advisory_terms": [
+      "fixture-fed, proof-only, and advisory-only",
+      "Operator remediation remains manual or agent-executed outside this artifact"
+    ],
+    "forbidden_live_claim_patterns": [
+      "mutates live workers",
+      "runs cargo",
+      "runs rch",
+      "releases reservations",
+      "reassigns beads",
+      "deletes target directories",
+      "repairs stalled builds automatically",
+      "changes live queue policy"
+    ]
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_resource_envelope_contract_v1.json",
+    "bash scripts/rch_policy_compliance_gate.sh docs/SWARM_RESOURCE_ENVELOPE.md docs/swarm_resource_envelope_contract_v1.json",
+    "git diff --check -- docs/SWARM_RESOURCE_ENVELOPE.md docs/swarm_resource_envelope_contract_v1.json"
+  ],
+  "downstream_beads": [
+    "bd-3q66g",
+    "bd-adsq0",
+    "bd-7quza",
+    "bd-frd5i",
+    "bd-2ivmm"
+  ]
+}

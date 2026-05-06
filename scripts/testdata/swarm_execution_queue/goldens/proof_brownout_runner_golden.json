@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_id": "proof_brownout",
+  "normalized_input_path": "scripts/testdata/swarm_execution_queue/proof_brownout_input.json",
+  "expected_exit_code": 0,
+  "expected_decision": "degraded",
+  "runner_invocation": {
+    "binary": "franken_swarm_execution_queue",
+    "queue_depth": 8,
+    "epoch": 7,
+    "timestamp_ns": 777
+  },
+  "runner": {
+    "artifact_schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+    "risk_budget_schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+    "bottleneck_schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+    "artifact_hash_hex": "e4f9760a6558bb0a9ca8642f037b7629a0efa13adade6d1a572cfc0cd70d3e24",
+    "normalized_input_hash_hex": "f6fe537ea0c5badc9b7a73d726ab50eea7a0d3940d128f3d40fe88a9b6494de1",
+    "queue_depth": 1,
+    "top_queue": [
+      "bd-brownout-ready"
+    ],
+    "queue": [
+      {
+        "rank": 1,
+        "task_id": "bd-brownout-ready",
+        "wave": "ready_now",
+        "open_blocker_count": 0,
+        "ev_millionths": -10000,
+        "first_action": "defer broad proof and select a narrower no-cargo task",
+        "fallback_trigger": "proof_brownout_conservative_mode"
+      }
+    ],
+    "conservative_mode": true,
+    "risk_budget": {
+      "remaining_millionths": 126000,
+      "consumed_millionths": 874000,
+      "conservative_mode": true,
+      "conservative_threshold_millionths": 200000
+    },
+    "bottleneck_count": 0,
+    "critical_bottleneck_count": 0,
+    "bottleneck_ids": []
+  }
+}

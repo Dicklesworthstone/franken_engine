@@ -63,6 +63,6 @@
     "decision": "pass",
     "top_queue": ["bd-ready-a"],
     "conservative_mode": false,
-    "bottleneck_ids": []
+    "bottleneck_ids": ["bd-ready-a"]
   }
 }

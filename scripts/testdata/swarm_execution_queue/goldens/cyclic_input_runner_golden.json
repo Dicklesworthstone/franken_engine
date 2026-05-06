@@ -1,0 +1,17 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_id": "cyclic_input",
+  "normalized_input_path": "scripts/testdata/swarm_execution_queue/cyclic_input.json",
+  "expected_exit_code": 42,
+  "expected_decision": "fail_closed",
+  "runner_invocation": {
+    "binary": "franken_swarm_execution_queue",
+    "queue_depth": 8,
+    "epoch": 7,
+    "timestamp_ns": 777
+  },
+  "failure": {
+    "fail_closed_rule": "dependency cycles fail closed",
+    "stderr_contains": "cycle detected involving: bd-cycle-a, bd-cycle-b"
+  }
+}

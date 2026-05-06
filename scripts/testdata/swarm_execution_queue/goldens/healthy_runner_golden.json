@@ -1,0 +1,47 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_id": "healthy",
+  "normalized_input_path": "scripts/testdata/swarm_execution_queue/healthy_input.json",
+  "expected_exit_code": 0,
+  "expected_decision": "pass",
+  "runner_invocation": {
+    "binary": "franken_swarm_execution_queue",
+    "queue_depth": 8,
+    "epoch": 7,
+    "timestamp_ns": 777
+  },
+  "runner": {
+    "artifact_schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+    "risk_budget_schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+    "bottleneck_schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+    "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
+    "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
+    "queue_depth": 1,
+    "top_queue": [
+      "bd-ready-a"
+    ],
+    "queue": [
+      {
+        "rank": 1,
+        "task_id": "bd-ready-a",
+        "wave": "ready_now",
+        "open_blocker_count": 0,
+        "ev_millionths": 725000,
+        "first_action": "claim bead and reserve focused proof files",
+        "fallback_trigger": "none"
+      }
+    ],
+    "conservative_mode": false,
+    "risk_budget": {
+      "remaining_millionths": 900000,
+      "consumed_millionths": 100000,
+      "conservative_mode": false,
+      "conservative_threshold_millionths": 200000
+    },
+    "bottleneck_count": 1,
+    "critical_bottleneck_count": 0,
+    "bottleneck_ids": [
+      "bd-ready-a"
+    ]
+  }
+}

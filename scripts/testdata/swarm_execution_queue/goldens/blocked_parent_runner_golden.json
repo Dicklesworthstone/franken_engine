@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_id": "blocked_parent",
+  "normalized_input_path": "scripts/testdata/swarm_execution_queue/blocked_parent_input.json",
+  "expected_exit_code": 0,
+  "expected_decision": "pass",
+  "runner_invocation": {
+    "binary": "franken_swarm_execution_queue",
+    "queue_depth": 8,
+    "epoch": 7,
+    "timestamp_ns": 777
+  },
+  "runner": {
+    "artifact_schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+    "risk_budget_schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+    "bottleneck_schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+    "artifact_hash_hex": "7ceaff146ce5d64722f4113f7dc6e88d785130ebd48d6e1171018ed3b703973e",
+    "normalized_input_hash_hex": "20c8864e920fb4af40ea140d070280dcde5b12af6a62c7a04cc5aeb57f34fe7a",
+    "queue_depth": 2,
+    "top_queue": [
+      "bd-child-contract",
+      "bd-parent"
+    ],
+    "queue": [
+      {
+        "rank": 1,
+        "task_id": "bd-child-contract",
+        "wave": "ready_now",
+        "open_blocker_count": 0,
+        "ev_millionths": 596000,
+        "first_action": "claim child contract bead first",
+        "fallback_trigger": "none"
+      },
+      {
+        "rank": 2,
+        "task_id": "bd-parent",
+        "wave": "ready_next",
+        "open_blocker_count": 1,
+        "ev_millionths": 513600,
+        "first_action": "work dependency bd-child-contract before parent closeout",
+        "fallback_trigger": "blocked_parent"
+      }
+    ],
+    "conservative_mode": false,
+    "risk_budget": {
+      "remaining_millionths": 820000,
+      "consumed_millionths": 180000,
+      "conservative_mode": false,
+      "conservative_threshold_millionths": 200000
+    },
+    "bottleneck_count": 1,
+    "critical_bottleneck_count": 0,
+    "bottleneck_ids": [
+      "bd-child-contract"
+    ]
+  }
+}

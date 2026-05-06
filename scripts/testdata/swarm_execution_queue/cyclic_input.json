@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.swarm-execution-queue-input.v1",
-  "fixture_id": "blocked_parent",
+  "fixture_id": "cyclic_input",
   "source_revision": "fixture-rev",
   "generated_epoch_seconds": 1800000000,
   "source_snapshots": {
@@ -12,6 +12,20 @@
     "stale_lock_recommendations_json": "fixture",
     "proof_transport_health_json": "fixture"
   },
+  "decision": "pass",
+  "accepted_inputs": [
+    {
+      "input": "br_ready_json"
+    },
+    {
+      "input": "br_list_json"
+    },
+    {
+      "input": "bv_actionable_plan_json"
+    }
+  ],
+  "degraded_inputs": [],
+  "fail_closed_reasons": [],
   "cross_cutting_signals": {
     "observability_quality_millionths": 900000,
     "catastrophic_tail_score_millionths": 30000,
@@ -23,17 +37,22 @@
   "risk_budget": {
     "remaining_millionths": 820000,
     "consumed_millionths": 180000,
-    "conservative_threshold_millionths": 200000
+    "conservative_threshold_millionths": 200000,
+    "conservative_mode": false
   },
   "tasks": [
     {
-      "task_id": "bd-parent",
-      "title": "Parent blocked by contract child",
+      "task_id": "bd-cycle-a",
+      "title": "Cycle fixture task A",
       "status": "open",
       "priority": 2,
       "assignee": "",
-      "depends_on": ["bd-child-contract"],
-      "dependents": [],
+      "depends_on": [
+        "bd-cycle-b"
+      ],
+      "dependents": [
+        "bd-cycle-b"
+      ],
       "completed": false,
       "open_blocker_count": 1,
       "owner_freshness": {
@@ -49,25 +68,29 @@
         "local_fallback_detected": false
       },
       "scores": {
-        "impact_millionths": 880000,
-        "confidence_millionths": 720000,
-        "reuse_millionths": 650000,
-        "effort_millionths": 450000,
-        "friction_millionths": 120000
+        "impact_millionths": 700000,
+        "confidence_millionths": 900000,
+        "reuse_millionths": 700000,
+        "effort_millionths": 220000,
+        "friction_millionths": 10000
       },
-      "fallback_trigger": "blocked_parent",
-      "first_action": "work dependency bd-child-contract before parent closeout"
+      "fallback_trigger": "none",
+      "first_action": "break dependency cycle before queueing bd-cycle-a"
     },
     {
-      "task_id": "bd-child-contract",
-      "title": "Ready contract child",
+      "task_id": "bd-cycle-b",
+      "title": "Cycle fixture task B",
       "status": "open",
       "priority": 2,
       "assignee": "",
-      "depends_on": [],
-      "dependents": ["bd-parent"],
+      "depends_on": [
+        "bd-cycle-a"
+      ],
+      "dependents": [
+        "bd-cycle-a"
+      ],
       "completed": false,
-      "open_blocker_count": 0,
+      "open_blocker_count": 1,
       "owner_freshness": {
         "state": "unassigned",
         "last_active_age_seconds": 0
@@ -81,20 +104,22 @@
         "local_fallback_detected": false
       },
       "scores": {
-        "impact_millionths": 760000,
-        "confidence_millionths": 850000,
+        "impact_millionths": 700000,
+        "confidence_millionths": 900000,
         "reuse_millionths": 700000,
-        "effort_millionths": 250000,
-        "friction_millionths": 50000
+        "effort_millionths": 220000,
+        "friction_millionths": 10000
       },
       "fallback_trigger": "none",
-      "first_action": "claim child contract bead first"
+      "first_action": "break dependency cycle before queueing bd-cycle-b"
     }
   ],
   "expected_output_assertions": {
-    "decision": "pass",
-    "top_queue": ["bd-child-contract", "bd-parent"],
+    "decision": "fail_closed",
+    "expected_exit_code": 42,
+    "fail_closed_reason_contains": "cycle detected",
+    "top_queue": [],
     "conservative_mode": false,
-    "bottleneck_ids": ["bd-child-contract"]
+    "bottleneck_ids": []
   }
 }

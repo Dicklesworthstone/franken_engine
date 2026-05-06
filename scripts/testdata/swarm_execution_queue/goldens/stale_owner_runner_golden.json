@@ -1,0 +1,47 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-conformance-golden.v1",
+  "fixture_id": "stale_owner",
+  "normalized_input_path": "scripts/testdata/swarm_execution_queue/stale_owner_input.json",
+  "expected_exit_code": 0,
+  "expected_decision": "degraded",
+  "runner_invocation": {
+    "binary": "franken_swarm_execution_queue",
+    "queue_depth": 8,
+    "epoch": 7,
+    "timestamp_ns": 777
+  },
+  "runner": {
+    "artifact_schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+    "risk_budget_schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+    "bottleneck_schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+    "artifact_hash_hex": "9dbd01a2a2c54014b98a2df72ea23cff03a434f7d60895240f770a3b8df2ed12",
+    "normalized_input_hash_hex": "2a88cea668b1dfc7a4ee01c33eb0a12fdc91db0d39f167b87aeb12ae939f3809",
+    "queue_depth": 1,
+    "top_queue": [
+      "bd-stale-owner"
+    ],
+    "queue": [
+      {
+        "rank": 1,
+        "task_id": "bd-stale-owner",
+        "wave": "ready_now",
+        "open_blocker_count": 0,
+        "ev_millionths": 410000,
+        "first_action": "contact owner or reopen only after stale-lock evidence says safe_to_reopen",
+        "fallback_trigger": "contact_or_reopen_required"
+      }
+    ],
+    "conservative_mode": false,
+    "risk_budget": {
+      "remaining_millionths": 650000,
+      "consumed_millionths": 350000,
+      "conservative_mode": false,
+      "conservative_threshold_millionths": 200000
+    },
+    "bottleneck_count": 1,
+    "critical_bottleneck_count": 0,
+    "bottleneck_ids": [
+      "bd-stale-owner"
+    ]
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "schema_version": "franken-engine.swarm-ops-state-contract-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy",
+      "description": "all required coordination and proof sources are fresh and coherent",
+      "signals": {
+        "br": {
+          "jsonl_fresh": true,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "agent_mail": {
+          "available": true,
+          "reservation_snapshot": "fresh",
+          "inbox_snapshot": "fresh"
+        },
+        "rch": {
+          "state": "healthy",
+          "active_stall_count": 0,
+          "local_fallback_observed": false
+        },
+        "git": {
+          "dirty_unowned_files": 0,
+          "diff_check_passed": true
+        },
+        "capacity": {
+          "contradictory_inputs": false
+        },
+        "proof_cache": {
+          "locality_evidence": "fresh"
+        }
+      },
+      "expected": {
+        "outcome": "pass",
+        "error_code": null,
+        "trust_state": "trusted"
+      }
+    },
+    {
+      "case_id": "stale_jsonl",
+      "description": "live br DB is newer than the exported JSONL tracker",
+      "signals": {
+        "br": {
+          "jsonl_fresh": false,
+          "db_newer": true,
+          "jsonl_newer": false,
+          "dirty_count": 1
+        },
+        "agent_mail": {
+          "available": true,
+          "reservation_snapshot": "fresh",
+          "inbox_snapshot": "fresh"
+        },
+        "rch": {
+          "state": "healthy",
+          "active_stall_count": 0,
+          "local_fallback_observed": false
+        },
+        "git": {
+          "dirty_unowned_files": 0,
+          "diff_check_passed": true
+        },
+        "capacity": {
+          "contradictory_inputs": false
+        },
+        "proof_cache": {
+          "locality_evidence": "fresh"
+        }
+      },
+      "expected": {
+        "outcome": "fail_closed",
+        "error_code": "FE-SWARM-OPS-STALE-JSONL",
+        "trust_state": "fail_closed"
+      }
+    },
+    {
+      "case_id": "mail_missing",
+      "description": "Agent Mail snapshot is missing while required br, rch, and git evidence remains coherent",
+      "signals": {
+        "br": {
+          "jsonl_fresh": true,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "agent_mail": {
+          "available": false,
+          "reservation_snapshot": "missing",
+          "inbox_snapshot": "missing"
+        },
+        "rch": {
+          "state": "healthy",
+          "active_stall_count": 0,
+          "local_fallback_observed": false
+        },
+        "git": {
+          "dirty_unowned_files": 0,
+          "diff_check_passed": true
+        },
+        "capacity": {
+          "contradictory_inputs": false
+        },
+        "proof_cache": {
+          "locality_evidence": "fresh"
+        }
+      },
+      "expected": {
+        "outcome": "degraded",
+        "error_code": "FE-SWARM-OPS-MAIL-MISSING",
+        "trust_state": "degraded"
+      }
+    },
+    {
+      "case_id": "rch_degraded",
+      "description": "RCH worker evidence is degraded without contradictory queue state or local fallback",
+      "signals": {
+        "br": {
+          "jsonl_fresh": true,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "agent_mail": {
+          "available": true,
+          "reservation_snapshot": "fresh",
+          "inbox_snapshot": "fresh"
+        },
+        "rch": {
+          "state": "degraded",
+          "active_stall_count": 1,
+          "local_fallback_observed": false
+        },
+        "git": {
+          "dirty_unowned_files": 0,
+          "diff_check_passed": true
+        },
+        "capacity": {
+          "contradictory_inputs": false
+        },
+        "proof_cache": {
+          "locality_evidence": "fresh"
+        }
+      },
+      "expected": {
+        "outcome": "degraded",
+        "error_code": "FE-SWARM-OPS-RCH-DEGRADED",
+        "trust_state": "degraded"
+      }
+    }
+  ]
+}

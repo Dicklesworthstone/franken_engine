@@ -31,7 +31,7 @@
     },
     {
       "field": "canary_verdict_ledger_json",
-      "schema_version": "franken-engine.swarm-execution-queue-tuning-canary-verdict-ledger.v1",
+      "schema_version": "franken-engine.swarm-execution-queue-canary-verdict-ledger.v1",
       "producer": "scripts/swarm_execution_queue_tuning_rollback_comparator.sh"
     },
     {

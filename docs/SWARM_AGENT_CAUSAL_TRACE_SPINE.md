@@ -3,7 +3,7 @@
 The swarm agent causal trace spine is the SWARM-CTRL-XVI evidence contract for
 linking live-agent coordination artifacts into one replayable handoff record.
 
-The initial surface is fixture-fed and advisory-only. It helps an operator
+The initial surface is fixture-fed, proof-only, and advisory-only. It helps an operator
 answer which agent claimed a bead, which paths were reserved, what Agent Mail
 coordination happened, which RCH or validation proof artifacts were produced,
 which commit closed the bead, and where the handoff degraded. It does not query
@@ -65,17 +65,29 @@ The graph layer then links events with typed causal edges such as:
 
 The trace spine is proof-only. It never:
 
-- updates or reopens beads
-- clears assignees
-- releases file reservations
-- sends Agent Mail
-- starts RCH or Cargo commands
-- changes live queue policy
-- mutates remote workers
-- rewrites historical closeout evidence
+- does not update or reopen beads
+- does not clear assignees
+- does not release file reservations
+- does not send Agent Mail
+- does not start RCH or Cargo commands
+- does not change live queue policy
+- does not mutate remote workers
+- does not rewrite historical closeout evidence
 
 Operator remediation remains manual or agent-executed outside this artifact, and
 must be reported through the normal bead and Agent Mail workflow.
+
+The no-mock drill has the same boundary:
+
+- does not query live Agent Mail
+- does not mutate `br` state
+- does not release reservations
+- does not send Agent Mail
+- does not run Cargo or RCH
+- does not mutate workers
+- does not repair beads automatically
+
+The drill emits proof artifacts only; human or agent operators perform actual remediation outside this artifact.
 
 ## Fail-Closed Classes
 
@@ -133,6 +145,59 @@ closeout commits, and optional operator-status summaries. It assigns stable
 fixture-fed and advisory-only, and exits `42` when fail-closed anomalies are
 present.
 
+## No-Mock Drill Artifacts
+
+`scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh` composes the real
+producer chain without a synthetic replacement harness:
+
+- `scripts/swarm_agent_causal_trace_normalizer.sh`
+- `scripts/swarm_agent_causal_trace_graph.sh`
+- `scripts/swarm_operator_status_report.sh`
+- `scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh`
+
+The drill writes deterministic fixture snapshots, feeds them through those
+producers, and emits:
+
+- `swarm_agent_causal_trace_receipt.json`
+- `swarm_agent_causal_trace_graph.json`
+- `swarm_agent_causal_trace_anomalies.json`
+- `status.json`
+- `commands.txt`
+- `events.jsonl`
+- `report.md`
+
+The required cases are:
+
+- `healthy_closeout`: claim, reservation, RCH proof, validation transcript,
+  closeout mail, closeout commit, and `br` close reason link into one trace.
+- `missing_agent_mail_snapshot`: absent Agent Mail profile/message snapshots
+  stay degraded and must not pass as complete.
+- `local_rch_fallback`: a local RCH fallback marker contaminates the proof and
+  fails closed.
+- `ownership_conflict`: dirty path, reservation, and bead write set disagree and
+  fail closed.
+- `closed_without_commit`: a closed bead without closeout commit evidence fails
+  closed.
+- `closed_without_validation`: a closed bead without validation proof fails
+  closed.
+
+## Runbook Truth Gate
+
+`scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh` enforces the
+runbook boundary above. It rejects these positive claims:
+
+- Forbidden: the drill queries live Agent Mail.
+- Forbidden: the drill changes `br` state.
+- Forbidden: the drill releases reservations.
+- Forbidden: the drill sends Agent Mail.
+- Forbidden: the drill mutates workers.
+- Forbidden: the drill runs Cargo or RCH.
+- Forbidden: the drill repairs beads automatically.
+- Forbidden: the drill changes live queue policy.
+
+It also requires the runbook and contract to reference every real producer in
+the no-mock drill.
+
 ## Validation
 
 ```bash
@@ -145,5 +210,12 @@ bash -n scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal
 shellcheck -x scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh
 bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check
 bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh selftest
-git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
+bash -n scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh
+shellcheck -x scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh
+bash scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh check
+bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh check
+bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh run
+bash scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh selftest
+bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh selftest
+git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
 ```

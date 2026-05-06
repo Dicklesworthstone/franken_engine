@@ -42,6 +42,65 @@
       "anomalies[].anomaly_hash"
     ]
   },
+  "no_mock_drill": {
+    "script": "scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh",
+    "receipt_schema_version": "franken-engine.swarm-agent-causal-trace-receipt.v1",
+    "event_schema_version": "franken-engine.swarm-agent-causal-trace-no-mock-drill.event.v1",
+    "real_producer_scripts": [
+      "scripts/swarm_agent_causal_trace_normalizer.sh",
+      "scripts/swarm_agent_causal_trace_graph.sh",
+      "scripts/swarm_operator_status_report.sh",
+      "scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh"
+    ],
+    "required_cases": [
+      "healthy_closeout",
+      "missing_agent_mail_snapshot",
+      "local_rch_fallback",
+      "ownership_conflict",
+      "closed_without_commit",
+      "closed_without_validation"
+    ],
+    "required_artifacts": [
+      "swarm_agent_causal_trace_receipt.json",
+      "swarm_agent_causal_trace_graph.json",
+      "swarm_agent_causal_trace_anomalies.json",
+      "status.json",
+      "commands.txt",
+      "events.jsonl",
+      "report.md"
+    ],
+    "mutation_policy": {
+      "fixture_fed_only": true,
+      "proof_only": true,
+      "advisory_only": true,
+      "queries_live_agent_mail": false,
+      "mutates_br": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "repairs_beads": false
+    }
+  },
+  "truth_gate": {
+    "script": "scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh",
+    "required_advisory_terms": [
+      "fixture-fed, proof-only, and advisory-only",
+      "human or agent operators perform actual remediation outside this artifact"
+    ],
+    "forbidden_live_claim_patterns": [
+      "queries live Agent Mail",
+      "changes br state",
+      "releases reservations",
+      "sends Agent Mail",
+      "mutates workers",
+      "runs cargo",
+      "runs rch",
+      "repairs beads automatically",
+      "queue policy mutation"
+    ]
+  },
   "planned_surfaces": [
     "scripts/swarm_agent_causal_trace_normalizer.sh",
     "scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh",
@@ -286,7 +345,12 @@
     {
       "fixture_id": "closed_without_commit",
       "expected_decision": "fail_closed",
-      "description": "closed bead lacks linked closeout commit or validation proof"
+      "description": "closed bead lacks linked closeout commit evidence"
+    },
+    {
+      "fixture_id": "closed_without_validation",
+      "expected_decision": "fail_closed",
+      "description": "closed bead lacks linked validation proof"
     }
   ],
   "downstream_beads": [
@@ -305,6 +369,13 @@
     "shellcheck -x scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
     "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check",
     "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh selftest",
-    "git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json"
+    "bash -n scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh",
+    "bash scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh check",
+    "bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh run",
+    "bash scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh selftest",
+    "bash scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh selftest",
+    "git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json"
   ]
 }

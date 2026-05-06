@@ -1,0 +1,76 @@
+{
+  "schema_version": "franken-engine.swarm-checkpoint-restore-planner-contract.v1",
+  "report_schema_version": "franken-engine.swarm-checkpoint-restore-plan.v1",
+  "producer_script": "scripts/swarm_checkpoint_restore_planner.sh",
+  "required_inputs": [
+    {
+      "flag": "--checkpoint-bundle-json",
+      "schema_version": "franken-engine.swarm-checkpoint-bundle.v1"
+    }
+  ],
+  "optional_current_comparison_inputs": [
+    {
+      "flag": "--current-swarm-capacity-snapshot-json",
+      "schema_version": "franken-engine.swarm-capacity-snapshot.v1"
+    },
+    {
+      "flag": "--current-swarm-capacity-forecast-json",
+      "schema_version": "franken-engine.swarm-capacity-forecast.v1"
+    },
+    {
+      "flag": "--current-remote-proof-archive-pressure-scoreboard-json",
+      "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1"
+    },
+    {
+      "flag": "--current-stale-lock-recommendations-json",
+      "schema_version": "franken-engine.stale-lock-recommendations.v1"
+    },
+    {
+      "flag": "--current-swarm-lease-exchange-cancellation-salvage-simulation-json",
+      "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1"
+    },
+    {
+      "flag": "--current-swarm-operator-status-report-json",
+      "schema_version": "franken-engine.swarm-operator-status-report.v1"
+    }
+  ],
+  "decision_modes": [
+    "resume",
+    "advisory_manual_review",
+    "fail_closed"
+  ],
+  "required_top_level_fields": [
+    "checkpoint_id",
+    "decision",
+    "exit_code",
+    "drift_class",
+    "summary.top_restore_action",
+    "drift_receipt.findings",
+    "resolved_inputs",
+    "artifact_paths.swarm_checkpoint_restore_plan_json"
+  ],
+  "resume_guardrails": [
+    "checkpoint capture_decision must remain captured",
+    "checkpoint restore_readiness_hint must remain candidate",
+    "checkpoint age must stay within the allowed restore freshness window",
+    "all current comparison inputs must be provided before automatic resume is allowed",
+    "ownership drift or contradictory ownership evidence must fail closed",
+    "archive or salvage fail-closed evidence must fail closed"
+  ],
+  "fail_closed_rules": [
+    "captured_degraded checkpoints must not auto-promote to resume",
+    "missing or stale checkpoint freshness must fail closed",
+    "current contradictory ownership or reservation evidence must fail closed",
+    "current archive pressure fail-closed evidence must fail closed",
+    "current salvage fail-closed evidence must fail closed",
+    "local-fallback checkpoint evidence must remain fail closed"
+  ],
+  "non_goals": [
+    "no live br mutation",
+    "no live Agent Mail mutation",
+    "no remote worker mutation",
+    "no automatic reopen",
+    "no automatic ownership transfer",
+    "no cargo execution in the smoke surface"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-counterfactual-planner-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "no_improvement",
+      "expected_decision": "pass",
+      "expected_plan_class": "no_improvement"
+    },
+    {
+      "scenario_id": "one_clear_improvement",
+      "expected_decision": "pass",
+      "expected_plan_class": "one_clear_improvement"
+    },
+    {
+      "scenario_id": "conflicting_improvements",
+      "expected_decision": "degraded",
+      "expected_plan_class": "conflicting_improvements"
+    },
+    {
+      "scenario_id": "insufficient_evidence",
+      "expected_decision": "degraded",
+      "expected_plan_class": "insufficient_evidence"
+    },
+    {
+      "scenario_id": "incomplete_evidence_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_plan_class": "fail_closed"
+    }
+  ]
+}

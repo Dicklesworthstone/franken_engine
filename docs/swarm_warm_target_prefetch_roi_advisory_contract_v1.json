@@ -1,0 +1,53 @@
+{
+  "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory-contract.v1",
+  "advisory_schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+  "producer_script": "scripts/swarm_warm_target_prefetch_roi_advisory.sh",
+  "contract_doc": "docs/SWARM_WARM_TARGET_PREFETCH_ROI_ADVISORY.md",
+  "required_args": [
+    "--capacity-forecast-json",
+    "--admission-budget-plan-json",
+    "--proof-cache-plan-json",
+    "--warm-target-roi-ledger-json",
+    "--archive-pressure-scoreboard-json",
+    "--replay-trace-json"
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--output-dir"
+  ],
+  "required_output_fields": [
+    "advisory",
+    "recommended_action",
+    "reason",
+    "proof_cache_summary.proof_cache_decision",
+    "warm_target_summary.roi.expected_reuse_score",
+    "warm_target_summary.roi.realized_reuse_score",
+    "archive_pressure_summary.advisory",
+    "validation_cost_summary.estimated_cpu_slots_total",
+    "recommended_prefetches",
+    "artifact_paths.swarm_warm_target_prefetch_roi_advisory_json",
+    "artifact_paths.report_md"
+  ],
+  "fixture_cases": [
+    "high_roi",
+    "low_roi",
+    "disk_pressure",
+    "stale_cache",
+    "missing_archive",
+    "salvage_pinned"
+  ],
+  "compatibility_contracts": [
+    "franken-engine.swarm-capacity-forecast.v1",
+    "franken-engine.swarm-admission-budget-plan.v1",
+    "franken-engine.proof-reuse-cache-plan.v1",
+    "franken-engine.warm-target-roi-eviction-ledger.v1",
+    "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+    "franken-engine.proof-economy-replay-trace.v1"
+  ],
+  "truth_constraints": [
+    "The advisory must remain report-only and must not prefetch, execute cargo, or mutate warm target directories.",
+    "Salvage-pinned or orphaned archive evidence must block prefetch with fail_closed behavior.",
+    "Missing archive truth must fail closed instead of guessing a prefetch path.",
+    "Low ROI or pressure-blocked cases must emit explicit defer reasons rather than silently recommending no action."
+  ]
+}

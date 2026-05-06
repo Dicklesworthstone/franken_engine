@@ -1,0 +1,45 @@
+{
+  "requests": [
+    {
+      "request_id": "alpha-heavy-proof",
+      "agent_id": "AgentAlpha",
+      "bead_id": "bd-p1-proof-alpha",
+      "bead_priority": 1,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": true,
+      "heavy": true,
+      "submitted_order": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_admission_alpha cargo test -p frankenengine-engine --test semantic_dark_matter_pipeline -- --nocapture"
+    },
+    {
+      "request_id": "beta-noisy-a",
+      "agent_id": "AgentBeta",
+      "bead_id": "bd-noisy-beta-a",
+      "bead_priority": 1,
+      "proof_refresh": true,
+      "heavy": true,
+      "submitted_order": 2,
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_admission_beta_a cargo test -p frankenengine-engine --test broad_beta_a"
+    },
+    {
+      "request_id": "beta-noisy-b",
+      "agent_id": "AgentBeta",
+      "bead_id": "bd-noisy-beta-b",
+      "bead_priority": 1,
+      "proof_refresh": true,
+      "heavy": true,
+      "submitted_order": 3,
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_admission_beta_b cargo test -p frankenengine-engine --test broad_beta_b"
+    },
+    {
+      "request_id": "gamma-docs-check",
+      "agent_id": "AgentGamma",
+      "bead_id": "bd-docs-gamma",
+      "bead_priority": 2,
+      "docs_only": true,
+      "heavy": false,
+      "submitted_order": 4,
+      "command": "bash -n scripts/e2e/swarm_admission_drill.sh"
+    }
+  ]
+}

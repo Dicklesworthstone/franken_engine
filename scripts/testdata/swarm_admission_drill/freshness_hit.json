@@ -1,0 +1,12 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "proof_artifact_id": "artifact-cache-hit",
+  "artifact_path": "artifacts/swarm_admission/cache-hit/report.json",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "freshness_state": "fresh",
+  "reusable": true,
+  "reason": "fixture cache hit",
+  "recommended_next_action": "reuse",
+  "covered_paths": ["scripts/e2e/swarm_admission_drill.sh"]
+}

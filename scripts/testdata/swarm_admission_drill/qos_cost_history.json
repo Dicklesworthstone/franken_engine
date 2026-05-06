@@ -1,0 +1,8 @@
+{
+  "history": [
+    {"request_id": "alpha-heavy-proof", "median_seconds": 180, "p95_seconds": 420},
+    {"request_id": "beta-noisy-a", "median_seconds": 240, "p95_seconds": 600},
+    {"request_id": "beta-noisy-b", "median_seconds": 260, "p95_seconds": 650},
+    {"request_id": "gamma-docs-check", "median_seconds": 2, "p95_seconds": 5}
+  ]
+}

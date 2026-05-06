@@ -1,0 +1,4 @@
+[
+  {"status": "A", "path": "scripts/e2e/swarm_admission_drill.sh"},
+  {"status": "M", "path": "crates/franken-engine/src/other_agent_lane.rs"}
+]

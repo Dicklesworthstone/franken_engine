@@ -1,0 +1,7 @@
+{
+  "reservations": [
+    {"path_pattern": "scripts/e2e/swarm_admission_drill.sh", "agent_id": "AgentAlpha", "bead_id": "bd-p1-proof-alpha", "exclusive": true, "expires_epoch_seconds": 110000},
+    {"target_dir": "/tmp/rch_target_franken_engine_admission_alpha", "agent_id": "AgentAlpha", "bead_id": "bd-p1-proof-alpha", "exclusive": true, "expires_epoch_seconds": 110000},
+    {"path_pattern": "crates/franken-engine/src/other_lane.rs", "agent_id": "AgentBeta", "bead_id": "bd-noisy-beta", "exclusive": true, "expires_epoch_seconds": 110000}
+  ]
+}

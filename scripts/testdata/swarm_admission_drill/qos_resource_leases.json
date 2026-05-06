@@ -1,0 +1,8 @@
+{
+  "plans": [
+    {"request_id": "alpha-heavy-proof", "bead_id": "bd-p1-proof-alpha", "lease_decision": "admit", "reason": "fixture lease admitted"},
+    {"request_id": "beta-noisy-a", "bead_id": "bd-noisy-beta-a", "lease_decision": "admit", "reason": "fixture lease admitted"},
+    {"request_id": "beta-noisy-b", "bead_id": "bd-noisy-beta-b", "lease_decision": "admit", "reason": "fixture lease admitted"},
+    {"request_id": "gamma-docs-check", "bead_id": "bd-docs-gamma", "lease_decision": "admit", "reason": "fixture lease admitted"}
+  ]
+}

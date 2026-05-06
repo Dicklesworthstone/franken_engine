@@ -1,0 +1,7 @@
+{
+  "agents": [
+    {"name": "AgentAlpha", "last_active_epoch_seconds": 99980},
+    {"name": "AgentBeta", "last_active_epoch_seconds": 99970},
+    {"name": "AgentTau", "last_active_epoch_seconds": 80000}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "messages": [
+    {"thread_id": "bd-stale-contact", "subject": "bd-stale-contact proof still running", "from": "AgentTau", "created_epoch_seconds": 99940, "created_ts": "fixture"}
+  ]
+}

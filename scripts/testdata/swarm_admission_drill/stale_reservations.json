@@ -1,0 +1,5 @@
+{
+  "reservations": [
+    {"path_pattern": "crates/franken-engine/src/semantic_dark_matter_engine.rs", "agent_id": "AgentAlpha", "bead_id": "bd-p1-proof-alpha", "expires_epoch_seconds": 110000}
+  ]
+}

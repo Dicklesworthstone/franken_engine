@@ -1,0 +1,12 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "proof_artifact_id": "artifact-stale-proof",
+  "artifact_path": "artifacts/swarm_admission/stale-proof/report.json",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "freshness_state": "stale_by_time",
+  "reusable": false,
+  "reason": "fixture stale proof refresh",
+  "recommended_next_action": "refresh",
+  "covered_paths": ["crates/franken-engine/src/semantic_dark_matter_engine.rs"]
+}

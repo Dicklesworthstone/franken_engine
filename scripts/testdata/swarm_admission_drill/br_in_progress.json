@@ -1,0 +1,7 @@
+{
+  "issues": [
+    {"id": "bd-p1-proof-alpha", "title": "focused P1 proof refresh", "status": "in_progress", "priority": 1, "assignee": "AgentAlpha"},
+    {"id": "bd-noisy-beta", "title": "noisy broad proof lane", "status": "in_progress", "priority": 2, "assignee": "AgentBeta"},
+    {"id": "bd-stale-contact", "title": "stale but recently touched", "status": "in_progress", "priority": 2, "assignee": "AgentTau"}
+  ]
+}

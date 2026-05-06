@@ -1,0 +1,9 @@
+{
+  "workers": [
+    {"worker_id": "worker-a", "status": "idle", "cpu_slots_available": 8, "memory_class": "large"},
+    {"worker_id": "worker-b", "status": "idle", "cpu_slots_available": 6, "memory_class": "large"},
+    {"worker_id": "worker-c", "status": "busy", "cpu_slots_available": 0, "memory_class": "xlarge"},
+    {"worker_id": "worker-d", "status": "busy", "cpu_slots_available": 0, "memory_class": "large"},
+    {"worker_id": "worker-e", "status": "available", "cpu_slots_available": 4, "memory_class": "medium"}
+  ]
+}

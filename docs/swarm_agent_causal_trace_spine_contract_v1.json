@@ -24,6 +24,24 @@
       "report.md"
     ]
   },
+  "graph": {
+    "script": "scripts/swarm_agent_causal_trace_graph.sh",
+    "smoke_script": "scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+    "schema_version": "franken-engine.swarm-agent-causal-trace-graph.v1",
+    "anomaly_report_schema_version": "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+    "artifacts": [
+      "swarm_agent_causal_trace_graph.json",
+      "swarm_agent_causal_trace_anomalies.json",
+      "events.jsonl",
+      "commands.txt",
+      "report.md"
+    ],
+    "stable_hash_fields": [
+      "nodes[].node_hash",
+      "edges[].edge_hash",
+      "anomalies[].anomaly_hash"
+    ]
+  },
   "planned_surfaces": [
     "scripts/swarm_agent_causal_trace_normalizer.sh",
     "scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh",
@@ -283,6 +301,10 @@
     "jq empty docs/swarm_agent_causal_trace_spine_contract_v1.json",
     "bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh check",
     "bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh selftest",
-    "git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json"
+    "bash -n scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+    "shellcheck -x scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+    "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check",
+    "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json"
   ]
 }

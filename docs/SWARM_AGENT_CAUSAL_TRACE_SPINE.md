@@ -115,6 +115,24 @@ source/event surface:
 The normalizer exits `42` for fail-closed trace contamination while preserving
 all artifacts for inspection.
 
+## Graph And Anomaly Artifacts
+
+`scripts/swarm_agent_causal_trace_graph.sh` consumes
+`swarm_agent_causal_trace_events.json` and emits the deterministic graph layer:
+
+- `swarm_agent_causal_trace_graph.json`
+- `swarm_agent_causal_trace_anomalies.json`
+- `events.jsonl`
+- `commands.txt`
+- `report.md`
+
+The graph producer links typed nodes and edges, including Agent Mail claim
+evidence, bead state, reservations, validation commands, RCH proof artifacts,
+closeout commits, and optional operator-status summaries. It assigns stable
+`sha256:` hashes to every graph node, edge, and anomaly row. It remains
+fixture-fed and advisory-only, and exits `42` when fail-closed anomalies are
+present.
+
 ## Validation
 
 ```bash
@@ -123,5 +141,9 @@ shellcheck -x scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_a
 jq empty docs/swarm_agent_causal_trace_spine_contract_v1.json
 bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh check
 bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh selftest
-git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
+bash -n scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh
+shellcheck -x scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh
+bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check
+bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh selftest
+git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh scripts/swarm_agent_causal_trace_graph.sh scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
 ```

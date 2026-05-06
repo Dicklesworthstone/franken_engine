@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 21,
+    "degraded_count": 22,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -53,6 +53,12 @@
     "checkpoint_restore_escalation_band": "unknown",
     "checkpoint_restore_top_action": null,
     "checkpoint_restore_unresolved_risk_count": 0,
+    "execution_queue_decision": "missing",
+    "execution_queue_conservative_mode": false,
+    "execution_queue_restore_dependency_state": "restore_unknown",
+    "execution_queue_top_start_count": 0,
+    "execution_queue_deferred_count": 0,
+    "execution_queue_bottleneck_count": 0,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -193,7 +199,7 @@
           "retry_safety": "safe_after_narrowing_or_timeout_adjustment",
           "classification_confidence": "high",
           "worker_id": "worker-smoke",
-          "command": "rch exec -- cargo test -p frankenengine-engine --test smoke",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_smoke cargo test -p frankenengine-engine --test smoke",
           "target_dir": "/tmp/rch_target_smoke",
           "recommended_next_action": "Retry only after narrowing the command."
         }
@@ -377,6 +383,35 @@
       "plan_artifact_path": null,
       "conformance_artifact_path": null
     },
+    "execution_queue_advisory": {
+      "artifact_status": "missing",
+      "risk_budget_artifact_status": "missing",
+      "bottleneck_artifact_status": "missing",
+      "run_manifest_artifact_status": "missing",
+      "severity": "warning",
+      "decision": "missing",
+      "conservative_mode": false,
+      "queue_depth": 0,
+      "top_recommended_starts": [],
+      "deferred_items": [],
+      "bottlenecks": [],
+      "bottleneck_count": 0,
+      "critical_bottleneck_count": 0,
+      "risk_budget": {
+        "remaining_millionths": 0,
+        "consumed_millionths": 0,
+        "conservative_threshold_millionths": 200000
+      },
+      "artifact_hash_hex": null,
+      "normalized_input_hash_hex": null,
+      "proof_lane_rationale": "Provide execution queue runner artifacts before trusting queue advisory output.",
+      "restore_dependency_state": "restore_unknown",
+      "restore_dependency_detail": "Checkpoint restore handoff artifacts are missing; queue advice is advisory only.",
+      "queue_artifact_path": null,
+      "risk_budget_artifact_path": null,
+      "bottleneck_report_artifact_path": null,
+      "run_manifest_artifact_path": null
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -398,7 +433,9 @@
         "high_cost",
         "collision_risk",
         "overloaded",
-        "forecast_low_confidence"
+        "forecast_low_confidence",
+        "execution_queue_conservative",
+        "execution_queue_restore_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -524,6 +561,12 @@
       "status": "missing",
       "impact": "checkpoint restore handoff artifacts are incomplete",
       "remediation": "Provide --checkpoint-bundle-json, --checkpoint-restore-plan-json, and --checkpoint-restore-conformance-report-json before trusting restore readiness."
+    },
+    {
+      "component": "execution_queue_advisory",
+      "status": "missing",
+      "impact": "execution queue runner artifacts are incomplete",
+      "remediation": "Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice."
     },
     {
       "component": "rch_incident_packet",

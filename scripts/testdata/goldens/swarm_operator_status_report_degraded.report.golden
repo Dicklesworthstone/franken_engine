@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `21`
+- Degraded fields: `22`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
@@ -12,6 +12,7 @@
 - Prefetch advisory: `missing`
 - Starvation rescue escalation: `unknown` via `null`
 - Checkpoint restore escalation: `unknown` via `null`
+- Execution queue: `missing` top=`0` deferred=`0` restore=`restore_unknown`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -27,6 +28,10 @@
 - Checkpoint bundle: `missing`
 - Checkpoint restore plan: `missing`
 - Checkpoint restore conformance report: `missing`
+- Execution queue artifact: `missing`
+- Execution queue risk budget: `missing`
+- Execution queue bottleneck report: `missing`
+- Execution queue run manifest: `missing`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
@@ -52,4 +57,5 @@
 - `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
 - `starvation_rescue_handoff` `missing`: starvation rescue handoff artifacts are incomplete. Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness.
 - `checkpoint_restore_handoff` `missing`: checkpoint restore handoff artifacts are incomplete. Provide --checkpoint-bundle-json, --checkpoint-restore-plan-json, and --checkpoint-restore-conformance-report-json before trusting restore readiness.
+- `execution_queue_advisory` `missing`: execution queue runner artifacts are incomplete. Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

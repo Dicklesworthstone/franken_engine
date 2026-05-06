@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `2`
+- Degraded fields: `3`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `high` / `nominal`
@@ -12,6 +12,7 @@
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
 - Checkpoint restore escalation: `fail_closed` via `manual_ownership_review`
+- Execution queue: `pass` top=`1` deferred=`0` restore=`restore_blocked`
 - High-cost commands: `0`
 - Collision risk: `reserved_overlap`
 - RCH incidents: `0`
@@ -27,10 +28,15 @@
 - Checkpoint bundle: `[SMOKE_ROOT]/collision_risk-fixtures/checkpoint_bundle.json`
 - Checkpoint restore plan: `[SMOKE_ROOT]/collision_risk-fixtures/checkpoint_restore_plan.json`
 - Checkpoint restore conformance report: `[SMOKE_ROOT]/collision_risk-fixtures/checkpoint_restore_conformance_report.json`
+- Execution queue artifact: `[SMOKE_ROOT]/collision_risk-fixtures/execution_queue_artifact.json`
+- Execution queue risk budget: `[SMOKE_ROOT]/collision_risk-fixtures/execution_queue_risk_budget_receipt.json`
+- Execution queue bottleneck report: `[SMOKE_ROOT]/collision_risk-fixtures/execution_queue_bottleneck_report.json`
+- Execution queue run manifest: `[SMOKE_ROOT]/collision_risk-fixtures/execution_queue_run_manifest.json`
 
 - `respect_checkpoint_restore_fail_closed`: checkpoint restore handoff is fail-closed or contradicted by conformance evidence
 
 ## Degraded
 
 - `checkpoint_restore_handoff` `fail_closed`: checkpoint restore handoff still carries fail-closed or manual-review drift. Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint.
+- `execution_queue_advisory` `warning`: execution queue advisory is conservative, blocked, or coupled to restore drift. Execution queue runner artifacts are present and risk budget permits advisory queue use.
 - `collision_risk` `reserved_overlap`: planned work may collide with another agent or dirty surface. Coordinate with listed agents or use safe alternatives before editing.

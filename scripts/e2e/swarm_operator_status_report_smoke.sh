@@ -143,6 +143,7 @@ write_predictive_extension_fixtures() {
 
   write_starvation_rescue_fixtures "$fixture_dir" "advisory"
   write_checkpoint_restore_fixtures "$fixture_dir" "healthy"
+  write_execution_queue_advisory_fixtures "$fixture_dir" "healthy"
 }
 
 write_starvation_rescue_fixtures() {
@@ -458,6 +459,95 @@ write_checkpoint_restore_fixtures() {
     }' >"${fixture_dir}/checkpoint_restore_conformance_report.json"
 }
 
+write_execution_queue_advisory_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local golden_path
+
+  case "$mode" in
+    healthy)
+      golden_path="${root_dir}/scripts/testdata/swarm_execution_queue/goldens/healthy_runner_golden.json"
+      ;;
+    conservative)
+      golden_path="${root_dir}/scripts/testdata/swarm_execution_queue/goldens/proof_brownout_runner_golden.json"
+      ;;
+    blocked_parent)
+      golden_path="${root_dir}/scripts/testdata/swarm_execution_queue/goldens/blocked_parent_runner_golden.json"
+      ;;
+    *)
+      record_failure "unknown execution queue fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  jq -n \
+    --slurpfile golden "$golden_path" \
+    '($golden[0]) as $g | {
+      schema_version:$g.runner.artifact_schema_version,
+      runner_schema_version:"franken-engine.swarm-execution-queue-runner.v1",
+      source_revision:"smoke-rev",
+      normalized_input_hash_hex:$g.runner.normalized_input_hash_hex,
+      artifact_hash_hex:$g.runner.artifact_hash_hex,
+      queue_artifact:{
+        queue:$g.runner.queue,
+        bottlenecks:($g.runner.bottleneck_ids | map({task_id:., severity:"low", downstream_count:1, unassigned:true})),
+        risk_budget:$g.runner.risk_budget
+      }
+    }' >"${fixture_dir}/execution_queue_artifact.json"
+
+  jq -n \
+    --slurpfile golden "$golden_path" \
+    '($golden[0]) as $g | {
+      schema_version:$g.runner.risk_budget_schema_version,
+      runner_schema_version:"franken-engine.swarm-execution-queue-runner.v1",
+      source_revision:"smoke-rev",
+      normalized_input_hash_hex:$g.runner.normalized_input_hash_hex,
+      decision:$g.expected_decision,
+      risk_budget:$g.runner.risk_budget,
+      conservative_mode:$g.runner.conservative_mode,
+      queue_depth:$g.runner.queue_depth
+    }' >"${fixture_dir}/execution_queue_risk_budget_receipt.json"
+
+  jq -n \
+    --slurpfile golden "$golden_path" \
+    '($golden[0]) as $g | {
+      schema_version:$g.runner.bottleneck_schema_version,
+      runner_schema_version:"franken-engine.swarm-execution-queue-runner.v1",
+      source_revision:"smoke-rev",
+      normalized_input_hash_hex:$g.runner.normalized_input_hash_hex,
+      bottleneck_count:$g.runner.bottleneck_count,
+      critical_bottleneck_count:$g.runner.critical_bottleneck_count,
+      bottlenecks:($g.runner.bottleneck_ids | map({task_id:., severity:"low", downstream_count:1, unassigned:true}))
+    }' >"${fixture_dir}/execution_queue_bottleneck_report.json"
+
+  jq -n \
+    --slurpfile golden "$golden_path" \
+    --arg fixture_dir "$fixture_dir" \
+    '($golden[0]) as $g | {
+      schema_version:"franken-engine.swarm-execution-queue-runner.v1",
+      source_revision:"smoke-rev",
+      normalized_input_path:$g.normalized_input_path,
+      normalized_input_hash_hex:$g.runner.normalized_input_hash_hex,
+      decision:$g.expected_decision,
+      task_count:($g.runner.queue | length),
+      queue_depth:$g.runner.queue_depth,
+      artifact_hash_hex:$g.runner.artifact_hash_hex,
+      artifact_paths:{
+        run_manifest_json:($fixture_dir + "/execution_queue_run_manifest.json"),
+        events_jsonl:($fixture_dir + "/execution_queue.events.jsonl"),
+        commands_txt:($fixture_dir + "/execution_queue.commands.txt"),
+        execution_queue_artifact_json:($fixture_dir + "/execution_queue_artifact.json"),
+        risk_budget_receipt_json:($fixture_dir + "/execution_queue_risk_budget_receipt.json"),
+        bottleneck_report_json:($fixture_dir + "/execution_queue_bottleneck_report.json"),
+        operator_summary_md:($fixture_dir + "/execution_queue.summary.md")
+      }
+    }' >"${fixture_dir}/execution_queue_run_manifest.json"
+
+  : >"${fixture_dir}/execution_queue.events.jsonl"
+  printf './franken_swarm_execution_queue --smoke-fixture\n' >"${fixture_dir}/execution_queue.commands.txt"
+  printf 'execution queue advisory fixture\n' >"${fixture_dir}/execution_queue.summary.md"
+}
+
 write_healthy_fixtures() {
   local fixture_dir="$1"
 
@@ -569,7 +659,7 @@ write_degraded_fixtures() {
   jq -n '[{path:"crates/franken-engine/src/semantic_dark_matter_engine.rs", reserved:true, overlaps_ready:true}]' >"${fixture_dir}/dirty_files.json"
   jq -n '{collision_risk:"none", conflicting_agents:[], safe_alternatives:[], reservation_recommendations:[], conflicts:{reservations:[], dirty:[], in_progress:[]}}' >"${fixture_dir}/collision_receipt.json"
   jq -n '{schema_version:"franken-engine.proof-freshness-decay-report.v1", proof_artifact_id:"proof-current", freshness_state:"fresh", reusable:true, reason:"proof artifact is reusable", recommended_next_action:"Reuse the proof artifact.", covered_paths:["crates/franken-engine/src/semantic_dark_matter_engine.rs"], changed_paths:[]}' >"${fixture_dir}/proof_freshness.json"
-  jq -n '{schema_version:"franken-engine.rch-incident-packet.v1", incident_id:"rch-incident-smoke", status:"fail", failure_kind:"worker_timeout", retry_safety:"safe_after_narrowing_or_timeout_adjustment", classification_confidence:"high", worker_id:"worker-smoke", command:"rch exec -- cargo test -p frankenengine-engine --test smoke", target_dir:"/tmp/rch_target_smoke", recommended_next_action:"Retry only after narrowing the command."}' >"${fixture_dir}/rch_incident_packet.json"
+  jq -n '{schema_version:"franken-engine.rch-incident-packet.v1", incident_id:"rch-incident-smoke", status:"fail", failure_kind:"worker_timeout", retry_safety:"safe_after_narrowing_or_timeout_adjustment", classification_confidence:"high", worker_id:"worker-smoke", command:"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_smoke cargo test -p frankenengine-engine --test smoke", target_dir:"/tmp/rch_target_smoke", recommended_next_action:"Retry only after narrowing the command."}' >"${fixture_dir}/rch_incident_packet.json"
 }
 
 write_stale_proof_fixtures() {
@@ -847,6 +937,15 @@ run_case() {
     forecast_low_confidence)
       write_forecast_low_confidence_fixtures "$fixture_dir"
       ;;
+    execution_queue_conservative)
+      write_healthy_fixtures "$fixture_dir"
+      write_execution_queue_advisory_fixtures "$fixture_dir" "conservative"
+      ;;
+    execution_queue_restore_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_checkpoint_restore_fixtures "$fixture_dir" "stale"
+      write_execution_queue_advisory_fixtures "$fixture_dir" "blocked_parent"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -868,6 +967,10 @@ run_case() {
   [[ -f "${fixture_dir}/checkpoint_bundle.json" ]] && extra_args+=(--checkpoint-bundle-json "${fixture_dir}/checkpoint_bundle.json")
   [[ -f "${fixture_dir}/checkpoint_restore_plan.json" ]] && extra_args+=(--checkpoint-restore-plan-json "${fixture_dir}/checkpoint_restore_plan.json")
   [[ -f "${fixture_dir}/checkpoint_restore_conformance_report.json" ]] && extra_args+=(--checkpoint-restore-conformance-report-json "${fixture_dir}/checkpoint_restore_conformance_report.json")
+  [[ -f "${fixture_dir}/execution_queue_artifact.json" ]] && extra_args+=(--execution-queue-artifact-json "${fixture_dir}/execution_queue_artifact.json")
+  [[ -f "${fixture_dir}/execution_queue_risk_budget_receipt.json" ]] && extra_args+=(--execution-queue-risk-budget-json "${fixture_dir}/execution_queue_risk_budget_receipt.json")
+  [[ -f "${fixture_dir}/execution_queue_bottleneck_report.json" ]] && extra_args+=(--execution-queue-bottleneck-report-json "${fixture_dir}/execution_queue_bottleneck_report.json")
+  [[ -f "${fixture_dir}/execution_queue_run_manifest.json" ]] && extra_args+=(--execution-queue-run-manifest-json "${fixture_dir}/execution_queue_run_manifest.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -923,6 +1026,11 @@ run_case() {
     and (.predictive_dashboard.checkpoint_restore.plan_decision | type == "string")
     and (.predictive_dashboard.checkpoint_restore.escalation_band | type == "string")
     and (.predictive_dashboard.checkpoint_restore.unresolved_risks | type == "array")
+    and (.predictive_dashboard.execution_queue_advisory.decision | type == "string")
+    and (.predictive_dashboard.execution_queue_advisory.top_recommended_starts | type == "array")
+    and (.predictive_dashboard.execution_queue_advisory.deferred_items | type == "array")
+    and (.predictive_dashboard.execution_queue_advisory.bottlenecks | type == "array")
+    and (.predictive_dashboard.execution_queue_advisory.restore_dependency_state | type == "string")
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -933,6 +1041,10 @@ run_case() {
     and ((.artifact_paths.checkpoint_bundle_json == null) or (.artifact_paths.checkpoint_bundle_json | type == "string"))
     and ((.artifact_paths.checkpoint_restore_plan_json == null) or (.artifact_paths.checkpoint_restore_plan_json | type == "string"))
     and ((.artifact_paths.checkpoint_restore_conformance_report_json == null) or (.artifact_paths.checkpoint_restore_conformance_report_json | type == "string"))
+    and ((.artifact_paths.execution_queue_artifact_json == null) or (.artifact_paths.execution_queue_artifact_json | type == "string"))
+    and ((.artifact_paths.execution_queue_risk_budget_json == null) or (.artifact_paths.execution_queue_risk_budget_json | type == "string"))
+    and ((.artifact_paths.execution_queue_bottleneck_report_json == null) or (.artifact_paths.execution_queue_bottleneck_report_json | type == "string"))
+    and ((.artifact_paths.execution_queue_run_manifest_json == null) or (.artifact_paths.execution_queue_run_manifest_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -959,6 +1071,11 @@ run_case() {
         and .predictive_dashboard.checkpoint_restore.plan_decision == "resume"
         and .predictive_dashboard.checkpoint_restore.escalation_band == "ready"
         and (.predictive_dashboard.checkpoint_restore.unresolved_risks | length) == 0
+        and .predictive_dashboard.execution_queue_advisory.decision == "pass"
+        and .predictive_dashboard.execution_queue_advisory.conservative_mode == false
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "clear"
+        and (.predictive_dashboard.execution_queue_advisory.top_recommended_starts | length) == 1
+        and (.predictive_dashboard.execution_queue_advisory.bottlenecks | length) == 1
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -976,6 +1093,7 @@ run_case() {
         and .predictive_dashboard.prefetch_roi.artifact_status == "missing"
         and .predictive_dashboard.starvation_rescue.artifact_status == "missing"
         and .predictive_dashboard.checkpoint_restore.artifact_status == "missing"
+        and .predictive_dashboard.execution_queue_advisory.artifact_status == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -987,6 +1105,7 @@ run_case() {
         and .predictive_dashboard.checkpoint_restore.escalation_band == "fail_closed"
         and .predictive_dashboard.checkpoint_restore.top_restore_action == "capture_fresh_checkpoint_bundle"
         and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("checkpoint_stale"))
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "restore_blocked"
         and any(.degraded[]; .component == "proof_freshness")
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1004,6 +1123,7 @@ run_case() {
         and .predictive_dashboard.checkpoint_restore.plan_decision == "fail_closed"
         and .predictive_dashboard.checkpoint_restore.top_restore_action == "manual_ownership_review"
         and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("ownership_drift"))
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "restore_blocked"
         and any(.degraded[]; .component == "collision_risk")
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1024,6 +1144,7 @@ run_case() {
         and .predictive_dashboard.checkpoint_restore.escalation_band == "manual_review"
         and .predictive_dashboard.checkpoint_restore.top_restore_action == "review_salvage_pressure_before_resume"
         and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("salvage_manual_review"))
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "restore_manual_review"
         and .predictive_dashboard.staged_contamination.decision == "pass"
         and any(.degraded[]; .component == "qos_batches")
       ' "${output_dir}/status.json" >/dev/null
@@ -1035,6 +1156,26 @@ run_case() {
         and .predictive_dashboard.capacity_forecast.overall_state == "blocked"
         and (.predictive_dashboard.capacity_forecast.blocked_categories | index("compile_pressure"))
         and any(.degraded[]; .component == "capacity_forecast")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    execution_queue_conservative)
+      jq -e '
+        .predictive_dashboard.execution_queue_advisory.decision == "degraded"
+        and .predictive_dashboard.execution_queue_advisory.conservative_mode == true
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "clear"
+        and .predictive_dashboard.execution_queue_advisory.risk_budget.remaining_millionths == 126000
+        and (.predictive_dashboard.execution_queue_advisory.deferred_items | map(.task_id) | index("bd-brownout-ready"))
+        and any(.degraded[]; .component == "execution_queue_advisory")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    execution_queue_restore_blocked)
+      jq -e '
+        .predictive_dashboard.execution_queue_advisory.decision == "pass"
+        and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "restore_blocked"
+        and (.predictive_dashboard.execution_queue_advisory.restore_dependency_detail | test("fail-closed|blocked"))
+        and (.predictive_dashboard.execution_queue_advisory.top_recommended_starts | map(.task_id) | index("bd-child-contract"))
+        and (.predictive_dashboard.execution_queue_advisory.deferred_items | map(.task_id) | index("bd-parent"))
+        and any(.degraded[]; .component == "execution_queue_advisory")
       ' "${output_dir}/status.json" >/dev/null
       ;;
   esac
@@ -1068,6 +1209,8 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("collision_risk"))
     and (.golden_fixture_cases | index("overloaded"))
     and (.golden_fixture_cases | index("forecast_low_confidence"))
+    and (.golden_fixture_cases | index("execution_queue_conservative"))
+    and (.golden_fixture_cases | index("execution_queue_restore_blocked"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -1080,6 +1223,9 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.restore_readiness_hint"))
     and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.top_restore_action"))
     and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.unresolved_risks"))
+    and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.top_recommended_starts"))
+    and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.deferred_items"))
+    and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.restore_dependency_state"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -1103,6 +1249,8 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_checkpoint_restore_planner_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_checkpoint_restore_conformance_gate.sh' "$contract_doc"
   grep -Fq 'docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_runner_contract_v1.json' "$contract_doc"
+  grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -1128,6 +1276,8 @@ run_selftest() {
   run_case "collision_risk" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "overloaded" "degraded" "ok" "degraded" "ok" "$tmp_root"
   run_case "forecast_low_confidence" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "execution_queue_conservative" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "execution_queue_restore_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

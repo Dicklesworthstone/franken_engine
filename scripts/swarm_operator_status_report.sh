@@ -37,6 +37,10 @@ starvation_rescue_conformance_report_json=""
 checkpoint_bundle_json=""
 checkpoint_restore_plan_json=""
 checkpoint_restore_conformance_report_json=""
+execution_queue_artifact_json=""
+execution_queue_risk_budget_json=""
+execution_queue_bottleneck_report_json=""
+execution_queue_run_manifest_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -81,6 +85,10 @@ Options:
   --checkpoint-bundle-json FILE
   --checkpoint-restore-plan-json FILE
   --checkpoint-restore-conformance-report-json FILE
+  --execution-queue-artifact-json FILE
+  --execution-queue-risk-budget-json FILE
+  --execution-queue-bottleneck-report-json FILE
+  --execution-queue-run-manifest-json FILE
 EOF
 }
 
@@ -230,6 +238,22 @@ while [[ "$#" -gt 0 ]]; do
       checkpoint_restore_conformance_report_json="$2"
       shift 2
       ;;
+    --execution-queue-artifact-json)
+      execution_queue_artifact_json="$2"
+      shift 2
+      ;;
+    --execution-queue-risk-budget-json)
+      execution_queue_risk_budget_json="$2"
+      shift 2
+      ;;
+    --execution-queue-bottleneck-report-json)
+      execution_queue_bottleneck_report_json="$2"
+      shift 2
+      ;;
+    --execution-queue-run-manifest-json)
+      execution_queue_run_manifest_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -298,6 +322,10 @@ starvation_rescue_conformance_report_status="missing"
 checkpoint_bundle_status="missing"
 checkpoint_restore_plan_status="missing"
 checkpoint_restore_conformance_report_status="missing"
+execution_queue_artifact_status="missing"
+execution_queue_risk_budget_status="missing"
+execution_queue_bottleneck_report_status="missing"
+execution_queue_run_manifest_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -312,6 +340,10 @@ if [[ -n "$starvation_rescue_conformance_report_json" ]]; then starvation_rescue
 if [[ -n "$checkpoint_bundle_json" ]]; then checkpoint_bundle_status="provided"; fi
 if [[ -n "$checkpoint_restore_plan_json" ]]; then checkpoint_restore_plan_status="provided"; fi
 if [[ -n "$checkpoint_restore_conformance_report_json" ]]; then checkpoint_restore_conformance_report_status="provided"; fi
+if [[ -n "$execution_queue_artifact_json" ]]; then execution_queue_artifact_status="provided"; fi
+if [[ -n "$execution_queue_risk_budget_json" ]]; then execution_queue_risk_budget_status="provided"; fi
+if [[ -n "$execution_queue_bottleneck_report_json" ]]; then execution_queue_bottleneck_report_status="provided"; fi
+if [[ -n "$execution_queue_run_manifest_json" ]]; then execution_queue_run_manifest_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -326,6 +358,10 @@ starvation_rescue_conformance_report_data="$(json_or_default "$starvation_rescue
 checkpoint_bundle_data="$(json_or_default "$checkpoint_bundle_json" '{"schema_version":"franken-engine.swarm-checkpoint-bundle.v1","checkpoint_id":"missing","capture_decision":"missing","restore_readiness_hint":"unknown","artifact_paths":{},"blockers":[],"artifact_ledger":{}}' 'checkpoint-bundle')"
 checkpoint_restore_plan_data="$(json_or_default "$checkpoint_restore_plan_json" '{"schema_version":"franken-engine.swarm-checkpoint-restore-plan.v1","checkpoint_id":"missing","decision":"missing","drift_class":"unknown","summary":{"top_restore_action":null,"provided_current_comparison_count":0,"missing_current_comparison_count":0},"drift_receipt":{"checkpoint_age_seconds":null,"fail_closed_reasons":[],"findings":[]},"artifact_paths":{}}' 'checkpoint-restore-plan')"
 checkpoint_restore_conformance_report_data="$(json_or_default "$checkpoint_restore_conformance_report_json" '{"schema_version":"franken-engine.swarm-checkpoint-restore-conformance-report.v1","decision":"missing","summary":{"restore_decision":"missing","checkpoint_capture_decision":"missing","top_restore_action":null,"gate_failure_count":0,"checked_artifact_path_count":0},"gate_failures":[],"artifact_paths":{}}' 'checkpoint-restore-conformance-report')"
+execution_queue_artifact_data="$(json_or_default "$execution_queue_artifact_json" '{"schema_version":"franken-engine.swarm-execution-queue-artifact.v1","artifact_hash_hex":null,"normalized_input_hash_hex":null,"queue_artifact":{"queue":[],"bottlenecks":[],"risk_budget":{"remaining_millionths":0,"consumed_millionths":0,"conservative_mode":false,"conservative_threshold_millionths":200000}}}' 'execution-queue-artifact')"
+execution_queue_risk_budget_data="$(json_or_default "$execution_queue_risk_budget_json" '{"schema_version":"franken-engine.swarm-execution-risk-budget-receipt.v1","decision":"missing","risk_budget":{"remaining_millionths":0,"consumed_millionths":0,"conservative_mode":false,"conservative_threshold_millionths":200000},"conservative_mode":false,"queue_depth":0}' 'execution-queue-risk-budget')"
+execution_queue_bottleneck_report_data="$(json_or_default "$execution_queue_bottleneck_report_json" '{"schema_version":"franken-engine.swarm-execution-bottleneck-report.v1","bottleneck_count":0,"critical_bottleneck_count":0,"bottlenecks":[]}' 'execution-queue-bottleneck-report')"
+execution_queue_run_manifest_data="$(json_or_default "$execution_queue_run_manifest_json" '{"schema_version":"franken-engine.swarm-execution-queue-runner.v1","decision":"missing","task_count":0,"queue_depth":0,"artifact_hash_hex":null,"artifact_paths":{}}' 'execution-queue-run-manifest')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -349,6 +385,10 @@ jq -n \
   --arg checkpoint_bundle_status "$checkpoint_bundle_status" \
   --arg checkpoint_restore_plan_status "$checkpoint_restore_plan_status" \
   --arg checkpoint_restore_conformance_report_status "$checkpoint_restore_conformance_report_status" \
+  --arg execution_queue_artifact_status "$execution_queue_artifact_status" \
+  --arg execution_queue_risk_budget_status "$execution_queue_risk_budget_status" \
+  --arg execution_queue_bottleneck_report_status "$execution_queue_bottleneck_report_status" \
+  --arg execution_queue_run_manifest_status "$execution_queue_run_manifest_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -379,6 +419,10 @@ jq -n \
   --argjson checkpoint_bundle "$checkpoint_bundle_data" \
   --argjson checkpoint_restore_plan "$checkpoint_restore_plan_data" \
   --argjson checkpoint_restore_conformance_report "$checkpoint_restore_conformance_report_data" \
+  --argjson execution_queue_artifact "$execution_queue_artifact_data" \
+  --argjson execution_queue_risk_budget "$execution_queue_risk_budget_data" \
+  --argjson execution_queue_bottleneck_report "$execution_queue_bottleneck_report_data" \
+  --argjson execution_queue_run_manifest "$execution_queue_run_manifest_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -831,6 +875,103 @@ jq -n \
       plan_artifact_path: ($checkpoint_restore_plan.artifact_paths.swarm_checkpoint_restore_plan_json // null),
       conformance_artifact_path: ($checkpoint_restore_conformance_report.artifact_paths.swarm_checkpoint_restore_conformance_report_json // null)
     }) as $checkpoint_restore_summary
+  | ($execution_queue_artifact.queue_artifact.queue // []) as $execution_queue_entries
+  | ($execution_queue_bottleneck_report.bottlenecks // $execution_queue_artifact.queue_artifact.bottlenecks // []) as $execution_queue_bottlenecks
+  | ({
+      artifact_status: $execution_queue_artifact_status,
+      risk_budget_artifact_status: $execution_queue_risk_budget_status,
+      bottleneck_artifact_status: $execution_queue_bottleneck_report_status,
+      run_manifest_artifact_status: $execution_queue_run_manifest_status,
+      severity: (
+        if $execution_queue_artifact_status == "missing"
+          or $execution_queue_risk_budget_status == "missing"
+          or $execution_queue_bottleneck_report_status == "missing"
+          or $execution_queue_run_manifest_status == "missing" then "warning"
+        elif (($execution_queue_risk_budget.decision // $execution_queue_run_manifest.decision // "") == "fail_closed") then "critical"
+        elif (($execution_queue_risk_budget.conservative_mode // $execution_queue_artifact.queue_artifact.risk_budget.conservative_mode // false) == true)
+          or (($execution_queue_bottleneck_report.critical_bottleneck_count // 0) > 0)
+          or ($checkpoint_restore_summary.severity != "ok") then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($execution_queue_risk_budget.decision // $execution_queue_run_manifest.decision // "missing"),
+      conservative_mode: (($execution_queue_risk_budget.conservative_mode // $execution_queue_artifact.queue_artifact.risk_budget.conservative_mode // false) == true),
+      queue_depth: ($execution_queue_risk_budget.queue_depth // ($execution_queue_entries | length)),
+      top_recommended_starts: bounded(
+        $execution_queue_entries
+        | map(select((.wave // "") == "ready_now"))
+        | map({
+            rank: (.rank // null),
+            task_id: (.task_id // null),
+            title: (.title // null),
+            wave: (.wave // null),
+            first_action: (.first_action // null),
+            fallback_trigger: (.fallback_trigger // "none"),
+            ev_millionths: (.ev_millionths // null)
+          })
+      ),
+      deferred_items: bounded(
+        $execution_queue_entries
+        | map(select(((.wave // "") != "ready_now") or ((.fallback_trigger // "none") != "none")))
+        | map({
+            rank: (.rank // null),
+            task_id: (.task_id // null),
+            title: (.title // null),
+            wave: (.wave // null),
+            first_action: (.first_action // null),
+            fallback_trigger: (.fallback_trigger // "none"),
+            open_blocker_count: (.open_blocker_count // 0)
+          })
+      ),
+      bottlenecks: bounded($execution_queue_bottlenecks),
+      bottleneck_count: ($execution_queue_bottleneck_report.bottleneck_count // ($execution_queue_bottlenecks | length)),
+      critical_bottleneck_count: ($execution_queue_bottleneck_report.critical_bottleneck_count // 0),
+      risk_budget: {
+        remaining_millionths: ($execution_queue_risk_budget.risk_budget.remaining_millionths // $execution_queue_artifact.queue_artifact.risk_budget.remaining_millionths // 0),
+        consumed_millionths: ($execution_queue_risk_budget.risk_budget.consumed_millionths // $execution_queue_artifact.queue_artifact.risk_budget.consumed_millionths // 0),
+        conservative_threshold_millionths: ($execution_queue_risk_budget.risk_budget.conservative_threshold_millionths // $execution_queue_artifact.queue_artifact.risk_budget.conservative_threshold_millionths // 200000)
+      },
+      artifact_hash_hex: ($execution_queue_artifact.artifact_hash_hex // $execution_queue_run_manifest.artifact_hash_hex // null),
+      normalized_input_hash_hex: ($execution_queue_artifact.normalized_input_hash_hex // $execution_queue_run_manifest.normalized_input_hash_hex // null),
+      proof_lane_rationale: (
+        if $execution_queue_artifact_status == "missing"
+          or $execution_queue_risk_budget_status == "missing"
+          or $execution_queue_bottleneck_report_status == "missing"
+          or $execution_queue_run_manifest_status == "missing" then
+          "Provide execution queue runner artifacts before trusting queue advisory output."
+        elif (($execution_queue_risk_budget.conservative_mode // false) == true) then
+          "Risk budget is in conservative mode; prefer narrow/no-cargo proof work before broad validation."
+        else
+          "Execution queue runner artifacts are present and risk budget permits advisory queue use."
+        end
+      ),
+      restore_dependency_state: (
+        if $checkpoint_bundle_status == "missing"
+          or $checkpoint_restore_plan_status == "missing"
+          or $checkpoint_restore_conformance_report_status == "missing" then "restore_unknown"
+        elif $checkpoint_restore_summary.severity == "critical" then "restore_blocked"
+        elif $checkpoint_restore_summary.severity == "warning" then "restore_manual_review"
+        else "clear"
+        end
+      ),
+      restore_dependency_detail: (
+        if $checkpoint_bundle_status == "missing"
+          or $checkpoint_restore_plan_status == "missing"
+          or $checkpoint_restore_conformance_report_status == "missing" then
+          "Checkpoint restore handoff artifacts are missing; queue advice is advisory only."
+        elif $checkpoint_restore_summary.severity == "critical" then
+          "Checkpoint restore handoff is fail-closed or blocked; do not let queue advice override restore remediation."
+        elif $checkpoint_restore_summary.severity == "warning" then
+          "Checkpoint restore handoff requires manual review; queue advice must stay secondary."
+        else
+          "Checkpoint restore handoff is ready."
+        end
+      ),
+      queue_artifact_path: ($execution_queue_run_manifest.artifact_paths.execution_queue_artifact_json // null),
+      risk_budget_artifact_path: ($execution_queue_run_manifest.artifact_paths.risk_budget_receipt_json // null),
+      bottleneck_report_artifact_path: ($execution_queue_run_manifest.artifact_paths.bottleneck_report_json // null),
+      run_manifest_artifact_path: ($execution_queue_run_manifest.artifact_paths.run_manifest_json // null)
+    }) as $execution_queue_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -905,6 +1046,14 @@ jq -n \
       elif $checkpoint_restore_summary.severity != "ok" then
         [{component: "checkpoint_restore_handoff", status: $checkpoint_restore_summary.escalation_band, impact: "checkpoint restore handoff still carries fail-closed or manual-review drift", remediation: "Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint."}]
       else [] end)
+    + (if $execution_queue_artifact_status == "missing"
+          or $execution_queue_risk_budget_status == "missing"
+          or $execution_queue_bottleneck_report_status == "missing"
+          or $execution_queue_run_manifest_status == "missing" then
+        [{component: "execution_queue_advisory", status: "missing", impact: "execution queue runner artifacts are incomplete", remediation: "Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice."}]
+      elif $execution_queue_summary.severity != "ok" then
+        [{component: "execution_queue_advisory", status: $execution_queue_summary.severity, impact: "execution queue advisory is conservative, blocked, or coupled to restore drift", remediation: $execution_queue_summary.proof_lane_rationale}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -971,6 +1120,12 @@ jq -n \
         checkpoint_restore_escalation_band: $checkpoint_restore_summary.escalation_band,
         checkpoint_restore_top_action: $checkpoint_restore_summary.top_restore_action,
         checkpoint_restore_unresolved_risk_count: (($checkpoint_restore_summary.unresolved_risks // []) | length),
+        execution_queue_decision: $execution_queue_summary.decision,
+        execution_queue_conservative_mode: $execution_queue_summary.conservative_mode,
+        execution_queue_restore_dependency_state: $execution_queue_summary.restore_dependency_state,
+        execution_queue_top_start_count: (($execution_queue_summary.top_recommended_starts // []) | length),
+        execution_queue_deferred_count: (($execution_queue_summary.deferred_items // []) | length),
+        execution_queue_bottleneck_count: $execution_queue_summary.bottleneck_count,
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -1033,9 +1188,10 @@ jq -n \
         prefetch_roi: $prefetch_roi_summary,
         starvation_rescue: $starvation_rescue_summary,
         checkpoint_restore: $checkpoint_restore_summary,
+        execution_queue_advisory: $execution_queue_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1048,8 +1204,16 @@ jq -n \
           [recommendation("respect_checkpoint_restore_fail_closed"; null; "checkpoint restore handoff is fail-closed or contradicted by conformance evidence")]
         elif $starvation_rescue_summary.severity == "critical" then
           [recommendation("respect_starvation_rescue_fail_closed"; null; "starvation rescue handoff is fail-closed or contradicted by conformance evidence")]
+        elif $execution_queue_summary.restore_dependency_state == "restore_blocked" then
+          [recommendation("respect_restore_before_queue"; null; "execution queue advisory reports checkpoint restore is blocked")]
+        elif $execution_queue_summary.severity == "critical" then
+          [recommendation("respect_execution_queue_fail_closed"; null; "execution queue advisory failed closed or has critical bottlenecks")]
         elif $checkpoint_restore_summary.severity == "warning" then
           [recommendation("review_checkpoint_restore_handoff"; null; "checkpoint restore handoff requires manual review before resume")]
+        elif $execution_queue_summary.restore_dependency_state == "restore_manual_review" then
+          [recommendation("review_restore_before_queue"; null; "execution queue advisory is secondary to checkpoint restore manual review")]
+        elif $execution_queue_summary.severity == "warning" then
+          [recommendation("use_execution_queue_conservatively"; null; "execution queue advisory reports conservative risk budget or degraded evidence")]
         elif $starvation_rescue_summary.severity == "warning" then
           [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
@@ -1111,7 +1275,11 @@ jq -n \
         starvation_rescue_conformance_report_json: $starvation_rescue_summary.conformance_artifact_path,
         checkpoint_bundle_json: $checkpoint_restore_summary.artifact_path,
         checkpoint_restore_plan_json: $checkpoint_restore_summary.plan_artifact_path,
-        checkpoint_restore_conformance_report_json: $checkpoint_restore_summary.conformance_artifact_path
+        checkpoint_restore_conformance_report_json: $checkpoint_restore_summary.conformance_artifact_path,
+        execution_queue_artifact_json: $execution_queue_summary.queue_artifact_path,
+        execution_queue_risk_budget_json: $execution_queue_summary.risk_budget_artifact_path,
+        execution_queue_bottleneck_report_json: $execution_queue_summary.bottleneck_report_artifact_path,
+        execution_queue_run_manifest_json: $execution_queue_summary.run_manifest_artifact_path
       }
     }
   ' >"$status_path"
@@ -1129,6 +1297,7 @@ jq -n \
   printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"
   printf -- "- Starvation rescue escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.starvation_rescue_escalation_band' "$status_path")" "$(jq -r '.summary.starvation_rescue_top_action' "$status_path")"
   printf -- "- Checkpoint restore escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.checkpoint_restore_escalation_band' "$status_path")" "$(jq -r '.summary.checkpoint_restore_top_action' "$status_path")"
+  printf -- "- Execution queue: \`%s\` top=\`%s\` deferred=\`%s\` restore=\`%s\`\n" "$(jq -r '.summary.execution_queue_decision' "$status_path")" "$(jq '.summary.execution_queue_top_start_count' "$status_path")" "$(jq '.summary.execution_queue_deferred_count' "$status_path")" "$(jq -r '.summary.execution_queue_restore_dependency_state' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -1143,7 +1312,11 @@ jq -n \
       {label:"Starvation rescue conformance report", path:.artifact_paths.starvation_rescue_conformance_report_json},
       {label:"Checkpoint bundle", path:.artifact_paths.checkpoint_bundle_json},
       {label:"Checkpoint restore plan", path:.artifact_paths.checkpoint_restore_plan_json},
-      {label:"Checkpoint restore conformance report", path:.artifact_paths.checkpoint_restore_conformance_report_json}
+      {label:"Checkpoint restore conformance report", path:.artifact_paths.checkpoint_restore_conformance_report_json},
+      {label:"Execution queue artifact", path:.artifact_paths.execution_queue_artifact_json},
+      {label:"Execution queue risk budget", path:.artifact_paths.execution_queue_risk_budget_json},
+      {label:"Execution queue bottleneck report", path:.artifact_paths.execution_queue_bottleneck_report_json},
+      {label:"Execution queue run manifest", path:.artifact_paths.execution_queue_run_manifest_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

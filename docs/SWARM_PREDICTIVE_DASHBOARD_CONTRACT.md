@@ -147,6 +147,23 @@ actions, and unresolved restore drift into the existing
 must not be described as live checkpoint replay, automatic worker mutation, or
 automatic ownership transfer.
 
+The same operator report now also integrates the SWARM-CTRL-XII execution queue
+advisory:
+
+- Runner contract: `docs/swarm_execution_queue_runner_contract_v1.json`
+- Conformance contract: `docs/swarm_execution_queue_conformance_contract_v1.json`
+- Queue artifact schema: `franken-engine.swarm-execution-queue-artifact.v1`
+- Risk-budget receipt schema: `franken-engine.swarm-execution-risk-budget-receipt.v1`
+- Bottleneck report schema: `franken-engine.swarm-execution-bottleneck-report.v1`
+
+That handoff carries top recommended starts, deferred queue entries,
+bottlenecks, conservative-mode state, and risk-budget rationale into the
+existing `scripts/swarm_operator_status_report.sh` producer. It is
+advisory-only. It must not be described as live bead mutation, automatic reopen,
+reassignment, or a second dashboard producer. If checkpoint restore evidence is
+blocked or manual-review, the `execution_queue_advisory` section must state that
+dependency instead of letting queue advice override restore remediation.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -182,6 +199,7 @@ consumption:
 | `prefetch_roi` | `swarm-warm-target-prefetch-roi-advisory.v1` | Show whether warm-target or archive prefetch has enough bounded ROI to recommend, plus target-dir and proof-cache posture. |
 | `starvation_rescue` | `swarm-starvation-rescue-plan.v1` plus `swarm-starvation-rescue-conformance-report.v1` | Show ordered rescue actions, escalation band, and unresolved rescue risks without creating a second dashboard producer. |
 | `checkpoint_restore` | `swarm-checkpoint-bundle.v1` plus `swarm-checkpoint-restore-plan.v1` plus `swarm-checkpoint-restore-conformance-report.v1` | Show whether a saved checkpoint can be resumed, must fail closed, or needs manual review, plus the top restore action and unresolved restore drift. |
+| `execution_queue_advisory` | `swarm-execution-queue-artifact.v1` plus risk-budget and bottleneck runner artifacts | Show top starts, deferred queue items, conservative-mode state, bottlenecks, and restore dependency status without mutating live queue state. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -206,6 +224,8 @@ The smoke test publishes deterministic goldens for:
 - `collision_risk`
 - `overloaded`
 - `forecast_low_confidence`
+- `execution_queue_conservative`
+- `execution_queue_restore_blocked`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -245,6 +265,12 @@ different: the current predictive dashboard producer does integrate their
 handoff directly, but only as advisory snapshot evidence. That does not make
 the dashboard a live checkpoint replay or automatic restore surface.
 
+The execution queue runner and conformance gate are also integrated directly,
+but only as advisory snapshot evidence. The `healthy` fixture covers a ready
+queue, `execution_queue_conservative` covers risk-budget conservative mode, and
+`execution_queue_restore_blocked` proves blocked checkpoint restore evidence
+remains visible inside queue advice.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -266,6 +292,9 @@ the dashboard a live checkpoint replay or automatic restore surface.
 - The docs must describe the checkpoint restore handoff as integrated advisory
   snapshot evidence, not as live checkpoint replay, automatic worker
   mutation, or automatic ownership transfer.
+- The docs must describe the execution queue advisory as integrated advisory
+  snapshot evidence, not as live bead mutation, automatic reopen,
+  reassignment, or an override for checkpoint restore remediation.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a

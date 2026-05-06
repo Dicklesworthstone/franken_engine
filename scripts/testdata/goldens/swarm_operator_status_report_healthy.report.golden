@@ -12,6 +12,7 @@
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
 - Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
+- Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -27,5 +28,9 @@
 - Checkpoint bundle: `[SMOKE_ROOT]/healthy-fixtures/checkpoint_bundle.json`
 - Checkpoint restore plan: `[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_plan.json`
 - Checkpoint restore conformance report: `[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_conformance_report.json`
+- Execution queue artifact: `[SMOKE_ROOT]/healthy-fixtures/execution_queue_artifact.json`
+- Execution queue risk budget: `[SMOKE_ROOT]/healthy-fixtures/execution_queue_risk_budget_receipt.json`
+- Execution queue bottleneck report: `[SMOKE_ROOT]/healthy-fixtures/execution_queue_bottleneck_report.json`
+- Execution queue run manifest: `[SMOKE_ROOT]/healthy-fixtures/execution_queue_run_manifest.json`
 
 - `pick_next_ready_bead` for `bd-p03vs`: resource governor admits validation and bead is ready

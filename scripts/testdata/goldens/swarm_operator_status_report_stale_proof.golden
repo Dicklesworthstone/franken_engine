@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 2,
+    "degraded_count": 3,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -53,6 +53,12 @@
     "checkpoint_restore_escalation_band": "fail_closed",
     "checkpoint_restore_top_action": "capture_fresh_checkpoint_bundle",
     "checkpoint_restore_unresolved_risk_count": 1,
+    "execution_queue_decision": "pass",
+    "execution_queue_conservative_mode": false,
+    "execution_queue_restore_dependency_state": "restore_blocked",
+    "execution_queue_top_start_count": 1,
+    "execution_queue_deferred_count": 0,
+    "execution_queue_bottleneck_count": 1,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -465,6 +471,52 @@
       "plan_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/checkpoint_restore_plan.json",
       "conformance_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/checkpoint_restore_conformance_report.json"
     },
+    "execution_queue_advisory": {
+      "artifact_status": "provided",
+      "risk_budget_artifact_status": "provided",
+      "bottleneck_artifact_status": "provided",
+      "run_manifest_artifact_status": "provided",
+      "severity": "warning",
+      "decision": "pass",
+      "conservative_mode": false,
+      "queue_depth": 1,
+      "top_recommended_starts": [
+        {
+          "rank": 1,
+          "task_id": "bd-ready-a",
+          "title": null,
+          "wave": "ready_now",
+          "first_action": "claim bead and reserve focused proof files",
+          "fallback_trigger": "none",
+          "ev_millionths": 725000
+        }
+      ],
+      "deferred_items": [],
+      "bottlenecks": [
+        {
+          "task_id": "bd-ready-a",
+          "severity": "low",
+          "downstream_count": 1,
+          "unassigned": true
+        }
+      ],
+      "bottleneck_count": 1,
+      "critical_bottleneck_count": 0,
+      "risk_budget": {
+        "remaining_millionths": 900000,
+        "consumed_millionths": 100000,
+        "conservative_threshold_millionths": 200000
+      },
+      "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
+      "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
+      "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
+      "restore_dependency_state": "restore_blocked",
+      "restore_dependency_detail": "Checkpoint restore handoff is fail-closed or blocked; do not let queue advice override restore remediation.",
+      "queue_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_run_manifest.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -486,7 +538,9 @@
         "high_cost",
         "collision_risk",
         "overloaded",
-        "forecast_low_confidence"
+        "forecast_low_confidence",
+        "execution_queue_conservative",
+        "execution_queue_restore_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -498,6 +552,12 @@
       "status": "fail_closed",
       "impact": "checkpoint restore handoff still carries fail-closed or manual-review drift",
       "remediation": "Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint."
+    },
+    {
+      "component": "execution_queue_advisory",
+      "status": "warning",
+      "impact": "execution queue advisory is conservative, blocked, or coupled to restore drift",
+      "remediation": "Execution queue runner artifacts are present and risk budget permits advisory queue use."
     },
     {
       "component": "proof_freshness",

@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `11`
+- Degraded fields: `12`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `medium` / `brownout`
@@ -12,6 +12,7 @@
 - Prefetch advisory: `manual_review_required`
 - Starvation rescue escalation: `manual_review` via `preserve_pinned_evidence`
 - Checkpoint restore escalation: `manual_review` via `review_salvage_pressure_before_resume`
+- Execution queue: `pass` top=`1` deferred=`0` restore=`restore_manual_review`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -27,6 +28,10 @@
 - Checkpoint bundle: `[SMOKE_ROOT]/overloaded-fixtures/checkpoint_bundle.json`
 - Checkpoint restore plan: `[SMOKE_ROOT]/overloaded-fixtures/checkpoint_restore_plan.json`
 - Checkpoint restore conformance report: `[SMOKE_ROOT]/overloaded-fixtures/checkpoint_restore_conformance_report.json`
+- Execution queue artifact: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_artifact.json`
+- Execution queue risk budget: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_risk_budget_receipt.json`
+- Execution queue bottleneck report: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_bottleneck_report.json`
+- Execution queue run manifest: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_run_manifest.json`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
@@ -43,3 +48,4 @@
 - `prefetch_roi` `manual_review_required`: prefetch ROI is degraded, blocked, or not worth taking. Do not warm a fresh target until brownout pressure and cache refresh obligations clear.
 - `starvation_rescue_handoff` `manual_review`: starvation rescue handoff still has unresolved risks or manual review pressure. Respect the rescue escalation band and recommended ordering before reopening or reassigning work.
 - `checkpoint_restore_handoff` `manual_review`: checkpoint restore handoff still carries fail-closed or manual-review drift. Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint.
+- `execution_queue_advisory` `warning`: execution queue advisory is conservative, blocked, or coupled to restore drift. Execution queue runner artifacts are present and risk budget permits advisory queue use.

@@ -53,6 +53,12 @@
     "checkpoint_restore_escalation_band": "ready",
     "checkpoint_restore_top_action": "resume_from_checkpoint",
     "checkpoint_restore_unresolved_risk_count": 0,
+    "execution_queue_decision": "pass",
+    "execution_queue_conservative_mode": false,
+    "execution_queue_restore_dependency_state": "clear",
+    "execution_queue_top_start_count": 1,
+    "execution_queue_deferred_count": 0,
+    "execution_queue_bottleneck_count": 1,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -465,6 +471,52 @@
       "plan_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/checkpoint_restore_plan.json",
       "conformance_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/checkpoint_restore_conformance_report.json"
     },
+    "execution_queue_advisory": {
+      "artifact_status": "provided",
+      "risk_budget_artifact_status": "provided",
+      "bottleneck_artifact_status": "provided",
+      "run_manifest_artifact_status": "provided",
+      "severity": "ok",
+      "decision": "pass",
+      "conservative_mode": false,
+      "queue_depth": 1,
+      "top_recommended_starts": [
+        {
+          "rank": 1,
+          "task_id": "bd-ready-a",
+          "title": null,
+          "wave": "ready_now",
+          "first_action": "claim bead and reserve focused proof files",
+          "fallback_trigger": "none",
+          "ev_millionths": 725000
+        }
+      ],
+      "deferred_items": [],
+      "bottlenecks": [
+        {
+          "task_id": "bd-ready-a",
+          "severity": "low",
+          "downstream_count": 1,
+          "unassigned": true
+        }
+      ],
+      "bottleneck_count": 1,
+      "critical_bottleneck_count": 0,
+      "risk_budget": {
+        "remaining_millionths": 900000,
+        "consumed_millionths": 100000,
+        "conservative_threshold_millionths": 200000
+      },
+      "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
+      "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
+      "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
+      "restore_dependency_state": "clear",
+      "restore_dependency_detail": "Checkpoint restore handoff is ready.",
+      "queue_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_run_manifest.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -486,7 +538,9 @@
         "high_cost",
         "collision_risk",
         "overloaded",
-        "forecast_low_confidence"
+        "forecast_low_confidence",
+        "execution_queue_conservative",
+        "execution_queue_restore_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

@@ -21,8 +21,8 @@
     "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
-    "high_cost_command_count": 1,
-    "proof_cost_budget_count": 1,
+    "high_cost_command_count": 0,
+    "proof_cost_budget_count": 0,
     "stale_evidence_count": 0,
     "dirty_reserved_count": 0,
     "blocked_bead_count": 0,
@@ -53,12 +53,12 @@
     "checkpoint_restore_escalation_band": "ready",
     "checkpoint_restore_top_action": "resume_from_checkpoint",
     "checkpoint_restore_unresolved_risk_count": 0,
-    "execution_queue_decision": "pass",
-    "execution_queue_conservative_mode": false,
+    "execution_queue_decision": "degraded",
+    "execution_queue_conservative_mode": true,
     "execution_queue_restore_dependency_state": "clear",
     "execution_queue_top_start_count": 1,
-    "execution_queue_deferred_count": 0,
-    "execution_queue_bottleneck_count": 1,
+    "execution_queue_deferred_count": 1,
+    "execution_queue_bottleneck_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -112,51 +112,36 @@
   "validation_plan": {
     "decision": "admit",
     "collision_risk": "none",
-    "risk_flags": [
-      "high_cost_history"
-    ],
+    "risk_flags": [],
     "commands": [
       {
-        "command_id": "cargo-test-proof_manifest_golden_artifacts",
-        "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-        "command_kind": "rch_cargo_test",
+        "command_id": "script-check",
+        "display": "bash -n scripts/swarm_operator_status_report.sh",
+        "command_kind": "shell_syntax",
         "predicted_cost": {
           "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
-          "state": "matched",
-          "cost_class": "high",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2
+          "state": "static",
+          "cost_class": "low",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0
         },
-        "risk_flags": [
-          "high_cost_history"
-        ],
+        "risk_flags": [],
         "cost_evidence": {
-          "status": "matched",
-          "matched_rows": 3,
-          "fresh_rows": 3,
-          "stale_rows": 0,
-          "source_revisions": [
-            "smoke-rev"
-          ]
+          "status": "not_required",
+          "matched_rows": 0,
+          "fresh_rows": 0,
+          "stale_rows": 0
         }
       }
     ],
     "omitted_commands": [],
-    "proof_cost_budgets": [
-      {
-        "schema_version": "franken-engine.focused-proof-cost-budget.v1",
-        "suite": "proof_manifest_golden_artifacts",
-        "package": "frankenengine-engine",
-        "max_total_compiled_targets": 2,
-        "max_total_linked_targets": 1
-      }
-    ],
+    "proof_cost_budgets": [],
     "conflicting_agents": [],
     "safe_alternatives": [
-      "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+      "scripts/swarm_operator_status_report.sh"
     ]
   },
   "proof_evidence_index": {
@@ -188,74 +173,36 @@
       "local_renderer": false
     },
     "predictive_cost": {
-      "status": "elevated",
+      "status": "nominal",
       "commands": [
         {
-          "command_id": "cargo-test-proof_manifest_golden_artifacts",
-          "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-          "command_kind": "rch_cargo_test",
-          "cost_class": "high",
-          "cost_state": "matched",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2,
-          "risk_flags": [
-            "high_cost_history"
-          ],
+          "command_id": "script-check",
+          "display": "bash -n scripts/swarm_operator_status_report.sh",
+          "command_kind": "shell_syntax",
+          "cost_class": "low",
+          "cost_state": "static",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0,
+          "risk_flags": [],
           "cost_evidence": {
-            "status": "matched",
-            "matched_rows": 3,
-            "fresh_rows": 3,
-            "stale_rows": 0,
-            "source_revisions": [
-              "smoke-rev"
-            ]
+            "status": "not_required",
+            "matched_rows": 0,
+            "fresh_rows": 0,
+            "stale_rows": 0
           }
         }
       ],
-      "high_risk_commands": [
-        {
-          "command_id": "cargo-test-proof_manifest_golden_artifacts",
-          "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-          "command_kind": "rch_cargo_test",
-          "cost_class": "high",
-          "cost_state": "matched",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2,
-          "risk_flags": [
-            "high_cost_history"
-          ],
-          "cost_evidence": {
-            "status": "matched",
-            "matched_rows": 3,
-            "fresh_rows": 3,
-            "stale_rows": 0,
-            "source_revisions": [
-              "smoke-rev"
-            ]
-          }
-        }
-      ],
-      "proof_cost_budgets": [
-        {
-          "schema_version": "franken-engine.focused-proof-cost-budget.v1",
-          "suite": "proof_manifest_golden_artifacts",
-          "package": "frankenengine-engine",
-          "max_total_compiled_targets": 2,
-          "max_total_linked_targets": 1
-        }
-      ]
+      "high_risk_commands": [],
+      "proof_cost_budgets": []
     },
     "collision_risk": {
       "risk": "none",
       "conflicting_agents": [],
       "safe_alternatives": [
-        "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+        "scripts/swarm_operator_status_report.sh"
       ],
       "reservation_recommendations": [],
       "conflicts": {
@@ -388,7 +335,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -414,7 +361,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -435,7 +382,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/admission_budget_plan.json"
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -447,7 +394,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -463,7 +410,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -495,8 +442,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -515,55 +462,58 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
       "risk_budget_artifact_status": "provided",
       "bottleneck_artifact_status": "provided",
       "run_manifest_artifact_status": "provided",
-      "severity": "ok",
-      "decision": "pass",
-      "conservative_mode": false,
+      "severity": "warning",
+      "decision": "degraded",
+      "conservative_mode": true,
       "queue_depth": 1,
       "top_recommended_starts": [
         {
           "rank": 1,
-          "task_id": "bd-ready-a",
+          "task_id": "bd-brownout-ready",
           "title": null,
           "wave": "ready_now",
-          "first_action": "claim bead and reserve focused proof files",
-          "fallback_trigger": "none",
-          "ev_millionths": 725000
+          "first_action": "defer broad proof and select a narrower no-cargo task",
+          "fallback_trigger": "proof_brownout_conservative_mode",
+          "ev_millionths": -10000
         }
       ],
-      "deferred_items": [],
-      "bottlenecks": [
+      "deferred_items": [
         {
-          "task_id": "bd-ready-a",
-          "severity": "low",
-          "downstream_count": 1,
-          "unassigned": true
+          "rank": 1,
+          "task_id": "bd-brownout-ready",
+          "title": null,
+          "wave": "ready_now",
+          "first_action": "defer broad proof and select a narrower no-cargo task",
+          "fallback_trigger": "proof_brownout_conservative_mode",
+          "open_blocker_count": 0
         }
       ],
-      "bottleneck_count": 1,
+      "bottlenecks": [],
+      "bottleneck_count": 0,
       "critical_bottleneck_count": 0,
       "risk_budget": {
-        "remaining_millionths": 900000,
-        "consumed_millionths": 100000,
+        "remaining_millionths": 126000,
+        "consumed_millionths": 874000,
         "conservative_threshold_millionths": 200000
       },
-      "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
-      "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
-      "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
+      "artifact_hash_hex": "e4f9760a6558bb0a9ca8642f037b7629a0efa13adade6d1a572cfc0cd70d3e24",
+      "normalized_input_hash_hex": "f6fe537ea0c5badc9b7a73d726ab50eea7a0d3940d128f3d40fe88a9b6494de1",
+      "proof_lane_rationale": "Risk budget is in conservative mode; prefer narrow/no-cargo proof work before broad validation.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/execution_queue_conservative-fixtures/execution_queue_run_manifest.json"
     },
     "staged_contamination": {
       "artifact_status": "provided",
@@ -596,17 +546,17 @@
   },
   "degraded": [
     {
-      "component": "predictive_cost",
-      "status": "high",
-      "impact": "cargo-test-proof_manifest_golden_artifacts has elevated predicted validation cost",
-      "remediation": "Narrow the command, defer until resource pressure clears, or preserve the high-cost receipt."
+      "component": "execution_queue_advisory",
+      "status": "warning",
+      "impact": "execution queue advisory is conservative, blocked, or coupled to restore drift",
+      "remediation": "Risk budget is in conservative mode; prefer narrow/no-cargo proof work before broad validation."
     }
   ],
   "recommendations": [
     {
-      "action": "narrow_high_cost_validation",
+      "action": "use_execution_queue_conservatively",
       "bead_id": null,
-      "reason": "predicted validation cost is elevated"
+      "reason": "execution queue advisory reports conservative risk budget or degraded evidence"
     }
   ]
 }

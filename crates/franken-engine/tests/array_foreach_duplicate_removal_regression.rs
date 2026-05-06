@@ -6,11 +6,11 @@ fn baseline_interpreter_source() -> &'static str {
 }
 
 #[test]
-fn test_array_foreach_fail_closed_behavior() {
+fn test_array_foreach_callback_dispatch_behavior() {
     let source = baseline_interpreter_source();
     assert!(source.contains("\"builtin:ArrayPrototypeForEach\" => {"));
-    assert!(source.contains("supported Array.prototype.forEach implementation"));
-    assert!(source.contains("callback invocation not yet supported"));
+    assert!(source.contains("self.invoke_array_callback("));
+    assert!(source.contains("Ok(Value::Undefined)"));
 }
 
 #[test]
@@ -34,18 +34,20 @@ fn test_array_foreach_no_duplicate_implementations() {
 #[test]
 fn test_array_foreach_non_object_this_behavior() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("expected: \"object\""));
-    assert!(source.contains("if !matches!(this_val, Value::Object(_))"));
+    assert!(source.contains("expected: \"array object\""));
+    assert!(source.contains("receiver for {method_name}"));
 }
 
 #[test]
 fn test_array_foreach_callback_validation_consistency() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("validate_array_callback_args(args, \"Array.prototype.forEach\")"));
+    assert!(
+        source.contains("validate_array_callback_structure(args, \"Array.prototype.forEach\")")
+    );
 }
 
 #[test]
 fn test_array_foreach_duplicate_removal_memory_consistency() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("side-effect execution for each element"));
+    assert!(source.contains("self.array_index_value(array_id, index)?"));
 }

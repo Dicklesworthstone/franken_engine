@@ -9340,82 +9340,106 @@ impl InterpreterCore {
         }
     }
 
-    /// Validates Array method callback arguments for fail-closed implementations
-    /// Returns Ok(()) if validation passes, otherwise returns appropriate TypeError
+    /// Validates Array method callback arguments for fail-closed implementations.
+    /// Hostcall-based tests pass the receiver as the first argument, while
+    /// lowered method wrappers keep the receiver in the active frame's `this`
+    /// value and pass only user arguments.
     fn validate_array_callback_args(
         &self,
         args: RegRange,
-        _method_name: &str,
+        method_name: &str,
     ) -> Result<(), InterpreterError> {
-        if args.count < 2 {
+        self.validate_array_callback_structure(args, method_name)
+            .map(|_| ())
+    }
+
+    fn validate_array_callback_structure(
+        &self,
+        args: RegRange,
+        method_name: &str,
+    ) -> Result<(ObjectId, Value, Value, usize), InterpreterError> {
+        if args.count == 0 {
             return Err(InterpreterError::TypeError {
                 expected: "callback function".to_string(),
                 got: "missing callback argument".to_string(),
             });
         }
 
-        let this_val = self.read_reg(args.start)?;
-        if !matches!(this_val, Value::Object(_)) {
+        let first = self.read_reg(args.start)?;
+        let frame_this = self
+            .call_stack
+            .last()
+            .map_or(Value::Undefined, |frame| frame.this_value.clone());
+
+        let use_frame_receiver = matches!(frame_this, Value::Object(_))
+            && (args.count == 1 || !matches!(first, Value::Object(_)));
+        let (this_val, callback, this_arg) = if use_frame_receiver {
+            (
+                frame_this,
+                first,
+                if args.count > 1 {
+                    self.read_reg(args.start + 1)?
+                } else {
+                    Value::Undefined
+                },
+            )
+        } else if args.count >= 2 {
+            (
+                first,
+                self.read_reg(args.start + 1)?,
+                if args.count > 2 {
+                    self.read_reg(args.start + 2)?
+                } else {
+                    Value::Undefined
+                },
+            )
+        } else {
             return Err(InterpreterError::TypeError {
-                expected: "object".to_string(),
-                got: format!("{:?}", this_val),
+                expected: "callback function".to_string(),
+                got: "missing callback argument".to_string(),
             });
-        }
+        };
 
-        let callback = self.read_reg(args.start + 1)?;
-        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
-            return Err(InterpreterError::TypeError {
-                expected: "function".to_string(),
-                got: format!("{:?}", callback),
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Simplified array callback helper - fails-closed for now but provides structure
-    /// for future callback support. This is a temporary implementation that validates
-    /// arguments and array structure but defers actual callback invocation.
-    fn validate_array_callback_structure(
-        &self,
-        args: RegRange,
-        method_name: &str,
-    ) -> Result<(ObjectId, Value, Value, usize), InterpreterError> {
-        // Validate arguments (array + callback)
-        self.validate_array_callback_args(args, method_name)?;
-
-        let array_id = match self.read_reg(args.start)? {
+        let array_id = match this_val {
             Value::Object(object_id) => object_id,
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "array object".to_string(),
-                    got: other.type_name().to_string(),
+                    got: format!("{} receiver for {method_name}", other.type_name()),
                 });
             }
         };
 
-        let callback = self.read_reg(args.start + 1)?;
-        let this_arg = if args.count >= 3 {
-            self.read_reg(args.start + 2)?
-        } else {
-            Value::Undefined
-        };
-
-        // Get array length
-        let array_length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-            match obj.properties.get("length") {
-                Some(Value::Int(len)) => *len as usize,
-                Some(Value::Float(f)) => f.inner().max(0.0) as usize,
-                _ => 0,
-            }
-        } else {
+        if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
             return Err(InterpreterError::TypeError {
-                expected: "valid array object".to_string(),
-                got: "null reference".to_string(),
+                expected: "function".to_string(),
+                got: callback.type_name().to_string(),
             });
-        };
+        }
 
+        let array_length = self.array_like_length(array_id)?;
         Ok((array_id, callback, this_arg, array_length))
+    }
+
+    fn invoke_array_callback(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        this_arg: Value,
+        element: Value,
+        element_index: usize,
+        array_id: ObjectId,
+    ) -> Result<Value, InterpreterError> {
+        let index = i64::try_from(element_index).map_err(|_| InterpreterError::TypeError {
+            expected: "array callback index within i64".to_string(),
+            got: element_index.to_string(),
+        })?;
+        self.invoke_inline_method_call(
+            module,
+            callback.clone(),
+            this_arg,
+            vec![element, Value::Int(index), Value::Object(array_id)],
+        )
     }
 
     fn array_prototype_reduce(
@@ -12487,16 +12511,24 @@ impl InterpreterCore {
                 Ok(Value::Bool(result))
             }
             "builtin:ArrayPrototypeForEach" => {
-                // Array.prototype.forEach(callback[, thisArg]) implementation - fail-closed until proper callback invocation
-                self.validate_array_callback_args(args, "Array.prototype.forEach")?;
+                let (array_id, callback, this_arg, length) =
+                    self.validate_array_callback_structure(args, "Array.prototype.forEach")?;
 
-                // Fail-closed until proper callback dispatch is implemented
-                // Programs like [1, 2].forEach(x => console.log(x)) should error rather than
-                // silently do nothing or process elements incorrectly
-                Err(InterpreterError::TypeError {
-                    expected: "supported Array.prototype.forEach implementation".to_string(),
-                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and side-effect execution for each element".to_string(),
-                })
+                for index in 0..length {
+                    let Some(element) = self.array_index_value(array_id, index)? else {
+                        continue;
+                    };
+                    self.invoke_array_callback(
+                        module,
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        array_id,
+                    )?;
+                }
+
+                Ok(Value::Undefined)
             }
             // ArrayPrototypeFind: Removed duplicate dispatch arm (use occurrence at line 12492)
             "builtin:MathSin" => {
@@ -13439,73 +13471,21 @@ impl InterpreterCore {
             }
             // Removed duplicate StringPrototypeSearch - implementation at line ~13482 has better JS fallbacks
             "builtin:ArrayPrototypeSome" => {
-                // Array.prototype.some(callback[, thisArg]).
-                //
-                // Lowered method wrappers dispatch builtin hostcalls with only
-                // user arguments in the register range; the receiver is held
-                // in the active call frame's `this`.
-                let (this_val, callback, this_arg) = if args.count >= 2 {
-                    (
-                        self.read_reg(args.start)?,
-                        self.read_reg(args.start + 1)?,
-                        if args.count > 2 {
-                            self.read_reg(args.start + 2)?
-                        } else {
-                            Value::Undefined
-                        },
-                    )
-                } else if args.count == 1 {
-                    let frame_this = self
-                        .call_stack
-                        .last()
-                        .map_or(Value::Undefined, |frame| frame.this_value.clone());
-                    if matches!(frame_this, Value::Object(_)) {
-                        (frame_this, self.read_reg(args.start)?, Value::Undefined)
-                    } else {
-                        return Err(InterpreterError::TypeError {
-                            expected: "callback function".to_string(),
-                            got: "missing callback argument".to_string(),
-                        });
-                    }
-                } else {
-                    return Err(InterpreterError::TypeError {
-                        expected: "callback function".to_string(),
-                        got: "missing callback argument".to_string(),
-                    });
-                };
+                let (array_id, callback, this_arg, length) =
+                    self.validate_array_callback_structure(args, "Array.prototype.some")?;
 
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    other => {
-                        return Err(InterpreterError::TypeError {
-                            expected: "array object".to_string(),
-                            got: other.type_name().to_string(),
-                        });
-                    }
-                };
-                if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
-                    return Err(InterpreterError::TypeError {
-                        expected: "function".to_string(),
-                        got: callback.type_name().to_string(),
-                    });
-                }
-
-                let length = self.array_like_length(array_id)?;
-                for i in 0..length {
-                    let Some(element) = self
-                        .heap
-                        .get(array_id.0 as usize)
-                        .and_then(|array_obj| array_obj.properties.get(&i.to_string()))
-                        .cloned()
-                    else {
+                for index in 0..length {
+                    let Some(element) = self.array_index_value(array_id, index)? else {
                         continue;
                     };
 
-                    let predicate_result = self.invoke_inline_method_call(
+                    let predicate_result = self.invoke_array_callback(
                         module,
-                        callback.clone(),
+                        &callback,
                         this_arg.clone(),
-                        vec![element, Value::Int(i as i64), Value::Object(array_id)],
+                        element,
+                        index,
+                        array_id,
                     )?;
                     if predicate_result.is_truthy() {
                         return Ok(Value::Bool(true));
@@ -14335,16 +14315,32 @@ impl InterpreterCore {
             }
 
             "builtin:ArrayPrototypeFindIndex" => {
-                // Array.prototype.findIndex(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
-                self.validate_array_callback_args(args, "Array.prototype.findIndex")?;
+                let (array_id, callback, this_arg, length) =
+                    self.validate_array_callback_structure(args, "Array.prototype.findIndex")?;
 
-                // Fail-closed until proper callback dispatch is implemented
-                // Programs like [1,2,3].findIndex(x => x > 2) should error rather than
-                // silently return wrong values like -1 or first valid index
-                Err(InterpreterError::TypeError {
-                    expected: "supported Array.prototype.findIndex implementation".to_string(),
-                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and returning index of first element where callback returns truthy".to_string(),
-                })
+                for index in 0..length {
+                    let element = self
+                        .array_index_value(array_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let predicate_result = self.invoke_array_callback(
+                        module,
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        array_id,
+                    )?;
+                    if predicate_result.is_truthy() {
+                        let index_value =
+                            i64::try_from(index).map_err(|_| InterpreterError::TypeError {
+                                expected: "array index within i64".to_string(),
+                                got: index.to_string(),
+                            })?;
+                        return Ok(Value::Int(index_value));
+                    }
+                }
+
+                Ok(Value::Int(-1))
             }
 
             "builtin:StringPrototypeCharCodeAt" => {
@@ -15307,16 +15303,27 @@ impl InterpreterCore {
 
             // Removed duplicate ObjectPrototypeHasOwnProperty - implementation at line 9134 (builtin:ObjectHasOwnProperty) is identical
             "builtin:ArrayPrototypeFind" => {
-                // Array.prototype.find(callback[, thisArg]) implementation - fail-closed until proper callback dispatch
-                self.validate_array_callback_args(args, "Array.prototype.find")?;
+                let (array_id, callback, this_arg, length) =
+                    self.validate_array_callback_structure(args, "Array.prototype.find")?;
 
-                // Fail-closed until proper callback dispatch is implemented
-                // Programs like [1,2,3].find(x => x > 2) should error rather than
-                // silently return wrong values like the first element or first truthy element
-                Err(InterpreterError::TypeError {
-                    expected: "supported Array.prototype.find implementation".to_string(),
-                    got: "callback invocation not yet supported - would require proper callback dispatch with (element, index, array) args, thisArg handling, and returning first element where callback returns truthy".to_string(),
-                })
+                for index in 0..length {
+                    let element = self
+                        .array_index_value(array_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let predicate_result = self.invoke_array_callback(
+                        module,
+                        &callback,
+                        this_arg.clone(),
+                        element.clone(),
+                        index,
+                        array_id,
+                    )?;
+                    if predicate_result.is_truthy() {
+                        return Ok(element);
+                    }
+                }
+
+                Ok(Value::Undefined)
             }
 
             // StringPrototypeStartsWith: Removed duplicate dispatch arm (use first occurrence instead)
@@ -17196,7 +17203,7 @@ impl InterpreterCore {
 
             "builtin:ArrayPrototypeEvery" => {
                 // Array.prototype.every() implementation with callback invocation
-                let (array_id, callback, _this_arg, array_length) =
+                let (array_id, callback, this_arg, array_length) =
                     self.validate_array_callback_structure(args, "Array.prototype.every")?;
 
                 // Empty array case: every() returns true (per ES specification)
@@ -17206,35 +17213,21 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and check for falsy result
                 for index in 0..array_length {
-                    // Get array element (or undefined if sparse)
-                    let element = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                        obj.properties
-                            .get(&index.to_string())
-                            .cloned()
-                            .unwrap_or(Value::Undefined)
-                    } else {
-                        Value::Undefined
+                    let Some(element) = self.array_index_value(array_id, index)? else {
+                        continue;
                     };
 
-                    // Simplified callback invocation for MVP:
-                    // For now, apply basic predicate logic based on element truthiness
-                    // TODO: Replace with proper callback dispatch mechanism
-                    let result = match &callback {
-                        Value::Function(_) | Value::Closure(_) => {
-                            // Simulate callback result based on element truthiness for basic testing
-                            // This is a temporary implementation until proper callback dispatch
-                            element.is_truthy()
-                        }
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "function".to_string(),
-                                got: callback.type_name().to_string(),
-                            });
-                        }
-                    };
+                    let result = self.invoke_array_callback(
+                        module,
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        array_id,
+                    )?;
 
                     // Short-circuit on first falsy result
-                    if !result {
+                    if !result.is_truthy() {
                         return Ok(Value::Bool(false));
                     }
                 }
@@ -17385,7 +17378,7 @@ impl InterpreterCore {
 
             "builtin:ArrayPrototypeMap" => {
                 // Array.prototype.map() implementation with callback invocation
-                let (array_id, callback, _this_arg, array_length) =
+                let (array_id, callback, this_arg, array_length) =
                     self.validate_array_callback_structure(args, "Array.prototype.map")?;
 
                 // Create result array
@@ -17399,32 +17392,18 @@ impl InterpreterCore {
 
                 // For each element, invoke callback and collect result
                 for index in 0..array_length {
-                    // Get array element (or undefined if sparse)
-                    let element = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                        obj.properties
-                            .get(&index.to_string())
-                            .cloned()
-                            .unwrap_or(Value::Undefined)
-                    } else {
-                        Value::Undefined
+                    let Some(element) = self.array_index_value(array_id, index)? else {
+                        continue;
                     };
 
-                    // Simplified callback invocation for MVP:
-                    // For now, apply identity transform (return element as-is)
-                    // TODO: Replace with proper callback dispatch mechanism
-                    let mapped_result = match &callback {
-                        Value::Function(_) | Value::Closure(_) => {
-                            // Simulate callback result - identity mapping for basic testing
-                            // This is a temporary implementation until proper callback dispatch
-                            element
-                        }
-                        _ => {
-                            return Err(InterpreterError::TypeError {
-                                expected: "function".to_string(),
-                                got: callback.type_name().to_string(),
-                            });
-                        }
-                    };
+                    let mapped_result = self.invoke_array_callback(
+                        module,
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        array_id,
+                    )?;
 
                     // Set result in new array
                     self.set_object_property(result_array_id, index.to_string(), mapped_result)?;

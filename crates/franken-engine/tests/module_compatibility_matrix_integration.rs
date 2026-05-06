@@ -4979,16 +4979,16 @@ fn test_array_map_callback_validation_regression() {
 #[test]
 fn test_array_map_this_validation_regression() {
     let source = baseline_interpreter_source();
-    assert!(source.contains("expected: \"object\""));
-    assert!(source.contains("if !matches!(this_val, Value::Object(_))"));
+    assert!(source.contains("expected: \"array object\""));
+    assert!(source.contains("receiver for {method_name}"));
 }
 
 #[test]
-fn test_array_map_fail_closed_behavior() {
+fn test_array_map_callback_dispatch_behavior() {
     let source = baseline_interpreter_source();
     assert!(source.contains("\"builtin:ArrayPrototypeMap\" => {"));
-    assert!(source.contains("supported Array.prototype.map implementation"));
-    assert!(source.contains("callback invocation not yet supported"));
+    assert!(source.contains("self.invoke_array_callback("));
+    assert!(source.contains("mapped_result"));
 }
 
 #[test]
@@ -5001,11 +5001,13 @@ fn test_array_map_deduplication_regression() {
 }
 
 #[test]
-fn test_array_for_each_fail_closed_behavior() {
+fn test_array_for_each_callback_dispatch_behavior() {
     let source = baseline_interpreter_source();
     assert!(source.contains("\"builtin:ArrayPrototypeForEach\" => {"));
-    assert!(source.contains("supported Array.prototype.forEach implementation"));
-    assert!(source.contains("side-effect execution for each element"));
+    assert!(
+        source.contains("validate_array_callback_structure(args, \"Array.prototype.forEach\")")
+    );
+    assert!(source.contains("Ok(Value::Undefined)"));
 }
 
 #[test]

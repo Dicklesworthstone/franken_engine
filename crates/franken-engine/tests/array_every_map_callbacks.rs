@@ -1,7 +1,7 @@
-//! Regression tests for Array.every and Array.map callback invocation (bd-2gd4b bd-1rs5t)
+//! Regression tests for Array callback invocation (bd-2gd4b bd-1rs5t bd-cvu18)
 //!
-//! These tests verify that Array.every and Array.map properly handle callback functions,
-//! including argument validation, empty arrays, error propagation, and deterministic behavior.
+//! These tests verify that Array callback methods properly invoke callback functions,
+//! including argument validation, empty arrays, side effects, and deterministic behavior.
 
 #![forbid(unsafe_code)]
 
@@ -140,6 +140,71 @@ fn non_function_callback_module(
     )
 }
 
+fn find_by_index_callback_module(source_label: &str, builtin_name: &str) -> Ir3Module {
+    module(
+        source_label,
+        vec!["length", "0", "1", "wrong", "target"],
+        vec![
+            Ir3Instruction::NewArray { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 2 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 3,
+                pool_index: 1,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 3,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 3,
+                val: 4,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 5,
+                pool_index: 2,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 6,
+                pool_index: 4,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 5,
+                val: 6,
+            },
+            Ir3Instruction::CreateClosure {
+                dst: 1,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: builtin(builtin_name),
+                args: RegRange { start: 0, count: 2 },
+                dst: 7,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadInt { dst: 3, value: 1 },
+            Ir3Instruction::StrictEq {
+                dst: 4,
+                lhs: 1,
+                rhs: 3,
+            },
+            Ir3Instruction::Return { value: 4 },
+        ],
+        vec![callback_desc(13)],
+    )
+}
+
 #[test]
 fn array_every_empty_array_returns_true() {
     let result = execute(&empty_array_callback_module(
@@ -216,9 +281,9 @@ fn array_map_rejects_non_function_callback() {
 }
 
 #[test]
-fn array_every_falsey_element_returns_false() {
+fn array_every_uses_callback_result_not_element_truthiness() {
     let result = execute(&module(
-        "array-every-falsey-element",
+        "array-every-callback-result",
         vec!["length", "0"],
         vec![
             Ir3Instruction::NewArray { dst: 0 },
@@ -238,7 +303,7 @@ fn array_every_falsey_element_returns_false() {
             },
             Ir3Instruction::LoadBool {
                 dst: 4,
-                value: false,
+                value: true,
             },
             Ir3Instruction::SetProperty {
                 obj: 0,
@@ -258,22 +323,22 @@ fn array_every_falsey_element_returns_false() {
             Ir3Instruction::Return { value: 6 },
             Ir3Instruction::LoadBool {
                 dst: 0,
-                value: true,
+                value: false,
             },
             Ir3Instruction::Return { value: 0 },
         ],
         vec![callback_desc(10)],
     ))
-    .expect("Array.every should evaluate falsey elements");
+    .expect("Array.every should invoke callback");
 
     assert_eq!(result.value, Value::Bool(false));
 }
 
 #[test]
-fn array_map_identity_callback_copies_existing_element() {
+fn array_map_uses_callback_result_not_identity() {
     let result = execute(&module(
-        "array-map-identity-element",
-        vec!["length", "0", "mapped"],
+        "array-map-callback-result",
+        vec!["length", "0", "source", "mapped"],
         vec![
             Ir3Instruction::NewArray { dst: 0 },
             Ir3Instruction::LoadStr {
@@ -315,17 +380,159 @@ fn array_map_identity_callback_copies_existing_element() {
                 dst: 7,
             },
             Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadStr {
+                dst: 0,
+                pool_index: 3,
+            },
+            Ir3Instruction::Return { value: 0 },
+        ],
+        vec![callback_desc(11)],
+    ))
+    .expect("Array.map should invoke callback");
+
+    assert_eq!(result.value, Value::Str("mapped".to_string()));
+}
+
+#[test]
+fn array_some_uses_callback_result_not_element_truthiness() {
+    let result = execute(&module(
+        "array-some-callback-result",
+        vec!["length", "0"],
+        vec![
+            Ir3Instruction::NewArray { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 1 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 3,
+                pool_index: 1,
+            },
+            Ir3Instruction::LoadBool {
+                dst: 4,
+                value: false,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 3,
+                val: 4,
+            },
+            Ir3Instruction::CreateClosure {
+                dst: 1,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: builtin("ArrayPrototypeSome"),
+                args: RegRange { start: 0, count: 2 },
+                dst: 6,
+            },
+            Ir3Instruction::Return { value: 6 },
             Ir3Instruction::LoadBool {
                 dst: 0,
                 value: true,
             },
             Ir3Instruction::Return { value: 0 },
         ],
-        vec![callback_desc(11)],
+        vec![callback_desc(10)],
     ))
-    .expect("Array.map should copy existing element through identity callback");
+    .expect("Array.some should invoke callback");
 
-    assert_eq!(result.value, Value::Str("mapped".to_string()));
+    assert_eq!(result.value, Value::Bool(true));
+}
+
+#[test]
+fn array_for_each_invokes_callback_side_effect() {
+    let result = execute(&module(
+        "array-foreach-side-effect",
+        vec!["length", "0", "seen"],
+        vec![
+            Ir3Instruction::NewArray { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 1 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 3,
+                pool_index: 1,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 7 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 3,
+                val: 4,
+            },
+            Ir3Instruction::CreateClosure {
+                dst: 1,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::HostCall {
+                capability: builtin("ArrayPrototypeForEach"),
+                args: RegRange { start: 0, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 6,
+                pool_index: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 6,
+                dst: 7,
+            },
+            Ir3Instruction::Return { value: 7 },
+            Ir3Instruction::LoadStr {
+                dst: 3,
+                pool_index: 2,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 2,
+                key: 3,
+                val: 0,
+            },
+            Ir3Instruction::LoadUndefined { dst: 4 },
+            Ir3Instruction::Return { value: 4 },
+        ],
+        vec![callback_desc(12)],
+    ))
+    .expect("Array.forEach should invoke callback");
+
+    assert_eq!(result.value, Value::Int(7));
+}
+
+#[test]
+fn array_find_uses_callback_result_not_first_truthy_element() {
+    let result = execute(&find_by_index_callback_module(
+        "array-find-callback-result",
+        "ArrayPrototypeFind",
+    ))
+    .expect("Array.find should invoke callback");
+
+    assert_eq!(result.value, Value::Str("target".to_string()));
+}
+
+#[test]
+fn array_find_index_uses_callback_result() {
+    let result = execute(&find_by_index_callback_module(
+        "array-find-index-callback-result",
+        "ArrayPrototypeFindIndex",
+    ))
+    .expect("Array.findIndex should invoke callback");
+
+    assert_eq!(result.value, Value::Int(1));
 }
 
 #[test]

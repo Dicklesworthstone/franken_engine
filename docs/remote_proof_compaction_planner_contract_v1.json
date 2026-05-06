@@ -1,0 +1,35 @@
+{
+  "schema_version": "franken-engine.remote-proof-compaction-planner-contract.v1",
+  "plan_schema": "franken-engine.remote-proof-compaction-plan.v1",
+  "required_inputs": [
+    "--residency-manifest-json",
+    "--mirror-manifest-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.remote-proof-evidence-residency-manifest.v1",
+    "franken-engine.remote-proof-artifact-mirror-manifest.v1"
+  ],
+  "required_artifacts": [
+    "remote_proof_compaction_plan.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "blocked_reasons": [
+    "retention_class_mismatch",
+    "provenance_mismatch",
+    "replay_role_mismatch"
+  ],
+  "hash_requirements": [
+    "remote_proof_compaction_plan.hash_basis.input_hash",
+    "remote_proof_compaction_plan.hash_basis.plan_hash"
+  ],
+  "determinism": {
+    "retained_path_selection": "Safe duplicate groups retain the lexicographically smallest path and compact the remainder.",
+    "stable_plan_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same compaction plan hash.",
+    "execution_mode": "Planner only; the compaction surface emits decisions and never deletes or rewrites artifacts."
+  }
+}

@@ -112,7 +112,7 @@ validate_runbook_references() {
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     check_repo_path_exists "$path"
-  done < <(grep -Eo '\./scripts/[A-Za-z0-9_./-]+' "$runbook_path" | sed 's#^\./##' | sort -u)
+  done < <(grep -Eo '(\./)?scripts/[A-Za-z0-9_./-]+' "$runbook_path" | sed 's#^\./##' | sort -u)
 
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue

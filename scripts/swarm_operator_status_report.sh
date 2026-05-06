@@ -28,6 +28,10 @@ proof_cache_plan_json=""
 qos_batch_plan_json=""
 stale_lock_recommendations_json=""
 staged_ownership_report_json=""
+capacity_forecast_json=""
+admission_budget_plan_json=""
+lease_exchange_salvage_simulation_json=""
+warm_target_prefetch_roi_advisory_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -63,6 +67,10 @@ Options:
   --qos-batch-plan-json FILE
   --stale-lock-recommendations-json FILE
   --staged-ownership-report-json FILE
+  --capacity-forecast-json FILE
+  --admission-budget-plan-json FILE
+  --lease-exchange-salvage-simulation-json FILE
+  --warm-target-prefetch-roi-advisory-json FILE
 EOF
 }
 
@@ -176,6 +184,22 @@ while [[ "$#" -gt 0 ]]; do
       staged_ownership_report_json="$2"
       shift 2
       ;;
+    --capacity-forecast-json)
+      capacity_forecast_json="$2"
+      shift 2
+      ;;
+    --admission-budget-plan-json)
+      admission_budget_plan_json="$2"
+      shift 2
+      ;;
+    --lease-exchange-salvage-simulation-json)
+      lease_exchange_salvage_simulation_json="$2"
+      shift 2
+      ;;
+    --warm-target-prefetch-roi-advisory-json)
+      warm_target_prefetch_roi_advisory_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -235,16 +259,28 @@ proof_cache_plan_status="missing"
 qos_batch_plan_status="missing"
 stale_lock_recommendations_status="missing"
 staged_ownership_report_status="missing"
+capacity_forecast_status="missing"
+admission_budget_plan_status="missing"
+lease_exchange_salvage_simulation_status="missing"
+warm_target_prefetch_roi_advisory_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
 if [[ -n "$stale_lock_recommendations_json" ]]; then stale_lock_recommendations_status="provided"; fi
 if [[ -n "$staged_ownership_report_json" ]]; then staged_ownership_report_status="provided"; fi
+if [[ -n "$capacity_forecast_json" ]]; then capacity_forecast_status="provided"; fi
+if [[ -n "$admission_budget_plan_json" ]]; then admission_budget_plan_status="provided"; fi
+if [[ -n "$lease_exchange_salvage_simulation_json" ]]; then lease_exchange_salvage_simulation_status="provided"; fi
+if [[ -n "$warm_target_prefetch_roi_advisory_json" ]]; then warm_target_prefetch_roi_advisory_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
 stale_lock_recommendations_data="$(json_or_default "$stale_lock_recommendations_json" '{"schema_version":"franken-engine.stale-lock-recommendations.v1","stale_lock_recommendations":[],"safe_to_reopen":[],"contact_first":[]}' 'stale-lock-recommendations')"
 staged_ownership_report_data="$(json_or_default "$staged_ownership_report_json" '{"schema_version":"franken-engine.staged-ownership-report.v1","decision":"missing","offender_count":0,"offending_paths":[],"findings":[]}' 'staged-ownership-report')"
+capacity_forecast_data="$(json_or_default "$capacity_forecast_json" '{"schema_version":"franken-engine.swarm-capacity-forecast.v1","decision":"missing","confidence_band":"low","summary":{"overall_state":"unknown","blocked_categories":[],"degraded_categories":[]},"telemetry_summary":{"snapshot_decision":"unknown"},"inputs":[],"forecasts":{},"artifact_paths":{}}' 'capacity-forecast')"
+admission_budget_plan_data="$(json_or_default "$admission_budget_plan_json" '{"schema_version":"franken-engine.swarm-admission-budget-plan.v1","decision":"missing","budget_profile":"unknown","summary":{"admitted_count":0,"deferred_count":0},"recommendations":[],"artifact_paths":{}}' 'admission-budget-plan')"
+lease_exchange_salvage_simulation_data="$(json_or_default "$lease_exchange_salvage_simulation_json" '{"schema_version":"franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1","decision":"missing","summary":{"manual_review_count":0,"lease_exchange_candidate_count":0,"salvage_promotion_candidate_count":0},"upstream_summary":{"archive_pressure_advisory":"unknown","salvage_workflow_state":"unknown"},"recommendations":[],"artifact_paths":{}}' 'lease-exchange-salvage-simulation')"
+warm_target_prefetch_roi_advisory_data="$(json_or_default "$warm_target_prefetch_roi_advisory_json" '{"schema_version":"franken-engine.swarm-warm-target-prefetch-roi-advisory.v1","advisory":"missing","recommended_action":"Provide a warm-target prefetch ROI advisory before claiming prefetch value.","reason":"No warm-target prefetch ROI advisory was provided.","budget_summary":{"budget_profile":"unknown"},"warm_target_summary":{"target_dir":null},"proof_cache_summary":{"proof_cache_decision":"unknown"},"archive_pressure_summary":{"advisory":"unknown"},"validation_cost_summary":{"estimated_cpu_slots_total":0},"roi_summary":{"expected_reuse_score":0,"realized_reuse_score":0,"reuse_delta":0},"artifact_paths":{}}' 'warm-target-prefetch-roi-advisory')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -259,6 +295,10 @@ jq -n \
   --arg qos_batch_plan_status "$qos_batch_plan_status" \
   --arg stale_lock_recommendations_status "$stale_lock_recommendations_status" \
   --arg staged_ownership_report_status "$staged_ownership_report_status" \
+  --arg capacity_forecast_status "$capacity_forecast_status" \
+  --arg admission_budget_plan_status "$admission_budget_plan_status" \
+  --arg lease_exchange_salvage_simulation_status "$lease_exchange_salvage_simulation_status" \
+  --arg warm_target_prefetch_roi_advisory_status "$warm_target_prefetch_roi_advisory_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -280,6 +320,10 @@ jq -n \
   --argjson qos_batch_plan "$qos_batch_plan_data" \
   --argjson stale_lock_recommendations "$stale_lock_recommendations_data" \
   --argjson staged_ownership_report "$staged_ownership_report_data" \
+  --argjson capacity_forecast "$capacity_forecast_data" \
+  --argjson admission_budget_plan "$admission_budget_plan_data" \
+  --argjson lease_exchange_salvage_simulation "$lease_exchange_salvage_simulation_data" \
+  --argjson warm_target_prefetch_roi_advisory "$warm_target_prefetch_roi_advisory_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -493,6 +537,129 @@ jq -n \
         end
       )
     }) as $staged_contamination_summary
+  | ({
+      artifact_status: $capacity_forecast_status,
+      severity: (
+        if $capacity_forecast_status == "missing" then "warning"
+        elif (($capacity_forecast.decision // "") == "fail_closed") then "critical"
+        elif (($capacity_forecast.summary.overall_state // "") | IN("blocked", "brownout", "degraded"))
+          or (($capacity_forecast.confidence_band // "") != "high") then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($capacity_forecast.decision // "missing"),
+      confidence_band: ($capacity_forecast.confidence_band // "low"),
+      overall_state: ($capacity_forecast.summary.overall_state // "unknown"),
+      blocked_categories: bounded($capacity_forecast.summary.blocked_categories),
+      degraded_categories: bounded($capacity_forecast.summary.degraded_categories),
+      category_states: {
+        compile_pressure: ($capacity_forecast.forecasts.compile_pressure.state // "unknown"),
+        disk_memory_pressure: ($capacity_forecast.forecasts.disk_memory_pressure.state // "unknown"),
+        rch_degradation: ($capacity_forecast.forecasts.rch_degradation.state // "unknown"),
+        target_dir_heat: ($capacity_forecast.forecasts.target_dir_heat.state // "unknown"),
+        proof_availability: ($capacity_forecast.forecasts.proof_availability.state // "unknown"),
+        coordination_pressure: ($capacity_forecast.forecasts.coordination_pressure.state // "unknown")
+      },
+      recommended_actions: {
+        compile_pressure: ($capacity_forecast.forecasts.compile_pressure.recommended_action // null),
+        disk_memory_pressure: ($capacity_forecast.forecasts.disk_memory_pressure.recommended_action // null),
+        rch_degradation: ($capacity_forecast.forecasts.rch_degradation.recommended_action // null),
+        target_dir_heat: ($capacity_forecast.forecasts.target_dir_heat.recommended_action // null),
+        proof_availability: ($capacity_forecast.forecasts.proof_availability.recommended_action // null),
+        coordination_pressure: ($capacity_forecast.forecasts.coordination_pressure.recommended_action // null)
+      },
+      artifact_path: ($capacity_forecast.artifact_paths.swarm_capacity_forecast_json // null)
+    }) as $capacity_forecast_summary
+  | ({
+      artifact_status: $capacity_forecast_status,
+      severity: (
+        if $capacity_forecast_status == "missing" then "warning"
+        elif (($capacity_forecast.decision // "") == "fail_closed")
+          or (($capacity_forecast.confidence_band // "") == "low") then "critical"
+        elif (($capacity_forecast.summary.degraded_categories // []) | length) != 0 then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($capacity_forecast.telemetry_summary.snapshot_decision // $capacity_forecast.decision // "missing"),
+      confidence_band: ($capacity_forecast.confidence_band // "low"),
+      input_count: (($capacity_forecast.inputs // []) | length),
+      provided_input_count: (($capacity_forecast.inputs // []) | map(select((.status // "") == "provided")) | length),
+      missing_input_count: (($capacity_forecast.inputs // []) | map(select((.status // "") != "provided")) | length),
+      failure_count: (($capacity_forecast.failures // []) | length),
+      inputs: bounded($capacity_forecast.inputs),
+      notes: bounded($capacity_forecast.notes),
+      recommended_action: (
+        if (($capacity_forecast.decision // "") == "fail_closed")
+          or (($capacity_forecast.confidence_band // "") == "low") then
+          "Refresh stale or missing telemetry artifacts before trusting the predictive dashboard."
+        else
+          "Treat the predictive forecast as advisory snapshot evidence only."
+        end
+      ),
+      artifact_path: ($capacity_forecast.artifact_paths.swarm_capacity_forecast_json // null)
+    }) as $telemetry_quality_summary
+  | ({
+      artifact_status: $admission_budget_plan_status,
+      severity: (
+        if $admission_budget_plan_status == "missing" then "warning"
+        elif (($admission_budget_plan.decision // "") == "fail_closed") then "critical"
+        elif (($admission_budget_plan.summary.deferred_count // 0) > 0)
+          or (($admission_budget_plan.decision // "") != "admit") then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($admission_budget_plan.decision // "missing"),
+      budget_profile: ($admission_budget_plan.budget_profile // "unknown"),
+      admitted_count: ($admission_budget_plan.summary.admitted_count // 0),
+      deferred_count: ($admission_budget_plan.summary.deferred_count // 0),
+      protected_request_count: (($admission_budget_plan.recommendations // []) | map(select((.budget_class // "") == "protected")) | length),
+      proof_obligation_count: (($admission_budget_plan.recommendations // []) | map(select((.proof_obligation // false) == true)) | length),
+      recommendations: bounded($admission_budget_plan.recommendations),
+      artifact_path: ($admission_budget_plan.artifact_paths.swarm_admission_budget_plan_json // null)
+    }) as $admission_budget_summary
+  | ({
+      artifact_status: $lease_exchange_salvage_simulation_status,
+      severity: (
+        if $lease_exchange_salvage_simulation_status == "missing" then "warning"
+        elif (($lease_exchange_salvage_simulation.decision // "") | test("fail_closed")) then "critical"
+        elif (($lease_exchange_salvage_simulation.summary.manual_review_count // 0) > 0)
+          or (($lease_exchange_salvage_simulation.summary.lease_exchange_candidate_count // 0) > 0)
+          or (($lease_exchange_salvage_simulation.summary.salvage_promotion_candidate_count // 0) > 0) then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($lease_exchange_salvage_simulation.decision // "missing"),
+      manual_review_count: ($lease_exchange_salvage_simulation.summary.manual_review_count // 0),
+      lease_exchange_candidate_count: ($lease_exchange_salvage_simulation.summary.lease_exchange_candidate_count // 0),
+      salvage_promotion_candidate_count: ($lease_exchange_salvage_simulation.summary.salvage_promotion_candidate_count // 0),
+      archive_pressure_advisory: ($lease_exchange_salvage_simulation.upstream_summary.archive_pressure_advisory // "unknown"),
+      salvage_workflow_state: ($lease_exchange_salvage_simulation.upstream_summary.salvage_workflow_state // "unknown"),
+      recommendations: bounded($lease_exchange_salvage_simulation.recommendations),
+      artifact_path: ($lease_exchange_salvage_simulation.artifact_paths.lease_exchange_cancellation_salvage_simulation_json // null)
+    }) as $lease_exchange_salvage_summary
+  | ({
+      artifact_status: $warm_target_prefetch_roi_advisory_status,
+      severity: (
+        if $warm_target_prefetch_roi_advisory_status == "missing" then "warning"
+        elif (($warm_target_prefetch_roi_advisory.advisory // "") == "fail_closed") then "critical"
+        elif (($warm_target_prefetch_roi_advisory.exit_code // 0) == 75)
+          or (($warm_target_prefetch_roi_advisory.advisory // "") != "prefetch_recommended") then "warning"
+        else "ok"
+        end
+      ),
+      advisory: ($warm_target_prefetch_roi_advisory.advisory // "missing"),
+      recommended_action: ($warm_target_prefetch_roi_advisory.recommended_action // "Provide a warm-target ROI advisory before recommending prefetch."),
+      reason: ($warm_target_prefetch_roi_advisory.reason // null),
+      budget_profile: ($warm_target_prefetch_roi_advisory.budget_summary.budget_profile // "unknown"),
+      target_dir: ($warm_target_prefetch_roi_advisory.warm_target_summary.target_dir // null),
+      proof_cache_decision: ($warm_target_prefetch_roi_advisory.proof_cache_summary.proof_cache_decision // "unknown"),
+      archive_pressure_advisory: ($warm_target_prefetch_roi_advisory.archive_pressure_summary.advisory // "unknown"),
+      estimated_cpu_slots_total: ($warm_target_prefetch_roi_advisory.validation_cost_summary.estimated_cpu_slots_total // 0),
+      expected_reuse_score: ($warm_target_prefetch_roi_advisory.roi_summary.expected_reuse_score // 0),
+      realized_reuse_score: ($warm_target_prefetch_roi_advisory.roi_summary.realized_reuse_score // 0),
+      reuse_delta: ($warm_target_prefetch_roi_advisory.roi_summary.reuse_delta // 0),
+      artifact_path: ($warm_target_prefetch_roi_advisory.artifact_paths.swarm_warm_target_prefetch_roi_advisory_json // null)
+    }) as $prefetch_roi_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -533,6 +700,26 @@ jq -n \
         [{component: "staged_contamination", status: "missing", impact: "staged ownership guard artifact is missing", remediation: "Provide --staged-ownership-report-json before commit or closeout."}]
       elif $staged_contamination_summary.severity != "ok" then
         [{component: "staged_contamination", status: $staged_contamination_summary.decision, impact: "staged paths are contaminated or only degraded ownership evidence is available", remediation: "Run the staged ownership guard and unstage offending paths before commit."}]
+      else [] end)
+    + (if $capacity_forecast_status == "missing" then
+        [{component: "capacity_forecast", status: "missing", impact: "predictive capacity forecast artifact is missing", remediation: "Provide --capacity-forecast-json before publishing forecast confidence."}]
+      elif $capacity_forecast_summary.severity != "ok" then
+        [{component: "capacity_forecast", status: $capacity_forecast_summary.overall_state, impact: "predictive capacity forecast is low-confidence or degraded", remediation: (($capacity_forecast_summary.recommended_actions.compile_pressure // $telemetry_quality_summary.recommended_action) // "Refresh forecast inputs before trusting this dashboard section.")}]
+      else [] end)
+    + (if $admission_budget_plan_status == "missing" then
+        [{component: "admission_budgets", status: "missing", impact: "admission budget plan artifact is missing", remediation: "Provide --admission-budget-plan-json before summarizing budget posture."}]
+      elif $admission_budget_summary.severity != "ok" then
+        [{component: "admission_budgets", status: $admission_budget_summary.decision, impact: "admission budget planning is constrained or deferred", remediation: "Follow the budget recommendations before admitting more work."}]
+      else [] end)
+    + (if $lease_exchange_salvage_simulation_status == "missing" then
+        [{component: "lease_exchange_salvage", status: "missing", impact: "lease-exchange salvage simulation artifact is missing", remediation: "Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles."}]
+      elif $lease_exchange_salvage_summary.severity != "ok" then
+        [{component: "lease_exchange_salvage", status: $lease_exchange_salvage_summary.decision, impact: "lease-exchange or salvage promotion requires review", remediation: "Use the simulation recommendations instead of changing ownership blindly."}]
+      else [] end)
+    + (if $warm_target_prefetch_roi_advisory_status == "missing" then
+        [{component: "prefetch_roi", status: "missing", impact: "warm-target prefetch ROI advisory artifact is missing", remediation: "Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch."}]
+      elif $prefetch_roi_summary.severity != "ok" then
+        [{component: "prefetch_roi", status: $prefetch_roi_summary.advisory, impact: "prefetch ROI is degraded, blocked, or not worth taking", remediation: ($prefetch_roi_summary.recommended_action // "Respect the prefetch ROI advisory before warming targets.")}]
       else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
@@ -582,6 +769,16 @@ jq -n \
         qos_deferred_count: $qos_batches_summary.deferred_count,
         stale_lock_safe_to_reopen_count: $stale_lock_summary.safe_to_reopen_count,
         stale_lock_contact_first_count: $stale_lock_summary.contact_first_count,
+        forecast_overall_state: $capacity_forecast_summary.overall_state,
+        forecast_confidence_band: $capacity_forecast_summary.confidence_band,
+        telemetry_missing_input_count: $telemetry_quality_summary.missing_input_count,
+        admission_budget_profile: $admission_budget_summary.budget_profile,
+        admission_deferred_count: $admission_budget_summary.deferred_count,
+        lease_exchange_decision: $lease_exchange_salvage_summary.decision,
+        lease_exchange_candidate_count: $lease_exchange_salvage_summary.lease_exchange_candidate_count,
+        salvage_promotion_candidate_count: $lease_exchange_salvage_summary.salvage_promotion_candidate_count,
+        prefetch_advisory: $prefetch_roi_summary.advisory,
+        prefetch_target_dir: $prefetch_roi_summary.target_dir,
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -637,9 +834,14 @@ jq -n \
         proof_cache: $proof_cache_summary,
         qos_batches: $qos_batches_summary,
         stale_lock_recommendations: $stale_lock_summary,
+        telemetry_quality: $telemetry_quality_summary,
+        capacity_forecast: $capacity_forecast_summary,
+        admission_budgets: $admission_budget_summary,
+        lease_exchange_salvage: $lease_exchange_salvage_summary,
+        prefetch_roi: $prefetch_roi_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -648,10 +850,14 @@ jq -n \
       recommendations: (
         if $staged_contamination_summary.severity == "critical" then
           [recommendation("reject_staged_contamination"; null; "staged ownership guard reports contamination")]
+        elif $capacity_forecast_summary.severity == "critical" then
+          [recommendation("refresh_capacity_forecast"; null; "predictive capacity forecast is fail-closed or low-confidence")]
         elif $resource_leases_summary.severity == "critical" then
           [recommendation("fix_resource_lease"; null; "resource lease planner denied or failed closed")]
         elif $proof_cache_summary.severity == "critical" then
           [recommendation("fix_proof_cache"; null; "proof reuse cache planner failed closed")]
+        elif $prefetch_roi_summary.severity == "critical" then
+          [recommendation("respect_prefetch_fail_closed"; null; "prefetch ROI advisory failed closed")]
         elif ($dirty_reserved | length) != 0 then
           [recommendation("avoid_dirty_reserved_files"; null; "dirty or reserved files overlap active work")]
         elif ($stale_lock_summary.safe_to_reopen_count > 0) then
@@ -660,6 +866,12 @@ jq -n \
           [recommendation("contact_stalled_owner"; $stale_lock_summary.contact_first[0]; "stale-lock recommender requires contact before reopening")]
         elif ($collision_summary.risk != "none") then
           [recommendation("coordinate_collision_risk"; null; "planned dashboard feed reports collision risk")]
+        elif $lease_exchange_salvage_summary.severity == "warning" then
+          [recommendation("review_lease_exchange_salvage"; null; "lease-exchange salvage simulation recommends coordination or manual review")]
+        elif $admission_budget_summary.severity == "warning" then
+          [recommendation("respect_admission_budget"; null; "admission budget planner defers or narrows queued work")]
+        elif $prefetch_roi_summary.severity == "warning" then
+          [recommendation("use_prefetch_roi_as_advisory"; null; "prefetch ROI advisory recommends warming only under bounded conditions")]
         elif $proof_cache_summary.severity == "warning" then
           [recommendation("refresh_or_partition_proof_cache"; null; "proof cache requires refresh or partial refresh")]
         elif $qos_batches_summary.deferred_count > 0 then
@@ -688,7 +900,11 @@ jq -n \
       artifact_paths: {
         status_json: $status_path,
         commands_txt: $commands_path,
-        report_md: $report_path
+        report_md: $report_path,
+        capacity_forecast_json: $capacity_forecast_summary.artifact_path,
+        admission_budget_plan_json: $admission_budget_summary.artifact_path,
+        lease_exchange_salvage_simulation_json: $lease_exchange_salvage_summary.artifact_path,
+        warm_target_prefetch_roi_advisory_json: $prefetch_roi_summary.artifact_path
       }
     }
   ' >"$status_path"
@@ -700,9 +916,24 @@ jq -n \
   printf -- "- In progress: \`%s\`\n" "$(jq '.summary.in_progress_count' "$status_path")"
   printf -- "- Degraded fields: \`%s\`\n\n" "$(jq '.summary.degraded_count' "$status_path")"
   printf -- "- Dashboard contract: \`%s\` via \`%s\`\n" "$(jq -r '.dashboard_contract.schema_version' "$status_path")" "$(jq -r '.dashboard_contract.renderer.provider' "$status_path")"
+  printf -- "- Forecast confidence: \`%s\` / \`%s\`\n" "$(jq -r '.summary.forecast_confidence_band' "$status_path")" "$(jq -r '.summary.forecast_overall_state' "$status_path")"
+  printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
+  printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
+  printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
+  printf '## Artifact Sources\n\n'
+  jq -r '
+    [
+      {label:"Capacity forecast", path:.artifact_paths.capacity_forecast_json},
+      {label:"Admission budget plan", path:.artifact_paths.admission_budget_plan_json},
+      {label:"Lease exchange salvage simulation", path:.artifact_paths.lease_exchange_salvage_simulation_json},
+      {label:"Warm target prefetch ROI advisory", path:.artifact_paths.warm_target_prefetch_roi_advisory_json}
+    ][]
+    | "- " + .label + ": `" + (.path // "missing") + "`"
+  ' "$status_path"
+  printf '\n'
   jq -r '.recommendations[] | "- `" + .action + "`" + (if .bead_id == null then "" else " for `" + .bead_id + "`" end) + ": " + .reason' "$status_path"
   if [[ "$(jq '.degraded | length' "$status_path")" -ne 0 ]]; then
     printf '\n## Degraded\n\n'

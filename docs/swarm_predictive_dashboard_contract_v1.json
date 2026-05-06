@@ -56,6 +56,20 @@
     "predictive_dashboard.qos_batches.deferred_commands",
     "predictive_dashboard.stale_lock_recommendations.contact_first",
     "predictive_dashboard.stale_lock_recommendations.actionable_commands",
+    "predictive_dashboard.telemetry_quality.decision",
+    "predictive_dashboard.telemetry_quality.confidence_band",
+    "predictive_dashboard.telemetry_quality.missing_input_count",
+    "predictive_dashboard.capacity_forecast.overall_state",
+    "predictive_dashboard.capacity_forecast.blocked_categories",
+    "predictive_dashboard.capacity_forecast.degraded_categories",
+    "predictive_dashboard.admission_budgets.budget_profile",
+    "predictive_dashboard.admission_budgets.deferred_count",
+    "predictive_dashboard.lease_exchange_salvage.decision",
+    "predictive_dashboard.lease_exchange_salvage.lease_exchange_candidate_count",
+    "predictive_dashboard.lease_exchange_salvage.salvage_promotion_candidate_count",
+    "predictive_dashboard.prefetch_roi.advisory",
+    "predictive_dashboard.prefetch_roi.recommended_action",
+    "predictive_dashboard.prefetch_roi.target_dir",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -77,14 +91,18 @@
     "stale_proof",
     "high_cost",
     "collision_risk",
-    "overloaded"
+    "overloaded",
+    "forecast_low_confidence"
   ],
   "truth_constraints": [
     "No rich interactive renderer is implemented in franken_engine by this contract.",
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
-    "The telemetry snapshot normalizer is a fixture-only extension point; it must not be described as live scheduling or worker mutation.",
-    "The capacity forecaster is a fixture-only extension point; it must not be described as live admission control or automatic worker mutation.",
-    "The admission budget planner is a fixture-only extension point; it must not be described as live worker allocation or automatic queue mutation."
+    "scripts/swarm_operator_status_report.sh remains the single predictive dashboard producer in franken_engine; do not add a second dashboard implementation here.",
+    "The telemetry quality and capacity forecast sections are advisory snapshots backed by scripts/swarm_capacity_forecaster.sh; they must not be described as live scheduling or automatic worker mutation.",
+    "The admission budget section is advisory snapshot evidence backed by scripts/swarm_admission_budget_planner.sh; it must not be described as live worker allocation, queue mutation, or automatic bead claiming.",
+    "The lease exchange and salvage section is advisory snapshot evidence backed by scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh; it must not be described as automatic ownership transfer or cancellation.",
+    "The prefetch ROI section is advisory snapshot evidence backed by scripts/swarm_warm_target_prefetch_roi_advisory.sh; it must not be described as automatic target warming or archive mutation.",
+    "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]
 }

@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 24,
+    "degraded_count": 25,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -70,6 +70,12 @@
     "queue_tuning_canary_action": "missing",
     "queue_tuning_manual_blocker_count": 0,
     "queue_tuning_evidence_link_count": 0,
+    "queue_policy_adoption_readiness": "missing",
+    "queue_policy_adoption_state": "missing",
+    "queue_policy_sustained_gain_verdict": "missing",
+    "queue_policy_expiry_decision": "missing",
+    "queue_policy_expiry_required": false,
+    "queue_policy_supersession_required": false,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -498,6 +504,53 @@
         "canary_verdict_ledger_json": null
       }
     },
+    "queue_policy_adoption": {
+      "artifact_statuses": {
+        "adoption_receipt": "missing",
+        "adoption_snapshot_bundle": "missing",
+        "sustained_gain_receipt": "missing",
+        "expiry_supersession_plan": "missing",
+        "expiry_supersession_ledger": "missing"
+      },
+      "severity": "warning",
+      "readiness": "missing",
+      "adoption_receipt_id": null,
+      "adoption_state": "missing",
+      "adopted_policy_bundle_id": null,
+      "adopted_candidate_id": null,
+      "adopted_expected_delta_millionths": null,
+      "observation_window": {},
+      "supersession_metadata": {},
+      "sustained_gain_verdict": "missing",
+      "sustained_gain_receipt_id": null,
+      "rollback_relevant_drift_count": 0,
+      "expiry_decision": "missing",
+      "expiry_required": false,
+      "supersession_required": false,
+      "newer_candidate_bundle_id": null,
+      "newer_candidate_id": null,
+      "execution_state": "missing",
+      "retirement_executed": false,
+      "supersession_executed": false,
+      "decision_reasons": [],
+      "fail_closed_reasons": [],
+      "ledger_rows": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false,
+        "mutates_external_state": false,
+        "retirement_executed": false,
+        "supersession_executed": false
+      },
+      "artifact_paths": {
+        "adoption_receipt_json": null,
+        "adoption_snapshot_bundle_json": null,
+        "sustained_gain_receipt_json": null,
+        "expiry_supersession_plan_json": null,
+        "expiry_supersession_ledger_json": null
+      }
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -526,7 +579,9 @@
         "queue_fidelity_insufficient_evidence",
         "queue_tuning_promotion_blocked",
         "queue_tuning_promotion_stale_evidence",
-        "queue_tuning_promotion_rollback_required"
+        "queue_tuning_promotion_rollback_required",
+        "queue_policy_adoption_expiry_required",
+        "queue_policy_adoption_supersession_required"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -670,6 +725,12 @@
       "status": "missing",
       "impact": "queue tuning promotion artifacts are incomplete",
       "remediation": "Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice."
+    },
+    {
+      "component": "queue_policy_adoption",
+      "status": "missing",
+      "impact": "policy adoption, sustained-gain, or expiry advisory artifacts are incomplete",
+      "remediation": "Provide adoption receipt, snapshot, sustained-gain receipt, expiry plan, and expiry ledger before trusting policy lifecycle advice."
     },
     {
       "component": "rch_incident_packet",

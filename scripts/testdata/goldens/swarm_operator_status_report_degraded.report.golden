@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `24`
+- Degraded fields: `25`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
@@ -15,6 +15,7 @@
 - Execution queue: `missing` top=`0` deferred=`0` restore=`restore_unknown`
 - Queue fidelity: trust=`missing` drift=`none` top-mismatch=`none` tuning=`none`
 - Queue tuning promotion: readiness=`missing` decision=`missing` rollback=`missing` canary=`missing`
+- Queue policy adoption: readiness=`missing` sustained=`missing` expiry=`missing` expire=`false` supersede=`false`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -44,6 +45,11 @@
 - Queue tuning rollout plan: `missing`
 - Queue tuning rollback comparator receipt: `missing`
 - Queue tuning canary verdict ledger: `missing`
+- Queue policy adoption receipt: `missing`
+- Queue policy adoption snapshot bundle: `missing`
+- Queue policy sustained-gain receipt: `missing`
+- Queue policy expiry/supersession plan: `missing`
+- Queue policy expiry/supersession ledger: `missing`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
@@ -72,4 +78,5 @@
 - `execution_queue_advisory` `missing`: execution queue runner artifacts are incomplete. Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice.
 - `queue_fidelity` `missing`: queue fidelity and tuning artifacts are incomplete. Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice.
 - `queue_tuning_promotion` `missing`: queue tuning promotion artifacts are incomplete. Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice.
+- `queue_policy_adoption` `missing`: policy adoption, sustained-gain, or expiry advisory artifacts are incomplete. Provide adoption receipt, snapshot, sustained-gain receipt, expiry plan, and expiry ledger before trusting policy lifecycle advice.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

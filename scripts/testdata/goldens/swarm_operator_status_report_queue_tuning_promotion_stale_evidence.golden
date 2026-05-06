@@ -70,6 +70,12 @@
     "queue_tuning_canary_action": "hold_canary",
     "queue_tuning_manual_blocker_count": 4,
     "queue_tuning_evidence_link_count": 3,
+    "queue_policy_adoption_readiness": "retained",
+    "queue_policy_adoption_state": "recorded_active_policy",
+    "queue_policy_sustained_gain_verdict": "sustained_gain",
+    "queue_policy_expiry_decision": "retain_adopted_policy",
+    "queue_policy_expiry_required": false,
+    "queue_policy_supersession_required": false,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -614,6 +620,91 @@
         "canary_verdict_ledger_json": "[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/canary_verdict_ledger.json"
       }
     },
+    "queue_policy_adoption": {
+      "artifact_statuses": {
+        "adoption_receipt": "provided",
+        "adoption_snapshot_bundle": "provided",
+        "sustained_gain_receipt": "provided",
+        "expiry_supersession_plan": "provided",
+        "expiry_supersession_ledger": "provided"
+      },
+      "severity": "ok",
+      "readiness": "retained",
+      "adoption_receipt_id": "queue-policy-adoption-receipt-smoke",
+      "adoption_state": "recorded_active_policy",
+      "adopted_policy_bundle_id": "queue-tuning-policy-bundle-smoke",
+      "adopted_candidate_id": "raise_proof_health_penalty",
+      "adopted_expected_delta_millionths": 240000,
+      "observation_window": {
+        "starts_at": "2026-05-06T00:00:00Z",
+        "duration_seconds": 3600,
+        "minimum_sample_count": 3,
+        "monitored_metrics": [
+          "queue_fidelity_millionths",
+          "proof_drift_count",
+          "rollback_trigger_count"
+        ],
+        "stop_on_missing_evidence": true
+      },
+      "supersession_metadata": {
+        "supersedes_adoption_receipt_id": null,
+        "supersedes_policy_bundle_id": "current-queue-policy",
+        "supersession_reason": "smoke",
+        "previous_policy_retention": "retain_for_rollback",
+        "expiry_policy": "score after window"
+      },
+      "sustained_gain_verdict": "sustained_gain",
+      "sustained_gain_receipt_id": "queue-policy-sustained-gain-smoke",
+      "rollback_relevant_drift_count": 0,
+      "expiry_decision": "retain_adopted_policy",
+      "expiry_required": false,
+      "supersession_required": false,
+      "newer_candidate_bundle_id": "queue-tuning-policy-bundle-smoke",
+      "newer_candidate_id": "raise_proof_health_penalty",
+      "execution_state": "advisory_not_executed",
+      "retirement_executed": false,
+      "supersession_executed": false,
+      "decision_reasons": [
+        {
+          "kind": "sustained_gain_retained",
+          "detail": "sustained-gain evidence supports retention"
+        }
+      ],
+      "fail_closed_reasons": [],
+      "ledger_rows": [
+        {
+          "check": "sustained_gain_verdict",
+          "observed_value": "sustained_gain",
+          "effect": "retention_support"
+        },
+        {
+          "check": "newer_candidate_delta",
+          "observed_value": "240000",
+          "adopted_value": "240000",
+          "effect": "retention_support"
+        },
+        {
+          "check": "rollback_relevant_drift_count",
+          "observed_value": "0",
+          "effect": "retention_support"
+        }
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false,
+        "mutates_external_state": false,
+        "retirement_executed": false,
+        "supersession_executed": false
+      },
+      "artifact_paths": {
+        "adoption_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/expiry_supersession_plan.json",
+        "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
+      }
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -642,7 +733,9 @@
         "queue_fidelity_insufficient_evidence",
         "queue_tuning_promotion_blocked",
         "queue_tuning_promotion_stale_evidence",
-        "queue_tuning_promotion_rollback_required"
+        "queue_tuning_promotion_rollback_required",
+        "queue_policy_adoption_expiry_required",
+        "queue_policy_adoption_supersession_required"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

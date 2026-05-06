@@ -213,6 +213,31 @@ rollback comparator/canary ledger requires rollback, the
 `queue_tuning_promotion` section must surface that fail-closed state instead of
 claiming promotion readiness.
 
+The same operator report now also integrates the SWARM-CTRL-XV policy adoption
+lifecycle handoff:
+
+- Adoption receipt contract: `docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json`
+- Adoption receipt schema: `franken-engine.swarm-execution-queue-policy-adoption-receipt.v1`
+- Adoption snapshot schema: `franken-engine.swarm-execution-queue-policy-adoption-snapshot-bundle.v1`
+
+- Sustained-gain scorer: `scripts/swarm_execution_queue_policy_sustained_gain_scorer.sh`
+- Sustained-gain contract: `docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json`
+- Sustained-gain receipt schema: `franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1`
+
+- Expiry/supersession planner: `scripts/swarm_execution_queue_policy_expiry_supersession_planner.sh`
+- Expiry/supersession contract: `docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json`
+- Expiry/supersession plan schema: `franken-engine.swarm-execution-queue-policy-expiry-supersession-plan.v1`
+- Expiry/supersession ledger schema: `franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1`
+
+That handoff carries adoption history, sustained-gain verdict, expiry decision,
+supersession advisory state, and execution-state boundaries into the existing
+`scripts/swarm_operator_status_report.sh` producer. It is advisory-only. It
+must not be described as live queue retuning, automatic scheduler mutation,
+automatic retirement, automatic supersession, or proof that retirement already
+executed. If sustained-gain evidence regresses or the expiry planner recommends
+expiry or supersession, the `queue_policy_adoption` section must surface that
+operator advisory without implying execution.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -251,6 +276,7 @@ consumption:
 | `execution_queue_advisory` | `swarm-execution-queue-artifact.v1` plus risk-budget and bottleneck runner artifacts | Show top starts, deferred queue items, conservative-mode state, bottlenecks, and restore dependency status without mutating live queue state. |
 | `queue_fidelity` | `swarm-execution-queue-fidelity-score-receipt.v1` plus drift ledger, counterfactual backtest, tuning plan, and frontier artifacts | Show hindsight trust level, highest-severity drift, and top tuning recommendation without live queue retuning. |
 | `queue_tuning_promotion` | `swarm-execution-queue-tuning-policy-bundle.v1` plus promotion guard, manual rollout, rollback comparator, and canary verdict artifacts | Show bundle readiness, canary recommendation, rollback readiness, manual-approval blockers, and evidence links without automatic promotion. |
+| `queue_policy_adoption` | `swarm-execution-queue-policy-adoption-receipt.v1` plus adoption snapshot, sustained-gain receipt, expiry/supersession plan, and expiry/supersession ledger artifacts | Show adoption state, sustained-gain verdict, expiry decision, and supersession advisory state without executing retirement or supersession. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -282,6 +308,8 @@ The smoke test publishes deterministic goldens for:
 - `queue_tuning_promotion_blocked`
 - `queue_tuning_promotion_stale_evidence`
 - `queue_tuning_promotion_rollback_required`
+- `queue_policy_adoption_expiry_required`
+- `queue_policy_adoption_supersession_required`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -342,6 +370,15 @@ manual-approval blockers, `queue_tuning_promotion_stale_evidence` covers stale
 evidence rejection, and `queue_tuning_promotion_rollback_required` proves a
 negative comparator/canary verdict stays fail-closed.
 
+The queue policy adoption receipt, sustained-gain scorer, and expiry/supersession
+planner are integrated directly as advisory lifecycle evidence. The `healthy`
+fixture covers retained adoption history, `queue_policy_adoption_expiry_required`
+proves regression and rollback-relevant drift surface as an expiry advisory
+without claiming executed retirement, and
+`queue_policy_adoption_supersession_required` proves a newer candidate bundle
+surfaces as a supersession advisory without claiming automatic promotion or
+executed supersession.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -372,6 +409,10 @@ negative comparator/canary verdict stays fail-closed.
 - The docs must describe the queue tuning promotion handoff as integrated
   advisory operator evidence, not as live queue retuning, automatic scheduler
   mutation, automatic promotion, or automatic bead changes.
+- The docs must describe the queue policy adoption handoff as integrated
+  advisory lifecycle evidence, not as live queue retuning, automatic scheduler
+  mutation, automatic retirement, automatic supersession, or proof that
+  retirement already executed.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a

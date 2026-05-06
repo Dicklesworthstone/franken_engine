@@ -15,6 +15,7 @@
 - Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
 - Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
 - Queue tuning promotion: readiness=`fail_closed` decision=`reject` rollback=`better_than_current` canary=`hold_canary`
+- Queue policy adoption: readiness=`retained` sustained=`sustained_gain` expiry=`retain_adopted_policy` expire=`false` supersede=`false`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -44,6 +45,11 @@
 - Queue tuning rollout plan: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/manual_approval_rollout_plan.json`
 - Queue tuning rollback comparator receipt: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/rollback_comparator_receipt.json`
 - Queue tuning canary verdict ledger: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/canary_verdict_ledger.json`
+- Queue policy adoption receipt: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/adoption_receipt.json`
+- Queue policy adoption snapshot bundle: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/adoption_snapshot_bundle.json`
+- Queue policy sustained-gain receipt: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/sustained_gain_receipt.json`
+- Queue policy expiry/supersession plan: `[SMOKE_ROOT]/queue_tuning_promotion_stale_evidence-fixtures/expiry_supersession_plan.json`
+- Queue policy expiry/supersession ledger: `expiry_supersession_ledger.json`
 
 - `respect_queue_tuning_promotion_fail_closed`: queue tuning promotion is rejected, rollback-required, or unsafe
 

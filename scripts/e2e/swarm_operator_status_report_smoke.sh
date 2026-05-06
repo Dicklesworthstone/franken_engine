@@ -899,7 +899,152 @@ write_queue_tuning_promotion_fixtures() {
         advisory_only:true
       },
       artifact_paths:{canary_verdict_ledger_json:$artifact_path}
-    }' >"${fixture_dir}/canary_verdict_ledger.json"
+  }' >"${fixture_dir}/canary_verdict_ledger.json"
+}
+
+write_queue_policy_adoption_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local sustained_verdict="sustained_gain"
+  local expiry_decision="retain_adopted_policy"
+  local expiry_required=false
+  local supersession_required=false
+  local newer_bundle_id="queue-tuning-policy-bundle-smoke"
+  local newer_candidate_id="raise_proof_health_penalty"
+  local decision_reasons_json='[{"kind":"sustained_gain_retained","detail":"sustained-gain evidence supports retention"}]'
+  local ledger_effect="retention_support"
+
+  case "$mode" in
+    healthy)
+      ;;
+    expiry_required)
+      sustained_verdict="regression_detected"
+      expiry_decision="expire_adopted_policy"
+      expiry_required=true
+      decision_reasons_json='[{"kind":"sustained_gain_regression","detail":"sustained-gain receipt reports regression"},{"kind":"rollback_relevant_drift","detail":"post-adoption drift ledger contains rollback-relevant rows"}]'
+      ledger_effect="expiry_pressure"
+      ;;
+    supersession_required)
+      expiry_decision="supersede_adopted_policy"
+      expiry_required=true
+      supersession_required=true
+      newer_bundle_id="queue-tuning-policy-bundle-next"
+      newer_candidate_id="raise_owner_friction_penalty"
+      decision_reasons_json='[{"kind":"newer_candidate_available","detail":"newer candidate bundle improves expected fidelity delta"}]'
+      ledger_effect="supersession_pressure"
+      ;;
+    *)
+      record_failure "unknown queue policy adoption fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/adoption_receipt.json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-policy-adoption-receipt.v1",
+      adoption_receipt_id:"queue-policy-adoption-receipt-smoke",
+      adopted_policy_bundle_id:"queue-tuning-policy-bundle-smoke",
+      source_revision:"smoke-rev",
+      generated_at:"2026-05-06T00:00:00Z",
+      decision:"admitted",
+      operator_decision:{decision:"adopt",approved_by:"human_operator",approved_at:"2026-05-06T00:00:00Z",approval_artifact_path:"approvals/queue-policy-adoption.json",decision_reason:"eligible evidence",adoption_state:"recorded_active_policy"},
+      adopted_candidate:{candidate_id:"raise_proof_health_penalty",expected_fidelity_delta_millionths:240000,source_policy_bundle_id:"queue-tuning-policy-bundle-smoke",source_promotion_guard_receipt_json:"promotion_guard_receipt.json",source_canary_verdict_ledger_json:"canary_verdict_ledger.json"},
+      observation_window:{starts_at:"2026-05-06T00:00:00Z",duration_seconds:3600,minimum_sample_count:3,monitored_metrics:["queue_fidelity_millionths","proof_drift_count","rollback_trigger_count"],stop_on_missing_evidence:true},
+      supersession:{supersedes_adoption_receipt_id:null,supersedes_policy_bundle_id:"current-queue-policy",supersession_reason:"smoke",previous_policy_retention:"retain_for_rollback",expiry_policy:"score after window"},
+      mutation_policy:{receipt_artifact_only:true,records_operator_decision:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false},
+      artifact_paths:{adoption_receipt_json:$artifact_path}
+    }' >"${fixture_dir}/adoption_receipt.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/adoption_snapshot_bundle.json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-policy-adoption-snapshot-bundle.v1",
+      snapshot_id:"queue-policy-adoption-snapshot-smoke",
+      adoption_receipt_id:"queue-policy-adoption-receipt-smoke",
+      adopted_policy_bundle_id:"queue-tuning-policy-bundle-smoke",
+      candidate_id:"raise_proof_health_penalty",
+      source_revision:"smoke-rev",
+      generated_at:"2026-05-06T00:00:00Z",
+      decision:"admitted",
+      normalized_inputs:{rollback_comparator_receipt:{current_fidelity_millionths:760000,candidate_expected_fidelity_millionths:1000000,candidate_delta_millionths:240000}},
+      mutation_policy:{receipt_artifact_only:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false},
+      artifact_paths:{adoption_snapshot_bundle_json:$artifact_path}
+    }' >"${fixture_dir}/adoption_snapshot_bundle.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/sustained_gain_receipt.json" \
+    --arg sustained_verdict "$sustained_verdict" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1",
+      sustained_gain_receipt_id:"queue-policy-sustained-gain-smoke",
+      source_revision:"smoke-rev",
+      generated_at:"2026-05-06T01:00:00Z",
+      verdict:$sustained_verdict,
+      adopted_policy_bundle_id:"queue-tuning-policy-bundle-smoke",
+      adoption_receipt_id:"queue-policy-adoption-receipt-smoke",
+      candidate_id:"raise_proof_health_penalty",
+      baseline_fidelity_millionths:760000,
+      promised_delta_millionths:240000,
+      sustained_floor_millionths:880000,
+      observed_fidelity_millionths:(if $sustained_verdict == "regression_detected" then 700000 else 900000 end),
+      rollback_drift_count:(if $sustained_verdict == "regression_detected" then 1 else 0 end),
+      fail_closed_reasons:[],
+      mutation_policy:{scoring_artifact_only:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false},
+      artifact_paths:{sustained_gain_receipt_json:$artifact_path}
+    }' >"${fixture_dir}/sustained_gain_receipt.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/expiry_supersession_plan.json" \
+    --arg expiry_decision "$expiry_decision" \
+    --arg newer_bundle_id "$newer_bundle_id" \
+    --arg newer_candidate_id "$newer_candidate_id" \
+    --argjson expiry_required "$expiry_required" \
+    --argjson supersession_required "$supersession_required" \
+    --argjson decision_reasons "$decision_reasons_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-policy-expiry-supersession-plan.v1",
+      plan_id:"queue-policy-expiry-supersession-smoke",
+      source_revision:"smoke-rev",
+      generated_at:"2026-05-06T02:00:00Z",
+      decision:$expiry_decision,
+      adopted_policy_bundle_id:"queue-tuning-policy-bundle-smoke",
+      adoption_receipt_id:"queue-policy-adoption-receipt-smoke",
+      adopted_candidate_id:"raise_proof_health_penalty",
+      adopted_expected_delta_millionths:240000,
+      sustained_gain_receipt_id:"queue-policy-sustained-gain-smoke",
+      sustained_gain_verdict:(if $expiry_decision == "expire_adopted_policy" then "regression_detected" else "sustained_gain" end),
+      rollback_relevant_drift_count:(if $expiry_decision == "expire_adopted_policy" then 1 else 0 end),
+      newer_candidate_bundle_id:$newer_bundle_id,
+      newer_candidate_id:$newer_candidate_id,
+      expiry_required:$expiry_required,
+      supersession_required:$supersession_required,
+      advisory_status:{planning_artifact_only:true,execution_state:"advisory_not_executed",retirement_executed:false,supersession_executed:false,execution_evidence:"not supplied"},
+      decision_reasons:$decision_reasons,
+      fail_closed_reasons:[],
+      mutation_policy:{planning_artifact_only:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false,retirement_executed:false,supersession_executed:false},
+      artifact_paths:{expiry_supersession_plan_json:$artifact_path,expiry_supersession_ledger_json:"expiry_supersession_ledger.json"}
+    }' >"${fixture_dir}/expiry_supersession_plan.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/expiry_supersession_ledger.json" \
+    --arg expiry_decision "$expiry_decision" \
+    --arg ledger_effect "$ledger_effect" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1",
+      source_revision:"smoke-rev",
+      generated_at:"2026-05-06T02:00:00Z",
+      decision:$expiry_decision,
+      ledger_rows:[
+        {check:"sustained_gain_verdict",observed_value:(if $expiry_decision == "expire_adopted_policy" then "regression_detected" else "sustained_gain" end),effect:$ledger_effect},
+        {check:"newer_candidate_delta",observed_value:(if $expiry_decision == "supersede_adopted_policy" then "320000" else "240000" end),adopted_value:"240000",effect:$ledger_effect},
+        {check:"rollback_relevant_drift_count",observed_value:(if $expiry_decision == "expire_adopted_policy" then "1" else "0" end),effect:$ledger_effect}
+      ],
+      ownership_rows:[],
+      fail_closed_reasons:[],
+      mutation_policy:{planning_artifact_only:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false,retirement_executed:false,supersession_executed:false},
+      artifact_paths:{expiry_supersession_ledger_json:$artifact_path}
+    }' >"${fixture_dir}/expiry_supersession_ledger.json"
 }
 
 write_healthy_fixtures() {
@@ -998,6 +1143,7 @@ write_healthy_fixtures() {
   write_predictive_extension_fixtures "$fixture_dir"
   write_queue_fidelity_fixtures "$fixture_dir" "healthy"
   write_queue_tuning_promotion_fixtures "$fixture_dir" "healthy"
+  write_queue_policy_adoption_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -1322,6 +1468,14 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_queue_tuning_promotion_fixtures "$fixture_dir" "rollback_required"
       ;;
+    queue_policy_adoption_expiry_required)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_policy_adoption_fixtures "$fixture_dir" "expiry_required"
+      ;;
+    queue_policy_adoption_supersession_required)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_policy_adoption_fixtures "$fixture_dir" "supersession_required"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1357,6 +1511,11 @@ run_case() {
   [[ -f "${fixture_dir}/manual_approval_rollout_plan.json" ]] && extra_args+=(--queue-tuning-rollout-plan-json "${fixture_dir}/manual_approval_rollout_plan.json")
   [[ -f "${fixture_dir}/rollback_comparator_receipt.json" ]] && extra_args+=(--queue-tuning-rollback-comparator-receipt-json "${fixture_dir}/rollback_comparator_receipt.json")
   [[ -f "${fixture_dir}/canary_verdict_ledger.json" ]] && extra_args+=(--queue-tuning-canary-verdict-ledger-json "${fixture_dir}/canary_verdict_ledger.json")
+  [[ -f "${fixture_dir}/adoption_receipt.json" ]] && extra_args+=(--queue-policy-adoption-receipt-json "${fixture_dir}/adoption_receipt.json")
+  [[ -f "${fixture_dir}/adoption_snapshot_bundle.json" ]] && extra_args+=(--queue-policy-adoption-snapshot-bundle-json "${fixture_dir}/adoption_snapshot_bundle.json")
+  [[ -f "${fixture_dir}/sustained_gain_receipt.json" ]] && extra_args+=(--queue-policy-sustained-gain-receipt-json "${fixture_dir}/sustained_gain_receipt.json")
+  [[ -f "${fixture_dir}/expiry_supersession_plan.json" ]] && extra_args+=(--queue-policy-expiry-supersession-plan-json "${fixture_dir}/expiry_supersession_plan.json")
+  [[ -f "${fixture_dir}/expiry_supersession_ledger.json" ]] && extra_args+=(--queue-policy-expiry-supersession-ledger-json "${fixture_dir}/expiry_supersession_ledger.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1434,6 +1593,18 @@ run_case() {
     and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.advisory_only == true)
     and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.changes_active_queue == false)
     and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.applies_live_retuning == false)
+    and (.predictive_dashboard.queue_policy_adoption.readiness | type == "string")
+    and (.predictive_dashboard.queue_policy_adoption.adoption_state | type == "string")
+    and (.predictive_dashboard.queue_policy_adoption.sustained_gain_verdict | type == "string")
+    and (.predictive_dashboard.queue_policy_adoption.expiry_decision | type == "string")
+    and (.predictive_dashboard.queue_policy_adoption.expiry_required | type == "boolean")
+    and (.predictive_dashboard.queue_policy_adoption.supersession_required | type == "boolean")
+    and (.predictive_dashboard.queue_policy_adoption.execution_state | type == "string")
+    and (.predictive_dashboard.queue_policy_adoption.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.queue_policy_adoption.mutation_policy.changes_active_queue == false)
+    and (.predictive_dashboard.queue_policy_adoption.mutation_policy.applies_live_retuning == false)
+    and (.predictive_dashboard.queue_policy_adoption.mutation_policy.retirement_executed == false)
+    and (.predictive_dashboard.queue_policy_adoption.mutation_policy.supersession_executed == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1458,6 +1629,11 @@ run_case() {
     and ((.artifact_paths.queue_tuning_rollout_plan_json == null) or (.artifact_paths.queue_tuning_rollout_plan_json | type == "string"))
     and ((.artifact_paths.queue_tuning_rollback_comparator_receipt_json == null) or (.artifact_paths.queue_tuning_rollback_comparator_receipt_json | type == "string"))
     and ((.artifact_paths.queue_tuning_canary_verdict_ledger_json == null) or (.artifact_paths.queue_tuning_canary_verdict_ledger_json | type == "string"))
+    and ((.artifact_paths.queue_policy_adoption_receipt_json == null) or (.artifact_paths.queue_policy_adoption_receipt_json | type == "string"))
+    and ((.artifact_paths.queue_policy_adoption_snapshot_bundle_json == null) or (.artifact_paths.queue_policy_adoption_snapshot_bundle_json | type == "string"))
+    and ((.artifact_paths.queue_policy_sustained_gain_receipt_json == null) or (.artifact_paths.queue_policy_sustained_gain_receipt_json | type == "string"))
+    and ((.artifact_paths.queue_policy_expiry_supersession_plan_json == null) or (.artifact_paths.queue_policy_expiry_supersession_plan_json | type == "string"))
+    and ((.artifact_paths.queue_policy_expiry_supersession_ledger_json == null) or (.artifact_paths.queue_policy_expiry_supersession_ledger_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1498,6 +1674,12 @@ run_case() {
         and .predictive_dashboard.queue_tuning_promotion.rollback_verdict == "better_than_current"
         and .predictive_dashboard.queue_tuning_promotion.canary_recommended_action == "continue_canary"
         and .predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count == 0
+        and .predictive_dashboard.queue_policy_adoption.readiness == "retained"
+        and .predictive_dashboard.queue_policy_adoption.adoption_state == "recorded_active_policy"
+        and .predictive_dashboard.queue_policy_adoption.sustained_gain_verdict == "sustained_gain"
+        and .predictive_dashboard.queue_policy_adoption.expiry_decision == "retain_adopted_policy"
+        and .predictive_dashboard.queue_policy_adoption.expiry_required == false
+        and .predictive_dashboard.queue_policy_adoption.supersession_required == false
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1518,6 +1700,7 @@ run_case() {
         and .predictive_dashboard.execution_queue_advisory.artifact_status == "missing"
         and .predictive_dashboard.queue_fidelity.artifact_status == "missing"
         and .predictive_dashboard.queue_tuning_promotion.artifact_statuses.bundle == "missing"
+        and .predictive_dashboard.queue_policy_adoption.artifact_statuses.adoption_receipt == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1657,6 +1840,31 @@ run_case() {
         and any(.degraded[]; .component == "queue_tuning_promotion")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    queue_policy_adoption_expiry_required)
+      jq -e '
+        .predictive_dashboard.queue_policy_adoption.readiness == "expiry_required"
+        and .predictive_dashboard.queue_policy_adoption.sustained_gain_verdict == "regression_detected"
+        and .predictive_dashboard.queue_policy_adoption.expiry_decision == "expire_adopted_policy"
+        and .predictive_dashboard.queue_policy_adoption.expiry_required == true
+        and .predictive_dashboard.queue_policy_adoption.supersession_required == false
+        and .summary.queue_policy_expiry_required == true
+        and .recommendations[0].action == "review_queue_policy_adoption_lifecycle"
+        and any(.degraded[]; .component == "queue_policy_adoption")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    queue_policy_adoption_supersession_required)
+      jq -e '
+        .predictive_dashboard.queue_policy_adoption.readiness == "supersession_required"
+        and .predictive_dashboard.queue_policy_adoption.sustained_gain_verdict == "sustained_gain"
+        and .predictive_dashboard.queue_policy_adoption.expiry_decision == "supersede_adopted_policy"
+        and .predictive_dashboard.queue_policy_adoption.expiry_required == true
+        and .predictive_dashboard.queue_policy_adoption.supersession_required == true
+        and .predictive_dashboard.queue_policy_adoption.newer_candidate_id == "raise_owner_friction_penalty"
+        and .summary.queue_policy_supersession_required == true
+        and .recommendations[0].action == "review_queue_policy_adoption_lifecycle"
+        and any(.degraded[]; .component == "queue_policy_adoption")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -1695,6 +1903,8 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("queue_tuning_promotion_blocked"))
     and (.golden_fixture_cases | index("queue_tuning_promotion_stale_evidence"))
     and (.golden_fixture_cases | index("queue_tuning_promotion_rollback_required"))
+    and (.golden_fixture_cases | index("queue_policy_adoption_expiry_required"))
+    and (.golden_fixture_cases | index("queue_policy_adoption_supersession_required"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -1721,6 +1931,13 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.evidence_link_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.adoption_state"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.sustained_gain_verdict"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.expiry_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.expiry_required"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.supersession_required"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -1750,9 +1967,13 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
+  grep -Fq 'queue_policy_adoption' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -1785,6 +2006,8 @@ run_selftest() {
   run_case "queue_tuning_promotion_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_tuning_promotion_stale_evidence" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_tuning_promotion_rollback_required" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_policy_adoption_expiry_required" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_policy_adoption_supersession_required" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

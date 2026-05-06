@@ -51,6 +51,11 @@ queue_tuning_promotion_guard_receipt_json=""
 queue_tuning_rollout_plan_json=""
 queue_tuning_rollback_comparator_receipt_json=""
 queue_tuning_canary_verdict_ledger_json=""
+queue_policy_adoption_receipt_json=""
+queue_policy_adoption_snapshot_bundle_json=""
+queue_policy_sustained_gain_receipt_json=""
+queue_policy_expiry_supersession_plan_json=""
+queue_policy_expiry_supersession_ledger_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -109,6 +114,11 @@ Options:
   --queue-tuning-rollout-plan-json FILE
   --queue-tuning-rollback-comparator-receipt-json FILE
   --queue-tuning-canary-verdict-ledger-json FILE
+  --queue-policy-adoption-receipt-json FILE
+  --queue-policy-adoption-snapshot-bundle-json FILE
+  --queue-policy-sustained-gain-receipt-json FILE
+  --queue-policy-expiry-supersession-plan-json FILE
+  --queue-policy-expiry-supersession-ledger-json FILE
 EOF
 }
 
@@ -314,6 +324,26 @@ while [[ "$#" -gt 0 ]]; do
       queue_tuning_canary_verdict_ledger_json="$2"
       shift 2
       ;;
+    --queue-policy-adoption-receipt-json)
+      queue_policy_adoption_receipt_json="$2"
+      shift 2
+      ;;
+    --queue-policy-adoption-snapshot-bundle-json)
+      queue_policy_adoption_snapshot_bundle_json="$2"
+      shift 2
+      ;;
+    --queue-policy-sustained-gain-receipt-json)
+      queue_policy_sustained_gain_receipt_json="$2"
+      shift 2
+      ;;
+    --queue-policy-expiry-supersession-plan-json)
+      queue_policy_expiry_supersession_plan_json="$2"
+      shift 2
+      ;;
+    --queue-policy-expiry-supersession-ledger-json)
+      queue_policy_expiry_supersession_ledger_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -396,6 +426,11 @@ queue_tuning_promotion_guard_receipt_status="missing"
 queue_tuning_rollout_plan_status="missing"
 queue_tuning_rollback_comparator_receipt_status="missing"
 queue_tuning_canary_verdict_ledger_status="missing"
+queue_policy_adoption_receipt_status="missing"
+queue_policy_adoption_snapshot_bundle_status="missing"
+queue_policy_sustained_gain_receipt_status="missing"
+queue_policy_expiry_supersession_plan_status="missing"
+queue_policy_expiry_supersession_ledger_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -424,6 +459,11 @@ if [[ -n "$queue_tuning_promotion_guard_receipt_json" ]]; then queue_tuning_prom
 if [[ -n "$queue_tuning_rollout_plan_json" ]]; then queue_tuning_rollout_plan_status="provided"; fi
 if [[ -n "$queue_tuning_rollback_comparator_receipt_json" ]]; then queue_tuning_rollback_comparator_receipt_status="provided"; fi
 if [[ -n "$queue_tuning_canary_verdict_ledger_json" ]]; then queue_tuning_canary_verdict_ledger_status="provided"; fi
+if [[ -n "$queue_policy_adoption_receipt_json" ]]; then queue_policy_adoption_receipt_status="provided"; fi
+if [[ -n "$queue_policy_adoption_snapshot_bundle_json" ]]; then queue_policy_adoption_snapshot_bundle_status="provided"; fi
+if [[ -n "$queue_policy_sustained_gain_receipt_json" ]]; then queue_policy_sustained_gain_receipt_status="provided"; fi
+if [[ -n "$queue_policy_expiry_supersession_plan_json" ]]; then queue_policy_expiry_supersession_plan_status="provided"; fi
+if [[ -n "$queue_policy_expiry_supersession_ledger_json" ]]; then queue_policy_expiry_supersession_ledger_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -452,6 +492,11 @@ queue_tuning_promotion_guard_receipt_data="$(json_or_default "$queue_tuning_prom
 queue_tuning_rollout_plan_data="$(json_or_default "$queue_tuning_rollout_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1","decision":"missing","manual_approval":{"required":true,"blockers":[]},"stop_conditions":[],"rejection_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-rollout-plan')"
 queue_tuning_rollback_comparator_receipt_data="$(json_or_default "$queue_tuning_rollback_comparator_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1","verdict":"missing","fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-rollback-comparator-receipt')"
 queue_tuning_canary_verdict_ledger_data="$(json_or_default "$queue_tuning_canary_verdict_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-canary-verdict-ledger.v1","verdict":"missing","recommended_action":"missing","rollback_triggers":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-canary-verdict-ledger')"
+queue_policy_adoption_receipt_data="$(json_or_default "$queue_policy_adoption_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-adoption-receipt.v1","decision":"missing","adoption_receipt_id":null,"adopted_policy_bundle_id":null,"operator_decision":{"adoption_state":"missing"},"adopted_candidate":{},"observation_window":{},"supersession":{},"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false},"artifact_paths":{}}' 'queue-policy-adoption-receipt')"
+queue_policy_adoption_snapshot_bundle_data="$(json_or_default "$queue_policy_adoption_snapshot_bundle_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-adoption-snapshot-bundle.v1","decision":"missing","snapshot_id":null,"adoption_receipt_id":null,"adopted_policy_bundle_id":null,"candidate_id":null,"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false},"artifact_paths":{}}' 'queue-policy-adoption-snapshot-bundle')"
+queue_policy_sustained_gain_receipt_data="$(json_or_default "$queue_policy_sustained_gain_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1","verdict":"missing","sustained_gain_receipt_id":null,"adopted_policy_bundle_id":null,"candidate_id":null,"rollback_drift_count":0,"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false},"artifact_paths":{}}' 'queue-policy-sustained-gain-receipt')"
+queue_policy_expiry_supersession_plan_data="$(json_or_default "$queue_policy_expiry_supersession_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-plan.v1","decision":"missing","plan_id":null,"adopted_policy_bundle_id":null,"sustained_gain_verdict":"missing","expiry_required":false,"supersession_required":false,"advisory_status":{"execution_state":"missing","retirement_executed":false,"supersession_executed":false},"decision_reasons":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-plan')"
+queue_policy_expiry_supersession_ledger_data="$(json_or_default "$queue_policy_expiry_supersession_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1","decision":"missing","ledger_rows":[],"ownership_rows":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-ledger')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -489,6 +534,11 @@ jq -n \
   --arg queue_tuning_rollout_plan_status "$queue_tuning_rollout_plan_status" \
   --arg queue_tuning_rollback_comparator_receipt_status "$queue_tuning_rollback_comparator_receipt_status" \
   --arg queue_tuning_canary_verdict_ledger_status "$queue_tuning_canary_verdict_ledger_status" \
+  --arg queue_policy_adoption_receipt_status "$queue_policy_adoption_receipt_status" \
+  --arg queue_policy_adoption_snapshot_bundle_status "$queue_policy_adoption_snapshot_bundle_status" \
+  --arg queue_policy_sustained_gain_receipt_status "$queue_policy_sustained_gain_receipt_status" \
+  --arg queue_policy_expiry_supersession_plan_status "$queue_policy_expiry_supersession_plan_status" \
+  --arg queue_policy_expiry_supersession_ledger_status "$queue_policy_expiry_supersession_ledger_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -533,6 +583,11 @@ jq -n \
   --argjson queue_tuning_rollout_plan "$queue_tuning_rollout_plan_data" \
   --argjson queue_tuning_rollback_comparator_receipt "$queue_tuning_rollback_comparator_receipt_data" \
   --argjson queue_tuning_canary_verdict_ledger "$queue_tuning_canary_verdict_ledger_data" \
+  --argjson queue_policy_adoption_receipt "$queue_policy_adoption_receipt_data" \
+  --argjson queue_policy_adoption_snapshot_bundle "$queue_policy_adoption_snapshot_bundle_data" \
+  --argjson queue_policy_sustained_gain_receipt "$queue_policy_sustained_gain_receipt_data" \
+  --argjson queue_policy_expiry_supersession_plan "$queue_policy_expiry_supersession_plan_data" \
+  --argjson queue_policy_expiry_supersession_ledger "$queue_policy_expiry_supersession_ledger_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -1287,6 +1342,102 @@ jq -n \
       }
     }) as $queue_tuning_promotion_summary
   | ([
+      $queue_policy_adoption_receipt.mutation_policy,
+      $queue_policy_adoption_snapshot_bundle.mutation_policy,
+      $queue_policy_sustained_gain_receipt.mutation_policy,
+      $queue_policy_expiry_supersession_plan.mutation_policy,
+      $queue_policy_expiry_supersession_ledger.mutation_policy
+    ] | map({
+      changes_active_queue: ((.changes_active_queue // false) == true),
+      applies_live_retuning: ((.applies_live_retuning // false) == true),
+      mutates_br: ((.mutates_br // false) == true),
+      sends_agent_mail: ((.sends_agent_mail // false) == true),
+      mutates_remote_workers: ((.mutates_remote_workers // false) == true),
+      rewrites_historical_outcomes: ((.rewrites_historical_outcomes // false) == true),
+      retirement_executed: ((.retirement_executed // false) == true),
+      supersession_executed: ((.supersession_executed // false) == true)
+    })) as $queue_policy_mutation_policies
+  | (any($queue_policy_mutation_policies[]; .changes_active_queue)) as $queue_policy_changes_active_queue
+  | (any($queue_policy_mutation_policies[]; .applies_live_retuning)) as $queue_policy_applies_live_retuning
+  | (any($queue_policy_mutation_policies[]; .mutates_br or .sends_agent_mail or .mutates_remote_workers or .rewrites_historical_outcomes)) as $queue_policy_mutates_external_state
+  | (any($queue_policy_mutation_policies[]; .retirement_executed or .supersession_executed)) as $queue_policy_claims_execution
+  | ({
+      artifact_statuses: {
+        adoption_receipt: $queue_policy_adoption_receipt_status,
+        adoption_snapshot_bundle: $queue_policy_adoption_snapshot_bundle_status,
+        sustained_gain_receipt: $queue_policy_sustained_gain_receipt_status,
+        expiry_supersession_plan: $queue_policy_expiry_supersession_plan_status,
+        expiry_supersession_ledger: $queue_policy_expiry_supersession_ledger_status
+      },
+      severity: (
+        if $queue_policy_adoption_receipt_status == "missing"
+          or $queue_policy_adoption_snapshot_bundle_status == "missing"
+          or $queue_policy_sustained_gain_receipt_status == "missing"
+          or $queue_policy_expiry_supersession_plan_status == "missing"
+          or $queue_policy_expiry_supersession_ledger_status == "missing" then "warning"
+        elif $queue_policy_changes_active_queue or $queue_policy_applies_live_retuning or $queue_policy_mutates_external_state or $queue_policy_claims_execution then "critical"
+        elif (($queue_policy_expiry_supersession_plan.decision // "") == "fail_closed")
+          or (($queue_policy_sustained_gain_receipt.verdict // "") == "fail_closed") then "critical"
+        elif (($queue_policy_expiry_supersession_plan.expiry_required // false) == true)
+          or (($queue_policy_expiry_supersession_plan.supersession_required // false) == true)
+          or (($queue_policy_sustained_gain_receipt.verdict // "") | IN("regression_detected", "inconclusive_drift")) then "warning"
+        else "ok"
+        end
+      ),
+      readiness: (
+        if $queue_policy_adoption_receipt_status == "missing"
+          or $queue_policy_adoption_snapshot_bundle_status == "missing"
+          or $queue_policy_sustained_gain_receipt_status == "missing"
+          or $queue_policy_expiry_supersession_plan_status == "missing"
+          or $queue_policy_expiry_supersession_ledger_status == "missing" then "missing"
+        elif $queue_policy_changes_active_queue or $queue_policy_applies_live_retuning or $queue_policy_mutates_external_state or $queue_policy_claims_execution then "fail_closed"
+        elif (($queue_policy_expiry_supersession_plan.decision // "") == "fail_closed")
+          or (($queue_policy_sustained_gain_receipt.verdict // "") == "fail_closed") then "fail_closed"
+        elif (($queue_policy_expiry_supersession_plan.supersession_required // false) == true) then "supersession_required"
+        elif (($queue_policy_expiry_supersession_plan.expiry_required // false) == true) then "expiry_required"
+        elif (($queue_policy_sustained_gain_receipt.verdict // "") == "inconclusive_drift") then "manual_review"
+        elif (($queue_policy_expiry_supersession_plan.decision // "") == "retain_adopted_policy") then "retained"
+        else "advisory"
+        end
+      ),
+      adoption_receipt_id: ($queue_policy_adoption_receipt.adoption_receipt_id // null),
+      adoption_state: ($queue_policy_adoption_receipt.operator_decision.adoption_state // "missing"),
+      adopted_policy_bundle_id: ($queue_policy_adoption_receipt.adopted_policy_bundle_id // $queue_policy_expiry_supersession_plan.adopted_policy_bundle_id // null),
+      adopted_candidate_id: ($queue_policy_adoption_receipt.adopted_candidate.candidate_id // $queue_policy_expiry_supersession_plan.adopted_candidate_id // null),
+      adopted_expected_delta_millionths: ($queue_policy_adoption_receipt.adopted_candidate.expected_fidelity_delta_millionths // $queue_policy_expiry_supersession_plan.adopted_expected_delta_millionths // null),
+      observation_window: ($queue_policy_adoption_receipt.observation_window // {}),
+      supersession_metadata: ($queue_policy_adoption_receipt.supersession // {}),
+      sustained_gain_verdict: ($queue_policy_sustained_gain_receipt.verdict // "missing"),
+      sustained_gain_receipt_id: ($queue_policy_sustained_gain_receipt.sustained_gain_receipt_id // null),
+      rollback_relevant_drift_count: ($queue_policy_expiry_supersession_plan.rollback_relevant_drift_count // $queue_policy_sustained_gain_receipt.rollback_drift_count // 0),
+      expiry_decision: ($queue_policy_expiry_supersession_plan.decision // "missing"),
+      expiry_required: (($queue_policy_expiry_supersession_plan.expiry_required // false) == true),
+      supersession_required: (($queue_policy_expiry_supersession_plan.supersession_required // false) == true),
+      newer_candidate_bundle_id: ($queue_policy_expiry_supersession_plan.newer_candidate_bundle_id // null),
+      newer_candidate_id: ($queue_policy_expiry_supersession_plan.newer_candidate_id // null),
+      execution_state: ($queue_policy_expiry_supersession_plan.advisory_status.execution_state // "missing"),
+      retirement_executed: (($queue_policy_expiry_supersession_plan.advisory_status.retirement_executed // false) == true),
+      supersession_executed: (($queue_policy_expiry_supersession_plan.advisory_status.supersession_executed // false) == true),
+      decision_reasons: bounded($queue_policy_expiry_supersession_plan.decision_reasons),
+      fail_closed_reasons: bounded(($queue_policy_expiry_supersession_plan.fail_closed_reasons // []) + ($queue_policy_expiry_supersession_ledger.fail_closed_reasons // [])),
+      ledger_rows: bounded($queue_policy_expiry_supersession_ledger.ledger_rows),
+      mutation_policy: {
+        advisory_only: (($queue_policy_changes_active_queue | not) and ($queue_policy_applies_live_retuning | not) and ($queue_policy_mutates_external_state | not) and ($queue_policy_claims_execution | not)),
+        changes_active_queue: $queue_policy_changes_active_queue,
+        applies_live_retuning: $queue_policy_applies_live_retuning,
+        mutates_external_state: $queue_policy_mutates_external_state,
+        retirement_executed: (($queue_policy_expiry_supersession_plan.mutation_policy.retirement_executed // false) == true),
+        supersession_executed: (($queue_policy_expiry_supersession_plan.mutation_policy.supersession_executed // false) == true)
+      },
+      artifact_paths: {
+        adoption_receipt_json: ($queue_policy_adoption_receipt.artifact_paths.adoption_receipt_json // null),
+        adoption_snapshot_bundle_json: ($queue_policy_adoption_snapshot_bundle.artifact_paths.adoption_snapshot_bundle_json // null),
+        sustained_gain_receipt_json: ($queue_policy_sustained_gain_receipt.artifact_paths.sustained_gain_receipt_json // null),
+        expiry_supersession_plan_json: ($queue_policy_expiry_supersession_plan.artifact_paths.expiry_supersession_plan_json // null),
+        expiry_supersession_ledger_json: ($queue_policy_expiry_supersession_plan.artifact_paths.expiry_supersession_ledger_json // null)
+      }
+    }) as $queue_policy_adoption_summary
+  | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
       degraded("proof_evidence_index"; $proof_index_status; "proof queries may be incomplete"; "Use explicit proof outcome snapshots until bd-p03vs lands.")
@@ -1396,6 +1547,15 @@ jq -n \
       elif $queue_tuning_promotion_summary.severity == "warning" then
         [{component: "queue_tuning_promotion", status: $queue_tuning_promotion_summary.readiness, impact: "queue tuning promotion needs manual review or fresher evidence", remediation: "Review manual approval blockers, stale evidence, and canary stop conditions before promotion."}]
       else [] end)
+    + (if $queue_policy_adoption_summary.readiness == "missing" then
+        [{component: "queue_policy_adoption", status: "missing", impact: "policy adoption, sustained-gain, or expiry advisory artifacts are incomplete", remediation: "Provide adoption receipt, snapshot, sustained-gain receipt, expiry plan, and expiry ledger before trusting policy lifecycle advice."}]
+      elif $queue_policy_adoption_summary.mutation_policy.advisory_only != true then
+        [{component: "queue_policy_adoption", status: "fail_closed", impact: "policy lifecycle input implies live mutation or executed retirement", remediation: "Reject lifecycle artifacts that claim automatic retuning, direct queue changes, or already executed retirement/supersession."}]
+      elif $queue_policy_adoption_summary.severity == "critical" then
+        [{component: "queue_policy_adoption", status: $queue_policy_adoption_summary.readiness, impact: "policy lifecycle evidence failed closed", remediation: "Respect sustained-gain and expiry/supersession fail-closed reasons before acting on the adopted policy."}]
+      elif $queue_policy_adoption_summary.severity == "warning" then
+        [{component: "queue_policy_adoption", status: $queue_policy_adoption_summary.readiness, impact: "policy lifecycle evidence recommends expiry, supersession, or manual review", remediation: "Route the advisory to a human operator; do not treat it as executed policy retirement or supersession."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -1479,6 +1639,12 @@ jq -n \
         queue_tuning_canary_action: $queue_tuning_promotion_summary.canary_recommended_action,
         queue_tuning_manual_blocker_count: $queue_tuning_promotion_summary.manual_approval_blocker_count,
         queue_tuning_evidence_link_count: $queue_tuning_promotion_summary.evidence_link_count,
+        queue_policy_adoption_readiness: $queue_policy_adoption_summary.readiness,
+        queue_policy_adoption_state: $queue_policy_adoption_summary.adoption_state,
+        queue_policy_sustained_gain_verdict: $queue_policy_adoption_summary.sustained_gain_verdict,
+        queue_policy_expiry_decision: $queue_policy_adoption_summary.expiry_decision,
+        queue_policy_expiry_required: $queue_policy_adoption_summary.expiry_required,
+        queue_policy_supersession_required: $queue_policy_adoption_summary.supersession_required,
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -1544,9 +1710,10 @@ jq -n \
         execution_queue_advisory: $execution_queue_summary,
         queue_fidelity: $queue_fidelity_summary,
         queue_tuning_promotion: $queue_tuning_promotion_summary,
+        queue_policy_adoption: $queue_policy_adoption_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1577,6 +1744,10 @@ jq -n \
           [recommendation("review_queue_fidelity_drift"; null; "queue hindsight fidelity or counterfactual tuning evidence is degraded")]
         elif $queue_tuning_promotion_summary.severity == "warning" then
           [recommendation("review_queue_tuning_promotion"; null; "queue tuning promotion needs manual approval, fresher evidence, or canary review")]
+        elif $queue_policy_adoption_summary.severity == "critical" then
+          [recommendation("respect_queue_policy_adoption_fail_closed"; null; "queue policy adoption lifecycle evidence failed closed")]
+        elif $queue_policy_adoption_summary.severity == "warning" then
+          [recommendation("review_queue_policy_adoption_lifecycle"; null; "queue policy adoption lifecycle recommends expiry, supersession, or manual review")]
         elif $starvation_rescue_summary.severity == "warning" then
           [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
@@ -1652,7 +1823,12 @@ jq -n \
         queue_tuning_promotion_guard_receipt_json: $queue_tuning_promotion_summary.artifact_paths.promotion_guard_receipt_json,
         queue_tuning_rollout_plan_json: $queue_tuning_promotion_summary.artifact_paths.rollout_plan_json,
         queue_tuning_rollback_comparator_receipt_json: $queue_tuning_promotion_summary.artifact_paths.rollback_comparator_receipt_json,
-        queue_tuning_canary_verdict_ledger_json: $queue_tuning_promotion_summary.artifact_paths.canary_verdict_ledger_json
+        queue_tuning_canary_verdict_ledger_json: $queue_tuning_promotion_summary.artifact_paths.canary_verdict_ledger_json,
+        queue_policy_adoption_receipt_json: $queue_policy_adoption_summary.artifact_paths.adoption_receipt_json,
+        queue_policy_adoption_snapshot_bundle_json: $queue_policy_adoption_summary.artifact_paths.adoption_snapshot_bundle_json,
+        queue_policy_sustained_gain_receipt_json: $queue_policy_adoption_summary.artifact_paths.sustained_gain_receipt_json,
+        queue_policy_expiry_supersession_plan_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_plan_json,
+        queue_policy_expiry_supersession_ledger_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_ledger_json
       }
     }
   ' >"$status_path"
@@ -1673,6 +1849,7 @@ jq -n \
   printf -- "- Execution queue: \`%s\` top=\`%s\` deferred=\`%s\` restore=\`%s\`\n" "$(jq -r '.summary.execution_queue_decision' "$status_path")" "$(jq '.summary.execution_queue_top_start_count' "$status_path")" "$(jq '.summary.execution_queue_deferred_count' "$status_path")" "$(jq -r '.summary.execution_queue_restore_dependency_state' "$status_path")"
   printf -- "- Queue fidelity: trust=\`%s\` drift=\`%s\` top-mismatch=\`%s\` tuning=\`%s\`\n" "$(jq -r '.summary.queue_fidelity_trust_level' "$status_path")" "$(jq -r '.summary.queue_fidelity_drift_class' "$status_path")" "$(jq -r '.summary.queue_fidelity_highest_mismatch' "$status_path")" "$(jq -r '.summary.queue_tuning_top_recommendation' "$status_path")"
   printf -- "- Queue tuning promotion: readiness=\`%s\` decision=\`%s\` rollback=\`%s\` canary=\`%s\`\n" "$(jq -r '.summary.queue_tuning_promotion_readiness' "$status_path")" "$(jq -r '.summary.queue_tuning_promotion_decision' "$status_path")" "$(jq -r '.summary.queue_tuning_rollback_verdict' "$status_path")" "$(jq -r '.summary.queue_tuning_canary_action' "$status_path")"
+  printf -- "- Queue policy adoption: readiness=\`%s\` sustained=\`%s\` expiry=\`%s\` expire=\`%s\` supersede=\`%s\`\n" "$(jq -r '.summary.queue_policy_adoption_readiness' "$status_path")" "$(jq -r '.summary.queue_policy_sustained_gain_verdict' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_decision' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_required' "$status_path")" "$(jq -r '.summary.queue_policy_supersession_required' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -1701,7 +1878,12 @@ jq -n \
       {label:"Queue tuning promotion guard receipt", path:.artifact_paths.queue_tuning_promotion_guard_receipt_json},
       {label:"Queue tuning rollout plan", path:.artifact_paths.queue_tuning_rollout_plan_json},
       {label:"Queue tuning rollback comparator receipt", path:.artifact_paths.queue_tuning_rollback_comparator_receipt_json},
-      {label:"Queue tuning canary verdict ledger", path:.artifact_paths.queue_tuning_canary_verdict_ledger_json}
+      {label:"Queue tuning canary verdict ledger", path:.artifact_paths.queue_tuning_canary_verdict_ledger_json},
+      {label:"Queue policy adoption receipt", path:.artifact_paths.queue_policy_adoption_receipt_json},
+      {label:"Queue policy adoption snapshot bundle", path:.artifact_paths.queue_policy_adoption_snapshot_bundle_json},
+      {label:"Queue policy sustained-gain receipt", path:.artifact_paths.queue_policy_sustained_gain_receipt_json},
+      {label:"Queue policy expiry/supersession plan", path:.artifact_paths.queue_policy_expiry_supersession_plan_json},
+      {label:"Queue policy expiry/supersession ledger", path:.artifact_paths.queue_policy_expiry_supersession_ledger_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

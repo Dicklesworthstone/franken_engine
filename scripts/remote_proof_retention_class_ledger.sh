@@ -566,7 +566,7 @@ jq \
 ' "$ledger_core" >"$ledger_tmp"
 mv "$ledger_tmp" "$ledger_path"
 
-write_event "retention_ledger_written" "$(jq -r '.retention_decision + \" / artifacts=\" + (.normalized_artifact_count | tostring)' "$ledger_path")"
+write_event "retention_ledger_written" "$(jq -r '.retention_decision + " / artifacts=" + (.normalized_artifact_count | tostring)' "$ledger_path")"
 
 {
   printf '# Remote Proof Retention Class Ledger\n\n'

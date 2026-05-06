@@ -362,7 +362,7 @@ jq \
 ' "$report_core" >"$report_tmp"
 mv "$report_tmp" "$report_path"
 
-write_event "gc_guard_written" "$(jq -r '.guard_decision + \" / \" + .recommended_action' "$report_path")"
+write_event "gc_guard_written" "$(jq -r '.guard_decision + " / " + .recommended_action' "$report_path")"
 
 {
   printf '# Remote Proof GC Guard\n\n'

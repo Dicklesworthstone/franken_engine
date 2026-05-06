@@ -1,0 +1,46 @@
+{
+  "schema_version": "franken-engine.swarm-ctrl-vi-runbook-truth-contract.v1",
+  "runbook_schema": "franken-engine.swarm-ctrl-vi-operator-runbook.v1",
+  "required_repo_paths": [
+    "scripts/remote_proof_retention_class_ledger.sh",
+    "scripts/remote_proof_compaction_planner.sh",
+    "scripts/remote_proof_archive_exporter.sh",
+    "scripts/remote_proof_gc_guard.sh",
+    "scripts/remote_proof_archive_pressure_scoreboard.sh",
+    "scripts/e2e/remote_proof_archive_lifecycle_no_mock_drill.sh",
+    "scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh",
+    "docs/SWARM_CTRL_VI_OPERATOR_RUNBOOK.md",
+    "docs/swarm_ctrl_vi_runbook_truth_contract_v1.json"
+  ],
+  "required_artifact_references": [
+    "retention_class_ledger.json",
+    "evidence_residency_manifest.json",
+    "remote_proof_compaction_plan.json",
+    "archive_pack.json",
+    "restore_verification_report.json",
+    "remote_proof_gc_guard_report.json",
+    "remote_proof_archive_pressure_scoreboard.json",
+    "remote_proof_archive_lifecycle_no_mock_drill_report.json"
+  ],
+  "required_commands": [
+    "./scripts/e2e/remote_proof_archive_lifecycle_no_mock_drill.sh check",
+    "./scripts/e2e/remote_proof_archive_lifecycle_no_mock_drill.sh selftest",
+    "./scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh selftest"
+  ],
+  "required_workflow_claims": [
+    "Duplicate artifact compaction must happen before archive export when `compacted_groups` is non-empty.",
+    "Salvage-pinned evidence blocks GC even when a cold archive exists.",
+    "Cold-archive eviction is honest only after `restore_verification_report.json` is `verified`."
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh",
+    "./scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_vi_runbook_truth_gate.sh selftest"
+  ],
+  "rejections": [
+    "bare heavy cargo examples not wrapped in rch exec -- env CARGO_TARGET_DIR=",
+    "missing archive lifecycle artifact references",
+    "stale workflow claims about compaction ordering, salvage pinning, or restore verification"
+  ]
+}

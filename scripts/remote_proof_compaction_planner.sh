@@ -383,7 +383,7 @@ jq \
 ' "$plan_core" >"$plan_tmp"
 mv "$plan_tmp" "$plan_path"
 
-write_event "compaction_plan_written" "$(jq -r '.plan_decision + \" / compacted=\" + (.compaction_stats.compacted_group_count | tostring)' "$plan_path")"
+write_event "compaction_plan_written" "$(jq -r '.plan_decision + " / compacted=" + (.compaction_stats.compacted_group_count | tostring)' "$plan_path")"
 
 {
   printf '# Remote Proof Compaction Planner\n\n'

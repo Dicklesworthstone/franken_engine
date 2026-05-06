@@ -54,6 +54,19 @@ write_real_surface_manifest() {
           upstream_schemas: ["franken-engine.resident-remote-proof-bundle.v1"]
         },
         {
+          surface_id: "locality-aware-remote-proof-batch-packer",
+          contract_json: "docs/locality_aware_remote_proof_batch_contract_v1.json",
+          implementation_script: "scripts/locality_aware_remote_proof_batch_packer.sh",
+          smoke_script: "scripts/e2e/locality_aware_remote_proof_batch_packer_smoke.sh",
+          doc_path: "docs/LOCALITY_AWARE_REMOTE_PROOF_BATCH_PACKER.md",
+          emitted_schema: "franken-engine.locality-aware-remote-proof-batch-plan.v1",
+          upstream_schemas: [
+            "franken-engine.resident-remote-proof-bundle.v1",
+            "franken-engine.remote-proof-artifact-mirror-verification.v1",
+            "franken-engine.warm-target-roi-eviction-ledger.v1"
+          ]
+        },
+        {
           surface_id: "remote-proof-salvage-receipt",
           contract_json: "docs/remote_proof_salvage_receipt_contract_v1.json",
           implementation_script: "scripts/remote_proof_salvage_receipt.sh",
@@ -237,7 +250,7 @@ run_check() {
   "$gate" --surface-manifest-json "$manifest_path" --output-dir "$gate_dir" >/dev/null
   jq -e '
     .catalog_decision == "pass"
-    and .surface_count == 5
+    and .surface_count == 6
     and .finding_count == 0
     and (.catalog_id | startswith("contract-catalog-"))
   ' "${gate_dir}/contract_catalog_report.json" >/dev/null

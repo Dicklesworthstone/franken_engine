@@ -16,8 +16,7 @@ record_failure() {
 
 write_bundle_reports() {
   local path="$1"
-  local fairness_split="${2:-false}"
-  local incompatible="${3:-false}"
+  local incompatible="${2:-false}"
 
   jq -n \
     --argjson incompatible "$incompatible" '
@@ -185,7 +184,7 @@ run_selftest() {
   fixture_dir="${tmp_root}/fixtures"
   mkdir -p "$fixture_dir"
 
-  write_bundle_reports "${fixture_dir}/bundle-reports-shared.json" false false
+  write_bundle_reports "${fixture_dir}/bundle-reports-shared.json" false
   write_mirror_manifests "${fixture_dir}/mirror-manifests.json"
   write_roi_ledgers "${fixture_dir}/roi-ledgers-shared.json" false
   write_fairness_policy "${fixture_dir}/fairness-two.json" 2
@@ -223,7 +222,7 @@ run_selftest() {
   ' "${fairness_dir}/batch_manifest.json" >/dev/null
   record_pass "fairness split assertions"
 
-  write_bundle_reports "${fixture_dir}/bundle-reports-incompatible.json" false true
+  write_bundle_reports "${fixture_dir}/bundle-reports-incompatible.json" true
   write_roi_ledgers "${fixture_dir}/roi-ledgers-incompatible.json" true
   incompatible_dir="${tmp_root}/incompatible-split"
   run_case "incompatible-worker-target-split" 0 "$incompatible_dir" \

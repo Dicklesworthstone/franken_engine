@@ -1,0 +1,513 @@
+{
+  "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "fresh_progress",
+      "expected_decision": "pass",
+      "expected_classification": "healthy",
+      "expected_worker_id": "rch-a",
+      "expected_command_contains": [],
+      "expected_reason_code": "classification:healthy",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "pass",
+          "components": {
+            "rch": {
+              "state": "captured",
+              "active_stall_count": 0
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 0,
+          "slot_utilization_millionths": 200000,
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "state": "HEALTHY",
+              "active_builds": 1
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-a",
+              "build_id": "build-healthy-1",
+              "command": "cargo check -p frankenengine-engine --lib",
+              "final_verdict": "healthy_remote_completion",
+              "reason_code": "completed",
+              "source_evidence": "remote_success",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 1,
+              "progress_age_seconds": 2,
+              "cancellation_outcome": "not_cancelled",
+              "queue_depth": 0,
+              "slot_utilization_millionths": 200000,
+              "observed_at_epoch_seconds": 1778097600
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": []
+        }
+      }
+    },
+    {
+      "case_id": "stale_progress_fresh_heartbeat",
+      "expected_decision": "degraded",
+      "expected_classification": "drain_recommended",
+      "expected_worker_id": "rch-b",
+      "expected_command_contains": [
+        "rch workers drain -y rch-b",
+        "rch workers probe rch-b --json"
+      ],
+      "expected_reason_code": "repeated_remote_stall",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "stalled",
+              "active_stall_count": 2
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097605,
+          "queue_depth": 2,
+          "slot_utilization_millionths": 850000,
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "state": "HEALTHY",
+              "active_builds": 1
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-b",
+              "build_id": "build-stall-1",
+              "command": "cargo test -p frankenengine-engine replacement_lineage_log::tests:: --lib",
+              "final_verdict": "fresh_heartbeat_frozen_progress_stall",
+              "reason_code": "fresh_heartbeat_frozen_progress",
+              "source_evidence": "remote_stall",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 4,
+              "progress_age_seconds": 1200,
+              "cancellation_outcome": "cancelled_clean",
+              "queue_depth": 2,
+              "slot_utilization_millionths": 850000,
+              "observed_at_epoch_seconds": 1778097601
+            },
+            {
+              "worker_id": "rch-b",
+              "build_id": "build-stall-2",
+              "command": "cargo check --all-targets",
+              "final_verdict": "transport_timeout",
+              "reason_code": "transport_timeout",
+              "source_evidence": "remote_stall",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 6,
+              "progress_age_seconds": 1800,
+              "cancellation_outcome": "cancelled_clean",
+              "queue_depth": 2,
+              "slot_utilization_millionths": 860000,
+              "observed_at_epoch_seconds": 1778097605
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": []
+        }
+      }
+    },
+    {
+      "case_id": "cancellation_clean",
+      "expected_decision": "degraded",
+      "expected_classification": "watch",
+      "expected_worker_id": "rch-c",
+      "expected_command_contains": [
+        "rch workers probe rch-c --json"
+      ],
+      "expected_reason_code": "clean_cancellation_observed",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "stalled",
+              "active_stall_count": 1
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 1,
+          "slot_utilization_millionths": 620000,
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "state": "HEALTHY",
+              "active_builds": 0
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-c",
+              "build_id": "build-cancel-1",
+              "command": "cargo check -p frankenengine-engine --lib",
+              "final_verdict": "transport_timeout",
+              "reason_code": "transport_timeout",
+              "source_evidence": "remote_stall",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 9,
+              "progress_age_seconds": 700,
+              "cancellation_outcome": "cancelled_clean",
+              "queue_depth": 1,
+              "slot_utilization_millionths": 620000,
+              "observed_at_epoch_seconds": 1778097600
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": []
+        }
+      }
+    },
+    {
+      "case_id": "telemetry_gap",
+      "expected_decision": "degraded",
+      "expected_classification": "probe_required",
+      "expected_worker_id": "rch-d",
+      "expected_command_contains": [
+        "rch workers probe rch-d --json",
+        "rch workers capabilities --refresh --json"
+      ],
+      "expected_reason_code": "telemetry_gap",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "degraded",
+              "active_stall_count": 0
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 1,
+          "slot_utilization_millionths": 540000,
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "state": "HEALTHY",
+              "active_builds": 0
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-d",
+              "build_id": "build-gap-1",
+              "command": "cargo clippy --all-targets -- -D warnings",
+              "final_verdict": "transport_timeout",
+              "reason_code": "telemetry_gap",
+              "source_evidence": "telemetry_gap",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": null,
+              "progress_age_seconds": null,
+              "cancellation_outcome": "unknown",
+              "queue_depth": 1,
+              "slot_utilization_millionths": 540000,
+              "observed_at_epoch_seconds": 1778097600
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "capabilities_state": "stale"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": []
+        }
+      }
+    },
+    {
+      "case_id": "drained_worker",
+      "expected_decision": "degraded",
+      "expected_classification": "drained",
+      "expected_worker_id": "rch-e",
+      "expected_command_contains": [
+        "rch workers probe rch-e --json"
+      ],
+      "expected_reason_code": "worker_drained_state",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "degraded",
+              "active_stall_count": 0
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 0,
+          "slot_utilization_millionths": 100000,
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "state": "DRAINED",
+              "active_builds": 0
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-e",
+              "build_id": "build-drained-1",
+              "command": "cargo check --all-targets",
+              "final_verdict": "transport_timeout",
+              "reason_code": "transport_timeout",
+              "source_evidence": "remote_stall",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 5,
+              "progress_age_seconds": 900,
+              "cancellation_outcome": "cancelled_clean",
+              "queue_depth": 1,
+              "slot_utilization_millionths": 400000,
+              "observed_at_epoch_seconds": 1778097500
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": [
+            {
+              "worker_id": "rch-e",
+              "action": "drain",
+              "outcome": "success",
+              "observed_at_epoch_seconds": 1778097550
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "successful_rehab",
+      "expected_decision": "degraded",
+      "expected_classification": "rehab_candidate",
+      "expected_worker_id": "rch-f",
+      "expected_command_contains": [
+        "rch workers enable rch-f",
+        "rch workers capabilities --refresh --json"
+      ],
+      "expected_reason_code": "successful_rehab_observed",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "degraded",
+              "active_stall_count": 0
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 0,
+          "slot_utilization_millionths": 180000,
+          "workers": [
+            {
+              "worker_id": "rch-f",
+              "state": "DRAINED",
+              "active_builds": 0
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-f",
+              "build_id": "build-rehab-old",
+              "command": "cargo test -p frankenengine-engine replacement_lineage_log::tests:: --lib",
+              "final_verdict": "transport_timeout",
+              "reason_code": "transport_timeout",
+              "source_evidence": "remote_stall",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 7,
+              "progress_age_seconds": 1200,
+              "cancellation_outcome": "cancelled_clean",
+              "queue_depth": 2,
+              "slot_utilization_millionths": 700000,
+              "observed_at_epoch_seconds": 1778097000
+            },
+            {
+              "worker_id": "rch-f",
+              "build_id": "build-rehab-new",
+              "command": "cargo check -p frankenengine-engine --lib",
+              "final_verdict": "healthy_remote_completion",
+              "reason_code": "completed",
+              "source_evidence": "remote_success",
+              "local_fallback_observed": false,
+              "heartbeat_age_seconds": 1,
+              "progress_age_seconds": 2,
+              "cancellation_outcome": "not_cancelled",
+              "queue_depth": 0,
+              "slot_utilization_millionths": 180000,
+              "observed_at_epoch_seconds": 1778097600
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-f",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": [
+            {
+              "worker_id": "rch-f",
+              "action": "drain",
+              "outcome": "success",
+              "observed_at_epoch_seconds": 1778097100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "expected_decision": "degraded",
+      "expected_classification": "probe_required",
+      "expected_worker_id": "rch-g",
+      "expected_command_contains": [
+        "rch workers probe rch-g --json",
+        "rch workers capabilities --refresh --json"
+      ],
+      "expected_reason_code": "local_fallback_contaminated",
+      "inputs": {
+        "swarm_ops_state_snapshot_json": {
+          "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+          "decision": "degraded",
+          "components": {
+            "rch": {
+              "state": "degraded",
+              "active_stall_count": 1
+            }
+          }
+        },
+        "worker_status_json": {
+          "schema_version": "franken-engine.rch-workers-status-snapshot.v1",
+          "captured_at_epoch_seconds": 1778097600,
+          "queue_depth": 1,
+          "slot_utilization_millionths": 500000,
+          "workers": [
+            {
+              "worker_id": "rch-g",
+              "state": "HEALTHY",
+              "active_builds": 0
+            }
+          ]
+        },
+        "stall_observations_json": {
+          "schema_version": "franken-engine.rch-stall-observations.v1",
+          "observations": [
+            {
+              "worker_id": "rch-g",
+              "build_id": "build-local-1",
+              "command": "cargo check -p frankenengine-engine --lib",
+              "final_verdict": "contaminated_local_fallback",
+              "reason_code": "local_fallback_contaminated",
+              "source_evidence": "local_fallback",
+              "local_fallback_observed": true,
+              "heartbeat_age_seconds": 8,
+              "progress_age_seconds": 500,
+              "cancellation_outcome": "not_cancelled",
+              "queue_depth": 1,
+              "slot_utilization_millionths": 500000,
+              "observed_at_epoch_seconds": 1778097600
+            }
+          ]
+        },
+        "worker_capabilities_json": {
+          "workers": [
+            {
+              "worker_id": "rch-g",
+              "capabilities_state": "fresh"
+            }
+          ]
+        },
+        "operator_actions_json": {
+          "actions": []
+        }
+      }
+    }
+  ]
+}

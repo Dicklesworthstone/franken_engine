@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-fidelity-scorer-fixtures.v1",
+  "source_fixture_bundle": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json",
+  "scenarios": [
+    {
+      "scenario_id": "exact_match",
+      "expected_decision": "pass",
+      "expected_mismatch_class": "exact_match",
+      "expected_confidence_band": "high"
+    },
+    {
+      "scenario_id": "conservative_correct",
+      "expected_decision": "degraded",
+      "expected_mismatch_class": "conservative_but_correct",
+      "expected_confidence_band": "medium"
+    },
+    {
+      "scenario_id": "over_conservative",
+      "expected_decision": "degraded",
+      "expected_mismatch_class": "over_conservative",
+      "expected_confidence_band": "medium"
+    },
+    {
+      "scenario_id": "stale_owner_miss",
+      "expected_decision": "degraded",
+      "expected_mismatch_class": "stale_owner_miss",
+      "expected_confidence_band": "low"
+    },
+    {
+      "scenario_id": "proof_brownout_miss",
+      "expected_decision": "degraded",
+      "expected_mismatch_class": "proof_brownout_miss",
+      "expected_confidence_band": "low"
+    },
+    {
+      "scenario_id": "contradictory_evidence",
+      "expected_decision": "fail_closed",
+      "expected_mismatch_class": "contradictory_evidence",
+      "expected_confidence_band": "insufficient_evidence"
+    }
+  ]
+}

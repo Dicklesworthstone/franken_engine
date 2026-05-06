@@ -22,7 +22,6 @@ write_real_surface_manifest() {
       schema_version: "franken-engine.remote-proof-contract-catalog-manifest.v1",
       external_schemas: [
         "franken-engine.rch-incident-packet.v1",
-        "franken-engine.rch-worker-truth-parity-report.v1",
         "franken-engine.rch-sync-closure-hotspot-ledger.v1",
         "franken-engine.sticky-worker-warm-target-lease-plan.v1"
       ],
@@ -35,6 +34,15 @@ write_real_surface_manifest() {
           doc_path: "docs/RESIDENT_REMOTE_PROOF_BUNDLE_EXECUTOR.md",
           emitted_schema: "franken-engine.resident-remote-proof-bundle.v1",
           upstream_schemas: []
+        },
+        {
+          surface_id: "rch-worker-truth-parity-ledger",
+          contract_json: "docs/rch_worker_truth_parity_contract_v1.json",
+          implementation_script: "scripts/rch_worker_truth_parity_ledger.sh",
+          smoke_script: "scripts/e2e/rch_worker_truth_parity_ledger_smoke.sh",
+          doc_path: "docs/RCH_WORKER_TRUTH_PARITY_LEDGER.md",
+          emitted_schema: "franken-engine.rch-worker-truth-parity-report.v1",
+          upstream_schemas: ["franken-engine.rch-incident-packet.v1"]
         },
         {
           surface_id: "remote-proof-artifact-mirror",
@@ -229,7 +237,7 @@ run_check() {
   "$gate" --surface-manifest-json "$manifest_path" --output-dir "$gate_dir" >/dev/null
   jq -e '
     .catalog_decision == "pass"
-    and .surface_count == 4
+    and .surface_count == 5
     and .finding_count == 0
     and (.catalog_id | startswith("contract-catalog-"))
   ' "${gate_dir}/contract_catalog_report.json" >/dev/null

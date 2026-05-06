@@ -48,6 +48,10 @@ Optional inputs:
 
 ## Contract
 
+The machine-readable contract is
+`docs/rch_worker_truth_parity_contract_v1.json` with schema version
+`franken-engine.rch-worker-truth-parity-contract.v1`.
+
 The ledger emits `worker_truth_report.json` with schema version
 `franken-engine.rch-worker-truth-parity-report.v1`.
 

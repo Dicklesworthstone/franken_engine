@@ -1,0 +1,263 @@
+{
+  "schema_version": "franken-engine.swarm-agent-causal-trace-spine-contract.v1",
+  "bead_id": "bd-crcrp",
+  "parent_bead_id": "bd-cmy3j",
+  "track": "SWARM-CTRL-XVI",
+  "trace_input_schema_version": "franken-engine.swarm-agent-causal-trace-input.v1",
+  "normalized_event_schema_version": "franken-engine.swarm-agent-causal-trace-event.v1",
+  "graph_schema_version": "franken-engine.swarm-agent-causal-trace-graph.v1",
+  "anomaly_report_schema_version": "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+  "trace_receipt_schema_version": "franken-engine.swarm-agent-causal-trace-receipt.v1",
+  "operator_status_section": "swarm_agent_causal_trace",
+  "planned_surfaces": [
+    "scripts/swarm_agent_causal_trace_normalizer.sh",
+    "scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh",
+    "scripts/swarm_agent_causal_trace_graph.sh",
+    "scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_operator_status_report_smoke.sh",
+    "scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh",
+    "scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh"
+  ],
+  "source_snapshot_contracts": [
+    {
+      "source_id": "br_issue_json",
+      "capture_command": "br show <bead-id> --json",
+      "required": true,
+      "missing_decision": "fail_closed"
+    },
+    {
+      "source_id": "br_ready_or_list_json",
+      "capture_command": "br ready --json or br list --json",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "br_sync_status_json",
+      "capture_command": "br sync --status --json",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "bv_actionable_plan_json",
+      "capture_command": "bv --recipe actionable --robot-plan",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "agent_mail_profiles_json",
+      "capture_command": "Agent Mail list_agents output",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "agent_mail_messages_json",
+      "capture_command": "Agent Mail inbox/search/thread snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "file_reservations_json",
+      "capture_command": "Agent Mail active file reservation snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "git_status_json",
+      "capture_command": "scoped git status snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "git_closeout_commits_json",
+      "capture_command": "closeout commit mapping or git log evidence",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "rch_validation_artifacts_json",
+      "capture_command": "RCH policy gate, run manifest, or command transcript artifacts",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "validation_commands_json",
+      "capture_command": "validation command transcript fixture",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "operator_status_json",
+      "capture_command": "scripts/swarm_operator_status_report.sh output",
+      "required": false,
+      "missing_decision": "degraded"
+    }
+  ],
+  "required_event_fields": [
+    "event_id",
+    "event_type",
+    "bead_id",
+    "agent_name",
+    "thread_id",
+    "source_revision",
+    "source_path",
+    "artifact_path",
+    "content_hash",
+    "observed_at",
+    "decision",
+    "degraded_reasons",
+    "fail_closed_reasons"
+  ],
+  "required_graph_fields": [
+    "trace_id",
+    "bead_id",
+    "source_revision",
+    "nodes",
+    "edges",
+    "anomaly_summary",
+    "mutation_policy",
+    "artifact_paths"
+  ],
+  "node_types": [
+    "agent_profile",
+    "bead_state",
+    "mail_message",
+    "file_reservation",
+    "git_status",
+    "git_commit",
+    "validation_command",
+    "rch_proof_artifact",
+    "operator_status",
+    "closeout_receipt"
+  ],
+  "edge_types": [
+    "agent_introduced",
+    "bead_claimed",
+    "reservation_covers_path",
+    "message_acknowledged",
+    "validation_proves_closeout",
+    "commit_closes_bead",
+    "operator_status_summarizes_trace",
+    "artifact_hashes_source",
+    "degraded_by_missing_optional_snapshot",
+    "fail_closed_by_contradiction"
+  ],
+  "anomaly_classes": [
+    "missing_claim_message",
+    "missing_reservation_for_dirty_path",
+    "reservation_without_matching_bead_scope",
+    "local_rch_fallback_contaminates_remote_proof",
+    "closed_bead_missing_commit",
+    "closed_bead_missing_validation_evidence",
+    "ack_required_message_unacknowledged",
+    "stale_owner_recent_activity_conflict"
+  ],
+  "required_artifact_contracts": [
+    {
+      "path_key": "artifact_paths.trace_input_json",
+      "schema_version": "franken-engine.swarm-agent-causal-trace-input.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.normalized_events_json",
+      "schema_version": "franken-engine.swarm-agent-causal-trace-event-set.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.causal_graph_json",
+      "schema_version": "franken-engine.swarm-agent-causal-trace-graph.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.anomaly_report_json",
+      "schema_version": "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.trace_receipt_json",
+      "schema_version": "franken-engine.swarm-agent-causal-trace-receipt.v1",
+      "required": true
+    },
+    {
+      "path_key": "artifact_paths.events_jsonl",
+      "required": true,
+      "description": "structured producer events"
+    },
+    {
+      "path_key": "artifact_paths.commands_txt",
+      "required": true,
+      "description": "exact command transcript"
+    },
+    {
+      "path_key": "artifact_paths.report_md",
+      "required": true,
+      "description": "operator-facing summary"
+    }
+  ],
+  "decision_policy": {
+    "pass": "all required identities and closeout evidence are linked with no anomalies",
+    "degraded": "optional evidence is missing or stale but no contradiction invalidates the trace",
+    "fail_closed": "required evidence is missing, contradictory, locally executed when remote proof is claimed, or unsafe automation wording is detected"
+  },
+  "fail_closed_rules": [
+    "missing br issue snapshot fails closed",
+    "closed bead without closeout commit evidence fails closed",
+    "closed bead without validation evidence fails closed",
+    "dirty path without matching bead scope and reservation fails closed",
+    "local RCH fallback marker contaminates remote proof evidence",
+    "ack_required message without acknowledgement evidence fails closed when the message is in the supplied thread snapshot",
+    "contradictory owner freshness between bead state, Agent Mail activity, reservations, and git activity fails closed",
+    "runbook output must not claim automatic bead repair, automatic reservation release, live Agent Mail sends, live RCH execution, or queue policy mutation"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "rewrites_historical_outcomes": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "planned_fixture_cases": [
+    {
+      "fixture_id": "healthy_closeout",
+      "expected_decision": "pass",
+      "description": "claim, reservation, RCH proof, validation transcript, closeout message, commit, and br close reason link into one trace"
+    },
+    {
+      "fixture_id": "missing_agent_mail_snapshot",
+      "expected_decision": "degraded",
+      "description": "missing optional Agent Mail profile/message evidence remains visible degraded state"
+    },
+    {
+      "fixture_id": "local_rch_fallback",
+      "expected_decision": "fail_closed",
+      "description": "local fallback marker invalidates remote proof closeout"
+    },
+    {
+      "fixture_id": "ownership_conflict",
+      "expected_decision": "fail_closed",
+      "description": "dirty path, reservation holder, and bead assignee disagree"
+    },
+    {
+      "fixture_id": "closed_without_commit",
+      "expected_decision": "fail_closed",
+      "description": "closed bead lacks linked closeout commit or validation proof"
+    }
+  ],
+  "downstream_beads": [
+    "bd-87piq",
+    "bd-d3a9u",
+    "bd-lvqje",
+    "bd-3j11b"
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_agent_causal_trace_spine_contract_v1.json",
+    "git diff --check -- docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json"
+  ]
+}

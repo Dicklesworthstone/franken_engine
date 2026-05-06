@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.locality-aware-remote-proof-batch-contract.v1",
+  "batch_manifest_schema": "franken-engine.locality-aware-remote-proof-batch-plan.v1",
+  "required_inputs": [
+    "--bundle-reports-json",
+    "--mirror-manifests-json",
+    "--roi-ledgers-json",
+    "--fairness-policy-json"
+  ],
+  "required_artifacts": [
+    "batch_manifest.json",
+    "commands.txt",
+    "events.jsonl",
+    "report.md"
+  ],
+  "required_bundle_fields": [
+    "bundle_id",
+    "expected_worker_id",
+    "expected_target_dir",
+    "closure_roots",
+    "predicted_cost_units"
+  ],
+  "required_batch_fields": [
+    "batch_id",
+    "worker_id",
+    "target_dir",
+    "bundle_ids",
+    "shared_locality_score",
+    "total_predicted_cost_units",
+    "bundle_rows"
+  ],
+  "required_bundle_row_fields": [
+    "bundle_id",
+    "pack_order",
+    "preferred_worker_id",
+    "preferred_target_dir",
+    "locality_reason",
+    "fairness_reason"
+  ],
+  "decisions": {
+    "pass": {
+      "exit_code": 0,
+      "meaning": "All bundles were assigned to deterministic worker-aware batches while respecting fairness limits and warm-target compatibility."
+    },
+    "fail_closed": {
+      "exit_code": 42,
+      "meaning": "At least one bundle lacked mirror, ROI, closure-root, worker, or target-dir evidence, so batching stopped instead of guessing."
+    }
+  },
+  "split_reasons": [
+    "fairness_split:max_bundles_per_worker",
+    "fairness_split:max_total_cost_per_worker",
+    "compatibility_split:worker_or_target_incompatibility"
+  ],
+  "fairness_policy_fields": [
+    "max_bundles_per_worker",
+    "max_total_cost_per_worker",
+    "starvation_escape_bundle_ids",
+    "explicit_incompatibilities"
+  ],
+  "determinism": {
+    "hashes": [
+      "hash_basis.input_hash",
+      "hash_basis.manifest_hash"
+    ],
+    "ordering": "Bundles are normalized, sorted, packed, and batch-id assigned deterministically.",
+    "stable_ids": "batch_manifest_id and each batch_id must remain stable across repeated runs with identical inputs."
+  }
+}

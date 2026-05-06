@@ -1,0 +1,153 @@
+{
+  "schema_version": "franken-engine.swarm-topology-placement-input-normalizer-contract.v1",
+  "bead_id": "bd-3ynhq",
+  "parent_bead_id": "bd-6arnx",
+  "depends_on": [
+    "bd-5p9ln"
+  ],
+  "script": "scripts/swarm_topology_placement_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_topology_placement_normalizer_smoke.sh",
+  "docs": "docs/SWARM_TOPOLOGY_AWARE_PLACEMENT_NORMALIZER.md",
+  "parent_contract": "docs/swarm_topology_aware_placement_contract_v1.json",
+  "fixture_bundle": "scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json",
+  "input_schema_version": "franken-engine.swarm-topology-placement-input.v1",
+  "source_schema_version": "franken-engine.swarm-topology-placement-sources.v1",
+  "event_schema_version": "franken-engine.swarm-topology-placement-normalizer.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "host_topology_json",
+      "argument": "--host-topology-json",
+      "required": true
+    },
+    {
+      "source_id": "numa_evidence_json",
+      "argument": "--numa-evidence-json",
+      "required": true
+    },
+    {
+      "source_id": "worker_inventory_json",
+      "argument": "--worker-inventory-json",
+      "required": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "cache_residency_json",
+      "argument": "--cache-residency-json"
+    },
+    {
+      "source_id": "resource_envelope_json",
+      "argument": "--resource-envelope-json"
+    },
+    {
+      "source_id": "execution_queue_input_json",
+      "argument": "--execution-queue-input-json"
+    },
+    {
+      "source_id": "tail_latency_evidence_json",
+      "argument": "--tail-latency-evidence-json"
+    }
+  ],
+  "artifacts": {
+    "input_json": "swarm_topology_placement_input.json",
+    "sources_json": "swarm_topology_placement_sources.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "normalized_input_fields": [
+    "schema_version",
+    "source_revision",
+    "bead_id",
+    "reference_time",
+    "reference_epoch_seconds",
+    "truth_state",
+    "decision",
+    "host_identity",
+    "numa_summary",
+    "worker_inventory",
+    "warm_cache_residency",
+    "context",
+    "placement_hints",
+    "degraded_reasons",
+    "blocked_reasons",
+    "fail_closed_reasons",
+    "source_artifacts",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "required_source_fields": [
+    "source_id",
+    "required",
+    "provided",
+    "artifact_path",
+    "schema_version",
+    "observed_epoch_seconds",
+    "freshness_state",
+    "trust_state"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decision_mapping": {
+    "pass": "required topology evidence is fresh and coherent and optional context does not degrade truth",
+    "degraded": "required topology evidence is coherent but one or more optional context sources are missing, stale, or untrusted",
+    "blocked": "locality contradictions or blocking context prevent confident placement advice",
+    "fail_closed": "required topology is malformed or stale, warm-cache claims lack residency evidence, or local fallback contaminates remote-only locality proof"
+  },
+  "fail_closed_rules": [
+    "required topology snapshots must be present, parseable, and fresh",
+    "worker inventory NUMA nodes must stay within the declared host NUMA count",
+    "hot-cache claims without current residency evidence fail closed",
+    "local fallback contamination fails closed",
+    "malformed optional context snapshots fail closed when provided"
+  ],
+  "blocked_rules": [
+    "contradictory host identity across required topology snapshots produces blocked locality truth",
+    "contradictory NUMA node-count evidence produces blocked locality truth",
+    "resource envelope or tail-latency blocked context remains visible as blocked guidance"
+  ],
+  "degraded_rules": [
+    "missing cache residency hints degrade",
+    "missing resource envelope context degrades",
+    "missing execution queue context degrades",
+    "missing tail latency locality context degrades",
+    "stale optional context remains degraded rather than silently healthy",
+    "execution queue fail_closed context remains visible as degraded or contaminated evidence, not healthy placement truth"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false
+  },
+  "selftest_scenarios": [
+    "healthy_confirmed",
+    "degraded_missing_cache_residency",
+    "blocked_contradictory_locality",
+    "contaminated_local_fallback",
+    "fail_closed_malformed_topology"
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_topology_placement_normalizer.sh",
+    "bash -n scripts/e2e/swarm_topology_placement_normalizer_smoke.sh",
+    "shellcheck -x scripts/swarm_topology_placement_normalizer.sh scripts/e2e/swarm_topology_placement_normalizer_smoke.sh",
+    "jq empty docs/swarm_topology_aware_placement_input_contract_v1.json scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json",
+    "bash scripts/e2e/swarm_topology_placement_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_topology_placement_normalizer_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_TOPOLOGY_AWARE_PLACEMENT_NORMALIZER.md docs/swarm_topology_aware_placement_input_contract_v1.json scripts/swarm_topology_placement_normalizer.sh scripts/e2e/swarm_topology_placement_normalizer_smoke.sh scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json"
+  ]
+}

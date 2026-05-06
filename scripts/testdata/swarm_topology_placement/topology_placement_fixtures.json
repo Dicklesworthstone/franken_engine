@@ -1,0 +1,370 @@
+{
+  "schema_version": "franken-engine.swarm-topology-placement-normalizer-fixtures.v1",
+  "reference_time": "2026-05-06T20:10:00Z",
+  "max_snapshot_age_seconds": 3600,
+  "scenarios": [
+    {
+      "scenario_id": "healthy_confirmed",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 965000,
+          "latency_penalty_millionths": 70000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            },
+            {
+              "worker_id": "rch-b",
+              "numa_node": 1,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [
+            "rch-a"
+          ],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": {
+          "schema_version": "franken-engine.cache-residency-snapshot.v1",
+          "host_id": "host-scale-a",
+          "truth_state": "confirmed",
+          "hot_worker_ids": [
+            "rch-a"
+          ],
+          "target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-scale-a"
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": {
+          "schema_version": "franken-engine.tail-latency-locality-snapshot.v1",
+          "decision": "pass",
+          "locality_domain": "numa_node",
+          "local_fallback_detected": false,
+          "observed_at": "2026-05-06T20:00:00Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_cache_residency",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 940000,
+          "latency_penalty_millionths": 90000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            },
+            {
+              "worker_id": "rch-b",
+              "numa_node": 1,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": null,
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-scale-a"
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": {
+          "schema_version": "franken-engine.tail-latency-locality-snapshot.v1",
+          "decision": "pass",
+          "locality_domain": "numa_node",
+          "local_fallback_detected": false,
+          "observed_at": "2026-05-06T20:00:00Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "blocked_contradictory_locality",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 910000,
+          "latency_penalty_millionths": 130000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-other",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": {
+          "schema_version": "franken-engine.cache-residency-snapshot.v1",
+          "host_id": "host-other",
+          "truth_state": "confirmed",
+          "hot_worker_ids": [
+            "rch-a"
+          ],
+          "target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-scale-a"
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": {
+          "schema_version": "franken-engine.tail-latency-locality-snapshot.v1",
+          "decision": "pass",
+          "locality_domain": "socket",
+          "local_fallback_detected": false,
+          "observed_at": "2026-05-06T20:00:00Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 955000,
+          "latency_penalty_millionths": 80000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": {
+          "schema_version": "franken-engine.cache-residency-snapshot.v1",
+          "host_id": "host-scale-a",
+          "truth_state": "confirmed",
+          "hot_worker_ids": [],
+          "target_dirs": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-scale-a"
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "local_rch_fallback"
+        },
+        "tail_latency_evidence_json": {
+          "schema_version": "franken-engine.tail-latency-locality-snapshot.v1",
+          "decision": "pass",
+          "locality_domain": "numa_node",
+          "local_fallback_detected": false,
+          "observed_at": "2026-05-06T20:00:00Z"
+        }
+      }
+    },
+    {
+      "scenario_id": "fail_closed_malformed_topology",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 42,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 955000,
+          "latency_penalty_millionths": 80000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 3,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": {
+          "schema_version": "franken-engine.cache-residency-snapshot.v1",
+          "host_id": "host-scale-a",
+          "truth_state": "confirmed",
+          "hot_worker_ids": [],
+          "target_dirs": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "resource_envelope_json": null,
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": null
+      }
+    }
+  ]
+}

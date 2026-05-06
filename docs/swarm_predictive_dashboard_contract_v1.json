@@ -16,10 +16,11 @@
   "telemetry_snapshot_normalizer": {
     "script": "scripts/swarm_telemetry_snapshot_normalizer.sh",
     "snapshot_schema_version": "franken-engine.swarm-capacity-snapshot.v1",
+    "slo_input_snapshot_schema_version": "franken-engine.swarm-slo-input-snapshot.v1",
     "contract_json": "docs/swarm_telemetry_snapshot_contract_v1.json",
     "status": "fixture_only_extension",
     "producer_integration": false,
-    "handoff_note": "The standalone snapshot normalizer reuses admission, archive, and proof-economy artifacts directly. The current swarm_operator_status_report producer does not emit this snapshot yet."
+    "handoff_note": "The standalone snapshot normalizer reuses admission, archive, proof-economy, and SWARM-CTRL-IX high-core evidence artifacts directly. The current swarm_operator_status_report producer does not emit either snapshot yet."
   },
   "capacity_forecaster": {
     "script": "scripts/swarm_capacity_forecaster.sh",
@@ -84,6 +85,11 @@
     "franken-engine.swarm-admission-budget-plan.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1"
+    ,
+    "franken-engine.stress-concurrency.suite-manifest.v1",
+    "franken-engine.tail-latency-control-plane.v1",
+    "franken-engine.rgc-fault-injection-chaos-verification-pack.report.v1",
+    "franken-engine.swarm-responsiveness-claim-map.v1"
   ],
   "golden_fixture_cases": [
     "healthy",

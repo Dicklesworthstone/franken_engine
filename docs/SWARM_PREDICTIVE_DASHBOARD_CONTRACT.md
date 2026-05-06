@@ -24,11 +24,17 @@ extension:
 
 - Script: `scripts/swarm_telemetry_snapshot_normalizer.sh`
 - Snapshot schema: `franken-engine.swarm-capacity-snapshot.v1`
+- High-core SLO schema: `franken-engine.swarm-slo-input-snapshot.v1`
 - Static contract: `docs/swarm_telemetry_snapshot_contract_v1.json`
 
 That normalizer reuses admission, archive, and proof-economy artifacts directly
 and stays fixture-only. It does not replace `scripts/swarm_operator_status_report.sh`
 and must not be described as a live scheduling control surface.
+When SWARM-CTRL-IX inputs are supplied, the same normalizer also emits a
+dedicated SLO input snapshot that summarizes checked-in stress, tail-latency,
+chaos, and swarm-responsiveness evidence for downstream calibration lanes. That
+extension is still report-only and must not be described as live tuning or
+worker mutation.
 
 The telemetry snapshot also feeds a standalone predictive capacity forecaster:
 

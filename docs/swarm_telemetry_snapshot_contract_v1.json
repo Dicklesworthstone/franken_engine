@@ -15,6 +15,10 @@
     "--predictive-wrapper-report-json",
     "--archive-lifecycle-report-json",
     "--proof-economy-drill-report-json",
+    "--stress-suite-manifest-json",
+    "--tail-latency-report-json",
+    "--chaos-verification-report-json",
+    "--swarm-responsiveness-claim-map-json",
     "--source-revision",
     "--now-epoch-seconds",
     "--stale-after-seconds",
@@ -22,10 +26,12 @@
   ],
   "required_artifacts": [
     "swarm_capacity_snapshot.json",
+    "swarm_slo_input_snapshot.json",
     "events.jsonl",
     "commands.txt",
     "report.md"
   ],
+  "secondary_output_schema": "franken-engine.swarm-slo-input-snapshot.v1",
   "required_upstream_schemas": [
     "franken-engine.swarm-validation-plan.v1",
     "franken-engine.swarm-resource-governor-decision.v1"
@@ -36,13 +42,18 @@
     "franken-engine.swarm-admission-drill-report.v1",
     "franken-engine.swarm-predictive-orchestration-e2e-wrapper.v1",
     "franken-engine.remote-proof-archive-lifecycle-no-mock-drill-report.v1",
-    "franken-engine.proof-economy-scheduler-replay-drill-report.v1"
+    "franken-engine.proof-economy-scheduler-replay-drill-report.v1",
+    "franken-engine.stress-concurrency.suite-manifest.v1",
+    "franken-engine.tail-latency-control-plane.v1",
+    "franken-engine.rgc-fault-injection-chaos-verification-pack.report.v1",
+    "franken-engine.swarm-responsiveness-claim-map.v1"
   ],
   "fail_closed_rejections": [
     "missing_required_field",
     "stale_timestamp",
     "contradictory_active_agent_ownership",
-    "non_replayable_artifact_reference"
+    "non_replayable_artifact_reference",
+    "non_rch_traceable_artifact"
   ],
   "determinism": {
     "execution_mode": "fixture_only",

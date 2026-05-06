@@ -183,8 +183,9 @@ run_check() {
   bash -n "$normalizer"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
-  jq -e '.telemetry_snapshot_normalizer.snapshot_schema_version == "franken-engine.swarm-capacity-snapshot.v1"' "$dashboard_contract_path" >/dev/null
+  jq -e '.telemetry_snapshot_normalizer.snapshot_schema_version == "franken-engine.swarm-capacity-snapshot.v1" and .telemetry_snapshot_normalizer.slo_input_snapshot_schema_version == "franken-engine.swarm-slo-input-snapshot.v1"' "$dashboard_contract_path" >/dev/null
   grep -q 'swarm-capacity-snapshot.v1' "$docs_path"
+  grep -q 'swarm_slo_input_snapshot.json' "$docs_path"
   grep -q 'scripts/swarm_telemetry_snapshot_normalizer.sh' "$dashboard_docs_path"
 
   scope_file="$(mktemp "${TMPDIR:-/tmp}/swarm-telemetry-snapshot-scope.XXXXXX")"
@@ -253,10 +254,17 @@ run_selftest() {
     and .swarm_capacity_snapshot.predictive_cost.collision_risk == "reserved_overlap"
     and .swarm_capacity_snapshot.proof_freshness.freshness_state == "fresh"
     and .reuse_audit.dashboard_contract_extension.provider == "/dp/frankentui"
+    and .summary.high_core_requested == false
+    and .swarm_capacity_snapshot.swarm_slo_inputs.decision == "not_requested"
     and (.accepted_inputs | length) >= 10
     and (.missing_inputs | length) == 0
     and (.non_replayable_artifact_refs | length) == 0
   ' "${run_a}/swarm_capacity_snapshot.json" >/dev/null
+  jq -e '
+    .schema_version == "franken-engine.swarm-slo-input-snapshot.v1"
+    and .decision == "not_requested"
+    and .summary.requested == false
+  ' "${run_a}/swarm_slo_input_snapshot.json" >/dev/null
   record_pass "healthy fixture normalizes into deterministic capacity snapshot"
 
   run_b="${tmp_root}/run-b"
@@ -301,6 +309,34 @@ run_selftest() {
     and any(.missing_required_fields[]?; .source == "validation_plan_json")
   ' "${missing_dir}/swarm_capacity_snapshot.json" >/dev/null
   record_pass "missing required validation-plan fields fail closed"
+
+  real_artifact_dir="${tmp_root}/real-high-core"
+  real_now_epoch="$(date -u -d '2026-02-22T07:24:00Z' +%s)"
+  expect_fail_closed "$fixture_dir" "$real_artifact_dir" \
+    --stress-suite-manifest-json "${root_dir}/artifacts/stress_concurrency/20260222T072317Z/suite_run_manifest.json" \
+    --tail-latency-report-json "${root_dir}/artifacts/rgc_tail_latency_control_plane/20260319T183341Z/latency_control_plane_report.json" \
+    --chaos-verification-report-json "${root_dir}/artifacts/rgc_fault_injection_chaos_verification_pack/20260303T075226Z/chaos_verification_report.json" \
+    --swarm-responsiveness-claim-map-json "${root_dir}/docs/rgc_swarm_responsiveness_claim_map_v1.json" \
+    --now-epoch-seconds "${real_now_epoch}"
+  jq -e '
+    .decision == "fail_closed"
+    and .swarm_capacity_snapshot.swarm_slo_inputs.requested == true
+    and .swarm_capacity_snapshot.swarm_slo_inputs.stress_concurrency.traceability == "local_or_unknown"
+    and .swarm_capacity_snapshot.swarm_slo_inputs.tail_latency_control_plane.traceability == "local_or_unknown"
+    and .swarm_capacity_snapshot.swarm_slo_inputs.chaos_verification.traceability == "local_or_unknown"
+    and .swarm_capacity_snapshot.swarm_slo_inputs.responsiveness_claim_map.traceability == "local_or_unknown"
+    and any(.high_core_traceability_failures[]?; .source == "stress_suite_manifest_json")
+    and any(.high_core_traceability_failures[]?; .source == "tail_latency_report_json")
+    and any(.high_core_traceability_failures[]?; .source == "chaos_verification_report_json")
+    and any(.high_core_traceability_failures[]?; .source == "swarm_responsiveness_claim_map_json")
+  ' "${real_artifact_dir}/swarm_capacity_snapshot.json" >/dev/null
+  jq -e '
+    .schema_version == "franken-engine.swarm-slo-input-snapshot.v1"
+    and .request_state == "requested"
+    and .decision == "fail_closed"
+    and .evidence.responsiveness_claim_map.traceability == "local_or_unknown"
+  ' "${real_artifact_dir}/swarm_slo_input_snapshot.json" >/dev/null
+  record_pass "real checked-in stress/tail/chaos evidence replays and fail-closes on local cargo traceability"
 
   printf 'swarm_telemetry_snapshot_smoke_artifacts=%s\n' "$tmp_root"
 }

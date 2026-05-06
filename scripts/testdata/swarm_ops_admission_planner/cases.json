@@ -1,0 +1,382 @@
+{
+  "schema_version": "franken-engine.swarm-ops-admission-planner-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "high_core_healthy",
+      "description": "64-core/256GiB host admits bounded heavy and light lanes",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "components": {
+          "br": {
+            "bv_plan_state": "fresh"
+          },
+          "rch": {
+            "state": "captured",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 64,
+          "total_memory_bytes": 274877906944,
+          "total_rch_slots": 6,
+          "target_dir_available_bytes": 214748364800,
+          "min_target_dir_available_bytes": 10737418240,
+          "max_parallel_heavy_lanes": 6
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-heavy-a",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 8,
+            "memory_bytes": 34359738368,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/a.sh"
+            ],
+            "proof_cache_hint": "warm-target-a"
+          },
+          {
+            "lane_id": "bd-heavy-b",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 16,
+            "memory_bytes": 68719476736,
+            "rch_slots": 1,
+            "target_dir_bytes": 21474836480,
+            "write_paths": [
+              "scripts/b.sh"
+            ],
+            "proof_cache_hint": "warm-target-b"
+          },
+          {
+            "lane_id": "bd-light-c",
+            "priority": 2,
+            "lane_class": "light",
+            "cpu_slots": 1,
+            "memory_bytes": 1073741824,
+            "rch_slots": 0,
+            "target_dir_bytes": 0,
+            "write_paths": [
+              "docs/c.md"
+            ],
+            "proof_cache_hint": "none"
+          }
+        ],
+        "reservation_conflicts": []
+      },
+      "expected": {
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "admitted_count": 3,
+        "deferred_count": 0,
+        "blocked_count": 0
+      }
+    },
+    {
+      "case_id": "low_memory",
+      "description": "known low-memory host defers heavy lane without overclaiming admission",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "components": {
+          "br": {
+            "bv_plan_state": "fresh"
+          },
+          "rch": {
+            "state": "captured",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 8,
+          "total_memory_bytes": 8589934592,
+          "total_rch_slots": 2,
+          "target_dir_available_bytes": 21474836480,
+          "min_target_dir_available_bytes": 10737418240
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-heavy-memory",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 4,
+            "memory_bytes": 17179869184,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/memory.sh"
+            ],
+            "proof_cache_hint": "warm-memory"
+          }
+        ],
+        "reservation_conflicts": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "capacity_budget_exceeded"
+        ],
+        "admitted_count": 0,
+        "deferred_count": 1,
+        "blocked_count": 0
+      }
+    },
+    {
+      "case_id": "disk_pressure",
+      "description": "target-dir pressure defers target-producing lanes",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "components": {
+          "br": {
+            "bv_plan_state": "fresh"
+          },
+          "rch": {
+            "state": "captured",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 32,
+          "total_memory_bytes": 137438953472,
+          "total_rch_slots": 4,
+          "target_dir_available_bytes": 1073741824,
+          "min_target_dir_available_bytes": 10737418240
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-disk-heavy",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 8,
+            "memory_bytes": 17179869184,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/disk.sh"
+            ],
+            "proof_cache_hint": "warm-disk"
+          }
+        ],
+        "reservation_conflicts": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "target_dir_disk_pressure"
+        ],
+        "admitted_count": 0,
+        "deferred_count": 1,
+        "blocked_count": 0
+      }
+    },
+    {
+      "case_id": "rch_brownout",
+      "description": "RCH brownout defers all remote-heavy lanes",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "rch_degraded"
+        ],
+        "components": {
+          "br": {
+            "bv_plan_state": "fresh"
+          },
+          "rch": {
+            "state": "degraded",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 64,
+          "total_memory_bytes": 274877906944,
+          "total_rch_slots": 0,
+          "target_dir_available_bytes": 214748364800,
+          "min_target_dir_available_bytes": 10737418240
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-rch-heavy",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 8,
+            "memory_bytes": 17179869184,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/rch.sh"
+            ],
+            "proof_cache_hint": "warm-rch"
+          }
+        ],
+        "reservation_conflicts": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "rch_brownout"
+        ],
+        "admitted_count": 0,
+        "deferred_count": 1,
+        "blocked_count": 0
+      }
+    },
+    {
+      "case_id": "stale_jsonl",
+      "description": "upstream stale br/bv state fails closed",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "stale_bv_due_to_br_sync"
+        ],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "components": {
+          "br": {
+            "bv_plan_state": "stale_due_to_br_sync"
+          },
+          "rch": {
+            "state": "captured",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 64,
+          "total_memory_bytes": 274877906944,
+          "total_rch_slots": 6,
+          "target_dir_available_bytes": 214748364800,
+          "min_target_dir_available_bytes": 10737418240
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-stale",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 8,
+            "memory_bytes": 17179869184,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/stale.sh"
+            ],
+            "proof_cache_hint": "warm-stale"
+          }
+        ],
+        "reservation_conflicts": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "stale_br_bv_state"
+        ],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "admitted_count": 0,
+        "deferred_count": 0,
+        "blocked_count": 1
+      }
+    },
+    {
+      "case_id": "reservation_conflict",
+      "description": "lane write path conflicts with active reservation",
+      "snapshot": {
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "components": {
+          "br": {
+            "bv_plan_state": "fresh"
+          },
+          "rch": {
+            "state": "captured",
+            "active_stall_count": 0
+          },
+          "git": {
+            "unowned_dirty_count": 0
+          }
+        },
+        "capacity_envelope": {
+          "total_cpu_slots": 64,
+          "total_memory_bytes": 274877906944,
+          "total_rch_slots": 6,
+          "target_dir_available_bytes": 214748364800,
+          "min_target_dir_available_bytes": 10737418240
+        },
+        "candidate_lanes": [
+          {
+            "lane_id": "bd-conflict",
+            "priority": 1,
+            "lane_class": "heavy",
+            "cpu_slots": 8,
+            "memory_bytes": 17179869184,
+            "rch_slots": 1,
+            "target_dir_bytes": 10737418240,
+            "write_paths": [
+              "scripts/conflict.sh"
+            ],
+            "proof_cache_hint": "warm-conflict"
+          }
+        ],
+        "reservation_conflicts": [
+          {
+            "path_pattern": "scripts/conflict.sh",
+            "holder": "LavenderElk",
+            "exclusive": true
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [
+          "reservation_conflict"
+        ],
+        "degraded_reasons": [],
+        "admitted_count": 0,
+        "deferred_count": 0,
+        "blocked_count": 1
+      }
+    }
+  ]
+}

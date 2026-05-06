@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-runner-contract.v1",
+  "bead_id": "bd-pthn9",
+  "parent_bead_id": "bd-g347f",
+  "depends_on": [
+    "bd-1wrlq",
+    "bd-lb6j0"
+  ],
+  "runner_module": "crates/franken-engine/src/swarm_execution_queue_runner.rs",
+  "runner_bin": "crates/franken-engine/src/bin/franken_swarm_execution_queue.rs",
+  "integration_test": "crates/franken-engine/tests/swarm_execution_queue_runner_integration.rs",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_RUNNER.md",
+  "input_schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "runner_schema_version": "franken-engine.swarm-execution-queue-runner.v1",
+  "output_artifact_contracts": [
+    {
+      "path": "run_manifest.json",
+      "schema_version": "franken-engine.swarm-execution-queue-runner.v1",
+      "required": true
+    },
+    {
+      "path": "events.jsonl",
+      "schema_version": "franken-engine.swarm-execution-queue-runner.event.v1",
+      "required": true
+    },
+    {
+      "path": "commands.txt",
+      "required": true
+    },
+    {
+      "path": "execution_queue_artifact.json",
+      "schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+      "required": true
+    },
+    {
+      "path": "risk_budget_receipt.json",
+      "schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+      "required": true
+    },
+    {
+      "path": "bottleneck_report.json",
+      "schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+      "required": true
+    },
+    {
+      "path": "operator_summary.md",
+      "required": true
+    }
+  ],
+  "preserved_rust_semantics": [
+    "wave ordering",
+    "EV and relevance scoring",
+    "risk-budget conservative mode",
+    "rationale deltas",
+    "bottleneck severity"
+  ],
+  "fail_closed_rules": [
+    "empty task graphs fail closed",
+    "unknown dependencies fail closed",
+    "dependency cycles fail closed",
+    "oversized graphs fail closed",
+    "invalid queue depth fails closed",
+    "local-rch fallback cannot be promoted as successful proof health",
+    "unrecognized degraded evidence fails closed"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "verification_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/rch_target_swarm_execution_queue cargo check -p frankenengine-engine --bin franken_swarm_execution_queue",
+    "rch exec -- env CARGO_TARGET_DIR=/data/tmp/rch_target_swarm_execution_queue cargo test -p frankenengine-engine --test swarm_execution_queue_runner_integration -- --nocapture",
+    "cargo fmt --check"
+  ]
+}

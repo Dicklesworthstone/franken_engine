@@ -455,6 +455,7 @@ pub mod supremacy_cell_matrix;
 pub mod supremacy_evidence_bundle;
 pub mod supremacy_verdict_engine;
 pub mod swarm_control_loop;
+pub mod swarm_execution_queue_runner;
 pub mod synthesis_budget;
 pub mod synthesis_eligibility_envelope;
 pub mod synthesis_kernel_promotion;

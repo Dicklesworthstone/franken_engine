@@ -1,0 +1,283 @@
+{
+  "schema_version": "franken-engine.swarm-ops-stale-recovery-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "active_owner",
+      "description": "owner is recently active, so the candidate is healthy",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-active",
+              "title": "active owner lane",
+              "status": "in_progress",
+              "assignee": "ActiveAgent",
+              "priority": 2,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "ActiveAgent",
+              "last_active_epoch_seconds": 1200
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": []
+        },
+        "file_reservations": {
+          "reservations": []
+        },
+        "git_activity": {
+          "activity": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "classification": "healthy",
+        "reason_code": "owner_recently_active"
+      }
+    },
+    {
+      "case_id": "blocked_by_active_agent",
+      "description": "active owner also holds an active reservation",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-blocked-active",
+              "title": "active reservation lane",
+              "status": "in_progress",
+              "assignee": "BusyAgent",
+              "priority": 1,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "BusyAgent",
+              "last_active_epoch_seconds": 1800
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": [
+            {
+              "thread_id": "bd-blocked-active",
+              "from": "BusyAgent",
+              "created_epoch_seconds": 1805
+            }
+          ]
+        },
+        "file_reservations": {
+          "reservations": [
+            {
+              "id": 42,
+              "bead_id": "bd-blocked-active",
+              "agent_name": "BusyAgent",
+              "path_pattern": "scripts/busy.sh",
+              "expires_epoch_seconds": 4000
+            }
+          ]
+        },
+        "git_activity": {
+          "activity": []
+        }
+      },
+      "expected": {
+        "decision": "blocked",
+        "classification": "blocked-by-active-agent",
+        "reason_code": "active_agent_or_reservation"
+      }
+    },
+    {
+      "case_id": "dead_owner",
+      "description": "owner is stale and has no recent activity or active reservations",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-dead",
+              "title": "dead owner lane",
+              "status": "in_progress",
+              "assignee": "DeadAgent",
+              "priority": 2,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "DeadAgent",
+              "last_active_epoch_seconds": 100
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": []
+        },
+        "file_reservations": {
+          "reservations": []
+        },
+        "git_activity": {
+          "activity": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "classification": "safe-to-reopen",
+        "reason_code": "stale_owner_no_recent_activity"
+      }
+    },
+    {
+      "case_id": "stale_but_recent_git",
+      "description": "owner profile is stale but recent git activity requires contact first",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-recent-git",
+              "title": "recent git lane",
+              "status": "in_progress",
+              "assignee": "GitAgent",
+              "priority": 2,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "GitAgent",
+              "last_active_epoch_seconds": 100
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": []
+        },
+        "file_reservations": {
+          "reservations": []
+        },
+        "git_activity": {
+          "activity": [
+            {
+              "bead_id": "bd-recent-git",
+              "agent_name": "GitAgent",
+              "touched_epoch_seconds": 1900,
+              "paths": [
+                "scripts/git.sh"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "classification": "needs-contact",
+        "reason_code": "recent_activity_requires_ack"
+      }
+    },
+    {
+      "case_id": "expired_reservation",
+      "description": "owner is stale and only expired reservation evidence remains",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-expired",
+              "title": "expired reservation lane",
+              "status": "in_progress",
+              "assignee": "ExpiredAgent",
+              "priority": 2,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "ExpiredAgent",
+              "last_active_epoch_seconds": 100
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": []
+        },
+        "file_reservations": {
+          "reservations": [
+            {
+              "id": 77,
+              "bead_id": "bd-expired",
+              "agent_name": "ExpiredAgent",
+              "path_pattern": "scripts/expired.sh",
+              "expires_epoch_seconds": 500
+            }
+          ]
+        },
+        "git_activity": {
+          "activity": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "classification": "safe-to-reopen",
+        "reason_code": "stale_owner_only_expired_reservations"
+      }
+    },
+    {
+      "case_id": "contradictory_mail_state",
+      "description": "future or flagged mail evidence requires manual review and fail-closed output",
+      "inputs": {
+        "in_progress": {
+          "issues": [
+            {
+              "id": "bd-contradictory",
+              "title": "contradictory mail lane",
+              "status": "in_progress",
+              "assignee": "MailAgent",
+              "priority": 2,
+              "updated_at": "2026-05-06T20:00:00Z"
+            }
+          ]
+        },
+        "agent_profiles": {
+          "agents": [
+            {
+              "name": "MailAgent",
+              "last_active_epoch_seconds": 100
+            }
+          ]
+        },
+        "mail_activity": {
+          "messages": [
+            {
+              "thread_id": "bd-contradictory",
+              "from": "MailAgent",
+              "created_epoch_seconds": 999999,
+              "contradictory": true
+            }
+          ]
+        },
+        "file_reservations": {
+          "reservations": []
+        },
+        "git_activity": {
+          "activity": []
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "classification": "manual-review",
+        "reason_code": "contradictory_mail_state"
+      }
+    }
+  ]
+}

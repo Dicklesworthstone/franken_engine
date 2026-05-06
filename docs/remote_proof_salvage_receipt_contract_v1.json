@@ -1,0 +1,56 @@
+{
+  "schema_version": "franken-engine.remote-proof-salvage-receipt-contract.v1",
+  "salvage_receipt_schema": "franken-engine.remote-proof-salvage-receipt.v1",
+  "required_inputs": [
+    "--bundle-report-json",
+    "--incident-packet-json",
+    "--worker-truth-report-json"
+  ],
+  "optional_inputs": [
+    "--output-dir"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.resident-remote-proof-bundle.v1",
+    "franken-engine.rch-incident-packet.v1",
+    "franken-engine.rch-worker-truth-parity-report.v1"
+  ],
+  "required_artifacts": [
+    "salvage_receipt.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "workflow_states": {
+    "clean_finished": {
+      "recommendation": "no_salvage_needed",
+      "exit_code": 0
+    },
+    "live_compile_salvageable": {
+      "recommendation": "wait_then_salvage_artifacts",
+      "exit_code": 42
+    },
+    "orphan_reconciliation_required": {
+      "recommendation": "clear_orphan_before_retry",
+      "exit_code": 42
+    },
+    "worker_unreachable_degraded": {
+      "recommendation": "quarantine_worker_and_reroute",
+      "exit_code": 42
+    },
+    "manual_review_required": {
+      "recommendation": "manual_classification_required",
+      "exit_code": 42
+    }
+  },
+  "observed_process_truth_fields": [
+    "live_remote_compile",
+    "orphaned_process_detected",
+    "worker_reachable",
+    "recoverable_artifact_set"
+  ],
+  "determinism": {
+    "salvage_id": "Derived from bundle id, incident failure kind, worker id, and target dir.",
+    "sorting": "Upstream worker-truth findings and worker rows are normalized before receipt composition.",
+    "execution_mode": "Classifier only; the salvage receipt does not execute cargo or mutate worker state."
+  }
+}

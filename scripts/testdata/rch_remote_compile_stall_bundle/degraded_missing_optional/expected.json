@@ -1,0 +1,13 @@
+{
+  "truth_state": "degraded",
+  "capture_decision": "captured_degraded",
+  "local_fallback_observed": false,
+  "expected_exit_code": 0,
+  "required_present_count": 4,
+  "optional_present_count": 1,
+  "optional_missing_count": 2,
+  "contradictory_snapshot_count": 0,
+  "primary_build_id": "29830575799926877",
+  "primary_worker_id": "ts2",
+  "required_blocker_code": "optional_snapshot_missing"
+}

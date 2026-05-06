@@ -1,0 +1,13 @@
+{
+  "truth_state": "blocked",
+  "capture_decision": "fail_closed",
+  "local_fallback_observed": false,
+  "expected_exit_code": 42,
+  "required_present_count": 4,
+  "optional_present_count": 2,
+  "optional_missing_count": 1,
+  "contradictory_snapshot_count": 1,
+  "primary_build_id": "29830575799926881",
+  "primary_worker_id": "vmi1153651",
+  "required_blocker_code": "queue_status_conflict"
+}

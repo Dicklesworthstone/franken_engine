@@ -1,0 +1,13 @@
+{
+  "truth_state": "contaminated",
+  "capture_decision": "fail_closed",
+  "local_fallback_observed": true,
+  "expected_exit_code": 42,
+  "required_present_count": 4,
+  "optional_present_count": 2,
+  "optional_missing_count": 1,
+  "contradictory_snapshot_count": 0,
+  "primary_build_id": "29830575799926873",
+  "primary_worker_id": "vmi1149989",
+  "required_blocker_code": "local_fallback_observed"
+}

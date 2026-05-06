@@ -1,0 +1,10 @@
+{
+  "workers": [
+    {
+      "worker_id": "vmi1153651",
+      "status": "idle",
+      "projects_root_ok": true,
+      "nightly_available": true
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "command": "queue",
+  "timestamp": "2026-05-06T20:00:10Z",
+  "api_version": "v1",
+  "data": {
+    "timestamp": "2026-05-06T20:00:10Z",
+    "queue_depth": 0,
+    "active_builds": [
+      {
+        "id": 29830575799926875,
+        "project_id": "franken_engine-stall",
+        "worker_id": "vmi1153651",
+        "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly cargo check -p frankenengine-engine --lib",
+        "last_progress_at": "2026-05-06T20:00:00Z",
+        "progress_age_secs": 10,
+        "last_heartbeat_at": "2026-05-06T20:00:08Z",
+        "heartbeat_phase": "execute",
+        "heartbeat_detail": "remote_exec_start"
+      }
+    ]
+  }
+}

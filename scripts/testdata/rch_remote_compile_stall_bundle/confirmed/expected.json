@@ -1,0 +1,13 @@
+{
+  "truth_state": "confirmed",
+  "capture_decision": "captured",
+  "local_fallback_observed": false,
+  "expected_exit_code": 0,
+  "required_present_count": 4,
+  "optional_present_count": 3,
+  "optional_missing_count": 0,
+  "contradictory_snapshot_count": 0,
+  "primary_build_id": "29830575799926875",
+  "primary_worker_id": "vmi1153651",
+  "required_blocker_code": ""
+}

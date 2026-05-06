@@ -1,0 +1,35 @@
+{
+  "success": true,
+  "command": "status",
+  "timestamp": "2026-05-06T20:06:10Z",
+  "api_version": "v1",
+  "data": {
+    "schema_version": "v1",
+    "daemon": {
+      "active_builds": [
+        {
+          "id": 29830575799926873,
+          "project_id": "franken_engine-stall",
+          "worker_id": "vmi1149989",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-check cargo check --all-targets",
+          "last_progress_at": "2026-05-06T20:05:40Z",
+          "progress_age_secs": 30,
+          "last_heartbeat_at": "2026-05-06T20:06:07Z",
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start"
+        }
+      ],
+      "workers": [
+        {
+          "id": "vmi1149989",
+          "status": "healthy",
+          "pressure_state": "healthy"
+        }
+      ]
+    },
+    "convergence": {
+      "status": "unknown",
+      "workers": []
+    }
+  }
+}

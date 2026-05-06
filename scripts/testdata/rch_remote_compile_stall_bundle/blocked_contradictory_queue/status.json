@@ -1,0 +1,35 @@
+{
+  "success": true,
+  "command": "status",
+  "timestamp": "2026-05-06T20:04:10Z",
+  "api_version": "v1",
+  "data": {
+    "schema_version": "v1",
+    "daemon": {
+      "active_builds": [
+        {
+          "id": 29830575799926881,
+          "project_id": "franken_engine-stall",
+          "worker_id": "vmi1149989",
+          "command": "rch exec -- env RUSTFLAGS='-Cdebuginfo=0' cargo test -p frankenengine-engine storage_adapter::tests::frankensqlite_typed_heavy_put_rejects_unmarked_generic_legacy_rows -- --exact --nocapture",
+          "last_progress_at": "2026-05-06T20:03:50Z",
+          "progress_age_secs": 20,
+          "last_heartbeat_at": "2026-05-06T20:04:05Z",
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start"
+        }
+      ],
+      "workers": [
+        {
+          "id": "vmi1149989",
+          "status": "healthy",
+          "pressure_state": "healthy"
+        }
+      ]
+    },
+    "convergence": {
+      "status": "unknown",
+      "workers": []
+    }
+  }
+}

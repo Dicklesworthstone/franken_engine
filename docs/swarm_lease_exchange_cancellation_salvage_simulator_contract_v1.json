@@ -1,0 +1,53 @@
+{
+  "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulator-contract.v1",
+  "simulation_schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+  "producer_script": "scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh",
+  "contract_doc": "docs/SWARM_LEASE_EXCHANGE_CANCELLATION_SALVAGE_SIMULATOR.md",
+  "required_args": [
+    "--stale-lock-recommendations-json",
+    "--admission-budget-plan-json",
+    "--resource-lease-plan-json",
+    "--gc-guard-report-json",
+    "--archive-pressure-scoreboard-json"
+  ],
+  "optional_args": [
+    "--reservation-snapshot-json",
+    "--agent-profiles-json",
+    "--source-revision",
+    "--output-dir"
+  ],
+  "required_output_fields": [
+    "decision",
+    "summary.request_count",
+    "summary.lease_exchange_candidate_count",
+    "summary.salvage_promotion_candidate_count",
+    "summary.ownership_fail_closed_count",
+    "upstream_summary.lease_decision",
+    "upstream_summary.archive_pressure_advisory",
+    "recommendations",
+    "artifact_paths.lease_exchange_cancellation_salvage_simulation_json",
+    "artifact_paths.commands_txt",
+    "artifact_paths.report_md"
+  ],
+  "fixture_cases": [
+    "stale_reservation",
+    "active_owner",
+    "degraded_rch",
+    "salvage_pinned",
+    "manual_confirmation_required",
+    "ownership_contradiction"
+  ],
+  "compatibility_contracts": [
+    "franken-engine.stale-lock-recommendations.v1",
+    "franken-engine.swarm-admission-budget-plan.v1",
+    "franken-engine.swarm-resource-lease-plan.v1",
+    "franken-engine.remote-proof-gc-guard.v1",
+    "franken-engine.remote-proof-archive-pressure-scoreboard.v1"
+  ],
+  "truth_constraints": [
+    "The simulator must remain report-only and must not call br update, release reservations, or kill processes.",
+    "Missing or contradictory ownership evidence must force fail_closed instead of optimistic exchange simulation.",
+    "Manual confirmation and active-owner evidence must block automatic lease exchange.",
+    "Salvage-pinned archive evidence must prefer preserve-only outcomes over simulated eviction or forced cancellation."
+  ]
+}

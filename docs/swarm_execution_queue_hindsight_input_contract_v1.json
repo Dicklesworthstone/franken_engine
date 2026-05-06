@@ -1,0 +1,157 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-hindsight-input-normalizer-contract.v1",
+  "bead_id": "bd-p5j9g",
+  "parent_bead_id": "bd-d5daf",
+  "depends_on": [
+    "bd-7s7ui"
+  ],
+  "script": "scripts/swarm_execution_queue_hindsight_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_hindsight_normalizer_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_HINDSIGHT_NORMALIZER.md",
+  "parent_contract": "docs/swarm_execution_queue_hindsight_contract_v1.json",
+  "fixture_bundle": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json",
+  "input_schema_version": "franken-engine.swarm-execution-queue-hindsight-input.v1",
+  "normalizer_schema_version": "franken-engine.swarm-execution-queue-hindsight-normalizer.v1",
+  "report_schema_version": "franken-engine.swarm-execution-queue-hindsight-report.v1",
+  "evidence_ledger_schema_version": "franken-engine.swarm-execution-queue-hindsight-evidence-ledger.v1",
+  "counterfactual_candidate_schema_version": "franken-engine.swarm-execution-queue-counterfactual-candidates.v1",
+  "event_schema_version": "franken-engine.swarm-execution-queue-hindsight.event.v1",
+  "required_queue_inputs": [
+    {
+      "source_id": "queue_artifact_json",
+      "argument": "--queue-artifact-json",
+      "required": true
+    },
+    {
+      "source_id": "queue_run_manifest_json",
+      "argument": "--queue-run-manifest-json",
+      "required": true
+    },
+    {
+      "source_id": "normalized_queue_input_json",
+      "argument": "--normalized-queue-input-json",
+      "required": true
+    },
+    {
+      "source_id": "risk_budget_receipt_json",
+      "argument": "--risk-budget-receipt-json",
+      "required": true
+    },
+    {
+      "source_id": "bottleneck_report_json",
+      "argument": "--bottleneck-report-json",
+      "required": true
+    }
+  ],
+  "required_aftermath_inputs": [
+    {
+      "source_id": "bead_status_snapshot_json",
+      "argument": "--bead-status-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "bead_timing_snapshot_json",
+      "argument": "--bead-timing-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "owner_contact_snapshot_json",
+      "argument": "--owner-contact-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "reservation_friction_snapshot_json",
+      "argument": "--reservation-friction-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "proof_outcome_snapshot_json",
+      "argument": "--proof-outcome-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "checkpoint_restore_state_json",
+      "argument": "--checkpoint-restore-state-json",
+      "required": true
+    }
+  ],
+  "required_input_metadata": [
+    "schema_version",
+    "captured_epoch_seconds",
+    "source_revision",
+    "artifact_path",
+    "content_hash_hex",
+    "trust_state",
+    "freshness_state"
+  ],
+  "artifact_paths": {
+    "hindsight_input_json": "hindsight_input.json",
+    "hindsight_report_json": "hindsight_report.json",
+    "evidence_ledger_json": "evidence_ledger.json",
+    "counterfactual_candidates_json": "counterfactual_candidates.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_hindsight_row_fields": [
+    "task_id",
+    "recommended_rank",
+    "recommended_wave",
+    "recommended_first_action",
+    "actual_outcome",
+    "actual_start_delta_seconds",
+    "actual_close_delta_seconds",
+    "rank_delta",
+    "defer_reason",
+    "override_reason",
+    "owner_friction_outcome",
+    "reservation_friction_outcome",
+    "proof_outcome",
+    "checkpoint_restore_outcome",
+    "fidelity_class",
+    "drift_class",
+    "confidence_band",
+    "counterfactual_candidate"
+  ],
+  "fail_closed_rules": [
+    "missing required inputs fail closed",
+    "missing or contradictory required timestamps fail closed",
+    "unknown task references fail closed",
+    "duplicate task IDs in queue or aftermath snapshots fail closed",
+    "queue rows without first_action fail closed",
+    "inconsistent owner identity or reservation-holder evidence fails closed",
+    "local-rch fallback fails when promoted as healthy proof completion",
+    "checkpoint restore blocked or manual-review evidence remains visible in affected rows"
+  ],
+  "degraded_rules": [
+    "missing observed outcomes degrade into insufficient_evidence rows",
+    "stale owner contact evidence degrades owner friction",
+    "reservation contention degrades reservation friction",
+    "proof brownout degrades proof outcome confidence",
+    "checkpoint restore manual review degrades restore confidence"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_active_queue": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "selftest_scenarios": [
+    "healthy",
+    "stale_owner",
+    "proof_brownout",
+    "contradictory_owner",
+    "missing_outcome"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_hindsight_normalizer.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_hindsight_normalizer_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_hindsight_normalizer.sh scripts/e2e/swarm_execution_queue_hindsight_normalizer_smoke.sh",
+    "jq empty docs/swarm_execution_queue_hindsight_input_contract_v1.json scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_normalizer_smoke.sh selftest"
+  ]
+}

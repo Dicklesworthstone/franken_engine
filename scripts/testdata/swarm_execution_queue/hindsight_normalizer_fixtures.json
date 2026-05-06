@@ -1,0 +1,234 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-hindsight-normalizer-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "healthy",
+      "expected_decision": "pass",
+      "inputs": {
+        "queue_artifact_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+          "artifact_id": "queue-artifact-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/queue_artifact_json",
+          "content_hash_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000001,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "queue_issued_epoch_seconds": 1800000000,
+          "queue": [
+            {
+              "rank": 1,
+              "task_id": "bd-ready-a",
+              "wave": "ready_now",
+              "open_blocker_count": 0,
+              "ev_millionths": 725000,
+              "first_action": "claim bead and reserve focused proof files",
+              "fallback_trigger": "none"
+            }
+          ]
+        },
+        "queue_run_manifest_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-runner.v1",
+          "artifact_id": "queue-run-manifest-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/queue_run_manifest_json",
+          "content_hash_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000001,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "queue_issued_epoch_seconds": 1800000000,
+          "runner_invocation": {
+            "queue_depth": 8,
+            "epoch": 7,
+            "timestamp_ns": 777
+          }
+        },
+        "normalized_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "artifact_id": "normalized-queue-input-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/normalized_queue_input_json",
+          "content_hash_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000001,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "generated_epoch_seconds": 1800000000,
+          "tasks": [
+            {
+              "task_id": "bd-ready-a",
+              "title": "Ready execution queue lane",
+              "status": "open",
+              "priority": 1,
+              "assignee": "AgentA",
+              "depends_on": [],
+              "dependents": [
+                "bd-parent"
+              ],
+              "completed": false,
+              "open_blocker_count": 0,
+              "owner_freshness": {
+                "state": "fresh",
+                "last_active_age_seconds": 120
+              },
+              "reservation_pressure": {
+                "state": "clear",
+                "active_reservation_count": 0
+              },
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              },
+              "scores": {
+                "impact_millionths": 900000,
+                "confidence_millionths": 850000,
+                "reuse_millionths": 700000,
+                "effort_millionths": 220000,
+                "friction_millionths": 40000
+              },
+              "fallback_trigger": "none",
+              "first_action": "claim bead and reserve focused proof files"
+            }
+          ]
+        },
+        "risk_budget_receipt_json": {
+          "schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+          "artifact_id": "risk-budget-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/risk_budget_receipt_json",
+          "content_hash_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000001,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "risk_budget": {
+            "remaining_millionths": 900000,
+            "consumed_millionths": 100000,
+            "conservative_mode": false,
+            "conservative_threshold_millionths": 200000
+          }
+        },
+        "bottleneck_report_json": {
+          "schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+          "artifact_id": "bottleneck-report-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/bottleneck_report_json",
+          "content_hash_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000001,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "bottleneck_ids": [
+            "bd-ready-a"
+          ],
+          "critical_bottleneck_count": 0
+        },
+        "bead_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.bead-status.v1",
+          "artifact_id": "bead-status-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/bead_status_snapshot_json",
+          "content_hash_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "tasks": [
+            {
+              "task_id": "bd-ready-a",
+              "status": "closed",
+              "assignee": "AgentA",
+              "actual_outcome": "closed"
+            }
+          ]
+        },
+        "bead_timing_snapshot_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.bead-timing.v1",
+          "artifact_id": "bead-timing-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/bead_timing_snapshot_json",
+          "content_hash_hex": "7777777777777777777777777777777777777777777777777777777777777777",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "tasks": [
+            {
+              "task_id": "bd-ready-a",
+              "actual_started_epoch_seconds": 1800000100,
+              "actual_closed_epoch_seconds": 1800000200,
+              "actual_rank": 1,
+              "actual_outcome": "closed"
+            }
+          ]
+        },
+        "owner_contact_snapshot_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.owner-contact.v1",
+          "artifact_id": "owner-contact-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/owner_contact_snapshot_json",
+          "content_hash_hex": "8888888888888888888888888888888888888888888888888888888888888888",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "contacts": [
+            {
+              "task_id": "bd-ready-a",
+              "owner": "AgentA",
+              "owner_last_contact_epoch_seconds": 1800000250,
+              "owner_friction_outcome": "none"
+            }
+          ]
+        },
+        "reservation_friction_snapshot_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.reservation-friction.v1",
+          "artifact_id": "reservation-friction-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/reservation_friction_snapshot_json",
+          "content_hash_hex": "9999999999999999999999999999999999999999999999999999999999999999",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "reservations": []
+        },
+        "proof_outcome_snapshot_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.proof-outcome.v1",
+          "artifact_id": "proof-outcome-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/proof_outcome_snapshot_json",
+          "content_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "proofs": [
+            {
+              "task_id": "bd-ready-a",
+              "state": "remote_success",
+              "proof_outcome": "remote_success",
+              "local_fallback_detected": false
+            }
+          ]
+        },
+        "checkpoint_restore_state_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-hindsight.checkpoint-restore.v1",
+          "artifact_id": "checkpoint-restore-healthy",
+          "artifact_path": "scripts/testdata/swarm_execution_queue/hindsight_normalizer_fixtures.json#/healthy/checkpoint_restore_state_json",
+          "content_hash_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "source_revision": "fixture-rev",
+          "captured_epoch_seconds": 1800000300,
+          "trust_state": "primary",
+          "freshness_state": "fresh",
+          "observation_epoch_seconds": 1800000300,
+          "restores": [
+            {
+              "task_id": "bd-ready-a",
+              "state": "none",
+              "checkpoint_restore_outcome": "none",
+              "manual_review_required": false
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -101,7 +101,8 @@
     "dependency cycles fail closed",
     "malformed required br or bv shapes fail closed",
     "queue inputs without first_action fail closed",
-    "local-rch fallback cannot be promoted as successful proof health"
+    "local-rch fallback cannot be promoted as successful proof health",
+    "bv actionable items that remain blocked and absent from br ready fail closed"
   ],
   "degraded_rules": [
     "missing optional Agent Mail activity degrades owner freshness evidence",
@@ -124,6 +125,7 @@
     "stale_owner",
     "proof_brownout",
     "blocked_parent",
+    "bv_br_divergence",
     "bad_shape",
     "local_fallback",
     "cycle"

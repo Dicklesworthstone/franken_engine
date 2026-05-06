@@ -56,6 +56,9 @@ write_fixture_set() {
     blocked_parent)
       deps='["bd-child-contract"]'
       ;;
+    bv_br_divergence)
+      deps='["bd-child-contract"]'
+      ;;
     bad_shape)
       ;;
     local_fallback)
@@ -89,7 +92,7 @@ write_fixture_set() {
   elif [[ "$scenario" == "proof_brownout" ]]; then
     primary_id="bd-brownout-ready"
     primary_title="Broad proof lane during brownout"
-  elif [[ "$scenario" == "blocked_parent" ]]; then
+  elif [[ "$scenario" == "blocked_parent" || "$scenario" == "bv_br_divergence" ]]; then
     primary_id="bd-parent"
     primary_title="Parent blocked by contract child"
   elif [[ "$scenario" == "local_fallback" ]]; then
@@ -101,23 +104,27 @@ write_fixture_set() {
     primary_title="Cycle A"
   fi
 
-  write_json "${dir}/br_ready.json" "$(jq -n \
-    --arg id "$primary_id" \
-    --arg title "$primary_title" \
-    --arg status "$status" \
-    --arg assignee "$owner" \
-    --argjson priority "$priority" \
-    '[
-      {
-        id:$id,
-        title:$title,
-        status:$status,
-        priority:$priority,
-        assignee:$assignee
-      }
-    ]')"
+  if [[ "$scenario" == "bv_br_divergence" ]]; then
+    write_json "${dir}/br_ready.json" '[]'
+  else
+    write_json "${dir}/br_ready.json" "$(jq -n \
+      --arg id "$primary_id" \
+      --arg title "$primary_title" \
+      --arg status "$status" \
+      --arg assignee "$owner" \
+      --argjson priority "$priority" \
+      '[
+        {
+          id:$id,
+          title:$title,
+          status:$status,
+          priority:$priority,
+          assignee:$assignee
+        }
+      ]')"
+  fi
 
-  if [[ "$scenario" == "blocked_parent" ]]; then
+  if [[ "$scenario" == "blocked_parent" || "$scenario" == "bv_br_divergence" ]]; then
     write_json "${dir}/br_list.json" "$(jq -n \
       --argjson deps "$deps" \
       '{
@@ -351,15 +358,17 @@ run_selftest() {
   stale_dir="${tmp_root}/stale_owner"
   brownout_dir="${tmp_root}/proof_brownout"
   blocked_dir="${tmp_root}/blocked_parent"
+  divergence_dir="${tmp_root}/bv_br_divergence"
   bad_shape_dir="${tmp_root}/bad_shape"
   fallback_dir="${tmp_root}/local_fallback"
   cycle_dir="${tmp_root}/cycle"
-  mkdir -p "$healthy_dir" "$stale_dir" "$brownout_dir" "$blocked_dir" "$bad_shape_dir" "$fallback_dir" "$cycle_dir"
+  mkdir -p "$healthy_dir" "$stale_dir" "$brownout_dir" "$blocked_dir" "$divergence_dir" "$bad_shape_dir" "$fallback_dir" "$cycle_dir"
 
   write_fixture_set "$healthy_dir" healthy
   write_fixture_set "$stale_dir" stale_owner
   write_fixture_set "$brownout_dir" proof_brownout
   write_fixture_set "$blocked_dir" blocked_parent
+  write_fixture_set "$divergence_dir" bv_br_divergence
   write_fixture_set "$bad_shape_dir" bad_shape
   write_fixture_set "$fallback_dir" local_fallback
   write_fixture_set "$cycle_dir" cycle
@@ -410,6 +419,14 @@ run_selftest() {
     and any(.tasks[]?; .task_id == "bd-parent" and .open_blocker_count == 1 and .fallback_trigger == "blocked_parent")
   ' "${blocked_dir}/out/normalized_input.json" >/dev/null
   record_pass "blocked parent keeps ready child ahead of parent"
+
+  mkdir -p "${divergence_dir}/out"
+  expect_fail_closed "$divergence_dir" "${divergence_dir}/out"
+  jq -e '
+    .decision == "fail_closed"
+    and any(.fail_closed_reasons[]?; .kind == "bv_ready_snapshot_divergence" and .label == "bd-parent")
+  ' "${divergence_dir}/out/normalized_input.json" >/dev/null
+  record_pass "bv plan divergence against br ready fails closed"
 
   mkdir -p "${bad_shape_dir}/out"
   expect_fail_closed "$bad_shape_dir" "${bad_shape_dir}/out"

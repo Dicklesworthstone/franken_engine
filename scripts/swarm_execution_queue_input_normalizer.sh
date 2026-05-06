@@ -545,6 +545,18 @@ jq -n \
         + (if $cycle_detected then [{kind:"dependency_cycle",source:"br_list_json",label:"dependencies",detail:"dependency cycle detected in normalized task graph"}] else [] end)
         + ([$tasks[]? | select(.proof_transport.local_fallback_detected == true) | {kind:"local_rch_fallback_detected",source:"proof_transport_health_json",label:.task_id,detail:"local fallback cannot be promoted as successful proof health"}])
         + ([$tasks[]? | select((.first_action // "") == "") | {kind:"missing_first_action",source:"normalizer",label:.task_id,detail:"normalized task lacks operator first_action"}])
+        + ([$tasks[]?
+            | .task_id as $task_id
+            | select(($ctx.bv_ids | index($task_id)) != null)
+            | select(($ctx.ready_ids | index($task_id)) == null)
+            | select(.status == "open")
+            | select(.open_blocker_count > 0)
+            | {
+                kind:"bv_ready_snapshot_divergence",
+                source:"bv_actionable_plan_json",
+                label:$task_id,
+                detail:"bv actionable plan listed a blocked open task that is absent from br ready snapshot"
+              }])
       ) as $fail_closed_reasons
     | (
         $ctx.optional_missing

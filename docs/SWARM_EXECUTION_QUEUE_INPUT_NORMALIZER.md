@@ -49,8 +49,9 @@ freshness, reservation pressure, proof transport state, millionth-scale scores,
   stale owner, reservation conflict, or proof brownout requires operator
   caution.
 - `fail_closed`: the graph is empty, malformed, cyclic, references unknown
-  dependencies, lacks first actions, or attempts to treat local-rch fallback as
-  successful proof health.
+  dependencies, lacks first actions, attempts to treat local-rch fallback as
+  successful proof health, or contains a contradictory `bv` actionable item
+  that is still blocked and absent from `br ready`.
 
 ## Validation
 

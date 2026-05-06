@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-tuning-rollback-comparator-contract.v1",
+  "bead_id": "bd-j2rny.4",
+  "parent_bead_id": "bd-j2rny",
+  "depends_on": [
+    "bd-j2rny.2"
+  ],
+  "script": "scripts/swarm_execution_queue_tuning_rollback_comparator.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_TUNING_ROLLBACK_COMPARATOR.md",
+  "candidate_bundle_contract": "docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json",
+  "rollout_plan_schema_version": "franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1",
+  "current_policy_state_schema_version": "franken-engine.swarm-execution-queue-current-policy-state.v1",
+  "receipt_schema_version": "franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1",
+  "canary_verdict_ledger_schema_version": "franken-engine.swarm-execution-queue-canary-verdict-ledger.v1",
+  "required_inputs": [
+    {
+      "field": "candidate_bundle_json",
+      "argument": "--candidate-bundle-json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1"
+    },
+    {
+      "field": "rollout_plan_json",
+      "argument": "--rollout-plan-json",
+      "schema_version": "franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1"
+    },
+    {
+      "field": "current_policy_state_json",
+      "argument": "--current-policy-state-json",
+      "schema_version": "franken-engine.swarm-execution-queue-current-policy-state.v1"
+    }
+  ],
+  "verdicts": [
+    "better_than_current",
+    "worse_than_current",
+    "ambiguous_verdict",
+    "fail_closed"
+  ],
+  "fail_closed_rules": [
+    "missing hindsight/fidelity evidence fails closed",
+    "rollback reference mismatch fails closed",
+    "missing rollback material fails closed",
+    "stale current evidence fails closed",
+    "rollout plan bundle mismatch fails closed",
+    "autonomous scheduler mutation claims fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "mutation_policy": {
+    "planning_artifact_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "operator_wording_required": "advisory-only planning artifact"
+  },
+  "artifact_paths": {
+    "rollback_comparator_receipt_json": "rollback_comparator_receipt.json",
+    "canary_verdict_ledger_json": "canary_verdict_ledger.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "selftest_scenarios": [
+    "better_than_current",
+    "worse_than_current",
+    "ambiguous_verdict",
+    "missing_rollback_evidence"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_tuning_rollback_comparator.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_tuning_rollback_comparator.sh scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh",
+    "jq empty docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh selftest"
+  ]
+}

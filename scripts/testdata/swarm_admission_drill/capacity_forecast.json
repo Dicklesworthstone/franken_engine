@@ -1,0 +1,97 @@
+{
+  "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+  "decision": "pass",
+  "confidence_band": "high",
+  "summary": {
+    "overall_state": "degraded",
+    "brownout_state": "nominal",
+    "snapshot_age_seconds": 30,
+    "high_cost_command_count": 1,
+    "deferred_command_count": 1,
+    "contact_first_count": 0,
+    "blocked_categories": [],
+    "degraded_categories": [
+      "compile_pressure"
+    ]
+  },
+  "assumptions": [
+    "Drill fixtures are deterministic.",
+    "The budget planner remains fixture-fed."
+  ],
+  "inherited_snapshot_failures": {
+    "snapshot_decision": "pass",
+    "missing_required_fields": [],
+    "stale_inputs": [],
+    "contradictory_inputs": [],
+    "non_replayable_artifact_refs": []
+  },
+  "fail_closed_reasons": [],
+  "resolved_inputs": [],
+  "forecasts": {
+    "compile_pressure": {
+      "state": "degraded",
+      "risk_level": "medium",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {},
+      "recommended_action": "Keep proofs narrow."
+    },
+    "disk_memory_pressure": {
+      "state": "normal",
+      "risk_level": "low",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {},
+      "recommended_action": "Disk and memory are within budget."
+    },
+    "rch_degradation": {
+      "state": "normal",
+      "risk_level": "low",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {},
+      "recommended_action": "Remote execution is healthy."
+    },
+    "target_dir_heat": {
+      "state": "normal",
+      "risk_level": "low",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {},
+      "recommended_action": "Current target dir is acceptable."
+    },
+    "proof_availability": {
+      "state": "normal",
+      "risk_level": "low",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {},
+      "recommended_action": "Cached proofs are reusable."
+    },
+    "coordination_pressure": {
+      "state": "normal",
+      "risk_level": "low",
+      "confidence_band": "high",
+      "confidence_score_millionths": 900000,
+      "assumptions": [],
+      "evidence": {
+        "contradiction_count": 0,
+        "reservation_count": 1,
+        "contact_first_count": 0,
+        "safe_to_reopen_count": 0
+      },
+      "auto_reopen_allowed": true,
+      "lease_exchange_allowed": true,
+      "recommended_action": "Coordination signals are normal."
+    }
+  },
+  "artifact_paths": {
+    "swarm_capacity_forecast_json": "scripts/testdata/swarm_admission_drill/capacity_forecast.json",
+    "report_md": "scripts/testdata/swarm_admission_drill/capacity_forecast_report.md"
+  }
+}

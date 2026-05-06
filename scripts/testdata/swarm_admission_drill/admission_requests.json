@@ -1,0 +1,31 @@
+{
+  "schema_version": "franken-engine.swarm-admission-request-set.v1",
+  "requests": [
+    {
+      "request_id": "drill-protected-p1",
+      "agent_id": "AgentAlpha",
+      "bead_id": "bd-p1-proof-alpha",
+      "bead_priority": 1,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_admission_alpha cargo test -p frankenengine-engine --test semantic_dark_matter_pipeline -- --nocapture",
+      "heavy_rust": true,
+      "proof_obligation": true,
+      "speculative": false,
+      "planned_write_paths": [
+        "scripts/e2e/swarm_admission_drill.sh"
+      ]
+    },
+    {
+      "request_id": "drill-speculative-p3",
+      "agent_id": "AgentTheta",
+      "bead_id": "bd-p3-speculative-theta",
+      "bead_priority": 3,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_admission_theta cargo test -p frankenengine-engine --test speculative_theta -- --nocapture",
+      "heavy_rust": true,
+      "proof_obligation": false,
+      "speculative": true,
+      "planned_write_paths": [
+        "scripts/swarm_admission_budget_planner.sh"
+      ]
+    }
+  ]
+}

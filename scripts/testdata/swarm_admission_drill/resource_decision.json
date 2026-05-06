@@ -1,0 +1,5 @@
+{
+  "schema_version": "franken-engine.swarm-resource-decision.v1",
+  "decision": "admit",
+  "findings": []
+}

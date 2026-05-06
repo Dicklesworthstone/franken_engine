@@ -97,12 +97,15 @@ check_mode() {
   require_fixture "${fixture_dir}/reservations.json"
   require_fixture "${fixture_dir}/br_in_progress.json"
   require_fixture "${fixture_dir}/dirty_files.json"
+  require_fixture "${fixture_dir}/capacity_forecast.json"
+  require_fixture "${fixture_dir}/admission_requests.json"
   require_fixture "${fixture_dir}/proof_index.json"
   require_fixture "${fixture_dir}/freshness_hit.json"
   require_fixture "${fixture_dir}/freshness_stale.json"
   require_fixture "${fixture_dir}/qos_pending_requests.json"
   require_fixture "${fixture_dir}/qos_resource_leases.json"
   require_fixture "${fixture_dir}/qos_cost_history.json"
+  require_fixture "${fixture_dir}/resource_decision.json"
   require_fixture "${fixture_dir}/stale_agents.json"
   require_fixture "${fixture_dir}/stale_threads.json"
   require_fixture "${fixture_dir}/stale_reservations.json"
@@ -113,11 +116,16 @@ check_mode() {
   scope_file="$(mktemp "${TMPDIR:-/tmp}/swarm-admission-drill-rch-scope.XXXXXX")"
   printf '%s\n' \
     "scripts/e2e/swarm_admission_drill.sh" \
+    "scripts/swarm_admission_budget_planner.sh" \
+    "docs/SWARM_ADMISSION_BUDGET_PLANNER.md" \
     "docs/SWARM_ADMISSION_DRILL.md" \
     "scripts/testdata/swarm_admission_drill/agents.json" \
+    "scripts/testdata/swarm_admission_drill/admission_requests.json" \
+    "scripts/testdata/swarm_admission_drill/capacity_forecast.json" \
     "scripts/testdata/swarm_admission_drill/qos_pending_requests.json" \
     "scripts/testdata/swarm_admission_drill/qos_resource_leases.json" \
-    "scripts/testdata/swarm_admission_drill/proof_index.json" >"$scope_file"
+    "scripts/testdata/swarm_admission_drill/proof_index.json" \
+    "scripts/testdata/swarm_admission_drill/resource_decision.json" >"$scope_file"
   "${root_dir}/scripts/rch_policy_compliance_gate.sh" \
     --output-dir "${TMPDIR:-/tmp}/swarm-admission-drill-rch-policy" \
     --scope-file "$scope_file" >/dev/null
@@ -125,7 +133,7 @@ check_mode() {
 }
 
 run_mode() {
-  local resource_dir proof_dir qos_dir stale_dir contaminated_dir
+  local resource_dir proof_dir qos_dir stale_dir contaminated_dir budget_dir
   local contamination_exit contamination_output
 
   mkdir -p "$run_dir"
@@ -137,6 +145,7 @@ run_mode() {
   qos_dir="${run_dir}/qos-batch"
   stale_dir="${run_dir}/stale-lock"
   contaminated_dir="${run_dir}/staged-contamination"
+  budget_dir="${run_dir}/admission-budget"
 
   "${root_dir}/scripts/swarm_resource_lease_planner.sh" \
     --agent-id AgentAlpha \
@@ -177,6 +186,13 @@ run_mode() {
     --stale-owner-seconds 1000 \
     --output-dir "$stale_dir" >/dev/null
 
+  bash "${root_dir}/scripts/swarm_admission_budget_planner.sh" \
+    --capacity-forecast-json "${fixture_dir}/capacity_forecast.json" \
+    --admission-requests-json "${fixture_dir}/admission_requests.json" \
+    --resource-decision-json "${fixture_dir}/resource_decision.json" \
+    --resource-lease-plan-json "${resource_dir}/resource_lease_plan.json" \
+    --output-dir "$budget_dir" >/dev/null
+
   set +e
   contamination_output="$(
     "${root_dir}/scripts/staged_ownership_contamination_guard.sh" \
@@ -202,6 +218,7 @@ run_mode() {
     --arg qos_plan "${qos_dir}/build_storm_batch_plan.json" \
     --arg stale_report "${stale_dir}/stale_lock_recommendations.json" \
     --arg contamination_report "${contaminated_dir}/staged_ownership_report.json" \
+    --arg budget_report "${budget_dir}/swarm_admission_budget_plan.json" \
     --arg events_path "$events_path" \
     --arg commands_path "$commands_path" \
     --arg report_md "$report_md" \
@@ -211,6 +228,7 @@ run_mode() {
     --slurpfile qos "${qos_dir}/build_storm_batch_plan.json" \
     --slurpfile stale "${stale_dir}/stale_lock_recommendations.json" \
     --slurpfile contamination "${contaminated_dir}/staged_ownership_report.json" \
+    --slurpfile budget "${budget_dir}/swarm_admission_budget_plan.json" \
     '{
       schema_version: $schema_version,
       drill_decision: "pass",
@@ -219,7 +237,8 @@ run_mode() {
         proof_cache_plan_json: $proof_plan,
         build_storm_batch_plan_json: $qos_plan,
         stale_lock_recommendations_json: $stale_report,
-        staged_ownership_report_json: $contamination_report
+        staged_ownership_report_json: $contamination_report,
+        swarm_admission_budget_plan_json: $budget_report
       },
       drill_observations: {
         admitted_heavy_proof: ($resource[0].lease_decision == "admit"),
@@ -227,7 +246,9 @@ run_mode() {
         stale_proof_refresh: (($proof[0].required_refreshes | length) >= 1),
         deferred_noisy_agent: (any($qos[0].deferred_commands[]?; .fairness_reason | contains("agent fairness throttle"))),
         stale_lock_contact_first: (($stale[0].contact_first | length) >= 1),
-        staged_contamination_rejection: ($contamination[0].decision == "fail_closed")
+        staged_contamination_rejection: ($contamination[0].decision == "fail_closed"),
+        protected_priority_budget: (any($budget[0].recommendations[]?; ((.priority_class == "P1") or (.priority_class == "P2")) and (.decision != "defer"))),
+        speculative_work_deferred: (any($budget[0].recommendations[]?; (.speculative == true) and (.decision == "defer")))
       },
       summary: {
         admitted_commands: ($qos[0].admitted_commands | length),
@@ -235,7 +256,10 @@ run_mode() {
         cache_hits: ($proof[0].cache_hit_artifacts | length),
         refreshes: ($proof[0].required_refreshes | length),
         stale_contact_first: ($stale[0].contact_first | length),
-        contamination_offenders: ($contamination[0].offending_paths | length)
+        contamination_offenders: ($contamination[0].offending_paths | length),
+        budget_admitted: ($budget[0].summary.admitted_count // 0),
+        budget_admit_narrow: ($budget[0].summary.admitted_narrow_count // 0),
+        budget_deferred: ($budget[0].summary.deferred_count // 0)
       },
       artifact_paths: {
         swarm_admission_drill_report_json: $report_json,
@@ -288,6 +312,7 @@ replay_mode() {
     and (.child_artifacts.build_storm_batch_plan_json | length > 0)
     and (.child_artifacts.stale_lock_recommendations_json | length > 0)
     and (.child_artifacts.staged_ownership_report_json | length > 0)
+    and (.child_artifacts.swarm_admission_budget_plan_json | length > 0)
   ' "$replay_report" >/dev/null
   while IFS= read -r child_path; do
     test -f "$child_path"

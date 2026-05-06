@@ -1,0 +1,54 @@
+{
+  "schema_version": "franken-engine.swarm-admission-budget-planner-contract.v1",
+  "plan_schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+  "producer_script": "scripts/swarm_admission_budget_planner.sh",
+  "contract_doc": "docs/SWARM_ADMISSION_BUDGET_PLANNER.md",
+  "required_args": [
+    "--capacity-forecast-json",
+    "--admission-requests-json"
+  ],
+  "optional_args": [
+    "--validation-plan-json",
+    "--resource-decision-json",
+    "--resource-lease-plan-json",
+    "--source-revision",
+    "--output-dir"
+  ],
+  "required_output_fields": [
+    "decision",
+    "budget_profile",
+    "protected_priority_classes",
+    "budget_policy.max_focused_heavy_total",
+    "budget_policy.max_admitted_requests_per_agent",
+    "priority_budgets",
+    "agent_budgets",
+    "recommendations",
+    "summary.requested_count",
+    "summary.admitted_count",
+    "summary.admitted_narrow_count",
+    "summary.deferred_count",
+    "artifact_paths.swarm_admission_budget_plan_json",
+    "artifact_paths.report_md"
+  ],
+  "fixture_cases": [
+    "fair_share",
+    "high_pressure",
+    "rch_degraded",
+    "disk_pressure",
+    "active_owner",
+    "stale_lock",
+    "forecast_unavailable_safe_mode"
+  ],
+  "compatibility_contracts": [
+    "franken-engine.swarm-capacity-forecast.v1",
+    "franken-engine.swarm-validation-plan.v1",
+    "franken-engine.swarm-resource-decision.v1",
+    "franken-engine.swarm-resource-lease-plan.v1"
+  ],
+  "truth_constraints": [
+    "The planner must remain fixture-fed and must not query live services or mutate tracker state.",
+    "The planner must not execute the recommended commands or allocate live workers.",
+    "Forecast safe mode must preserve protected P1 and P2 proof work as admit_narrow while deferring speculative work.",
+    "Active-owner and stale-lock coordination blockers must never auto-admit write-expanding requests."
+  ]
+}

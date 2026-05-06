@@ -29,6 +29,14 @@
     "producer_integration": false,
     "handoff_note": "The standalone capacity forecaster consumes the telemetry snapshot plus its normalized child artifacts to publish deterministic confidence-banded risk categories. The current swarm_operator_status_report producer does not emit this forecast yet."
   },
+  "admission_budget_planner": {
+    "script": "scripts/swarm_admission_budget_planner.sh",
+    "plan_schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+    "contract_json": "docs/swarm_admission_budget_planner_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone admission budget planner consumes the predictive capacity forecast plus bounded request fixtures to publish deterministic per-priority and per-agent admission budgets. The current swarm_operator_status_report producer does not emit this budget plan yet."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -59,6 +67,7 @@
     "franken-engine.swarm-resource-lease-plan.v1",
     "franken-engine.proof-reuse-cache-plan.v1",
     "franken-engine.build-storm-batch-plan.v1",
+    "franken-engine.swarm-admission-budget-plan.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1"
   ],
@@ -75,6 +84,7 @@
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
     "The telemetry snapshot normalizer is a fixture-only extension point; it must not be described as live scheduling or worker mutation.",
-    "The capacity forecaster is a fixture-only extension point; it must not be described as live admission control or automatic worker mutation."
+    "The capacity forecaster is a fixture-only extension point; it must not be described as live admission control or automatic worker mutation.",
+    "The admission budget planner is a fixture-only extension point; it must not be described as live worker allocation or automatic queue mutation."
   ]
 }

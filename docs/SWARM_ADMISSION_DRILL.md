@@ -15,6 +15,7 @@ The drill invokes:
 - `scripts/swarm_resource_lease_planner.sh`
 - `scripts/proof_reuse_cache_planner.sh`
 - `scripts/build_storm_qos_batch_planner.sh`
+- `scripts/swarm_admission_budget_planner.sh`
 - `scripts/stale_lock_stalled_bead_recommender.sh`
 - `scripts/staged_ownership_contamination_guard.sh`
 
@@ -31,6 +32,8 @@ The combined report fails unless it sees:
 - one deferred noisy agent
 - one stale-lock contact-first recommendation
 - one staged contamination rejection
+- one protected-priority budget recommendation that survives pressure
+- one speculative request deferred by the budget planner
 
 Replay mode validates an existing artifact bundle without rerunning child gates:
 

@@ -40,6 +40,16 @@ compile pressure, disk and memory pressure, `rch` degradation, target-dir heat,
 proof availability, and coordination pressure. It is also fixture-only and must
 not be described as live admission control or automatic worker mutation.
 
+The forecast can then feed a standalone admission budget planner:
+
+- Script: `scripts/swarm_admission_budget_planner.sh`
+- Plan schema: `franken-engine.swarm-admission-budget-plan.v1`
+- Static contract: `docs/swarm_admission_budget_planner_contract_v1.json`
+
+That planner publishes deterministic per-priority and per-agent dry-run
+admission budgets. It remains fixture-only and must not be described as live
+worker allocation, queue mutation, or automatic bead claiming.
+
 ## Dashboard Sections
 
 The `predictive_dashboard` object contains bounded sections for renderer
@@ -107,4 +117,14 @@ bash -n scripts/e2e/swarm_capacity_forecaster_smoke.sh
 ./scripts/e2e/swarm_capacity_forecaster_smoke.sh check
 ./scripts/e2e/swarm_capacity_forecaster_smoke.sh selftest
 jq empty docs/swarm_capacity_forecaster_contract_v1.json
+```
+
+When changing the admission budget planner extension, also run:
+
+```bash
+bash -n scripts/swarm_admission_budget_planner.sh
+bash -n scripts/e2e/swarm_admission_budget_planner_smoke.sh
+./scripts/e2e/swarm_admission_budget_planner_smoke.sh check
+./scripts/e2e/swarm_admission_budget_planner_smoke.sh selftest
+jq empty docs/swarm_admission_budget_planner_contract_v1.json
 ```

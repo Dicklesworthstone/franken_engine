@@ -100,6 +100,58 @@ write_healthy_fixtures() {
   jq -n '{collision_risk:"none", conflicting_agents:[], safe_alternatives:["scripts/swarm_operator_status_report.sh"], reservation_recommendations:[], conflicts:{reservations:[], dirty:[], in_progress:[]}}' >"${fixture_dir}/collision_receipt.json"
   jq -n '{schema_version:"franken-engine.proof-freshness-decay-report.v1", proof_artifact_id:"proof-current", freshness_state:"fresh", reusable:true, reason:"proof artifact is reusable", recommended_next_action:"Reuse the proof artifact.", covered_paths:["scripts/swarm_operator_status_report.sh"], changed_paths:[]}' >"${fixture_dir}/proof_freshness.json"
   jq -n '{status:"not_provided", failure_kind:"none", retry_safety:"not_required", recommended_next_action:"No rch incident packet was provided."}' >"${fixture_dir}/rch_incident_packet.json"
+  jq -n '{
+    schema_version:"franken-engine.swarm-resource-lease-plan.v1",
+    agent_id:"ScarletOwl",
+    bead_id:"bd-h3hrc",
+    requested_command:"bash -n scripts/swarm_operator_status_report.sh",
+    target_dir:"/tmp/rch_target_franken_engine_operator_status",
+    lease_decision:"admit",
+    lease_ttl_seconds:1800,
+    reason:"lease admitted",
+    safe_alternatives:[],
+    assigned_worker:"worker-alpha",
+    findings:[{severity:"info", code:"lease_admitted", message:"lease admitted"}]
+  }' >"${fixture_dir}/resource_lease_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.proof-reuse-cache-plan.v1",
+    expected_source_revision:"smoke-rev",
+    proof_cache_decision:"cache_hit",
+    reason:"all requested proof artifacts are safely reusable",
+    cache_hit_artifacts:[{bead_id:"bd-h3hrc", artifact_id:"operator-status-golden", artifact_path:"scripts/testdata/goldens/swarm_operator_status_report_healthy.golden"}],
+    required_refreshes:[],
+    invalid_artifacts:[],
+    invalidated_paths:[],
+    refresh_commands:[],
+    summary:{cache_hit_count:1, refresh_count:0, invalid_count:0}
+  }' >"${fixture_dir}/proof_cache_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.build-storm-batch-plan.v1",
+    batch_id:"batch-healthy",
+    batch_decision:"planned",
+    fairness_reason:"all pending requests fit within fairness and worker capacity",
+    max_parallel_heavy:2,
+    retry_after_seconds:0,
+    admitted_commands:[{request_id:"status-shell", agent_id:"ScarletOwl", bead_id:"bd-h3hrc", command:"bash -n scripts/swarm_operator_status_report.sh", heavy:false, batch_decision:"admit", fairness_reason:"admitted as light validation outside heavy capacity"}],
+    deferred_commands:[]
+  }' >"${fixture_dir}/qos_batch_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.stale-lock-recommendations.v1",
+    stale_lock_recommendations:[],
+    safe_to_reopen:[],
+    contact_first:[]
+  }' >"${fixture_dir}/stale_lock_recommendations.json"
+  jq -n '{
+    schema_version:"franken-engine.staged-ownership-report.v1",
+    agent_id:"ScarletOwl",
+    bead_id:"bd-h3hrc",
+    decision:"pass",
+    staged_path_count:4,
+    offender_count:0,
+    scoped_beads_issue_ids:["bd-h3hrc"],
+    offending_paths:[],
+    findings:[]
+  }' >"${fixture_dir}/staged_ownership_report.json"
 }
 
 write_degraded_fixtures() {
@@ -197,6 +249,66 @@ write_collision_risk_fixtures() {
   }' >"${fixture_dir}/collision_receipt.json"
 }
 
+write_overloaded_fixtures() {
+  local fixture_dir="$1"
+
+  write_healthy_fixtures "$fixture_dir"
+  jq -n '{
+    schema_version:"franken-engine.swarm-resource-lease-plan.v1",
+    agent_id:"ScarletOwl",
+    bead_id:"bd-h3hrc",
+    requested_command:"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_overloaded cargo test -p frankenengine-engine --test overloaded_swarm",
+    target_dir:"/tmp/rch_target_franken_engine_overloaded",
+    lease_decision:"defer",
+    lease_ttl_seconds:1800,
+    reason:"no rch worker has the requested CPU and memory lease available",
+    safe_alternatives:["Run shell/docs gates now and retry the heavy proof when a worker is idle."],
+    assigned_worker:"none",
+    findings:[{severity:"warning", code:"all_workers_busy", message:"no rch worker has the requested CPU and memory lease available"}]
+  }' >"${fixture_dir}/resource_lease_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.proof-reuse-cache-plan.v1",
+    expected_source_revision:"smoke-rev",
+    proof_cache_decision:"refresh_required",
+    reason:"all matching proof artifacts require refresh before reuse",
+    cache_hit_artifacts:[],
+    required_refreshes:[{bead_id:"bd-h3hrc", artifact_id:"operator-status-golden", refresh_reason:"source paths changed"}],
+    invalid_artifacts:[],
+    invalidated_paths:["scripts/swarm_operator_status_report.sh"],
+    refresh_commands:["rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e"],
+    summary:{cache_hit_count:0, refresh_count:1, invalid_count:0}
+  }' >"${fixture_dir}/proof_cache_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.build-storm-batch-plan.v1",
+    batch_id:"batch-overloaded",
+    batch_decision:"all_deferred",
+    fairness_reason:"all requests deferred by worker capacity, resource leases, or fairness gates",
+    max_parallel_heavy:0,
+    retry_after_seconds:300,
+    admitted_commands:[],
+    deferred_commands:[
+      {request_id:"heavy-proof-a", agent_id:"ScarletOwl", bead_id:"bd-h3hrc", command:"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_a cargo test -p frankenengine-engine --test heavy_a", heavy:true, batch_decision:"defer", fairness_reason:"all rch workers busy; no heavy validation slots available", retry_after_seconds:300},
+      {request_id:"heavy-proof-b", agent_id:"CyanOak", bead_id:"bd-vnkan", command:"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_b cargo test -p frankenengine-engine --test heavy_b", heavy:true, batch_decision:"defer", fairness_reason:"all rch workers busy; no heavy validation slots available", retry_after_seconds:300}
+    ]
+  }' >"${fixture_dir}/qos_batch_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.stale-lock-recommendations.v1",
+    stale_lock_recommendations:[{
+      bead_id:"bd-high-priority-stalled",
+      title:"High priority stalled bead",
+      priority:1,
+      assignee:"AgentTau",
+      safe_to_reopen:false,
+      contact_first:true,
+      recommendation:"contact_first_high_priority",
+      suggested_br_commands:[],
+      contact_commands:["fetch inbox and thread messages for bd-high-priority-stalled", "send Agent Mail contact-first message to AgentTau"]
+    }],
+    safe_to_reopen:[],
+    contact_first:["bd-high-priority-stalled"]
+  }' >"${fixture_dir}/stale_lock_recommendations.json"
+}
+
 run_case() {
   local case_name="$1"
   local expected_status="$2"
@@ -226,11 +338,21 @@ run_case() {
     collision_risk)
       write_collision_risk_fixtures "$fixture_dir"
       ;;
+    overloaded)
+      write_overloaded_fixtures "$fixture_dir"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
       ;;
   esac
+
+  local extra_args=()
+  [[ -f "${fixture_dir}/resource_lease_plan.json" ]] && extra_args+=(--resource-lease-plan-json "${fixture_dir}/resource_lease_plan.json")
+  [[ -f "${fixture_dir}/proof_cache_plan.json" ]] && extra_args+=(--proof-cache-plan-json "${fixture_dir}/proof_cache_plan.json")
+  [[ -f "${fixture_dir}/qos_batch_plan.json" ]] && extra_args+=(--qos-batch-plan-json "${fixture_dir}/qos_batch_plan.json")
+  [[ -f "${fixture_dir}/stale_lock_recommendations.json" ]] && extra_args+=(--stale-lock-recommendations-json "${fixture_dir}/stale_lock_recommendations.json")
+  [[ -f "${fixture_dir}/staged_ownership_report.json" ]] && extra_args+=(--staged-ownership-report-json "${fixture_dir}/staged_ownership_report.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -251,7 +373,8 @@ run_case() {
     --dirty-files-json "${fixture_dir}/dirty_files.json" \
     --collision-receipt-json "${fixture_dir}/collision_receipt.json" \
     --proof-freshness-json "${fixture_dir}/proof_freshness.json" \
-    --rch-incident-packet-json "${fixture_dir}/rch_incident_packet.json" >/dev/null
+    --rch-incident-packet-json "${fixture_dir}/rch_incident_packet.json" \
+    "${extra_args[@]}" >/dev/null
 
   jq -e --arg expected_status "$expected_status" '
     .schema_version == "franken-engine.swarm-operator-status-report.v1"
@@ -268,6 +391,11 @@ run_case() {
     and (.predictive_dashboard.collision_risk.risk | type == "string")
     and (.predictive_dashboard.proof_freshness.state | type == "string")
     and (.predictive_dashboard.rch_incidents.incidents | type == "array")
+    and (.predictive_dashboard.resource_leases.lease_decision | type == "string")
+    and (.predictive_dashboard.proof_cache.proof_cache_decision | type == "string")
+    and (.predictive_dashboard.qos_batches.batch_decision | type == "string")
+    and (.predictive_dashboard.stale_lock_recommendations.recommendation_count | type == "number")
+    and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -279,12 +407,22 @@ run_case() {
         and .predictive_dashboard.collision_risk.risk == "none"
         and .predictive_dashboard.proof_freshness.state == "fresh"
         and .predictive_dashboard.rch_incidents.status == "none"
+        and .predictive_dashboard.resource_leases.lease_decision == "admit"
+        and .predictive_dashboard.proof_cache.proof_cache_decision == "cache_hit"
+        and .predictive_dashboard.qos_batches.deferred_count == 0
+        and .predictive_dashboard.stale_lock_recommendations.contact_first_count == 0
+        and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
     degraded)
       jq -e '
         .predictive_dashboard.rch_incidents.status == "degraded"
         and any(.degraded[]; .component == "rch_incident_packet")
+        and .predictive_dashboard.resource_leases.artifact_status == "missing"
+        and .predictive_dashboard.proof_cache.artifact_status == "missing"
+        and .predictive_dashboard.qos_batches.artifact_status == "missing"
+        and .predictive_dashboard.stale_lock_recommendations.artifact_status == "missing"
+        and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
     stale_proof)
@@ -306,6 +444,17 @@ run_case() {
         .predictive_dashboard.collision_risk.risk == "reserved_overlap"
         and (.predictive_dashboard.collision_risk.conflicting_agents | index("CyanOak"))
         and any(.degraded[]; .component == "collision_risk")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    overloaded)
+      jq -e '
+        .predictive_dashboard.resource_leases.lease_decision == "defer"
+        and .predictive_dashboard.proof_cache.proof_cache_decision == "refresh_required"
+        and .predictive_dashboard.qos_batches.batch_decision == "all_deferred"
+        and .predictive_dashboard.qos_batches.deferred_count == 2
+        and .predictive_dashboard.stale_lock_recommendations.contact_first_count == 1
+        and .predictive_dashboard.staged_contamination.decision == "pass"
+        and any(.degraded[]; .component == "qos_batches")
       ' "${output_dir}/status.json" >/dev/null
       ;;
   esac
@@ -335,6 +484,7 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("stale_proof"))
     and (.golden_fixture_cases | index("high_cost"))
     and (.golden_fixture_cases | index("collision_risk"))
+    and (.golden_fixture_cases | index("overloaded"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -361,6 +511,7 @@ run_selftest() {
   run_case "stale_proof" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "high_cost" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "collision_risk" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "overloaded" "degraded" "ok" "degraded" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

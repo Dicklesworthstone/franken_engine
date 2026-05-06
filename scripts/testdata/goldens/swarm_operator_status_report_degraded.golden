@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 10,
+    "degraded_count": 15,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -27,7 +27,16 @@
     "dirty_reserved_count": 1,
     "blocked_bead_count": 1,
     "collision_risk": "none",
-    "rch_incident_count": 1
+    "rch_incident_count": 1,
+    "resource_lease_decision": "missing",
+    "proof_cache_decision": "missing",
+    "qos_batch_decision": "missing",
+    "qos_admitted_count": 0,
+    "qos_deferred_count": 0,
+    "stale_lock_safe_to_reopen_count": 0,
+    "stale_lock_contact_first_count": 0,
+    "staged_contamination_decision": "missing",
+    "staged_contamination_offender_count": 0
   },
   "services": {
     "agent_mail": "missing",
@@ -172,13 +181,89 @@
         }
       ]
     },
+    "resource_leases": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "lease_decision": "missing",
+      "reason": "No resource lease plan was provided.",
+      "agent_id": null,
+      "bead_id": null,
+      "requested_command": null,
+      "target_dir": null,
+      "assigned_worker": null,
+      "safe_alternatives": [],
+      "findings": [],
+      "actionable_commands": [
+        "./scripts/swarm_resource_lease_planner.sh --agent-id <agent-id> --bead-id <bead-id> --requested-command <command> --target-dir <target-dir>"
+      ]
+    },
+    "proof_cache": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "proof_cache_decision": "missing",
+      "reason": "No proof cache plan was provided.",
+      "cache_hit_count": 0,
+      "refresh_count": 0,
+      "invalid_count": 0,
+      "cache_hit_artifacts": [],
+      "required_refreshes": [],
+      "invalid_artifacts": [],
+      "invalidated_paths": [],
+      "refresh_commands": [],
+      "actionable_commands": [
+        "./scripts/proof_reuse_cache_planner.sh --proof-index-json <proof-index.json> --freshness-report <freshness.json>"
+      ]
+    },
+    "qos_batches": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "batch_id": null,
+      "batch_decision": "missing",
+      "fairness_reason": "No build-storm QoS batch plan was provided.",
+      "max_parallel_heavy": null,
+      "retry_after_seconds": 0,
+      "admitted_count": 0,
+      "deferred_count": 0,
+      "admitted_commands": [],
+      "deferred_commands": [],
+      "actionable_commands": [
+        "./scripts/build_storm_qos_batch_planner.sh --pending-requests-json <pending.json> --resource-lease-plans-json <leases.json> --proof-cost-history-json <costs.json> --rch-workers-json <workers.json>"
+      ]
+    },
+    "stale_lock_recommendations": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "recommendation_count": 0,
+      "safe_to_reopen_count": 0,
+      "contact_first_count": 0,
+      "safe_to_reopen": [],
+      "contact_first": [],
+      "recommendations": [],
+      "actionable_commands": [
+        "./scripts/stale_lock_stalled_bead_recommender.sh --in-progress-json <in-progress.json>"
+      ]
+    },
+    "staged_contamination": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "decision": "missing",
+      "staged_path_count": 0,
+      "offender_count": 0,
+      "scoped_beads_issue_ids": [],
+      "offending_paths": [],
+      "findings": [],
+      "actionable_commands": [
+        "./scripts/staged_ownership_contamination_guard.sh --agent-id <agent-id> --bead-id <bead-id> --allowed-path <path>"
+      ]
+    },
     "fixture_contract": {
       "golden_cases": [
         "healthy",
         "degraded",
         "stale_proof",
         "high_cost",
-        "collision_risk"
+        "collision_risk",
+        "overloaded"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -238,6 +323,36 @@
       "status": "blocked",
       "impact": "bd-blocked is blocked in the bv track",
       "remediation": "Inspect dependencies before recommending this bead."
+    },
+    {
+      "component": "resource_leases",
+      "status": "missing",
+      "impact": "resource lease admission artifact is missing",
+      "remediation": "Provide --resource-lease-plan-json before publishing the operator status feed."
+    },
+    {
+      "component": "proof_cache",
+      "status": "missing",
+      "impact": "proof reuse cache artifact is missing",
+      "remediation": "Provide --proof-cache-plan-json before reusing prior proof artifacts."
+    },
+    {
+      "component": "qos_batches",
+      "status": "missing",
+      "impact": "build-storm QoS batch artifact is missing",
+      "remediation": "Provide --qos-batch-plan-json before publishing admission state."
+    },
+    {
+      "component": "stale_lock_recommendations",
+      "status": "missing",
+      "impact": "stale-lock recommendation artifact is missing",
+      "remediation": "Provide --stale-lock-recommendations-json before reopening stalled beads."
+    },
+    {
+      "component": "staged_contamination",
+      "status": "missing",
+      "impact": "staged ownership guard artifact is missing",
+      "remediation": "Provide --staged-ownership-report-json before commit or closeout."
     },
     {
       "component": "rch_incident_packet",

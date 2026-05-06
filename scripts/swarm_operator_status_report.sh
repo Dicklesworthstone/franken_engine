@@ -23,6 +23,11 @@ dirty_files_json=""
 collision_receipt_json=""
 proof_freshness_json=""
 rch_incident_packet_json=""
+resource_lease_plan_json=""
+proof_cache_plan_json=""
+qos_batch_plan_json=""
+stale_lock_recommendations_json=""
+staged_ownership_report_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -53,6 +58,11 @@ Options:
   --collision-receipt-json FILE
   --proof-freshness-json FILE
   --rch-incident-packet-json FILE
+  --resource-lease-plan-json FILE
+  --proof-cache-plan-json FILE
+  --qos-batch-plan-json FILE
+  --stale-lock-recommendations-json FILE
+  --staged-ownership-report-json FILE
 EOF
 }
 
@@ -146,6 +156,26 @@ while [[ "$#" -gt 0 ]]; do
       rch_incident_packet_json="$2"
       shift 2
       ;;
+    --resource-lease-plan-json)
+      resource_lease_plan_json="$2"
+      shift 2
+      ;;
+    --proof-cache-plan-json)
+      proof_cache_plan_json="$2"
+      shift 2
+      ;;
+    --qos-batch-plan-json)
+      qos_batch_plan_json="$2"
+      shift 2
+      ;;
+    --stale-lock-recommendations-json)
+      stale_lock_recommendations_json="$2"
+      shift 2
+      ;;
+    --staged-ownership-report-json)
+      staged_ownership_report_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -200,6 +230,21 @@ dirty_files_data="$(json_or_default "$dirty_files_json" '[]' 'dirty-files')"
 collision_receipt_data="$(json_or_default "$collision_receipt_json" '{"collision_risk":"none","conflicting_agents":[],"safe_alternatives":[],"reservation_recommendations":[],"conflicts":{"reservations":[],"dirty":[],"in_progress":[]}}' 'collision-receipt')"
 proof_freshness_data="$(json_or_default "$proof_freshness_json" '{"freshness_state":"not_provided","reusable":null,"reason":"No proof freshness report was provided.","recommended_next_action":"Provide a proof freshness report before reusing prior proof artifacts."}' 'proof-freshness')"
 rch_incident_packet_data="$(json_or_default "$rch_incident_packet_json" '{"status":"not_provided","failure_kind":"none","retry_safety":"not_required","recommended_next_action":"No rch incident packet was provided."}' 'rch-incident-packet')"
+resource_lease_plan_status="missing"
+proof_cache_plan_status="missing"
+qos_batch_plan_status="missing"
+stale_lock_recommendations_status="missing"
+staged_ownership_report_status="missing"
+if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
+if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
+if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
+if [[ -n "$stale_lock_recommendations_json" ]]; then stale_lock_recommendations_status="provided"; fi
+if [[ -n "$staged_ownership_report_json" ]]; then staged_ownership_report_status="provided"; fi
+resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
+proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
+qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
+stale_lock_recommendations_data="$(json_or_default "$stale_lock_recommendations_json" '{"schema_version":"franken-engine.stale-lock-recommendations.v1","stale_lock_recommendations":[],"safe_to_reopen":[],"contact_first":[]}' 'stale-lock-recommendations')"
+staged_ownership_report_data="$(json_or_default "$staged_ownership_report_json" '{"schema_version":"franken-engine.staged-ownership-report.v1","decision":"missing","offender_count":0,"offending_paths":[],"findings":[]}' 'staged-ownership-report')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -209,6 +254,11 @@ jq -n \
   --arg agent_mail_status "$agent_mail_status" \
   --arg rch_status "$rch_status" \
   --arg proof_index_status "$proof_index_status" \
+  --arg resource_lease_plan_status "$resource_lease_plan_status" \
+  --arg proof_cache_plan_status "$proof_cache_plan_status" \
+  --arg qos_batch_plan_status "$qos_batch_plan_status" \
+  --arg stale_lock_recommendations_status "$stale_lock_recommendations_status" \
+  --arg staged_ownership_report_status "$staged_ownership_report_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -225,6 +275,11 @@ jq -n \
   --argjson collision_receipt "$collision_receipt_data" \
   --argjson proof_freshness "$proof_freshness_data" \
   --argjson rch_incident_packet "$rch_incident_packet_data" \
+  --argjson resource_lease_plan "$resource_lease_plan_data" \
+  --argjson proof_cache_plan "$proof_cache_plan_data" \
+  --argjson qos_batch_plan "$qos_batch_plan_data" \
+  --argjson stale_lock_recommendations "$stale_lock_recommendations_data" \
+  --argjson staged_ownership_report "$staged_ownership_report_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -242,6 +297,8 @@ jq -n \
     {action: $action, bead_id: $bead, reason: $reason};
   def nonempty_or($primary; $fallback):
     if (($primary // []) | length) > 0 then $primary else ($fallback // []) end;
+  def bounded($items): (($items // [])[0:8]);
+  def strings($items): bounded(($items // []) | map(tostring));
 
   ($ready | map(bead_row) | sort_by(.priority // 999, .id)) as $ready_rows
   | ($in_progress | map(bead_row) | sort_by(.id)) as $in_progress_rows
@@ -306,6 +363,136 @@ jq -n \
         recommended_next_action: ($rch_incident_packet.recommended_next_action // null)
       }]
     end) as $rch_incident_summaries
+  | ({
+      artifact_status: $resource_lease_plan_status,
+      severity: (
+        if $resource_lease_plan_status == "missing" then "warning"
+        elif (($resource_lease_plan.lease_decision // "") | IN("admit")) then "ok"
+        elif (($resource_lease_plan.lease_decision // "") | IN("admit_narrow", "defer")) then "warning"
+        else "critical"
+        end
+      ),
+      lease_decision: ($resource_lease_plan.lease_decision // "missing"),
+      reason: ($resource_lease_plan.reason // null),
+      agent_id: ($resource_lease_plan.agent_id // null),
+      bead_id: ($resource_lease_plan.bead_id // null),
+      requested_command: ($resource_lease_plan.requested_command // null),
+      target_dir: ($resource_lease_plan.target_dir // null),
+      assigned_worker: ($resource_lease_plan.assigned_worker // null),
+      safe_alternatives: bounded($resource_lease_plan.safe_alternatives),
+      findings: bounded($resource_lease_plan.findings),
+      actionable_commands: (
+        if $resource_lease_plan_status == "missing" then
+          ["./scripts/swarm_resource_lease_planner.sh --agent-id <agent-id> --bead-id <bead-id> --requested-command <command> --target-dir <target-dir>"]
+        elif (($resource_lease_plan.lease_decision // "") | IN("admit", "admit_narrow")) then
+          []
+        else
+          strings($resource_lease_plan.safe_alternatives)
+        end
+      )
+    }) as $resource_leases_summary
+  | ({
+      artifact_status: $proof_cache_plan_status,
+      severity: (
+        if $proof_cache_plan_status == "missing" then "warning"
+        elif (($proof_cache_plan.proof_cache_decision // "") == "cache_hit") then "ok"
+        elif (($proof_cache_plan.proof_cache_decision // "") | IN("partial_refresh", "refresh_required")) then "warning"
+        else "critical"
+        end
+      ),
+      proof_cache_decision: ($proof_cache_plan.proof_cache_decision // "missing"),
+      reason: ($proof_cache_plan.reason // null),
+      cache_hit_count: (($proof_cache_plan.cache_hit_artifacts // []) | length),
+      refresh_count: (($proof_cache_plan.required_refreshes // []) | length),
+      invalid_count: (($proof_cache_plan.invalid_artifacts // []) | length),
+      cache_hit_artifacts: bounded($proof_cache_plan.cache_hit_artifacts),
+      required_refreshes: bounded($proof_cache_plan.required_refreshes),
+      invalid_artifacts: bounded($proof_cache_plan.invalid_artifacts),
+      invalidated_paths: bounded($proof_cache_plan.invalidated_paths),
+      refresh_commands: strings($proof_cache_plan.refresh_commands),
+      actionable_commands: (
+        if $proof_cache_plan_status == "missing" then
+          ["./scripts/proof_reuse_cache_planner.sh --proof-index-json <proof-index.json> --freshness-report <freshness.json>"]
+        else
+          strings($proof_cache_plan.refresh_commands)
+        end
+      )
+    }) as $proof_cache_summary
+  | ({
+      artifact_status: $qos_batch_plan_status,
+      severity: (
+        if $qos_batch_plan_status == "missing" then "warning"
+        elif (($qos_batch_plan.batch_decision // "") == "planned" and (($qos_batch_plan.deferred_commands // []) | length) == 0) then "ok"
+        elif (($qos_batch_plan.batch_decision // "") | IN("planned", "all_deferred")) then "warning"
+        else "critical"
+        end
+      ),
+      batch_id: ($qos_batch_plan.batch_id // null),
+      batch_decision: ($qos_batch_plan.batch_decision // "missing"),
+      fairness_reason: ($qos_batch_plan.fairness_reason // null),
+      max_parallel_heavy: ($qos_batch_plan.max_parallel_heavy // null),
+      retry_after_seconds: ($qos_batch_plan.retry_after_seconds // 0),
+      admitted_count: (($qos_batch_plan.admitted_commands // []) | length),
+      deferred_count: (($qos_batch_plan.deferred_commands // []) | length),
+      admitted_commands: bounded($qos_batch_plan.admitted_commands),
+      deferred_commands: bounded($qos_batch_plan.deferred_commands),
+      actionable_commands: (
+        if $qos_batch_plan_status == "missing" then
+          ["./scripts/build_storm_qos_batch_planner.sh --pending-requests-json <pending.json> --resource-lease-plans-json <leases.json> --proof-cost-history-json <costs.json> --rch-workers-json <workers.json>"]
+        else
+          strings((($qos_batch_plan.admitted_commands // []) + ($qos_batch_plan.deferred_commands // [])) | map(.command // empty))
+        end
+      )
+    }) as $qos_batches_summary
+  | ({
+      artifact_status: $stale_lock_recommendations_status,
+      severity: (
+        if $stale_lock_recommendations_status == "missing" then "warning"
+        elif ((($stale_lock_recommendations.safe_to_reopen // []) | length) == 0 and (($stale_lock_recommendations.contact_first // []) | length) == 0) then "ok"
+        else "warning"
+        end
+      ),
+      recommendation_count: (($stale_lock_recommendations.stale_lock_recommendations // []) | length),
+      safe_to_reopen_count: (($stale_lock_recommendations.safe_to_reopen // []) | length),
+      contact_first_count: (($stale_lock_recommendations.contact_first // []) | length),
+      safe_to_reopen: bounded($stale_lock_recommendations.safe_to_reopen),
+      contact_first: bounded($stale_lock_recommendations.contact_first),
+      recommendations: bounded($stale_lock_recommendations.stale_lock_recommendations),
+      actionable_commands: (
+        if $stale_lock_recommendations_status == "missing" then
+          ["./scripts/stale_lock_stalled_bead_recommender.sh --in-progress-json <in-progress.json>"]
+        else
+          strings([
+            ($stale_lock_recommendations.stale_lock_recommendations // [])[]?
+            | (.suggested_br_commands // [])[]?,
+              (.contact_commands // [])[]?
+          ])
+        end
+      )
+    }) as $stale_lock_summary
+  | ({
+      artifact_status: $staged_ownership_report_status,
+      severity: (
+        if $staged_ownership_report_status == "missing" then "warning"
+        elif (($staged_ownership_report.decision // "") == "pass") then "ok"
+        elif (($staged_ownership_report.decision // "") == "pass_degraded") then "warning"
+        else "critical"
+        end
+      ),
+      decision: ($staged_ownership_report.decision // "missing"),
+      staged_path_count: ($staged_ownership_report.staged_path_count // 0),
+      offender_count: ($staged_ownership_report.offender_count // 0),
+      scoped_beads_issue_ids: bounded($staged_ownership_report.scoped_beads_issue_ids),
+      offending_paths: bounded($staged_ownership_report.offending_paths),
+      findings: bounded($staged_ownership_report.findings),
+      actionable_commands: (
+        if $staged_ownership_report_status == "missing" then
+          ["./scripts/staged_ownership_contamination_guard.sh --agent-id <agent-id> --bead-id <bead-id> --allowed-path <path>"]
+        else
+          strings(($staged_ownership_report.offending_paths // []) | map(.remediation // empty))
+        end
+      )
+    }) as $staged_contamination_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -322,6 +509,31 @@ jq -n \
     + ($bad_proofs | map({component: "proof_outcome", status: (.status // "degraded"), impact: (.bead_id + " proof is not passing"), remediation: "Inspect the proof outcome before recommending dependent work."}))
     + ($blocked_items | map({component: "blocked_bead_chain", status: "blocked", impact: (.id + " is blocked in the bv track"), remediation: "Inspect dependencies before recommending this bead."}))
     + ($high_cost_rows | map({component: "predictive_cost", status: (.cost_class // "unknown"), impact: ((.command_id // "unknown_command") + " has elevated predicted validation cost"), remediation: "Narrow the command, defer until resource pressure clears, or preserve the high-cost receipt."}))
+    + (if $resource_lease_plan_status == "missing" then
+        [{component: "resource_leases", status: "missing", impact: "resource lease admission artifact is missing", remediation: "Provide --resource-lease-plan-json before publishing the operator status feed."}]
+      elif $resource_leases_summary.severity != "ok" then
+        [{component: "resource_leases", status: $resource_leases_summary.lease_decision, impact: "resource lease admission is not fully green", remediation: ($resource_leases_summary.reason // "Inspect the resource lease plan before running validation.")}]
+      else [] end)
+    + (if $proof_cache_plan_status == "missing" then
+        [{component: "proof_cache", status: "missing", impact: "proof reuse cache artifact is missing", remediation: "Provide --proof-cache-plan-json before reusing prior proof artifacts."}]
+      elif $proof_cache_summary.severity != "ok" then
+        [{component: "proof_cache", status: $proof_cache_summary.proof_cache_decision, impact: "proof cache does not report a clean cache hit", remediation: ($proof_cache_summary.reason // "Refresh proof artifacts before relying on them.")}]
+      else [] end)
+    + (if $qos_batch_plan_status == "missing" then
+        [{component: "qos_batches", status: "missing", impact: "build-storm QoS batch artifact is missing", remediation: "Provide --qos-batch-plan-json before publishing admission state."}]
+      elif $qos_batches_summary.severity != "ok" then
+        [{component: "qos_batches", status: $qos_batches_summary.batch_decision, impact: "one or more validation requests are deferred or the batch is unavailable", remediation: ($qos_batches_summary.fairness_reason // "Inspect QoS batch plan before admitting more heavy proof work.")}]
+      else [] end)
+    + (if $stale_lock_recommendations_status == "missing" then
+        [{component: "stale_lock_recommendations", status: "missing", impact: "stale-lock recommendation artifact is missing", remediation: "Provide --stale-lock-recommendations-json before reopening stalled beads."}]
+      elif $stale_lock_summary.severity != "ok" then
+        [{component: "stale_lock_recommendations", status: "attention", impact: "stalled beads require reopen or contact-first action", remediation: "Follow the stale-lock recommendation commands before changing assignees."}]
+      else [] end)
+    + (if $staged_ownership_report_status == "missing" then
+        [{component: "staged_contamination", status: "missing", impact: "staged ownership guard artifact is missing", remediation: "Provide --staged-ownership-report-json before commit or closeout."}]
+      elif $staged_contamination_summary.severity != "ok" then
+        [{component: "staged_contamination", status: $staged_contamination_summary.decision, impact: "staged paths are contaminated or only degraded ownership evidence is available", remediation: "Run the staged ownership guard and unstage offending paths before commit."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -362,7 +574,16 @@ jq -n \
         dirty_reserved_count: ($dirty_reserved | length),
         blocked_bead_count: ($blocked_items | length),
         collision_risk: $collision_summary.risk,
-        rch_incident_count: ($rch_incident_summaries | length)
+        rch_incident_count: ($rch_incident_summaries | length),
+        resource_lease_decision: $resource_leases_summary.lease_decision,
+        proof_cache_decision: $proof_cache_summary.proof_cache_decision,
+        qos_batch_decision: $qos_batches_summary.batch_decision,
+        qos_admitted_count: $qos_batches_summary.admitted_count,
+        qos_deferred_count: $qos_batches_summary.deferred_count,
+        stale_lock_safe_to_reopen_count: $stale_lock_summary.safe_to_reopen_count,
+        stale_lock_contact_first_count: $stale_lock_summary.contact_first_count,
+        staged_contamination_decision: $staged_contamination_summary.decision,
+        staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
       services: {
         agent_mail: $agent_mail_status,
@@ -412,18 +633,41 @@ jq -n \
           ),
           incidents: $rch_incident_summaries
         },
+        resource_leases: $resource_leases_summary,
+        proof_cache: $proof_cache_summary,
+        qos_batches: $qos_batches_summary,
+        stale_lock_recommendations: $stale_lock_summary,
+        staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
       },
       degraded: $degraded,
       recommendations: (
-        if ($dirty_reserved | length) != 0 then
+        if $staged_contamination_summary.severity == "critical" then
+          [recommendation("reject_staged_contamination"; null; "staged ownership guard reports contamination")]
+        elif $resource_leases_summary.severity == "critical" then
+          [recommendation("fix_resource_lease"; null; "resource lease planner denied or failed closed")]
+        elif $proof_cache_summary.severity == "critical" then
+          [recommendation("fix_proof_cache"; null; "proof reuse cache planner failed closed")]
+        elif ($dirty_reserved | length) != 0 then
           [recommendation("avoid_dirty_reserved_files"; null; "dirty or reserved files overlap active work")]
+        elif ($stale_lock_summary.safe_to_reopen_count > 0) then
+          [recommendation("reopen_stale_beads"; $stale_lock_summary.safe_to_reopen[0]; "stale-lock recommender reports a safe reopen candidate")]
+        elif ($stale_lock_summary.contact_first_count > 0) then
+          [recommendation("contact_stalled_owner"; $stale_lock_summary.contact_first[0]; "stale-lock recommender requires contact before reopening")]
         elif ($collision_summary.risk != "none") then
           [recommendation("coordinate_collision_risk"; null; "planned dashboard feed reports collision risk")]
+        elif $proof_cache_summary.severity == "warning" then
+          [recommendation("refresh_or_partition_proof_cache"; null; "proof cache requires refresh or partial refresh")]
+        elif $qos_batches_summary.deferred_count > 0 then
+          [recommendation("respect_qos_batch_defer"; null; "QoS batch deferred lower-ranked or over-budget validation work")]
+        elif $resource_leases_summary.severity == "warning" then
+          [recommendation("treat_resource_lease_as_degraded"; null; "resource lease planner admitted only in degraded or deferred mode")]
+        elif $staged_contamination_summary.severity == "warning" then
+          [recommendation("refresh_staged_ownership_evidence"; null; "staged ownership guard is degraded or missing")]
         elif ($high_cost_rows | length) != 0 then
           [recommendation("narrow_high_cost_validation"; null; "predicted validation cost is elevated")]
         elif ((($proof_freshness_summary.state | IN("fresh", "not_provided"))

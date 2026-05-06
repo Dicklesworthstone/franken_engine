@@ -142,7 +142,7 @@ revision, mark the proof stale and refresh it before relying on it.
 8. Publish operator status from explicit snapshots:
 
 ```bash
-./scripts/swarm_operator_status_report.sh --output-dir /tmp/franken-engine-swarm-operator-status --source-revision smoke-rev --agent-mail-status ok --rch-status ok --proof-index-status ok --validation-plan-json /tmp/franken-engine-swarm-validation-plan/plan.json --collision-receipt-json /tmp/franken-engine-swarm-validation-plan/collision_receipt.json --proof-freshness-json /tmp/franken-engine-proof-freshness/proof_freshness_report.json --rch-incident-packet-json /tmp/franken-engine-rch-incident/incident_packet.json
+./scripts/swarm_operator_status_report.sh --output-dir /tmp/franken-engine-swarm-operator-status --source-revision smoke-rev --agent-mail-status ok --rch-status ok --proof-index-status ok --validation-plan-json /tmp/franken-engine-swarm-validation-plan/plan.json --collision-receipt-json /tmp/franken-engine-swarm-validation-plan/collision_receipt.json --proof-freshness-json /tmp/franken-engine-proof-freshness/proof_freshness_report.json --rch-incident-packet-json /tmp/franken-engine-rch-incident/incident_packet.json --resource-lease-plan-json /tmp/franken-engine-swarm-resource-lease/resource_lease_plan.json --proof-cache-plan-json /tmp/franken-engine-proof-reuse-cache/proof_cache_plan.json --qos-batch-plan-json /tmp/franken-engine-build-storm-qos/build_storm_batch_plan.json --stale-lock-recommendations-json /tmp/franken-engine-stale-lock/stale_lock_recommendations.json --staged-ownership-report-json /tmp/franken-engine-staged-ownership/staged_ownership_report.json
 cat /tmp/franken-engine-swarm-operator-status/status.json
 cat /tmp/franken-engine-swarm-operator-status/report.md
 ```
@@ -152,6 +152,13 @@ The predictive dashboard contract is a JSON feed contract only:
 - Schema: `franken-engine.swarm-predictive-dashboard.v1`
 - Contract: `docs/swarm_predictive_dashboard_contract_v1.json`
 - Human-readable contract: `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`
+
+The status feed composes the older predictive dashboard sections with the
+SWARM-CTRL-III admission-control artifacts: resource leases, proof-cache reuse,
+QoS batches, stale-lock recommendations, and staged-ownership contamination.
+Missing admission artifacts are reported as degraded `artifact_status:
+"missing"` sections so operators can distinguish incomplete evidence from
+healthy idle state.
 
 FrankenEngine does not ship a local interactive dashboard for this feed. The
 future rich rendering implementation belongs in `/dp/frankentui`; until that
@@ -168,7 +175,7 @@ repo artifacts and executable checks:
 | Predictive validation plans show likely cost, target selection, artifact freshness, and collision risk before heavy commands run. | `scripts/swarm_validation_planner.sh`, `scripts/e2e/swarm_validation_planner_smoke.sh`, `scripts/proof_freshness_decay_gate.sh`, and `scripts/e2e/proof_freshness_decay_gate_smoke.sh` publish predicted-cost, recommended target-dir, collision, and reusable-proof decisions from explicit snapshots. |
 | `rch` fallback and worker-pressure failures produce compact incident packets instead of ambiguous logs. | `scripts/rch_incident_packet_gate.sh` and `scripts/e2e/rch_incident_packet_gate_smoke.sh` classify local fallback, worker timeout, SIGKILL, artifact retrieval failure, missing completion markers, and unknown remote failures into `franken-engine.rch-incident-packet.v1`. |
 | Proof artifacts are indexed with freshness and decay status tied to source revisions and changed paths. | `scripts/proof_freshness_decay_gate.sh`, `scripts/proof_reuse_cache_planner.sh`, `scripts/e2e/proof_reuse_cache_planner_smoke.sh`, and the proof-cost history inputs consumed by the validation planner keep stale, superseded, incomplete, mismatched, and source-revision-drift evidence fail-closed. |
-| The operator status feed can power a future frankentui dashboard without schema churn. | `scripts/swarm_operator_status_report.sh`, `scripts/e2e/swarm_operator_status_report_smoke.sh`, `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`, and `docs/swarm_predictive_dashboard_contract_v1.json` publish `franken-engine.swarm-predictive-dashboard.v1` while keeping local interactive rendering non-shipped and `/dp/frankentui`-owned. |
+| The operator status feed can power a future frankentui dashboard without schema churn. | `scripts/swarm_operator_status_report.sh`, `scripts/e2e/swarm_operator_status_report_smoke.sh`, `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`, and `docs/swarm_predictive_dashboard_contract_v1.json` publish `franken-engine.swarm-predictive-dashboard.v1`, including resource lease, proof cache, QoS batch, stale-lock, and staged-contamination sections, while keeping local interactive rendering non-shipped and `/dp/frankentui`-owned. |
 | The composed workflow has a no-mock drill, stable logs, deterministic artifacts, and docs truth coverage. | `scripts/e2e/swarm_predictive_orchestration_e2e.sh` composes the planner, freshness gate, rch incident gate, and operator status reporter without executing Cargo; `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh` verifies shipped paths, contract fields, future-tense frankentui claims, and rch-wrapped heavy Cargo examples. |
 
 Child-bead closure evidence:

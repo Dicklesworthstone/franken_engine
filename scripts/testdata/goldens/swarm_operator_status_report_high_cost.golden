@@ -27,7 +27,16 @@
     "dirty_reserved_count": 0,
     "blocked_bead_count": 0,
     "collision_risk": "none",
-    "rch_incident_count": 0
+    "rch_incident_count": 0,
+    "resource_lease_decision": "admit",
+    "proof_cache_decision": "cache_hit",
+    "qos_batch_decision": "planned",
+    "qos_admitted_count": 1,
+    "qos_deferred_count": 0,
+    "stale_lock_safe_to_reopen_count": 0,
+    "stale_lock_contact_first_count": 0,
+    "staged_contamination_decision": "pass",
+    "staged_contamination_offender_count": 0
   },
   "services": {
     "agent_mail": "ok",
@@ -247,13 +256,105 @@
       "status": "none",
       "incidents": []
     },
+    "resource_leases": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "lease_decision": "admit",
+      "reason": "lease admitted",
+      "agent_id": "ScarletOwl",
+      "bead_id": "bd-h3hrc",
+      "requested_command": "bash -n scripts/swarm_operator_status_report.sh",
+      "target_dir": "/tmp/rch_target_franken_engine_operator_status",
+      "assigned_worker": "worker-alpha",
+      "safe_alternatives": [],
+      "findings": [
+        {
+          "severity": "info",
+          "code": "lease_admitted",
+          "message": "lease admitted"
+        }
+      ],
+      "actionable_commands": []
+    },
+    "proof_cache": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "proof_cache_decision": "cache_hit",
+      "reason": "all requested proof artifacts are safely reusable",
+      "cache_hit_count": 1,
+      "refresh_count": 0,
+      "invalid_count": 0,
+      "cache_hit_artifacts": [
+        {
+          "bead_id": "bd-h3hrc",
+          "artifact_id": "operator-status-golden",
+          "artifact_path": "scripts/testdata/goldens/swarm_operator_status_report_healthy.golden"
+        }
+      ],
+      "required_refreshes": [],
+      "invalid_artifacts": [],
+      "invalidated_paths": [],
+      "refresh_commands": [],
+      "actionable_commands": []
+    },
+    "qos_batches": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "batch_id": "batch-healthy",
+      "batch_decision": "planned",
+      "fairness_reason": "all pending requests fit within fairness and worker capacity",
+      "max_parallel_heavy": 2,
+      "retry_after_seconds": 0,
+      "admitted_count": 1,
+      "deferred_count": 0,
+      "admitted_commands": [
+        {
+          "request_id": "status-shell",
+          "agent_id": "ScarletOwl",
+          "bead_id": "bd-h3hrc",
+          "command": "bash -n scripts/swarm_operator_status_report.sh",
+          "heavy": false,
+          "batch_decision": "admit",
+          "fairness_reason": "admitted as light validation outside heavy capacity"
+        }
+      ],
+      "deferred_commands": [],
+      "actionable_commands": [
+        "bash -n scripts/swarm_operator_status_report.sh"
+      ]
+    },
+    "stale_lock_recommendations": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "recommendation_count": 0,
+      "safe_to_reopen_count": 0,
+      "contact_first_count": 0,
+      "safe_to_reopen": [],
+      "contact_first": [],
+      "recommendations": [],
+      "actionable_commands": []
+    },
+    "staged_contamination": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "pass",
+      "staged_path_count": 4,
+      "offender_count": 0,
+      "scoped_beads_issue_ids": [
+        "bd-h3hrc"
+      ],
+      "offending_paths": [],
+      "findings": [],
+      "actionable_commands": []
+    },
     "fixture_contract": {
       "golden_cases": [
         "healthy",
         "degraded",
         "stale_proof",
         "high_cost",
-        "collision_risk"
+        "collision_risk",
+        "overloaded"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

@@ -23,20 +23,36 @@
     "predictive_dashboard.proof_freshness.state",
     "predictive_dashboard.proof_freshness.reusable",
     "predictive_dashboard.rch_incidents.status",
-    "predictive_dashboard.rch_incidents.incidents"
+    "predictive_dashboard.rch_incidents.incidents",
+    "predictive_dashboard.resource_leases.lease_decision",
+    "predictive_dashboard.resource_leases.severity",
+    "predictive_dashboard.proof_cache.proof_cache_decision",
+    "predictive_dashboard.proof_cache.refresh_commands",
+    "predictive_dashboard.qos_batches.batch_decision",
+    "predictive_dashboard.qos_batches.deferred_commands",
+    "predictive_dashboard.stale_lock_recommendations.contact_first",
+    "predictive_dashboard.stale_lock_recommendations.actionable_commands",
+    "predictive_dashboard.staged_contamination.decision",
+    "predictive_dashboard.staged_contamination.offending_paths"
   ],
   "input_snapshot_contracts": [
     "franken-engine.swarm-validation-plan.v1",
     "franken-engine.swarm-validation-collision-receipt.v1",
     "franken-engine.proof-freshness-decay-report.v1",
-    "franken-engine.rch-incident-packet.v1"
+    "franken-engine.rch-incident-packet.v1",
+    "franken-engine.swarm-resource-lease-plan.v1",
+    "franken-engine.proof-reuse-cache-plan.v1",
+    "franken-engine.build-storm-batch-plan.v1",
+    "franken-engine.stale-lock-recommendations.v1",
+    "franken-engine.staged-ownership-report.v1"
   ],
   "golden_fixture_cases": [
     "healthy",
     "degraded",
     "stale_proof",
     "high_cost",
-    "collision_risk"
+    "collision_risk",
+    "overloaded"
   ],
   "truth_constraints": [
     "No rich interactive renderer is implemented in franken_engine by this contract.",

@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 1,
+    "degraded_count": 5,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -28,19 +28,19 @@
     "blocked_bead_count": 0,
     "collision_risk": "none",
     "rch_incident_count": 0,
-    "resource_lease_decision": "admit",
-    "proof_cache_decision": "cache_hit",
-    "qos_batch_decision": "planned",
-    "qos_admitted_count": 1,
-    "qos_deferred_count": 0,
+    "resource_lease_decision": "defer",
+    "proof_cache_decision": "refresh_required",
+    "qos_batch_decision": "all_deferred",
+    "qos_admitted_count": 0,
+    "qos_deferred_count": 2,
     "stale_lock_safe_to_reopen_count": 0,
-    "stale_lock_contact_first_count": 0,
+    "stale_lock_contact_first_count": 1,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
   "services": {
     "agent_mail": "ok",
-    "rch": "ok",
+    "rch": "degraded",
     "proof_evidence_index": "ok"
   },
   "ready_beads": [
@@ -188,12 +188,12 @@
       }
     },
     "proof_freshness": {
-      "state": "stale_by_time",
-      "reusable": false,
-      "artifact_id": "proof-stale",
-      "artifact_path": "artifacts/proof/current/manifest.json",
-      "reason": "current time exceeds the artifact freshness deadline",
-      "recommended_next_action": "Refresh the proof artifact before publishing or relying on the claim.",
+      "state": "fresh",
+      "reusable": true,
+      "artifact_id": "proof-current",
+      "artifact_path": null,
+      "reason": "proof artifact is reusable",
+      "recommended_next_action": "Reuse the proof artifact.",
       "covered_paths": [
         "scripts/swarm_operator_status_report.sh"
       ],
@@ -205,81 +205,123 @@
     },
     "resource_leases": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "lease_decision": "admit",
-      "reason": "lease admitted",
+      "severity": "warning",
+      "lease_decision": "defer",
+      "reason": "no rch worker has the requested CPU and memory lease available",
       "agent_id": "ScarletOwl",
       "bead_id": "bd-h3hrc",
-      "requested_command": "bash -n scripts/swarm_operator_status_report.sh",
-      "target_dir": "/tmp/rch_target_franken_engine_operator_status",
-      "assigned_worker": "worker-alpha",
-      "safe_alternatives": [],
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_overloaded cargo test -p frankenengine-engine --test overloaded_swarm",
+      "target_dir": "/tmp/rch_target_franken_engine_overloaded",
+      "assigned_worker": "none",
+      "safe_alternatives": [
+        "Run shell/docs gates now and retry the heavy proof when a worker is idle."
+      ],
       "findings": [
         {
-          "severity": "info",
-          "code": "lease_admitted",
-          "message": "lease admitted"
+          "severity": "warning",
+          "code": "all_workers_busy",
+          "message": "no rch worker has the requested CPU and memory lease available"
         }
       ],
-      "actionable_commands": []
+      "actionable_commands": [
+        "Run shell/docs gates now and retry the heavy proof when a worker is idle."
+      ]
     },
     "proof_cache": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "proof_cache_decision": "cache_hit",
-      "reason": "all requested proof artifacts are safely reusable",
-      "cache_hit_count": 1,
-      "refresh_count": 0,
+      "severity": "warning",
+      "proof_cache_decision": "refresh_required",
+      "reason": "all matching proof artifacts require refresh before reuse",
+      "cache_hit_count": 0,
+      "refresh_count": 1,
       "invalid_count": 0,
-      "cache_hit_artifacts": [
+      "cache_hit_artifacts": [],
+      "required_refreshes": [
         {
           "bead_id": "bd-h3hrc",
           "artifact_id": "operator-status-golden",
-          "artifact_path": "scripts/testdata/goldens/swarm_operator_status_report_healthy.golden"
+          "refresh_reason": "source paths changed"
         }
       ],
-      "required_refreshes": [],
       "invalid_artifacts": [],
-      "invalidated_paths": [],
-      "refresh_commands": [],
-      "actionable_commands": []
+      "invalidated_paths": [
+        "scripts/swarm_operator_status_report.sh"
+      ],
+      "refresh_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e"
+      ],
+      "actionable_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e"
+      ]
     },
     "qos_batches": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "batch_id": "batch-healthy",
-      "batch_decision": "planned",
-      "fairness_reason": "all pending requests fit within fairness and worker capacity",
-      "max_parallel_heavy": 2,
-      "retry_after_seconds": 0,
-      "admitted_count": 1,
-      "deferred_count": 0,
-      "admitted_commands": [
+      "severity": "warning",
+      "batch_id": "batch-overloaded",
+      "batch_decision": "all_deferred",
+      "fairness_reason": "all requests deferred by worker capacity, resource leases, or fairness gates",
+      "max_parallel_heavy": 0,
+      "retry_after_seconds": 300,
+      "admitted_count": 0,
+      "deferred_count": 2,
+      "admitted_commands": [],
+      "deferred_commands": [
         {
-          "request_id": "status-shell",
+          "request_id": "heavy-proof-a",
           "agent_id": "ScarletOwl",
           "bead_id": "bd-h3hrc",
-          "command": "bash -n scripts/swarm_operator_status_report.sh",
-          "heavy": false,
-          "batch_decision": "admit",
-          "fairness_reason": "admitted as light validation outside heavy capacity"
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_a cargo test -p frankenengine-engine --test heavy_a",
+          "heavy": true,
+          "batch_decision": "defer",
+          "fairness_reason": "all rch workers busy; no heavy validation slots available",
+          "retry_after_seconds": 300
+        },
+        {
+          "request_id": "heavy-proof-b",
+          "agent_id": "CyanOak",
+          "bead_id": "bd-vnkan",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_b cargo test -p frankenengine-engine --test heavy_b",
+          "heavy": true,
+          "batch_decision": "defer",
+          "fairness_reason": "all rch workers busy; no heavy validation slots available",
+          "retry_after_seconds": 300
         }
       ],
-      "deferred_commands": [],
       "actionable_commands": [
-        "bash -n scripts/swarm_operator_status_report.sh"
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_a cargo test -p frankenengine-engine --test heavy_a",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_heavy_b cargo test -p frankenengine-engine --test heavy_b"
       ]
     },
     "stale_lock_recommendations": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "recommendation_count": 0,
+      "severity": "warning",
+      "recommendation_count": 1,
       "safe_to_reopen_count": 0,
-      "contact_first_count": 0,
+      "contact_first_count": 1,
       "safe_to_reopen": [],
-      "contact_first": [],
-      "recommendations": [],
-      "actionable_commands": []
+      "contact_first": [
+        "bd-high-priority-stalled"
+      ],
+      "recommendations": [
+        {
+          "bead_id": "bd-high-priority-stalled",
+          "title": "High priority stalled bead",
+          "priority": 1,
+          "assignee": "AgentTau",
+          "safe_to_reopen": false,
+          "contact_first": true,
+          "recommendation": "contact_first_high_priority",
+          "suggested_br_commands": [],
+          "contact_commands": [
+            "fetch inbox and thread messages for bd-high-priority-stalled",
+            "send Agent Mail contact-first message to AgentTau"
+          ]
+        }
+      ],
+      "actionable_commands": [
+        "fetch inbox and thread messages for bd-high-priority-stalled",
+        "send Agent Mail contact-first message to AgentTau"
+      ]
     },
     "staged_contamination": {
       "artifact_status": "provided",
@@ -309,17 +351,41 @@
   },
   "degraded": [
     {
-      "component": "proof_freshness",
-      "status": "stale_by_time",
-      "impact": "prior proof evidence is not reusable",
-      "remediation": "Refresh the proof artifact before publishing or relying on the claim."
+      "component": "rch",
+      "status": "degraded",
+      "impact": "remote proof routing may be unavailable",
+      "remediation": "Defer heavy validation until rch status is ok or use script-only proof."
+    },
+    {
+      "component": "resource_leases",
+      "status": "defer",
+      "impact": "resource lease admission is not fully green",
+      "remediation": "no rch worker has the requested CPU and memory lease available"
+    },
+    {
+      "component": "proof_cache",
+      "status": "refresh_required",
+      "impact": "proof cache does not report a clean cache hit",
+      "remediation": "all matching proof artifacts require refresh before reuse"
+    },
+    {
+      "component": "qos_batches",
+      "status": "all_deferred",
+      "impact": "one or more validation requests are deferred or the batch is unavailable",
+      "remediation": "all requests deferred by worker capacity, resource leases, or fairness gates"
+    },
+    {
+      "component": "stale_lock_recommendations",
+      "status": "attention",
+      "impact": "stalled beads require reopen or contact-first action",
+      "remediation": "Follow the stale-lock recommendation commands before changing assignees."
     }
   ],
   "recommendations": [
     {
-      "action": "refresh_stale_proof",
-      "bead_id": null,
-      "reason": "proof freshness gate reports non-reusable evidence"
+      "action": "contact_stalled_owner",
+      "bead_id": "bd-high-priority-stalled",
+      "reason": "stale-lock recommender requires contact before reopening"
     }
   ]
 }

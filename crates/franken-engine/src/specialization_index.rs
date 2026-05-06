@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use crate::engine_object_id::EngineObjectId;
 use crate::proof_specialization_receipt::{OptimizationClass, ProofType};
 use crate::security_epoch::SecurityEpoch;
-use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
+use crate::storage_adapter::{
+    EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery,
+    mark_typed_heavy_generic_compat_metadata,
+};
 use crate::typed_persistence_models::{
     SpecializationIndexEntry, TypedStorageAdapterExt, TypedStoreRecord, allocate_typed_record_id,
 };
@@ -765,6 +768,7 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
 
         let mut metadata = BTreeMap::new();
         metadata.insert("receipt_id".to_string(), outcome.receipt_id.to_hex());
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
 
         self.storage.put(STORE, key, value, metadata, &ctx)?;
         self.emit_event(trace_id, "insert_benchmark", "ok", None);
@@ -822,6 +826,7 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
 
         let mut metadata = BTreeMap::new();
         metadata.insert("receipt_id".to_string(), entry.receipt_id.to_hex());
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
 
         self.storage.put(STORE, inv_key, value, metadata, &ctx)?;
 

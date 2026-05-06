@@ -20,6 +20,14 @@ use crate::typed_persistence_models::{
 
 /// Current schema version for storage-adapter contracts.
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY: &str = "typed_authority_mode";
+pub(crate) const TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE: &str = "explicit_legacy_compat_v1";
+const TYPED_HEAVY_BACKFILL_QUERY_MODE_VALUE: &str = "explicit_legacy_backfill_planning_v1";
+const TYPED_RECORD_FORMAT_KEY: &str = "record_format";
+const TYPED_RECORD_FORMAT_VALUE: &str = "sqlmodel_rust_typed_v1";
+const TYPED_MODEL_KEY: &str = "typed_model";
+const TYPED_STORE_KIND_KEY: &str = "store_kind";
+const TYPED_RECORD_ID_KEY: &str = "typed_record_id";
 
 /// Canonical control-plane stores mapped in the persistence inventory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -72,6 +80,171 @@ impl fmt::Display for StoreKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+pub(crate) fn mark_typed_heavy_generic_compat_metadata(metadata: &mut BTreeMap<String, String>) {
+    metadata.insert(
+        TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY.to_string(),
+        TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE.to_string(),
+    );
+}
+
+fn is_typed_heavy_store(store: StoreKind) -> bool {
+    matches!(
+        store,
+        StoreKind::ReplacementLineage | StoreKind::IfcProvenance | StoreKind::SpecializationIndex
+    )
+}
+
+fn typed_store_prefix(store: StoreKind) -> String {
+    format!("typed/{}/", store.as_str())
+}
+
+fn typed_heavy_legacy_prefixes(store: StoreKind) -> &'static [&'static str] {
+    match store {
+        StoreKind::ReplacementLineage => &[
+            "replacement_receipts/",
+            "demotion_receipts/",
+            "lineage_chain/",
+            "replacement_by_hash/",
+            "demotion_by_hash/",
+        ],
+        StoreKind::IfcProvenance => &[
+            "flow_event::",
+            "flow_proof::",
+            "declass_receipt::",
+            "confinement_claim::",
+        ],
+        StoreKind::SpecializationIndex => &["receipt:", "benchmark:", "invalidation:"],
+        _ => &[],
+    }
+}
+
+fn typed_heavy_key_is_recognized(store: StoreKind, key: &str) -> bool {
+    let typed_prefix = typed_store_prefix(store);
+    key.starts_with(&typed_prefix)
+        || typed_heavy_legacy_prefixes(store)
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+}
+
+fn typed_heavy_put_is_current_typed_envelope(
+    store: StoreKind,
+    key: &str,
+    metadata: &BTreeMap<String, String>,
+) -> bool {
+    let typed_prefix = typed_store_prefix(store);
+    key.starts_with(&typed_prefix)
+        && metadata
+            .get(TYPED_RECORD_FORMAT_KEY)
+            .is_some_and(|format| format == TYPED_RECORD_FORMAT_VALUE)
+        && metadata.contains_key(TYPED_MODEL_KEY)
+        && metadata
+            .get(TYPED_STORE_KIND_KEY)
+            .is_some_and(|store_kind| store_kind == store.as_str())
+        && metadata.contains_key(TYPED_RECORD_ID_KEY)
+}
+
+fn typed_heavy_put_is_explicit_legacy_compat(
+    store: StoreKind,
+    key: &str,
+    metadata: &BTreeMap<String, String>,
+) -> bool {
+    typed_heavy_legacy_prefixes(store)
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+        && metadata
+            .get(TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY)
+            .is_some_and(|mode| mode == TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE)
+}
+
+fn typed_heavy_write_policy_error(store: StoreKind, operation: &str, key: &str) -> StorageError {
+    StorageError::WriteRejected {
+        detail: format!(
+            "generic {operation} on typed-heavy store {store} for key `{key}` is non-authoritative; use a sqlmodel_rust typed envelope or an explicitly marked legacy compatibility row"
+        ),
+    }
+}
+
+fn typed_heavy_read_policy_error(
+    store: StoreKind,
+    operation: &str,
+    detail: String,
+) -> StorageError {
+    StorageError::IntegrityViolation {
+        store,
+        detail: format!(
+            "generic {operation} on typed-heavy store {store} is non-authoritative: {detail}"
+        ),
+    }
+}
+
+fn enforce_typed_heavy_put_policy(
+    store: StoreKind,
+    key: &str,
+    metadata: &BTreeMap<String, String>,
+) -> Result<(), StorageError> {
+    if !is_typed_heavy_store(store) {
+        return Ok(());
+    }
+    if typed_heavy_put_is_current_typed_envelope(store, key, metadata)
+        || typed_heavy_put_is_explicit_legacy_compat(store, key, metadata)
+    {
+        return Ok(());
+    }
+    Err(typed_heavy_write_policy_error(store, "put", key))
+}
+
+fn enforce_typed_heavy_key_access_policy(
+    store: StoreKind,
+    key: &str,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if !is_typed_heavy_store(store) || typed_heavy_key_is_recognized(store, key) {
+        return Ok(());
+    }
+    Err(typed_heavy_read_policy_error(
+        store,
+        operation,
+        format!(
+            "key `{key}` is neither a typed `{}` envelope nor a recognized compatibility prefix",
+            typed_store_prefix(store)
+        ),
+    ))
+}
+
+fn enforce_typed_heavy_query_policy(
+    store: StoreKind,
+    query: &StoreQuery,
+) -> Result<(), StorageError> {
+    if !is_typed_heavy_store(store) {
+        return Ok(());
+    }
+
+    if let Some(prefix) = &query.key_prefix {
+        if typed_heavy_key_is_recognized(store, prefix) {
+            return Ok(());
+        }
+        return Err(typed_heavy_read_policy_error(
+            store,
+            "query",
+            format!("key_prefix `{prefix}` is not a typed or recognized compatibility prefix"),
+        ));
+    }
+
+    if query
+        .metadata_filters
+        .get(TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY)
+        .is_some_and(|mode| mode == TYPED_HEAVY_BACKFILL_QUERY_MODE_VALUE)
+    {
+        return Ok(());
+    }
+
+    Err(typed_heavy_read_policy_error(
+        store,
+        "query",
+        "unscoped generic scans require an explicit backfill-planning marker".to_string(),
+    ))
 }
 
 /// Canonical context carried into adapter operations.
@@ -456,6 +629,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                 });
             }
             Self::validate_key(&key)?;
+            enforce_typed_heavy_put_policy(store, &key, &metadata)?;
             Ok(self
                 .get_or_insert_state(store)
                 .put(store, key, value, metadata))
@@ -478,6 +652,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
     ) -> Result<Option<StoreRecord>, StorageError> {
         let result = (|| {
             Self::validate_key(key)?;
+            enforce_typed_heavy_key_access_policy(store, key, "get")?;
             Ok(self
                 .stores
                 .get(&store)
@@ -505,6 +680,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                     detail: "limit cannot be zero".to_string(),
                 });
             }
+            enforce_typed_heavy_query_policy(store, query)?;
 
             let Some(state) = self.stores.get(&store) else {
                 return Ok(Vec::new());
@@ -552,6 +728,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                 });
             }
             Self::validate_key(key)?;
+            enforce_typed_heavy_key_access_policy(store, key, "delete")?;
             Ok(self
                 .stores
                 .get_mut(&store)
@@ -584,6 +761,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
             let mut out = Vec::with_capacity(entries.len());
             for entry in entries {
                 Self::validate_key(&entry.key)?;
+                enforce_typed_heavy_put_policy(store, &entry.key, &entry.metadata)?;
                 out.push(staged.put(store, entry.key, entry.value, entry.metadata));
             }
             self.stores.insert(store, staged);
@@ -830,6 +1008,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<StoreRecord, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(&key)?;
+            enforce_typed_heavy_put_policy(store, &key, &metadata)?;
             self.backend
                 .put_record(store, &key, &value, &metadata)
                 .map_err(Self::map_backend_error)
@@ -852,6 +1031,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<Option<StoreRecord>, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(key)?;
+            enforce_typed_heavy_key_access_policy(store, key, "get")?;
             self.backend
                 .get_record(store, key)
                 .map_err(Self::map_backend_error)
@@ -878,6 +1058,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
                     detail: "limit cannot be zero".to_string(),
                 });
             }
+            enforce_typed_heavy_query_policy(store, query)?;
 
             // Query without a limit first, then canonicalize and truncate locally.
             // This prevents backend row-order variation from changing visible results.
@@ -908,6 +1089,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<bool, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(key)?;
+            enforce_typed_heavy_key_access_policy(store, key, "delete")?;
             self.backend
                 .delete_record(store, key)
                 .map_err(Self::map_backend_error)
@@ -931,6 +1113,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
         let result = (|| {
             for entry in &entries {
                 InMemoryStorageAdapter::validate_key(&entry.key)?;
+                enforce_typed_heavy_put_policy(store, &entry.key, &entry.metadata)?;
             }
             self.backend
                 .put_batch(store, &entries)
@@ -2985,5 +3168,226 @@ mod tests {
         assert!(adapter.has_typed_session());
         assert!(adapter.typed_session().is_some());
         assert!(adapter.typed_session_mut().is_some());
+    }
+
+    fn typed_replacement_metadata() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                TYPED_RECORD_FORMAT_KEY.to_string(),
+                TYPED_RECORD_FORMAT_VALUE.to_string(),
+            ),
+            (
+                TYPED_MODEL_KEY.to_string(),
+                "ReplacementLineageEntry".to_string(),
+            ),
+            (
+                TYPED_STORE_KIND_KEY.to_string(),
+                StoreKind::ReplacementLineage.as_str().to_string(),
+            ),
+            (TYPED_RECORD_ID_KEY.to_string(), "7".to_string()),
+        ])
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_rejects_unmarked_generic_legacy_rows() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let err = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                vec![1],
+                BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
+                &ctx(),
+            )
+            .expect_err("unmarked legacy row should fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+        assert!(err.to_string().contains("non-authoritative"));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_allows_explicit_generic_compat_rows() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let mut metadata = BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]);
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
+        let stored = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                vec![1],
+                metadata,
+                &ctx(),
+            )
+            .expect("explicit compatibility row should be accepted");
+        assert_eq!(
+            stored.key,
+            "replacement_receipts/slot-a/00000000000000000001/receipt-a"
+        );
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_rejects_marker_on_unknown_prefix() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let mut metadata = BTreeMap::new();
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
+        let err = adapter
+            .put(
+                StoreKind::IfcProvenance,
+                "mystery::record".to_string(),
+                vec![1],
+                metadata,
+                &ctx(),
+            )
+            .expect_err("unknown generic prefix should still fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_allows_current_typed_envelopes() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let stored = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "typed/replacement_lineage/00000000000000000007".to_string(),
+                b"{\"typed_record_id\":7}".to_vec(),
+                typed_replacement_metadata(),
+                &ctx(),
+            )
+            .expect("current typed envelope should be accepted");
+        assert_eq!(stored.key, "typed/replacement_lineage/00000000000000000007");
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_get_rejects_unknown_keys() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let err = adapter
+            .get(StoreKind::SpecializationIndex, "opaque-key", &ctx())
+            .expect_err("unknown generic get should fail closed");
+        assert!(matches!(err, StorageError::IntegrityViolation { .. }));
+        assert!(err.to_string().contains("non-authoritative"));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_query_requires_typed_or_compatibility_scope() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let err = adapter
+            .query(StoreKind::IfcProvenance, &StoreQuery::default(), &ctx())
+            .expect_err("unscoped typed-heavy query should fail closed");
+        assert!(matches!(err, StorageError::IntegrityViolation { .. }));
+        assert!(err.to_string().contains("backfill-planning marker"));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_query_allows_recognized_compatibility_prefixes() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let mut metadata = BTreeMap::from([("receipt_id".to_string(), "abc".to_string())]);
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
+        adapter
+            .put(
+                StoreKind::SpecializationIndex,
+                "benchmark:bm-1".to_string(),
+                vec![3],
+                metadata,
+                &ctx(),
+            )
+            .expect("compatibility benchmark row should be accepted");
+        let rows = adapter
+            .query(
+                StoreKind::SpecializationIndex,
+                &StoreQuery {
+                    key_prefix: Some("benchmark:".to_string()),
+                    ..StoreQuery::default()
+                },
+                &ctx(),
+            )
+            .expect("recognized compatibility query should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "benchmark:bm-1");
+    }
+
+    #[test]
+    fn in_memory_typed_heavy_put_rejects_unmarked_generic_legacy_rows() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let err = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                vec![1],
+                BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
+                &ctx(),
+            )
+            .expect_err("unmarked legacy row should fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+        assert!(err.to_string().contains("non-authoritative"));
+    }
+
+    #[test]
+    fn in_memory_typed_heavy_get_query_and_delete_reject_unrecognized_keys() {
+        let mut adapter = InMemoryStorageAdapter::new();
+
+        let get_err = adapter
+            .get(StoreKind::SpecializationIndex, "opaque-key", &ctx())
+            .expect_err("unknown generic get should fail closed");
+        assert!(matches!(get_err, StorageError::IntegrityViolation { .. }));
+
+        let query_err = adapter
+            .query(StoreKind::IfcProvenance, &StoreQuery::default(), &ctx())
+            .expect_err("unscoped typed-heavy query should fail closed");
+        assert!(matches!(query_err, StorageError::IntegrityViolation { .. }));
+        assert!(query_err.to_string().contains("backfill-planning marker"));
+
+        let delete_err = adapter
+            .delete(StoreKind::ReplacementLineage, "opaque-key", &ctx())
+            .expect_err("unknown generic delete should fail closed");
+        assert!(matches!(
+            delete_err,
+            StorageError::IntegrityViolation { .. }
+        ));
+    }
+
+    #[test]
+    fn in_memory_typed_heavy_batch_put_is_atomic_when_policy_rejects_entry() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let mut metadata = BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]);
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
+
+        let err = adapter
+            .put_batch(
+                StoreKind::ReplacementLineage,
+                vec![
+                    BatchPutEntry {
+                        key: "replacement_receipts/slot-a/00000000000000000001/receipt-a"
+                            .to_string(),
+                        value: vec![1],
+                        metadata,
+                    },
+                    BatchPutEntry {
+                        key: "opaque-key".to_string(),
+                        value: vec![2],
+                        metadata: BTreeMap::new(),
+                    },
+                ],
+                &ctx(),
+            )
+            .expect_err("batch with an unmarked generic row should fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+
+        let rows = adapter
+            .query(
+                StoreKind::ReplacementLineage,
+                &StoreQuery {
+                    key_prefix: Some("replacement_receipts/".to_string()),
+                    ..StoreQuery::default()
+                },
+                &ctx(),
+            )
+            .expect("recognized compatibility query should succeed");
+        assert!(rows.is_empty());
     }
 }

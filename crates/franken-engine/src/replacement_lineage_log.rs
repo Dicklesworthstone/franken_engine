@@ -20,7 +20,10 @@ use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::self_replacement::{ReplacementReceipt, ValidationArtifactKind};
 use crate::slot_registry::SlotId;
-use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
+use crate::storage_adapter::{
+    EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery,
+    mark_typed_heavy_generic_compat_metadata,
+};
 use crate::typed_persistence_models::{
     ReplacementLineageEntry, TypedStorageAdapterExt, TypedStoreRecord, allocate_typed_record_id,
     map_legacy_replacement_lineage_record,
@@ -1389,6 +1392,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 "receipt_content_hash".to_string(),
                 record.receipt_content_hash.clone(),
             );
+            mark_typed_heavy_generic_compat_metadata(&mut metadata);
 
             let value =
                 serde_json::to_vec(&record).map_err(|err| LineageIndexError::Serialization {
@@ -1404,11 +1408,13 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
             )?;
             self.store_typed_lineage_mirror(&stored_record, context)?;
 
+            let mut replacement_pointer_metadata = table_metadata(TABLE_REPLACEMENT_BY_HASH);
+            mark_typed_heavy_generic_compat_metadata(&mut replacement_pointer_metadata);
             self.adapter.put(
                 StoreKind::ReplacementLineage,
                 replacement_by_hash_key(&record.receipt_content_hash),
                 key.as_bytes().to_vec(),
-                table_metadata(TABLE_REPLACEMENT_BY_HASH),
+                replacement_pointer_metadata,
                 context,
             )?;
 
@@ -1432,6 +1438,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 chain_entry.slot_id.as_str().to_string(),
             );
             chain_meta.insert("receipt_id".to_string(), chain_entry.receipt_id.clone());
+            mark_typed_heavy_generic_compat_metadata(&mut chain_meta);
             let chain_value = serde_json::to_vec(&chain_entry).map_err(|err| {
                 LineageIndexError::Serialization {
                     operation: "serialize lineage chain entry".to_string(),
@@ -1539,6 +1546,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 "receipt_content_hash".to_string(),
                 record.receipt_content_hash.clone(),
             );
+            mark_typed_heavy_generic_compat_metadata(&mut metadata);
             let value =
                 serde_json::to_vec(&record).map_err(|err| LineageIndexError::Serialization {
                     operation: "serialize demotion record".to_string(),
@@ -1553,11 +1561,13 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
             )?;
             self.store_typed_lineage_mirror(&stored_record, context)?;
 
+            let mut demotion_pointer_metadata = table_metadata(TABLE_DEMOTION_BY_HASH);
+            mark_typed_heavy_generic_compat_metadata(&mut demotion_pointer_metadata);
             self.adapter.put(
                 StoreKind::ReplacementLineage,
                 demotion_by_hash_key(&record.receipt_content_hash),
                 key.as_bytes().to_vec(),
-                table_metadata(TABLE_DEMOTION_BY_HASH),
+                demotion_pointer_metadata,
                 context,
             )?;
 
@@ -1576,6 +1586,7 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 chain_entry.slot_id.as_str().to_string(),
             );
             chain_meta.insert("receipt_id".to_string(), chain_entry.receipt_id.clone());
+            mark_typed_heavy_generic_compat_metadata(&mut chain_meta);
             let chain_value = serde_json::to_vec(&chain_entry).map_err(|err| {
                 LineageIndexError::Serialization {
                     operation: "serialize demotion lineage chain entry".to_string(),

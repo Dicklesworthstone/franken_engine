@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::ifc_artifacts::{ClaimStrength, DeclassificationDecision, Label, ProofMethod};
 use crate::storage_adapter::{
     EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
+    mark_typed_heavy_generic_compat_metadata,
 };
 use crate::typed_persistence_models::{
     IfcProvenanceEntry, TypedStorageAdapterExt, allocate_typed_record_id,
@@ -1519,7 +1520,8 @@ impl<S: StorageAdapter> IfcProvenanceIndex<S> {
     ) -> Result<StoreRecord, ProvenanceError> {
         let value = serde_json::to_vec(record)
             .map_err(|e| ProvenanceError::SerializationError(e.to_string()))?;
-        let metadata = BTreeMap::new();
+        let mut metadata = BTreeMap::new();
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
         self.store
             .put(STORE, key.to_string(), value, metadata, ctx)
             .map_err(ProvenanceError::from)

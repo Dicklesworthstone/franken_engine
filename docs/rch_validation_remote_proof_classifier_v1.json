@@ -1,0 +1,125 @@
+{
+  "schema_version": "franken-engine.rch-validation-remote-proof-classifier.v1",
+  "bead_id": "bd-bpoi9",
+  "contract_name": "RCH validation remote-proof classifier",
+  "valid_verdicts": [
+    "source_pass",
+    "source_failure",
+    "toolchain_blocker",
+    "transport_timeout",
+    "local_fallback_refused",
+    "missing_remote_proof"
+  ],
+  "valid_reason_codes": [
+    "remote_command_exit_zero",
+    "remote_source_diagnostic",
+    "missing_cargo_clippy",
+    "ssh_timeout_no_final_verdict",
+    "local_fallback_refused",
+    "missing_worker_or_command_evidence"
+  ],
+  "cases": [
+    {
+      "case_id": "remote-cargo-check-pass",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo check --all-targets",
+      "selected_worker": "vmi1293453",
+      "remote_command_started": true,
+      "remote_command_finished": true,
+      "remote_exit_code": 0,
+      "observed_log_markers": [
+        "Selected worker: vmi1293453",
+        "Executing command remotely:",
+        "Remote command finished: exit=0"
+      ],
+      "verdict": "source_pass",
+      "reason_code": "remote_command_exit_zero",
+      "source_evidence": true,
+      "remediation": "Record the remote command and commit hash as validation evidence."
+    },
+    {
+      "case_id": "remote-source-diagnostic",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo check --all-targets",
+      "selected_worker": "vmi1293453",
+      "remote_command_started": true,
+      "remote_command_finished": true,
+      "remote_exit_code": 101,
+      "observed_log_markers": [
+        "Selected worker: vmi1293453",
+        "Executing command remotely:",
+        "error[E0425]: cannot find function",
+        "Remote command finished: exit=101"
+      ],
+      "verdict": "source_failure",
+      "reason_code": "remote_source_diagnostic",
+      "source_evidence": true,
+      "remediation": "Treat as a real source failure if it reaches the touched target; otherwise file or cite the unrelated blocker."
+    },
+    {
+      "case_id": "missing-cargo-clippy-before-lint",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-clippy CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo clippy --all-targets -- -D warnings",
+      "selected_worker": "vmi1293453",
+      "remote_command_started": true,
+      "remote_command_finished": true,
+      "remote_exit_code": 1,
+      "observed_log_markers": [
+        "Selected worker: vmi1293453",
+        "Executing command remotely:",
+        "error: 'cargo-clippy' is not installed",
+        "Remote command finished: exit=1"
+      ],
+      "verdict": "toolchain_blocker",
+      "reason_code": "missing_cargo_clippy",
+      "source_evidence": false,
+      "remediation": "Do not count as lint evidence; reroute to a worker with cargo-clippy or fix worker capability advertising."
+    },
+    {
+      "case_id": "ssh-timeout-no-final-verdict",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo test",
+      "selected_worker": "vmi1149989",
+      "remote_command_started": true,
+      "remote_command_finished": false,
+      "remote_exit_code": null,
+      "observed_log_markers": [
+        "Selected worker: vmi1149989",
+        "Executing command remotely:",
+        "Remote execution failed on vmi1149989 with SSH timeout",
+        "refusing local fallback: SSH command timed out after 1800s"
+      ],
+      "verdict": "transport_timeout",
+      "reason_code": "ssh_timeout_no_final_verdict",
+      "source_evidence": false,
+      "remediation": "Do not infer pass or fail; split the validation target, salvage remote artifacts if available, or rerun with a narrower command."
+    },
+    {
+      "case_id": "local-fallback-refused",
+      "validation_command": "rch exec -- env CARGO_TARGET_DIR=/data/tmp/franken_engine-test CARGO_INCREMENTAL=0 cargo test",
+      "selected_worker": "vmi1149989",
+      "remote_command_started": false,
+      "remote_command_finished": false,
+      "remote_exit_code": null,
+      "observed_log_markers": [
+        "Remote execution failed",
+        "refusing local fallback"
+      ],
+      "verdict": "local_fallback_refused",
+      "reason_code": "local_fallback_refused",
+      "source_evidence": false,
+      "remediation": "Report the remote infrastructure blocker and rerun through rch once a worker is available."
+    },
+    {
+      "case_id": "missing-worker-or-command-evidence",
+      "validation_command": "cargo test",
+      "selected_worker": null,
+      "remote_command_started": false,
+      "remote_command_finished": false,
+      "remote_exit_code": null,
+      "observed_log_markers": [
+        "test result: ok"
+      ],
+      "verdict": "missing_remote_proof",
+      "reason_code": "missing_worker_or_command_evidence",
+      "source_evidence": false,
+      "remediation": "Rerun with rch exec -- and preserve selected worker plus remote command markers."
+    }
+  ]
+}

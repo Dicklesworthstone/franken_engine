@@ -1,0 +1,11 @@
+{
+  "schema_version": "franken-engine.tail-latency-control-plane.v1",
+  "end_to_end_bounds": {
+    "p95_ms": 38,
+    "p99_ms": 44
+  },
+  "guardrails": {
+    "status": "accepted"
+  }
+}
+

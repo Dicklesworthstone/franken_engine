@@ -1,0 +1,13 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+  "pressure_level": "low",
+  "advisory": "retain",
+  "recommended_action": "retain_current_residency",
+  "reason": "checked-in fixture",
+  "policy_findings": [],
+  "hash_basis": {
+    "input_hash": "archive-fixture",
+    "scoreboard_hash": "archive-fixture-scoreboard"
+  }
+}
+

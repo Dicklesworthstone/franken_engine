@@ -1,0 +1,10 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "freshness_state": "fresh",
+  "reusable": true,
+  "recommended_next_action": "reuse proof",
+  "changed_paths": [
+    "scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh"
+  ]
+}
+

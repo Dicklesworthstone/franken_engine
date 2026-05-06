@@ -1,0 +1,25 @@
+{
+  "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+  "advisory": "prefetch_recommended",
+  "recommended_action": "retain_target_and_reuse_cache",
+  "proof_cache_summary": {
+    "proof_cache_decision": "cache_hit"
+  },
+  "warm_target_summary": {
+    "target_dir": "/tmp/rch_target_franken_engine_ix_fixture",
+    "roi": {
+      "expected_reuse_score": 0.82,
+      "realized_reuse_score": 0.91
+    }
+  },
+  "archive_pressure_summary": {
+    "advisory": "retain",
+    "recommended_action": "retain_current_residency"
+  },
+  "validation_cost_summary": {
+    "estimated_cpu_slots_total": 6
+  },
+  "artifact_paths": {
+    "swarm_warm_target_prefetch_roi_advisory_json": "scripts/testdata/swarm_high_core_slo_calibration_drill/warm_target_prefetch_roi_advisory.json"
+  }
+}

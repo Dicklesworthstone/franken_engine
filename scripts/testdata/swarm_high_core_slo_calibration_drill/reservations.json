@@ -1,0 +1,12 @@
+{
+  "snapshot_epoch_seconds": 1778200200,
+  "reservations": [
+    {
+      "path_pattern": "scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh",
+      "agent_name": "AgentGamma",
+      "bead_id": "bd-ix-live-gamma",
+      "exclusive": true
+    }
+  ]
+}
+

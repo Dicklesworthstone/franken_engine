@@ -1,0 +1,16 @@
+{
+  "schema_version": "franken-engine.swarm-responsiveness-claim-map.v1",
+  "claims": [
+    {
+      "claim_id": "queue_wait_budget_band",
+      "status": "published",
+      "verification_commands": [
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_ix_claim_map cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+      ]
+    }
+  ],
+  "operator_verification": [
+    "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_ix_claim_map cargo test -p frankenengine-engine --lib swarm_fleet_health_overview -- --nocapture"
+  ]
+}
+

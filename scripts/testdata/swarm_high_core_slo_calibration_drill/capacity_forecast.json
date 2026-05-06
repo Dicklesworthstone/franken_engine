@@ -1,0 +1,15 @@
+{
+  "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+  "decision": "pass",
+  "confidence_band": "high",
+  "generated_epoch_seconds": 1778200200,
+  "summary": {
+    "overall_state": "normal",
+    "blocked_categories": [],
+    "degraded_categories": []
+  },
+  "artifact_paths": {
+    "swarm_capacity_forecast_json": "scripts/testdata/swarm_high_core_slo_calibration_drill/capacity_forecast.json"
+  }
+}
+

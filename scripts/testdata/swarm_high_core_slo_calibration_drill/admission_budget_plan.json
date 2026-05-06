@@ -1,0 +1,28 @@
+{
+  "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+  "decision": "admit",
+  "budget_profile": "balanced",
+  "summary": {
+    "admitted_count": 2,
+    "admitted_narrow_count": 0,
+    "deferred_count": 0
+  },
+  "recommendations": [
+    {
+      "request_id": "proof-a",
+      "bead_id": "bd-5n9ts",
+      "agent_id": "CyanOak",
+      "decision": "admit"
+    },
+    {
+      "request_id": "proof-b",
+      "bead_id": "bd-5n9ts",
+      "agent_id": "CyanOak",
+      "decision": "admit"
+    }
+  ],
+  "artifact_paths": {
+    "swarm_admission_budget_plan_json": "scripts/testdata/swarm_high_core_slo_calibration_drill/admission_budget_plan.json"
+  }
+}
+

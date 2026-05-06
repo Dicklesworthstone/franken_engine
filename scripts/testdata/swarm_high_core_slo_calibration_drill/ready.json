@@ -1,0 +1,17 @@
+[
+  {
+    "id": "bd-ix-proof-alpha",
+    "title": "IX focused proof lane",
+    "priority": 2,
+    "status": "open",
+    "assignee": null
+  },
+  {
+    "id": "bd-ix-docs-beta",
+    "title": "IX runbook truth refresh",
+    "priority": 2,
+    "status": "open",
+    "assignee": null
+  }
+]
+

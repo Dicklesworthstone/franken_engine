@@ -1,0 +1,12 @@
+{
+  "issues": [
+    {
+      "id": "bd-ix-live-gamma",
+      "title": "Active IX review lane",
+      "priority": 2,
+      "status": "in_progress",
+      "assignee": "AgentGamma"
+    }
+  ]
+}
+

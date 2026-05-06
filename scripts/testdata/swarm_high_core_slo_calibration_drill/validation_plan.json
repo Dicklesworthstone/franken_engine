@@ -1,0 +1,50 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "decision": "planned",
+  "collision_risk": "reserved_overlap",
+  "conflicting_agents": [
+    "AgentGamma"
+  ],
+  "safe_alternatives": [
+    "docs/SWARM_CTRL_IX_OPERATOR_RUNBOOK.md"
+  ],
+  "reservation_recommendations": [
+    {
+      "action": "coordinate_reservation_holder",
+      "scope": "planned_write_set",
+      "reason": "planned write paths overlap active exclusive reservations"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "rch-proof-check-ix",
+      "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_ix cargo test -p frankenengine-engine --test swarm_high_core_slo_calibration_no_mock_drill -- --nocapture",
+      "predicted_cost": {
+        "cost_class": "high",
+        "state": "fresh",
+        "sample_count": 2
+      },
+      "risk_flags": [
+        "high_cost_history"
+      ]
+    },
+    {
+      "command_id": "bash-n-ix-drill",
+      "display": "bash -n scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh",
+      "predicted_cost": {
+        "cost_class": "low",
+        "state": "static",
+        "sample_count": 0
+      },
+      "risk_flags": []
+    }
+  ],
+  "proof_cost_budgets": [
+    {
+      "command_id": "rch-proof-check-ix",
+      "max_elapsed_ms": 900000
+    }
+  ],
+  "snapshot_epoch_seconds": 1778200200
+}
+

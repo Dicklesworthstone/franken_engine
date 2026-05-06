@@ -1,0 +1,11 @@
+{
+  "schema_version": "franken-engine.rgc-fault-injection-chaos-verification-pack.report.v1",
+  "generated_at_utc": "2026-05-08T00:30:00Z",
+  "summary": {
+    "decision": "pass"
+  },
+  "evidence_inputs": {
+    "scheduler_faults": 2
+  }
+}
+

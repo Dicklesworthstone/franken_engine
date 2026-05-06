@@ -1,0 +1,2 @@
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_ix_chaos cargo test -p frankenengine-engine --test chaos_replay -- --nocapture
+

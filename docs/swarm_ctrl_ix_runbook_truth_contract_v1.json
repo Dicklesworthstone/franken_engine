@@ -1,0 +1,51 @@
+{
+  "schema_version": "franken-engine.swarm-ctrl-ix-runbook-truth-contract.v1",
+  "runbook_schema": "franken-engine.swarm-ctrl-ix-operator-runbook.v1",
+  "required_repo_paths": [
+    "scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh",
+    "scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh",
+    "scripts/swarm_telemetry_snapshot_normalizer.sh",
+    "scripts/swarm_high_core_slo_scenario_matrix.sh",
+    "scripts/swarm_slo_calibrator.sh",
+    "scripts/swarm_high_core_chaos_conformance_gate.sh",
+    "scripts/swarm_operator_slo_tuning_advisory.sh",
+    "docs/SWARM_CTRL_IX_OPERATOR_RUNBOOK.md",
+    "docs/swarm_ctrl_ix_runbook_truth_contract_v1.json"
+  ],
+  "required_artifact_references": [
+    "swarm_high_core_slo_calibration_no_mock_drill_report.json",
+    "swarm_capacity_snapshot.json",
+    "swarm_slo_input_snapshot.json",
+    "swarm_high_core_scenario_matrix_report.json",
+    "swarm_slo_threshold_receipt.json",
+    "swarm_high_core_chaos_conformance_report.json",
+    "swarm_operator_slo_tuning_advisory.json"
+  ],
+  "required_commands": [
+    "./scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh run",
+    "./scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh selftest",
+    "./scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh replay --artifact-dir /tmp/franken-engine-swarm-high-core-slo-calibration-no-mock-drill/EXAMPLE",
+    "./scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh selftest"
+  ],
+  "required_workflow_claims": [
+    "The composed drill does not execute live high-core stress; it reuses checked-in fixtures and replay artifacts only.",
+    "The checked-in high-core evidence path must fail closed when traceability is not fully `rch`-backed.",
+    "The operator advisory remains a downstream handoff only; it does not mutate live worker state, queue entries, leases, or archive bundles.",
+    "Scenario matrix output must still match `scripts/testdata/goldens/swarm_high_core_slo_scenario_matrix.golden` before downstream IX artifacts are trusted."
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_high_core_slo_calibration_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh",
+    "./scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_ctrl_ix_runbook_truth_gate.sh selftest"
+  ],
+  "rejections": [
+    "bare heavy cargo examples not wrapped in rch exec -- env CARGO_TARGET_DIR=",
+    "missing IX drill artifact references",
+    "claims of live worker mutation or live high-core stress",
+    "stale claims that checked-in high-core traceability failures are already acceptable"
+  ]
+}
+

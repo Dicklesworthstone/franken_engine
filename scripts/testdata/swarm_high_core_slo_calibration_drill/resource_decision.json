@@ -1,0 +1,14 @@
+{
+  "schema_version": "franken-engine.swarm-resource-governor-decision.v1",
+  "decision": "admit_narrow",
+  "findings": [
+    {
+      "decision": "admit_narrow",
+      "signal": "memory_available_bytes",
+      "reason": "missing_optional_memory_signal",
+      "remediation": "Keep validation narrow."
+    }
+  ],
+  "snapshot_epoch_seconds": 1778200200
+}
+

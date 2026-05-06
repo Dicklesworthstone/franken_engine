@@ -14,6 +14,7 @@
 - Checkpoint restore escalation: `fail_closed` via `capture_fresh_checkpoint_bundle`
 - Execution queue: `pass` top=`1` deferred=`0` restore=`restore_blocked`
 - Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
+- Queue tuning promotion: readiness=`ready` decision=`eligible_canary` rollback=`better_than_current` canary=`continue_canary`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -38,6 +39,11 @@
 - Queue counterfactual backtest report: `[SMOKE_ROOT]/stale_proof-fixtures/counterfactual_backtest_report.json`
 - Queue tuning plan: `[SMOKE_ROOT]/stale_proof-fixtures/tuning_plan.json`
 - Queue tuning frontier: `[SMOKE_ROOT]/stale_proof-fixtures/frontier.json`
+- Queue tuning policy bundle: `[SMOKE_ROOT]/stale_proof-fixtures/tuning_policy_bundle.json`
+- Queue tuning promotion guard receipt: `[SMOKE_ROOT]/stale_proof-fixtures/promotion_guard_receipt.json`
+- Queue tuning rollout plan: `[SMOKE_ROOT]/stale_proof-fixtures/manual_approval_rollout_plan.json`
+- Queue tuning rollback comparator receipt: `[SMOKE_ROOT]/stale_proof-fixtures/rollback_comparator_receipt.json`
+- Queue tuning canary verdict ledger: `[SMOKE_ROOT]/stale_proof-fixtures/canary_verdict_ledger.json`
 
 - `respect_checkpoint_restore_fail_closed`: checkpoint restore handoff is fail-closed or contradicted by conformance evidence
 

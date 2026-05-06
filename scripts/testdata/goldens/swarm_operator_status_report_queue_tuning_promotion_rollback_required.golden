@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 3,
+    "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -49,13 +49,13 @@
     "starvation_rescue_escalation_band": "ready",
     "starvation_rescue_top_action": "reopen_stale_claim_then_rebalance",
     "starvation_rescue_unresolved_risk_count": 0,
-    "checkpoint_restore_plan_decision": "fail_closed",
-    "checkpoint_restore_escalation_band": "fail_closed",
-    "checkpoint_restore_top_action": "capture_fresh_checkpoint_bundle",
-    "checkpoint_restore_unresolved_risk_count": 1,
+    "checkpoint_restore_plan_decision": "resume",
+    "checkpoint_restore_escalation_band": "ready",
+    "checkpoint_restore_top_action": "resume_from_checkpoint",
+    "checkpoint_restore_unresolved_risk_count": 0,
     "execution_queue_decision": "pass",
     "execution_queue_conservative_mode": false,
-    "execution_queue_restore_dependency_state": "restore_blocked",
+    "execution_queue_restore_dependency_state": "clear",
     "execution_queue_top_start_count": 1,
     "execution_queue_deferred_count": 0,
     "execution_queue_bottleneck_count": 1,
@@ -64,10 +64,10 @@
     "queue_fidelity_highest_mismatch": "none",
     "queue_tuning_plan_class": "no_improvement",
     "queue_tuning_top_recommendation": "none",
-    "queue_tuning_promotion_readiness": "ready",
+    "queue_tuning_promotion_readiness": "rollback_required",
     "queue_tuning_promotion_decision": "eligible_canary",
-    "queue_tuning_rollback_verdict": "better_than_current",
-    "queue_tuning_canary_action": "continue_canary",
+    "queue_tuning_rollback_verdict": "worse_than_current",
+    "queue_tuning_canary_action": "rollback_required",
     "queue_tuning_manual_blocker_count": 0,
     "queue_tuning_evidence_link_count": 3,
     "staged_contamination_decision": "pass",
@@ -223,12 +223,12 @@
       }
     },
     "proof_freshness": {
-      "state": "stale_by_time",
-      "reusable": false,
-      "artifact_id": "proof-stale",
-      "artifact_path": "artifacts/proof/current/manifest.json",
-      "reason": "current time exceeds the artifact freshness deadline",
-      "recommended_next_action": "Refresh the proof artifact before publishing or relying on the claim.",
+      "state": "fresh",
+      "reusable": true,
+      "artifact_id": "proof-current",
+      "artifact_path": null,
+      "reason": "proof artifact is reusable",
+      "recommended_next_action": "Reuse the proof artifact.",
       "covered_paths": [
         "scripts/swarm_operator_status_report.sh"
       ],
@@ -346,7 +346,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -372,7 +372,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -393,7 +393,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/admission_budget_plan.json"
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -405,7 +405,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -421,7 +421,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -453,41 +453,36 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
       "plan_artifact_status": "provided",
       "conformance_artifact_status": "provided",
-      "severity": "critical",
+      "severity": "ok",
       "checkpoint_id": "checkpoint-operator-status-smoke",
       "checkpoint_capture_decision": "captured",
       "restore_readiness_hint": "candidate",
-      "plan_decision": "fail_closed",
+      "plan_decision": "resume",
       "conformance_decision": "pass",
-      "drift_class": "blocked",
-      "checkpoint_age_seconds": 7200,
-      "top_restore_action": "capture_fresh_checkpoint_bundle",
+      "drift_class": "none",
+      "checkpoint_age_seconds": 300,
+      "top_restore_action": "resume_from_checkpoint",
       "gate_failure_count": 0,
-      "escalation_band": "fail_closed",
-      "unresolved_risks": [
-        {
-          "kind": "checkpoint_stale",
-          "detail": "checkpoint age exceeded the restore freshness window"
-        }
-      ],
+      "escalation_band": "ready",
+      "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
       "risk_budget_artifact_status": "provided",
       "bottleneck_artifact_status": "provided",
       "run_manifest_artifact_status": "provided",
-      "severity": "warning",
+      "severity": "ok",
       "decision": "pass",
       "conservative_mode": false,
       "queue_depth": 1,
@@ -521,12 +516,12 @@
       "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
       "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
-      "restore_dependency_state": "restore_blocked",
-      "restore_dependency_detail": "Checkpoint restore handoff is fail-closed or blocked; do not let queue advice override restore remediation.",
-      "queue_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_run_manifest.json"
+      "restore_dependency_state": "clear",
+      "restore_dependency_detail": "Checkpoint restore handoff is ready.",
+      "queue_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -565,11 +560,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/stale_proof-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/stale_proof-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/stale_proof-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/stale_proof-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/stale_proof-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -580,21 +575,21 @@
         "rollback_comparator_receipt": "provided",
         "canary_verdict_ledger": "provided"
       },
-      "severity": "ok",
-      "readiness": "ready",
+      "severity": "critical",
+      "readiness": "rollback_required",
       "bundle_id": "queue-tuning-policy-bundle-smoke",
       "candidate_id": "raise_proof_health_penalty",
       "candidate_delta_millionths": 240000,
       "bundle_decision": "ready",
       "promotion_decision": "eligible_canary",
       "rollout_decision": "ready_for_manual_approval",
-      "rollback_verdict": "better_than_current",
-      "canary_verdict": "canary_running",
-      "canary_recommended_action": "continue_canary",
+      "rollback_verdict": "worse_than_current",
+      "canary_verdict": "regressed",
+      "canary_recommended_action": "rollback_required",
       "manual_approval_required": true,
       "manual_approval_blocker_count": 0,
       "evidence_link_count": 3,
-      "rollback_trigger_count": 0,
+      "rollback_trigger_count": 1,
       "top_stop_condition": {
         "metric": "fidelity_delta_millionths",
         "operator": "lt",
@@ -602,18 +597,25 @@
         "recommended_action": "rollback_required"
       },
       "reject_reasons": [],
-      "rollback_triggers": [],
+      "rollback_triggers": [
+        {
+          "metric": "queue_fidelity_delta_millionths",
+          "observed_millionths": -64000,
+          "threshold_millionths": 0,
+          "recommended_action": "rollback_required"
+        }
+      ],
       "mutation_policy": {
         "advisory_only": true,
         "changes_active_queue": false,
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/stale_proof-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/stale_proof-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/stale_proof-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/stale_proof-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/stale_proof-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/canary_verdict_ledger.json"
       }
     },
     "staged_contamination": {
@@ -652,29 +654,17 @@
   },
   "degraded": [
     {
-      "component": "checkpoint_restore_handoff",
-      "status": "fail_closed",
-      "impact": "checkpoint restore handoff still carries fail-closed or manual-review drift",
-      "remediation": "Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint."
-    },
-    {
-      "component": "execution_queue_advisory",
-      "status": "warning",
-      "impact": "execution queue advisory is conservative, blocked, or coupled to restore drift",
-      "remediation": "Execution queue runner artifacts are present and risk budget permits advisory queue use."
-    },
-    {
-      "component": "proof_freshness",
-      "status": "stale_by_time",
-      "impact": "prior proof evidence is not reusable",
-      "remediation": "Refresh the proof artifact before publishing or relying on the claim."
+      "component": "queue_tuning_promotion",
+      "status": "rollback_required",
+      "impact": "queue tuning promotion is blocked, rejected, or requires rollback",
+      "remediation": "Respect the promotion guard, rollback comparator, and canary verdict before changing queue policy."
     }
   ],
   "recommendations": [
     {
-      "action": "respect_checkpoint_restore_fail_closed",
+      "action": "respect_queue_tuning_promotion_fail_closed",
       "bead_id": null,
-      "reason": "checkpoint restore handoff is fail-closed or contradicted by conformance evidence"
+      "reason": "queue tuning promotion is rejected, rollback-required, or unsafe"
     }
   ]
 }

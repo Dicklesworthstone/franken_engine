@@ -186,6 +186,33 @@ automatic bead changes, or a second dashboard producer. If checkpoint restore
 or execution queue evidence is degraded, queue fidelity must compose with those
 sections instead of overriding their remediation.
 
+The same operator report now also integrates the final SWARM-CTRL-XIV queue
+tuning promotion handoff:
+
+- Bundle packer: `scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh`
+- Bundle contract: `docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json`
+- Bundle schema: `franken-engine.swarm-execution-queue-tuning-policy-bundle.v1`
+
+- Promotion guard: `scripts/swarm_execution_queue_tuning_promotion_guard.sh`
+- Promotion guard contract: `docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json`
+- Promotion guard receipt schema: `franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1`
+- Manual rollout plan schema: `franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1`
+
+- Rollback comparator: `scripts/swarm_execution_queue_tuning_rollback_comparator.sh`
+- Rollback comparator contract: `docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json`
+- Rollback comparator receipt schema: `franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1`
+- Canary verdict ledger schema: `franken-engine.swarm-execution-queue-canary-verdict-ledger.v1`
+
+That handoff carries bundle readiness, promotion guard decision, manual
+approval blockers, rollback readiness, canary recommendation, and evidence-link
+counts into the existing `scripts/swarm_operator_status_report.sh` producer. It
+is advisory-only. It must not be described as live queue retuning, automatic
+scheduler mutation, automatic promotion, automatic bead changes, or a second
+dashboard producer. If the promotion guard rejects, evidence is stale, or the
+rollback comparator/canary ledger requires rollback, the
+`queue_tuning_promotion` section must surface that fail-closed state instead of
+claiming promotion readiness.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -223,6 +250,7 @@ consumption:
 | `checkpoint_restore` | `swarm-checkpoint-bundle.v1` plus `swarm-checkpoint-restore-plan.v1` plus `swarm-checkpoint-restore-conformance-report.v1` | Show whether a saved checkpoint can be resumed, must fail closed, or needs manual review, plus the top restore action and unresolved restore drift. |
 | `execution_queue_advisory` | `swarm-execution-queue-artifact.v1` plus risk-budget and bottleneck runner artifacts | Show top starts, deferred queue items, conservative-mode state, bottlenecks, and restore dependency status without mutating live queue state. |
 | `queue_fidelity` | `swarm-execution-queue-fidelity-score-receipt.v1` plus drift ledger, counterfactual backtest, tuning plan, and frontier artifacts | Show hindsight trust level, highest-severity drift, and top tuning recommendation without live queue retuning. |
+| `queue_tuning_promotion` | `swarm-execution-queue-tuning-policy-bundle.v1` plus promotion guard, manual rollout, rollback comparator, and canary verdict artifacts | Show bundle readiness, canary recommendation, rollback readiness, manual-approval blockers, and evidence links without automatic promotion. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -251,6 +279,9 @@ The smoke test publishes deterministic goldens for:
 - `execution_queue_restore_blocked`
 - `queue_fidelity_high_drift`
 - `queue_fidelity_insufficient_evidence`
+- `queue_tuning_promotion_blocked`
+- `queue_tuning_promotion_stale_evidence`
+- `queue_tuning_promotion_rollback_required`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -304,6 +335,13 @@ highest-severity mismatch with a tuning recommendation, and
 `queue_fidelity_insufficient_evidence` proves low-evidence tuning stays manual
 review.
 
+The queue tuning policy bundle, promotion guard, and rollback comparator are
+integrated directly as advisory operator evidence. The `healthy` fixture covers
+an eligible canary recommendation, `queue_tuning_promotion_blocked` covers
+manual-approval blockers, `queue_tuning_promotion_stale_evidence` covers stale
+evidence rejection, and `queue_tuning_promotion_rollback_required` proves a
+negative comparator/canary verdict stays fail-closed.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -331,6 +369,9 @@ review.
 - The docs must describe the queue fidelity handoff as integrated advisory
   hindsight evidence, not as live queue retuning, automatic scheduler mutation,
   or automatic bead changes.
+- The docs must describe the queue tuning promotion handoff as integrated
+  advisory operator evidence, not as live queue retuning, automatic scheduler
+  mutation, automatic promotion, or automatic bead changes.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -411,6 +452,21 @@ bash -n scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh
 ./scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh check
 ./scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh selftest
 jq empty docs/swarm_execution_queue_fidelity_scorer_contract_v1.json docs/swarm_execution_queue_counterfactual_planner_contract_v1.json
+```
+
+When changing the queue tuning promotion handoff, also run:
+
+```bash
+bash -n scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh
+bash -n scripts/swarm_execution_queue_tuning_promotion_guard.sh
+bash -n scripts/swarm_execution_queue_tuning_rollback_comparator.sh
+bash -n scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh
+bash -n scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh
+bash -n scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh
+./scripts/e2e/swarm_execution_queue_tuning_policy_bundle_packer_smoke.sh selftest
+./scripts/e2e/swarm_execution_queue_tuning_promotion_guard_smoke.sh selftest
+./scripts/e2e/swarm_execution_queue_tuning_rollback_comparator_smoke.sh selftest
+jq empty docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json
 ```
 
 When changing the SWARM-CTRL-IX high-core scenario matrix, also run:

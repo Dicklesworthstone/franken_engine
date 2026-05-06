@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `23`
+- Degraded fields: `24`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
@@ -14,6 +14,7 @@
 - Checkpoint restore escalation: `unknown` via `null`
 - Execution queue: `missing` top=`0` deferred=`0` restore=`restore_unknown`
 - Queue fidelity: trust=`missing` drift=`none` top-mismatch=`none` tuning=`none`
+- Queue tuning promotion: readiness=`missing` decision=`missing` rollback=`missing` canary=`missing`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -38,6 +39,11 @@
 - Queue counterfactual backtest report: `missing`
 - Queue tuning plan: `missing`
 - Queue tuning frontier: `missing`
+- Queue tuning policy bundle: `missing`
+- Queue tuning promotion guard receipt: `missing`
+- Queue tuning rollout plan: `missing`
+- Queue tuning rollback comparator receipt: `missing`
+- Queue tuning canary verdict ledger: `missing`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
@@ -65,4 +71,5 @@
 - `checkpoint_restore_handoff` `missing`: checkpoint restore handoff artifacts are incomplete. Provide --checkpoint-bundle-json, --checkpoint-restore-plan-json, and --checkpoint-restore-conformance-report-json before trusting restore readiness.
 - `execution_queue_advisory` `missing`: execution queue runner artifacts are incomplete. Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice.
 - `queue_fidelity` `missing`: queue fidelity and tuning artifacts are incomplete. Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice.
+- `queue_tuning_promotion` `missing`: queue tuning promotion artifacts are incomplete. Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

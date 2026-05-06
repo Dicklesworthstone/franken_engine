@@ -46,6 +46,11 @@ queue_drift_ledger_json=""
 queue_counterfactual_backtest_report_json=""
 queue_tuning_plan_json=""
 queue_tuning_frontier_json=""
+queue_tuning_bundle_json=""
+queue_tuning_promotion_guard_receipt_json=""
+queue_tuning_rollout_plan_json=""
+queue_tuning_rollback_comparator_receipt_json=""
+queue_tuning_canary_verdict_ledger_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -99,6 +104,11 @@ Options:
   --queue-counterfactual-backtest-report-json FILE
   --queue-tuning-plan-json FILE
   --queue-tuning-frontier-json FILE
+  --queue-tuning-bundle-json FILE
+  --queue-tuning-promotion-guard-receipt-json FILE
+  --queue-tuning-rollout-plan-json FILE
+  --queue-tuning-rollback-comparator-receipt-json FILE
+  --queue-tuning-canary-verdict-ledger-json FILE
 EOF
 }
 
@@ -284,6 +294,26 @@ while [[ "$#" -gt 0 ]]; do
       queue_tuning_frontier_json="$2"
       shift 2
       ;;
+    --queue-tuning-bundle-json)
+      queue_tuning_bundle_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-promotion-guard-receipt-json)
+      queue_tuning_promotion_guard_receipt_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-rollout-plan-json)
+      queue_tuning_rollout_plan_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-rollback-comparator-receipt-json)
+      queue_tuning_rollback_comparator_receipt_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-canary-verdict-ledger-json)
+      queue_tuning_canary_verdict_ledger_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -361,6 +391,11 @@ queue_drift_ledger_status="missing"
 queue_counterfactual_backtest_report_status="missing"
 queue_tuning_plan_status="missing"
 queue_tuning_frontier_status="missing"
+queue_tuning_bundle_status="missing"
+queue_tuning_promotion_guard_receipt_status="missing"
+queue_tuning_rollout_plan_status="missing"
+queue_tuning_rollback_comparator_receipt_status="missing"
+queue_tuning_canary_verdict_ledger_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -384,6 +419,11 @@ if [[ -n "$queue_drift_ledger_json" ]]; then queue_drift_ledger_status="provided
 if [[ -n "$queue_counterfactual_backtest_report_json" ]]; then queue_counterfactual_backtest_report_status="provided"; fi
 if [[ -n "$queue_tuning_plan_json" ]]; then queue_tuning_plan_status="provided"; fi
 if [[ -n "$queue_tuning_frontier_json" ]]; then queue_tuning_frontier_status="provided"; fi
+if [[ -n "$queue_tuning_bundle_json" ]]; then queue_tuning_bundle_status="provided"; fi
+if [[ -n "$queue_tuning_promotion_guard_receipt_json" ]]; then queue_tuning_promotion_guard_receipt_status="provided"; fi
+if [[ -n "$queue_tuning_rollout_plan_json" ]]; then queue_tuning_rollout_plan_status="provided"; fi
+if [[ -n "$queue_tuning_rollback_comparator_receipt_json" ]]; then queue_tuning_rollback_comparator_receipt_status="provided"; fi
+if [[ -n "$queue_tuning_canary_verdict_ledger_json" ]]; then queue_tuning_canary_verdict_ledger_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -407,6 +447,11 @@ queue_drift_ledger_data="$(json_or_default "$queue_drift_ledger_json" '{"schema_
 queue_counterfactual_backtest_report_data="$(json_or_default "$queue_counterfactual_backtest_report_json" '{"schema_version":"franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1","decision":"missing","baseline_overall_fidelity_millionths":0,"evaluated_candidate_count":0,"positive_candidate_count":0,"fail_closed_reasons":[],"candidates":[],"artifact_paths":{}}' 'queue-counterfactual-backtest-report')"
 queue_tuning_plan_data="$(json_or_default "$queue_tuning_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-plan.v1","decision":"missing","plan_class":"missing","recommended_candidate":null,"ranked_candidates":[],"operator_notes":["No queue tuning plan was provided."],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true}}' 'queue-tuning-plan')"
 queue_tuning_frontier_data="$(json_or_default "$queue_tuning_frontier_json" '{"schema_version":"franken-engine.swarm-execution-queue-counterfactual-frontier.v1","frontier":[]}' 'queue-tuning-frontier')"
+queue_tuning_bundle_data="$(json_or_default "$queue_tuning_bundle_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-policy-bundle.v1","decision":"missing","bundle_id":null,"promoted_candidate":{},"evidence_links":[],"manual_approval":{"required":true,"blockers":[]},"rollback_references":{},"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-bundle')"
+queue_tuning_promotion_guard_receipt_data="$(json_or_default "$queue_tuning_promotion_guard_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1","decision":"missing","reject_reasons":[],"manual_approval_blockers":[],"preconditions":{},"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-promotion-guard-receipt')"
+queue_tuning_rollout_plan_data="$(json_or_default "$queue_tuning_rollout_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1","decision":"missing","manual_approval":{"required":true,"blockers":[]},"stop_conditions":[],"rejection_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-rollout-plan')"
+queue_tuning_rollback_comparator_receipt_data="$(json_or_default "$queue_tuning_rollback_comparator_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1","verdict":"missing","fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-rollback-comparator-receipt')"
+queue_tuning_canary_verdict_ledger_data="$(json_or_default "$queue_tuning_canary_verdict_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-canary-verdict-ledger.v1","verdict":"missing","recommended_action":"missing","rollback_triggers":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true},"artifact_paths":{}}' 'queue-tuning-canary-verdict-ledger')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -439,6 +484,11 @@ jq -n \
   --arg queue_counterfactual_backtest_report_status "$queue_counterfactual_backtest_report_status" \
   --arg queue_tuning_plan_status "$queue_tuning_plan_status" \
   --arg queue_tuning_frontier_status "$queue_tuning_frontier_status" \
+  --arg queue_tuning_bundle_status "$queue_tuning_bundle_status" \
+  --arg queue_tuning_promotion_guard_receipt_status "$queue_tuning_promotion_guard_receipt_status" \
+  --arg queue_tuning_rollout_plan_status "$queue_tuning_rollout_plan_status" \
+  --arg queue_tuning_rollback_comparator_receipt_status "$queue_tuning_rollback_comparator_receipt_status" \
+  --arg queue_tuning_canary_verdict_ledger_status "$queue_tuning_canary_verdict_ledger_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -478,6 +528,11 @@ jq -n \
   --argjson queue_counterfactual_backtest_report "$queue_counterfactual_backtest_report_data" \
   --argjson queue_tuning_plan "$queue_tuning_plan_data" \
   --argjson queue_tuning_frontier "$queue_tuning_frontier_data" \
+  --argjson queue_tuning_bundle "$queue_tuning_bundle_data" \
+  --argjson queue_tuning_promotion_guard_receipt "$queue_tuning_promotion_guard_receipt_data" \
+  --argjson queue_tuning_rollout_plan "$queue_tuning_rollout_plan_data" \
+  --argjson queue_tuning_rollback_comparator_receipt "$queue_tuning_rollback_comparator_receipt_data" \
+  --argjson queue_tuning_canary_verdict_ledger "$queue_tuning_canary_verdict_ledger_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -1133,6 +1188,105 @@ jq -n \
       }
     }) as $queue_fidelity_summary
   | ([
+      $queue_tuning_bundle.mutation_policy,
+      $queue_tuning_promotion_guard_receipt.mutation_policy,
+      $queue_tuning_rollout_plan.mutation_policy,
+      $queue_tuning_rollback_comparator_receipt.mutation_policy,
+      $queue_tuning_canary_verdict_ledger.mutation_policy
+    ] | map({
+      advisory_only: ((.advisory_only // true) == true),
+      changes_active_queue: ((.changes_active_queue // false) == true),
+      applies_live_retuning: ((.applies_live_retuning // false) == true)
+    })) as $queue_tuning_mutation_policies
+  | ($queue_tuning_mutation_policies | map(select(.changes_active_queue == true)) | length > 0) as $queue_tuning_changes_active_queue
+  | ($queue_tuning_mutation_policies | map(select(.applies_live_retuning == true)) | length > 0) as $queue_tuning_applies_live_retuning
+  | ($queue_tuning_mutation_policies | map(select(.advisory_only != true)) | length > 0) as $queue_tuning_lacks_advisory_only
+  | ((($queue_tuning_promotion_guard_receipt.reject_reasons // []) | length)
+      + (($queue_tuning_promotion_guard_receipt.manual_approval_blockers // []) | length)
+      + (($queue_tuning_rollout_plan.manual_approval.blockers // []) | length)
+      + (($queue_tuning_rollout_plan.rejection_reasons // []) | length)) as $queue_tuning_manual_blocker_count
+  | ({
+      artifact_statuses: {
+        bundle: $queue_tuning_bundle_status,
+        promotion_guard_receipt: $queue_tuning_promotion_guard_receipt_status,
+        rollout_plan: $queue_tuning_rollout_plan_status,
+        rollback_comparator_receipt: $queue_tuning_rollback_comparator_receipt_status,
+        canary_verdict_ledger: $queue_tuning_canary_verdict_ledger_status
+      },
+      severity: (
+        if $queue_tuning_bundle_status == "missing"
+          or $queue_tuning_promotion_guard_receipt_status == "missing"
+          or $queue_tuning_rollout_plan_status == "missing"
+          or $queue_tuning_rollback_comparator_receipt_status == "missing"
+          or $queue_tuning_canary_verdict_ledger_status == "missing" then "warning"
+        elif $queue_tuning_changes_active_queue or $queue_tuning_applies_live_retuning or $queue_tuning_lacks_advisory_only then "critical"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") | IN("reject", "fail_closed", "blocked"))
+          or (($queue_tuning_rollout_plan.decision // "") | IN("reject", "fail_closed", "blocked"))
+          or (($queue_tuning_rollback_comparator_receipt.verdict // "") | IN("worse_than_current", "fail_closed"))
+          or (($queue_tuning_canary_verdict_ledger.recommended_action // "") | IN("rollback_required", "stop_canary", "revert", "fail_closed")) then "critical"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") | IN("manual_review", "missing"))
+          or (($queue_tuning_rollout_plan.decision // "") | IN("manual_review", "missing"))
+          or (($queue_tuning_rollback_comparator_receipt.verdict // "") | IN("ambiguous_verdict", "missing"))
+          or (($queue_tuning_canary_verdict_ledger.recommended_action // "") | IN("manual_review", "missing", "hold_canary")) then "warning"
+        else "ok"
+        end
+      ),
+      readiness: (
+        if $queue_tuning_bundle_status == "missing"
+          or $queue_tuning_promotion_guard_receipt_status == "missing"
+          or $queue_tuning_rollout_plan_status == "missing"
+          or $queue_tuning_rollback_comparator_receipt_status == "missing"
+          or $queue_tuning_canary_verdict_ledger_status == "missing" then "missing"
+        elif $queue_tuning_changes_active_queue or $queue_tuning_applies_live_retuning or $queue_tuning_lacks_advisory_only then "fail_closed"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") | IN("reject", "fail_closed", "blocked"))
+          or (($queue_tuning_rollout_plan.decision // "") | IN("reject", "fail_closed", "blocked")) then "fail_closed"
+        elif (($queue_tuning_rollback_comparator_receipt.verdict // "") | IN("worse_than_current", "fail_closed"))
+          or (($queue_tuning_canary_verdict_ledger.recommended_action // "") | IN("rollback_required", "stop_canary", "revert", "fail_closed")) then "rollback_required"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") | IN("manual_review", "missing"))
+          or (($queue_tuning_rollout_plan.decision // "") | IN("manual_review", "missing"))
+          or (($queue_tuning_rollback_comparator_receipt.verdict // "") | IN("ambiguous_verdict", "missing"))
+          or (($queue_tuning_canary_verdict_ledger.recommended_action // "") | IN("manual_review", "missing", "hold_canary")) then "manual_review"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") == "safe_noop") then "noop"
+        elif (($queue_tuning_promotion_guard_receipt.decision // "") == "eligible_canary")
+          and (($queue_tuning_rollback_comparator_receipt.verdict // "") == "better_than_current")
+          and (($queue_tuning_canary_verdict_ledger.recommended_action // "") | IN("continue_canary", "promote_after_canary")) then "ready"
+        else "advisory"
+        end
+      ),
+      bundle_id: ($queue_tuning_bundle.bundle_id // null),
+      candidate_id: ($queue_tuning_bundle.promoted_candidate.candidate_id // $queue_tuning_promotion_guard_receipt.candidate_id // null),
+      candidate_delta_millionths: ($queue_tuning_bundle.promoted_candidate.expected_fidelity_delta_millionths // $queue_tuning_promotion_guard_receipt.expected_fidelity_delta_millionths // null),
+      bundle_decision: ($queue_tuning_bundle.decision // "missing"),
+      promotion_decision: ($queue_tuning_promotion_guard_receipt.decision // "missing"),
+      rollout_decision: ($queue_tuning_rollout_plan.decision // "missing"),
+      rollback_verdict: ($queue_tuning_rollback_comparator_receipt.verdict // "missing"),
+      canary_verdict: ($queue_tuning_canary_verdict_ledger.verdict // "missing"),
+      canary_recommended_action: ($queue_tuning_canary_verdict_ledger.recommended_action // "missing"),
+      manual_approval_required: (($queue_tuning_bundle.manual_approval.required // $queue_tuning_rollout_plan.manual_approval.required // true) == true),
+      manual_approval_blocker_count: $queue_tuning_manual_blocker_count,
+      evidence_link_count: (($queue_tuning_bundle.evidence_links // []) | length),
+      rollback_trigger_count: (($queue_tuning_canary_verdict_ledger.rollback_triggers // []) | length),
+      top_stop_condition: (
+        if (($queue_tuning_rollout_plan.stop_conditions // []) | length) == 0 then null
+        else $queue_tuning_rollout_plan.stop_conditions[0]
+        end
+      ),
+      reject_reasons: bounded(($queue_tuning_promotion_guard_receipt.reject_reasons // []) + ($queue_tuning_rollout_plan.rejection_reasons // [])),
+      rollback_triggers: bounded($queue_tuning_canary_verdict_ledger.rollback_triggers),
+      mutation_policy: {
+        advisory_only: (($queue_tuning_lacks_advisory_only | not) and ($queue_tuning_changes_active_queue | not) and ($queue_tuning_applies_live_retuning | not)),
+        changes_active_queue: $queue_tuning_changes_active_queue,
+        applies_live_retuning: $queue_tuning_applies_live_retuning
+      },
+      artifact_paths: {
+        bundle_json: ($queue_tuning_bundle.artifact_paths.tuning_policy_bundle_json // $queue_tuning_bundle.artifact_paths.bundle_json // null),
+        promotion_guard_receipt_json: ($queue_tuning_promotion_guard_receipt.artifact_paths.promotion_guard_receipt_json // null),
+        rollout_plan_json: ($queue_tuning_rollout_plan.artifact_paths.manual_approval_rollout_plan_json // $queue_tuning_rollout_plan.artifact_paths.rollout_plan_json // null),
+        rollback_comparator_receipt_json: ($queue_tuning_rollback_comparator_receipt.artifact_paths.rollback_comparator_receipt_json // null),
+        canary_verdict_ledger_json: ($queue_tuning_canary_verdict_ledger.artifact_paths.canary_verdict_ledger_json // null)
+      }
+    }) as $queue_tuning_promotion_summary
+  | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
       degraded("proof_evidence_index"; $proof_index_status; "proof queries may be incomplete"; "Use explicit proof outcome snapshots until bd-p03vs lands.")
@@ -1227,6 +1381,21 @@ jq -n \
       elif $queue_fidelity_summary.severity != "ok" then
         [{component: "queue_fidelity", status: $queue_fidelity_summary.trust_level, impact: "queue hindsight drift or counterfactual tuning evidence is degraded", remediation: "Review the highest-severity mismatch and tuning frontier before changing queue policy."}]
       else [] end)
+    + (if $queue_tuning_bundle_status == "missing"
+          or $queue_tuning_promotion_guard_receipt_status == "missing"
+          or $queue_tuning_rollout_plan_status == "missing"
+          or $queue_tuning_rollback_comparator_receipt_status == "missing"
+          or $queue_tuning_canary_verdict_ledger_status == "missing" then
+        [{component: "queue_tuning_promotion", status: "missing", impact: "queue tuning promotion artifacts are incomplete", remediation: "Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice."}]
+      elif ($queue_tuning_promotion_summary.mutation_policy.changes_active_queue == true
+            or $queue_tuning_promotion_summary.mutation_policy.applies_live_retuning == true
+            or $queue_tuning_promotion_summary.mutation_policy.advisory_only != true) then
+        [{component: "queue_tuning_promotion", status: "fail_closed", impact: "queue tuning promotion input implies live mutation", remediation: "Reject promotion artifacts that claim automatic queue retuning, live mutation, or direct scheduler changes."}]
+      elif $queue_tuning_promotion_summary.severity == "critical" then
+        [{component: "queue_tuning_promotion", status: $queue_tuning_promotion_summary.readiness, impact: "queue tuning promotion is blocked, rejected, or requires rollback", remediation: "Respect the promotion guard, rollback comparator, and canary verdict before changing queue policy."}]
+      elif $queue_tuning_promotion_summary.severity == "warning" then
+        [{component: "queue_tuning_promotion", status: $queue_tuning_promotion_summary.readiness, impact: "queue tuning promotion needs manual review or fresher evidence", remediation: "Review manual approval blockers, stale evidence, and canary stop conditions before promotion."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -1304,6 +1473,12 @@ jq -n \
         queue_fidelity_highest_mismatch: ($queue_fidelity_summary.highest_severity_mismatch.mismatch_class // "none"),
         queue_tuning_plan_class: $queue_fidelity_summary.tuning_plan_class,
         queue_tuning_top_recommendation: ($queue_fidelity_summary.top_tuning_recommendation.candidate_id // "none"),
+        queue_tuning_promotion_readiness: $queue_tuning_promotion_summary.readiness,
+        queue_tuning_promotion_decision: $queue_tuning_promotion_summary.promotion_decision,
+        queue_tuning_rollback_verdict: $queue_tuning_promotion_summary.rollback_verdict,
+        queue_tuning_canary_action: $queue_tuning_promotion_summary.canary_recommended_action,
+        queue_tuning_manual_blocker_count: $queue_tuning_promotion_summary.manual_approval_blocker_count,
+        queue_tuning_evidence_link_count: $queue_tuning_promotion_summary.evidence_link_count,
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -1368,9 +1543,10 @@ jq -n \
         checkpoint_restore: $checkpoint_restore_summary,
         execution_queue_advisory: $execution_queue_summary,
         queue_fidelity: $queue_fidelity_summary,
+        queue_tuning_promotion: $queue_tuning_promotion_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1389,6 +1565,8 @@ jq -n \
           [recommendation("respect_execution_queue_fail_closed"; null; "execution queue advisory failed closed or has critical bottlenecks")]
         elif $queue_fidelity_summary.severity == "critical" then
           [recommendation("respect_queue_fidelity_fail_closed"; null; "queue fidelity or counterfactual tuning evidence failed closed")]
+        elif $queue_tuning_promotion_summary.severity == "critical" then
+          [recommendation("respect_queue_tuning_promotion_fail_closed"; null; "queue tuning promotion is rejected, rollback-required, or unsafe")]
         elif $checkpoint_restore_summary.severity == "warning" then
           [recommendation("review_checkpoint_restore_handoff"; null; "checkpoint restore handoff requires manual review before resume")]
         elif $execution_queue_summary.restore_dependency_state == "restore_manual_review" then
@@ -1397,6 +1575,8 @@ jq -n \
           [recommendation("use_execution_queue_conservatively"; null; "execution queue advisory reports conservative risk budget or degraded evidence")]
         elif $queue_fidelity_summary.severity == "warning" then
           [recommendation("review_queue_fidelity_drift"; null; "queue hindsight fidelity or counterfactual tuning evidence is degraded")]
+        elif $queue_tuning_promotion_summary.severity == "warning" then
+          [recommendation("review_queue_tuning_promotion"; null; "queue tuning promotion needs manual approval, fresher evidence, or canary review")]
         elif $starvation_rescue_summary.severity == "warning" then
           [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
@@ -1467,7 +1647,12 @@ jq -n \
         queue_drift_ledger_json: $queue_fidelity_summary.artifact_paths.drift_ledger_json,
         queue_counterfactual_backtest_report_json: $queue_fidelity_summary.artifact_paths.counterfactual_backtest_report_json,
         queue_tuning_plan_json: $queue_fidelity_summary.artifact_paths.tuning_plan_json,
-        queue_tuning_frontier_json: $queue_fidelity_summary.artifact_paths.frontier_json
+        queue_tuning_frontier_json: $queue_fidelity_summary.artifact_paths.frontier_json,
+        queue_tuning_bundle_json: $queue_tuning_promotion_summary.artifact_paths.bundle_json,
+        queue_tuning_promotion_guard_receipt_json: $queue_tuning_promotion_summary.artifact_paths.promotion_guard_receipt_json,
+        queue_tuning_rollout_plan_json: $queue_tuning_promotion_summary.artifact_paths.rollout_plan_json,
+        queue_tuning_rollback_comparator_receipt_json: $queue_tuning_promotion_summary.artifact_paths.rollback_comparator_receipt_json,
+        queue_tuning_canary_verdict_ledger_json: $queue_tuning_promotion_summary.artifact_paths.canary_verdict_ledger_json
       }
     }
   ' >"$status_path"
@@ -1487,6 +1672,7 @@ jq -n \
   printf -- "- Checkpoint restore escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.checkpoint_restore_escalation_band' "$status_path")" "$(jq -r '.summary.checkpoint_restore_top_action' "$status_path")"
   printf -- "- Execution queue: \`%s\` top=\`%s\` deferred=\`%s\` restore=\`%s\`\n" "$(jq -r '.summary.execution_queue_decision' "$status_path")" "$(jq '.summary.execution_queue_top_start_count' "$status_path")" "$(jq '.summary.execution_queue_deferred_count' "$status_path")" "$(jq -r '.summary.execution_queue_restore_dependency_state' "$status_path")"
   printf -- "- Queue fidelity: trust=\`%s\` drift=\`%s\` top-mismatch=\`%s\` tuning=\`%s\`\n" "$(jq -r '.summary.queue_fidelity_trust_level' "$status_path")" "$(jq -r '.summary.queue_fidelity_drift_class' "$status_path")" "$(jq -r '.summary.queue_fidelity_highest_mismatch' "$status_path")" "$(jq -r '.summary.queue_tuning_top_recommendation' "$status_path")"
+  printf -- "- Queue tuning promotion: readiness=\`%s\` decision=\`%s\` rollback=\`%s\` canary=\`%s\`\n" "$(jq -r '.summary.queue_tuning_promotion_readiness' "$status_path")" "$(jq -r '.summary.queue_tuning_promotion_decision' "$status_path")" "$(jq -r '.summary.queue_tuning_rollback_verdict' "$status_path")" "$(jq -r '.summary.queue_tuning_canary_action' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -1510,7 +1696,12 @@ jq -n \
       {label:"Queue drift ledger", path:.artifact_paths.queue_drift_ledger_json},
       {label:"Queue counterfactual backtest report", path:.artifact_paths.queue_counterfactual_backtest_report_json},
       {label:"Queue tuning plan", path:.artifact_paths.queue_tuning_plan_json},
-      {label:"Queue tuning frontier", path:.artifact_paths.queue_tuning_frontier_json}
+      {label:"Queue tuning frontier", path:.artifact_paths.queue_tuning_frontier_json},
+      {label:"Queue tuning policy bundle", path:.artifact_paths.queue_tuning_bundle_json},
+      {label:"Queue tuning promotion guard receipt", path:.artifact_paths.queue_tuning_promotion_guard_receipt_json},
+      {label:"Queue tuning rollout plan", path:.artifact_paths.queue_tuning_rollout_plan_json},
+      {label:"Queue tuning rollback comparator receipt", path:.artifact_paths.queue_tuning_rollback_comparator_receipt_json},
+      {label:"Queue tuning canary verdict ledger", path:.artifact_paths.queue_tuning_canary_verdict_ledger_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

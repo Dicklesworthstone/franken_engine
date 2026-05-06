@@ -111,6 +111,25 @@
     "producer_integration": true,
     "handoff_note": "The operator status report integrates queue fidelity, drift, and counterfactual tuning artifacts as advisory-only hindsight evidence. It must not be described as live queue retuning, automatic scheduler mutation, automatic bead changes, or a second dashboard producer."
   },
+  "queue_tuning_promotion_handoff": {
+    "bundle_packer_script": "scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh",
+    "bundle_schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+    "bundle_contract_doc": "docs/SWARM_EXECUTION_QUEUE_TUNING_POLICY_BUNDLE_CONTRACT.md",
+    "bundle_contract_json": "docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json",
+    "promotion_guard_script": "scripts/swarm_execution_queue_tuning_promotion_guard.sh",
+    "promotion_guard_receipt_schema_version": "franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1",
+    "promotion_guard_contract_doc": "docs/SWARM_EXECUTION_QUEUE_TUNING_PROMOTION_GUARD.md",
+    "promotion_guard_contract_json": "docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json",
+    "rollout_plan_schema_version": "franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1",
+    "rollback_comparator_script": "scripts/swarm_execution_queue_tuning_rollback_comparator.sh",
+    "rollback_comparator_receipt_schema_version": "franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1",
+    "canary_verdict_ledger_schema_version": "franken-engine.swarm-execution-queue-canary-verdict-ledger.v1",
+    "rollback_comparator_contract_doc": "docs/SWARM_EXECUTION_QUEUE_TUNING_ROLLBACK_COMPARATOR.md",
+    "rollback_comparator_contract_json": "docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "handoff_note": "The operator status report integrates final queue tuning promotion artifacts as advisory-only operator evidence. It must not be described as live queue retuning, automatic scheduler mutation, automatic promotion, or a second dashboard producer."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -173,6 +192,13 @@
     "predictive_dashboard.queue_fidelity.top_tuning_recommendation",
     "predictive_dashboard.queue_fidelity.frontier",
     "predictive_dashboard.queue_fidelity.mutation_policy",
+    "predictive_dashboard.queue_tuning_promotion.readiness",
+    "predictive_dashboard.queue_tuning_promotion.promotion_decision",
+    "predictive_dashboard.queue_tuning_promotion.rollback_verdict",
+    "predictive_dashboard.queue_tuning_promotion.canary_recommended_action",
+    "predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count",
+    "predictive_dashboard.queue_tuning_promotion.evidence_link_count",
+    "predictive_dashboard.queue_tuning_promotion.mutation_policy",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -199,6 +225,11 @@
     "franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1",
     "franken-engine.swarm-execution-queue-tuning-plan.v1",
     "franken-engine.swarm-execution-queue-counterfactual-frontier.v1",
+    "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+    "franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1",
+    "franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1",
+    "franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1",
+    "franken-engine.swarm-execution-queue-canary-verdict-ledger.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -219,7 +250,10 @@
     "execution_queue_conservative",
     "execution_queue_restore_blocked",
     "queue_fidelity_high_drift",
-    "queue_fidelity_insufficient_evidence"
+    "queue_fidelity_insufficient_evidence",
+    "queue_tuning_promotion_blocked",
+    "queue_tuning_promotion_stale_evidence",
+    "queue_tuning_promotion_rollback_required"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -256,6 +290,7 @@
     "The checkpoint restore section is advisory snapshot evidence backed by docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md, scripts/swarm_checkpoint_restore_planner.sh, and scripts/swarm_checkpoint_restore_conformance_gate.sh; it must not be described as live checkpoint replay, automatic worker mutation, or automatic ownership transfer.",
     "The execution queue advisory section is advisory snapshot evidence backed by docs/swarm_execution_queue_runner_contract_v1.json and docs/swarm_execution_queue_conformance_contract_v1.json; it must not be described as live bead mutation, automatic reopen, reassignment, or an override for blocked checkpoint restore evidence.",
     "The queue fidelity section is advisory hindsight evidence backed by docs/swarm_execution_queue_fidelity_scorer_contract_v1.json and docs/swarm_execution_queue_counterfactual_planner_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, or automatic bead changes.",
+    "The queue tuning promotion section is advisory operator evidence backed by docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json, docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json, and docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, automatic promotion, or automatic bead changes.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

@@ -726,6 +726,182 @@ write_queue_fidelity_fixtures() {
   }' >"${fixture_dir}/frontier.json"
 }
 
+write_queue_tuning_promotion_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local bundle_decision="ready"
+  local guard_decision="eligible_canary"
+  local rollout_decision="ready_for_manual_approval"
+  local rollback_verdict="better_than_current"
+  local canary_verdict="canary_running"
+  local canary_action="continue_canary"
+  local candidate_id="raise_proof_health_penalty"
+  local candidate_delta_millionths=240000
+  local reject_reasons_json='[]'
+  local blockers_json='[]'
+  local rollback_triggers_json='[]'
+  local stop_conditions_json='[{"metric":"fidelity_delta_millionths","operator":"lt","threshold_millionths":0,"recommended_action":"rollback_required"}]'
+  local evidence_links_json='[{"kind":"fidelity_score_receipt","path":"fidelity_score_receipt.json"},{"kind":"counterfactual_backtest_report","path":"counterfactual_backtest_report.json"},{"kind":"rollback_comparator_receipt","path":"rollback_comparator_receipt.json"}]'
+
+  case "$mode" in
+    healthy)
+      ;;
+    blocked)
+      guard_decision="reject"
+      rollout_decision="blocked"
+      canary_verdict="not_started"
+      canary_action="hold_canary"
+      reject_reasons_json='["manual_approval_missing","bundle_not_reviewed"]'
+      blockers_json='[{"code":"manual_approval_missing","detail":"operator approval is required before canary promotion"},{"code":"bundle_not_reviewed","detail":"policy bundle has not been reviewed"}]'
+      ;;
+    stale_evidence)
+      guard_decision="reject"
+      rollout_decision="blocked"
+      canary_verdict="not_started"
+      canary_action="hold_canary"
+      reject_reasons_json='["stale_evidence"]'
+      blockers_json='[{"code":"stale_evidence","detail":"bundle evidence is older than the freshness window"}]'
+      ;;
+    rollback_required)
+      rollback_verdict="worse_than_current"
+      canary_verdict="regressed"
+      canary_action="rollback_required"
+      rollback_triggers_json='[{"metric":"queue_fidelity_delta_millionths","observed_millionths":-64000,"threshold_millionths":0,"recommended_action":"rollback_required"}]'
+      ;;
+    *)
+      record_failure "unknown queue tuning promotion fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/tuning_policy_bundle.json" \
+    --arg decision "$bundle_decision" \
+    --arg candidate_id "$candidate_id" \
+    --argjson candidate_delta_millionths "$candidate_delta_millionths" \
+    --argjson evidence_links "$evidence_links_json" \
+    --argjson blockers "$blockers_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      bundle_id:"queue-tuning-policy-bundle-smoke",
+      promoted_candidate:{
+        candidate_id:$candidate_id,
+        expected_fidelity_delta_millionths:$candidate_delta_millionths,
+        confidence_band:"high",
+        safety_status:"safe_to_replay"
+      },
+      evidence_links:$evidence_links,
+      manual_approval:{required:true, blockers:$blockers},
+      rollback_references:{
+        rollback_comparator_receipt_json:"rollback_comparator_receipt.json",
+        canary_verdict_ledger_json:"canary_verdict_ledger.json"
+      },
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      artifact_paths:{tuning_policy_bundle_json:$artifact_path}
+    }' >"${fixture_dir}/tuning_policy_bundle.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/promotion_guard_receipt.json" \
+    --arg decision "$guard_decision" \
+    --arg candidate_id "$candidate_id" \
+    --argjson candidate_delta_millionths "$candidate_delta_millionths" \
+    --argjson reject_reasons "$reject_reasons_json" \
+    --argjson blockers "$blockers_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      candidate_id:$candidate_id,
+      expected_fidelity_delta_millionths:$candidate_delta_millionths,
+      reject_reasons:$reject_reasons,
+      manual_approval_blockers:$blockers,
+      preconditions:{
+        bundle_reviewed:(($reject_reasons | index("bundle_not_reviewed")) == null),
+        evidence_fresh:(($reject_reasons | index("stale_evidence")) == null),
+        manual_approval_present:(($reject_reasons | index("manual_approval_missing")) == null)
+      },
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      artifact_paths:{promotion_guard_receipt_json:$artifact_path}
+    }' >"${fixture_dir}/promotion_guard_receipt.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/manual_approval_rollout_plan.json" \
+    --arg decision "$rollout_decision" \
+    --argjson blockers "$blockers_json" \
+    --argjson reject_reasons "$reject_reasons_json" \
+    --argjson stop_conditions "$stop_conditions_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-manual-approval-rollout-plan.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      manual_approval:{
+        required:true,
+        approver_role:"operator",
+        blockers:$blockers
+      },
+      rejection_reasons:$reject_reasons,
+      stop_conditions:$stop_conditions,
+      canary:{recommended_action:"continue_canary", initial_fraction_millionths:100000},
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      artifact_paths:{manual_approval_rollout_plan_json:$artifact_path}
+    }' >"${fixture_dir}/manual_approval_rollout_plan.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/rollback_comparator_receipt.json" \
+    --arg verdict "$rollback_verdict" \
+    --arg candidate_id "$candidate_id" \
+    --argjson candidate_delta_millionths "$candidate_delta_millionths" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1",
+      source_revision:"smoke-rev",
+      verdict:$verdict,
+      current_policy_id:"current-queue-policy",
+      candidate_policy_id:$candidate_id,
+      fidelity_delta_millionths:(if $verdict == "worse_than_current" then -64000 else $candidate_delta_millionths end),
+      fail_closed_reasons:[],
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      artifact_paths:{rollback_comparator_receipt_json:$artifact_path}
+    }' >"${fixture_dir}/rollback_comparator_receipt.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/canary_verdict_ledger.json" \
+    --arg verdict "$canary_verdict" \
+    --arg recommended_action "$canary_action" \
+    --argjson rollback_triggers "$rollback_triggers_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-canary-verdict-ledger.v1",
+      source_revision:"smoke-rev",
+      verdict:$verdict,
+      recommended_action:$recommended_action,
+      rollback_triggers:$rollback_triggers,
+      fail_closed_reasons:[],
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      artifact_paths:{canary_verdict_ledger_json:$artifact_path}
+    }' >"${fixture_dir}/canary_verdict_ledger.json"
+}
+
 write_healthy_fixtures() {
   local fixture_dir="$1"
 
@@ -821,6 +997,7 @@ write_healthy_fixtures() {
   }' >"${fixture_dir}/staged_ownership_report.json"
   write_predictive_extension_fixtures "$fixture_dir"
   write_queue_fidelity_fixtures "$fixture_dir" "healthy"
+  write_queue_tuning_promotion_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -1133,6 +1310,18 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_queue_fidelity_fixtures "$fixture_dir" "insufficient_evidence"
       ;;
+    queue_tuning_promotion_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_tuning_promotion_fixtures "$fixture_dir" "blocked"
+      ;;
+    queue_tuning_promotion_stale_evidence)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_tuning_promotion_fixtures "$fixture_dir" "stale_evidence"
+      ;;
+    queue_tuning_promotion_rollback_required)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_tuning_promotion_fixtures "$fixture_dir" "rollback_required"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1163,6 +1352,11 @@ run_case() {
   [[ -f "${fixture_dir}/counterfactual_backtest_report.json" ]] && extra_args+=(--queue-counterfactual-backtest-report-json "${fixture_dir}/counterfactual_backtest_report.json")
   [[ -f "${fixture_dir}/tuning_plan.json" ]] && extra_args+=(--queue-tuning-plan-json "${fixture_dir}/tuning_plan.json")
   [[ -f "${fixture_dir}/frontier.json" ]] && extra_args+=(--queue-tuning-frontier-json "${fixture_dir}/frontier.json")
+  [[ -f "${fixture_dir}/tuning_policy_bundle.json" ]] && extra_args+=(--queue-tuning-bundle-json "${fixture_dir}/tuning_policy_bundle.json")
+  [[ -f "${fixture_dir}/promotion_guard_receipt.json" ]] && extra_args+=(--queue-tuning-promotion-guard-receipt-json "${fixture_dir}/promotion_guard_receipt.json")
+  [[ -f "${fixture_dir}/manual_approval_rollout_plan.json" ]] && extra_args+=(--queue-tuning-rollout-plan-json "${fixture_dir}/manual_approval_rollout_plan.json")
+  [[ -f "${fixture_dir}/rollback_comparator_receipt.json" ]] && extra_args+=(--queue-tuning-rollback-comparator-receipt-json "${fixture_dir}/rollback_comparator_receipt.json")
+  [[ -f "${fixture_dir}/canary_verdict_ledger.json" ]] && extra_args+=(--queue-tuning-canary-verdict-ledger-json "${fixture_dir}/canary_verdict_ledger.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1231,6 +1425,15 @@ run_case() {
     and (.predictive_dashboard.queue_fidelity.mutation_policy.advisory_only == true)
     and (.predictive_dashboard.queue_fidelity.mutation_policy.changes_active_queue == false)
     and (.predictive_dashboard.queue_fidelity.mutation_policy.applies_live_retuning == false)
+    and (.predictive_dashboard.queue_tuning_promotion.readiness | type == "string")
+    and (.predictive_dashboard.queue_tuning_promotion.promotion_decision | type == "string")
+    and (.predictive_dashboard.queue_tuning_promotion.rollback_verdict | type == "string")
+    and (.predictive_dashboard.queue_tuning_promotion.canary_recommended_action | type == "string")
+    and (.predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count | type == "number")
+    and (.predictive_dashboard.queue_tuning_promotion.evidence_link_count | type == "number")
+    and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.changes_active_queue == false)
+    and (.predictive_dashboard.queue_tuning_promotion.mutation_policy.applies_live_retuning == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1250,6 +1453,11 @@ run_case() {
     and ((.artifact_paths.queue_counterfactual_backtest_report_json == null) or (.artifact_paths.queue_counterfactual_backtest_report_json | type == "string"))
     and ((.artifact_paths.queue_tuning_plan_json == null) or (.artifact_paths.queue_tuning_plan_json | type == "string"))
     and ((.artifact_paths.queue_tuning_frontier_json == null) or (.artifact_paths.queue_tuning_frontier_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_bundle_json == null) or (.artifact_paths.queue_tuning_bundle_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_promotion_guard_receipt_json == null) or (.artifact_paths.queue_tuning_promotion_guard_receipt_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_rollout_plan_json == null) or (.artifact_paths.queue_tuning_rollout_plan_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_rollback_comparator_receipt_json == null) or (.artifact_paths.queue_tuning_rollback_comparator_receipt_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_canary_verdict_ledger_json == null) or (.artifact_paths.queue_tuning_canary_verdict_ledger_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1285,6 +1493,11 @@ run_case() {
         and .predictive_dashboard.queue_fidelity.drift_class == "none"
         and .predictive_dashboard.queue_fidelity.highest_severity_mismatch == null
         and .predictive_dashboard.queue_fidelity.top_tuning_recommendation == null
+        and .predictive_dashboard.queue_tuning_promotion.readiness == "ready"
+        and .predictive_dashboard.queue_tuning_promotion.promotion_decision == "eligible_canary"
+        and .predictive_dashboard.queue_tuning_promotion.rollback_verdict == "better_than_current"
+        and .predictive_dashboard.queue_tuning_promotion.canary_recommended_action == "continue_canary"
+        and .predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count == 0
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1304,6 +1517,7 @@ run_case() {
         and .predictive_dashboard.checkpoint_restore.artifact_status == "missing"
         and .predictive_dashboard.execution_queue_advisory.artifact_status == "missing"
         and .predictive_dashboard.queue_fidelity.artifact_status == "missing"
+        and .predictive_dashboard.queue_tuning_promotion.artifact_statuses.bundle == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1411,6 +1625,38 @@ run_case() {
         and any(.degraded[]; .component == "queue_fidelity")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    queue_tuning_promotion_blocked)
+      jq -e '
+        .predictive_dashboard.queue_tuning_promotion.readiness == "fail_closed"
+        and .predictive_dashboard.queue_tuning_promotion.promotion_decision == "reject"
+        and .predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count > 0
+        and (.predictive_dashboard.queue_tuning_promotion.reject_reasons | index("manual_approval_missing"))
+        and .summary.queue_tuning_promotion_readiness == "fail_closed"
+        and .recommendations[0].action == "respect_queue_tuning_promotion_fail_closed"
+        and any(.degraded[]; .component == "queue_tuning_promotion")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    queue_tuning_promotion_stale_evidence)
+      jq -e '
+        .predictive_dashboard.queue_tuning_promotion.readiness == "fail_closed"
+        and .predictive_dashboard.queue_tuning_promotion.promotion_decision == "reject"
+        and (.predictive_dashboard.queue_tuning_promotion.reject_reasons | index("stale_evidence"))
+        and .summary.queue_tuning_promotion_decision == "reject"
+        and .recommendations[0].action == "respect_queue_tuning_promotion_fail_closed"
+        and any(.degraded[]; .component == "queue_tuning_promotion")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    queue_tuning_promotion_rollback_required)
+      jq -e '
+        .predictive_dashboard.queue_tuning_promotion.readiness == "rollback_required"
+        and .predictive_dashboard.queue_tuning_promotion.rollback_verdict == "worse_than_current"
+        and .predictive_dashboard.queue_tuning_promotion.canary_recommended_action == "rollback_required"
+        and .predictive_dashboard.queue_tuning_promotion.rollback_trigger_count == 1
+        and .summary.queue_tuning_rollback_verdict == "worse_than_current"
+        and .recommendations[0].action == "respect_queue_tuning_promotion_fail_closed"
+        and any(.degraded[]; .component == "queue_tuning_promotion")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -1446,6 +1692,9 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("execution_queue_restore_blocked"))
     and (.golden_fixture_cases | index("queue_fidelity_high_drift"))
     and (.golden_fixture_cases | index("queue_fidelity_insufficient_evidence"))
+    and (.golden_fixture_cases | index("queue_tuning_promotion_blocked"))
+    and (.golden_fixture_cases | index("queue_tuning_promotion_stale_evidence"))
+    and (.golden_fixture_cases | index("queue_tuning_promotion_rollback_required"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -1465,6 +1714,13 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.drift_class"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.highest_severity_mismatch"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.top_tuning_recommendation"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.promotion_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.rollback_verdict"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.canary_recommended_action"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.manual_approval_blocker_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.evidence_link_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_tuning_promotion.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -1491,8 +1747,12 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_execution_queue_runner_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_fidelity_scorer_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_counterfactual_planner_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
+  grep -Fq 'queue_tuning_promotion' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -1522,6 +1782,9 @@ run_selftest() {
   run_case "execution_queue_restore_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_fidelity_high_drift" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_fidelity_insufficient_evidence" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_tuning_promotion_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_tuning_promotion_stale_evidence" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_tuning_promotion_rollback_required" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

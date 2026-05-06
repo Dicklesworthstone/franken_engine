@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 23,
+    "degraded_count": 24,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -64,6 +64,12 @@
     "queue_fidelity_highest_mismatch": "none",
     "queue_tuning_plan_class": "missing",
     "queue_tuning_top_recommendation": "none",
+    "queue_tuning_promotion_readiness": "missing",
+    "queue_tuning_promotion_decision": "missing",
+    "queue_tuning_rollback_verdict": "missing",
+    "queue_tuning_canary_action": "missing",
+    "queue_tuning_manual_blocker_count": 0,
+    "queue_tuning_evidence_link_count": 0,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -453,6 +459,45 @@
         "frontier_json": null
       }
     },
+    "queue_tuning_promotion": {
+      "artifact_statuses": {
+        "bundle": "missing",
+        "promotion_guard_receipt": "missing",
+        "rollout_plan": "missing",
+        "rollback_comparator_receipt": "missing",
+        "canary_verdict_ledger": "missing"
+      },
+      "severity": "warning",
+      "readiness": "missing",
+      "bundle_id": null,
+      "candidate_id": null,
+      "candidate_delta_millionths": null,
+      "bundle_decision": "missing",
+      "promotion_decision": "missing",
+      "rollout_decision": "missing",
+      "rollback_verdict": "missing",
+      "canary_verdict": "missing",
+      "canary_recommended_action": "missing",
+      "manual_approval_required": true,
+      "manual_approval_blocker_count": 0,
+      "evidence_link_count": 0,
+      "rollback_trigger_count": 0,
+      "top_stop_condition": null,
+      "reject_reasons": [],
+      "rollback_triggers": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "bundle_json": null,
+        "promotion_guard_receipt_json": null,
+        "rollout_plan_json": null,
+        "rollback_comparator_receipt_json": null,
+        "canary_verdict_ledger_json": null
+      }
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -478,7 +523,10 @@
         "execution_queue_conservative",
         "execution_queue_restore_blocked",
         "queue_fidelity_high_drift",
-        "queue_fidelity_insufficient_evidence"
+        "queue_fidelity_insufficient_evidence",
+        "queue_tuning_promotion_blocked",
+        "queue_tuning_promotion_stale_evidence",
+        "queue_tuning_promotion_rollback_required"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -616,6 +664,12 @@
       "status": "missing",
       "impact": "queue fidelity and tuning artifacts are incomplete",
       "remediation": "Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice."
+    },
+    {
+      "component": "queue_tuning_promotion",
+      "status": "missing",
+      "impact": "queue tuning promotion artifacts are incomplete",
+      "remediation": "Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice."
     },
     {
       "component": "rch_incident_packet",

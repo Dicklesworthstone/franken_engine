@@ -14,6 +14,7 @@
 - Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
 - Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
 - Queue fidelity: trust=`degraded` drift=`proof_brownout_miss` top-mismatch=`proof_brownout_miss` tuning=`raise_proof_health_penalty`
+- Queue tuning promotion: readiness=`ready` decision=`eligible_canary` rollback=`better_than_current` canary=`continue_canary`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -38,6 +39,11 @@
 - Queue counterfactual backtest report: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/counterfactual_backtest_report.json`
 - Queue tuning plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/tuning_plan.json`
 - Queue tuning frontier: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/frontier.json`
+- Queue tuning policy bundle: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/tuning_policy_bundle.json`
+- Queue tuning promotion guard receipt: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/promotion_guard_receipt.json`
+- Queue tuning rollout plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/manual_approval_rollout_plan.json`
+- Queue tuning rollback comparator receipt: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/rollback_comparator_receipt.json`
+- Queue tuning canary verdict ledger: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/canary_verdict_ledger.json`
 
 - `review_queue_fidelity_drift`: queue hindsight fidelity or counterfactual tuning evidence is degraded
 

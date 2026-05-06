@@ -64,6 +64,12 @@
     "queue_fidelity_highest_mismatch": "none",
     "queue_tuning_plan_class": "no_improvement",
     "queue_tuning_top_recommendation": "none",
+    "queue_tuning_promotion_readiness": "ready",
+    "queue_tuning_promotion_decision": "eligible_canary",
+    "queue_tuning_rollback_verdict": "better_than_current",
+    "queue_tuning_canary_action": "continue_canary",
+    "queue_tuning_manual_blocker_count": 0,
+    "queue_tuning_evidence_link_count": 3,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -576,6 +582,50 @@
         "frontier_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/frontier.json"
       }
     },
+    "queue_tuning_promotion": {
+      "artifact_statuses": {
+        "bundle": "provided",
+        "promotion_guard_receipt": "provided",
+        "rollout_plan": "provided",
+        "rollback_comparator_receipt": "provided",
+        "canary_verdict_ledger": "provided"
+      },
+      "severity": "ok",
+      "readiness": "ready",
+      "bundle_id": "queue-tuning-policy-bundle-smoke",
+      "candidate_id": "raise_proof_health_penalty",
+      "candidate_delta_millionths": 240000,
+      "bundle_decision": "ready",
+      "promotion_decision": "eligible_canary",
+      "rollout_decision": "ready_for_manual_approval",
+      "rollback_verdict": "better_than_current",
+      "canary_verdict": "canary_running",
+      "canary_recommended_action": "continue_canary",
+      "manual_approval_required": true,
+      "manual_approval_blocker_count": 0,
+      "evidence_link_count": 3,
+      "rollback_trigger_count": 0,
+      "top_stop_condition": {
+        "metric": "fidelity_delta_millionths",
+        "operator": "lt",
+        "threshold_millionths": 0,
+        "recommended_action": "rollback_required"
+      },
+      "reject_reasons": [],
+      "rollback_triggers": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "bundle_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/canary_verdict_ledger.json"
+      }
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -601,7 +651,10 @@
         "execution_queue_conservative",
         "execution_queue_restore_blocked",
         "queue_fidelity_high_drift",
-        "queue_fidelity_insufficient_evidence"
+        "queue_fidelity_insufficient_evidence",
+        "queue_tuning_promotion_blocked",
+        "queue_tuning_promotion_stale_evidence",
+        "queue_tuning_promotion_rollback_required"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

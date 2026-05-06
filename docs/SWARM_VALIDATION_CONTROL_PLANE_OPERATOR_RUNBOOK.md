@@ -158,6 +158,32 @@ future rich rendering implementation belongs in `/dp/frankentui`; until that
 implementation exists, treat the JSON and Markdown reports as the shipped
 operator surface.
 
+## SWARM-CTRL-II Closeout Evidence
+
+`bd-uhzkf` closes when every predictive orchestration claim maps to shipped
+repo artifacts and executable checks:
+
+| Epic claim | Shipped evidence |
+| --- | --- |
+| Predictive validation plans show likely cost, target selection, artifact freshness, and collision risk before heavy commands run. | `scripts/swarm_validation_planner.sh`, `scripts/e2e/swarm_validation_planner_smoke.sh`, `scripts/proof_freshness_decay_gate.sh`, and `scripts/e2e/proof_freshness_decay_gate_smoke.sh` publish predicted-cost, recommended target-dir, collision, and reusable-proof decisions from explicit snapshots. |
+| `rch` fallback and worker-pressure failures produce compact incident packets instead of ambiguous logs. | `scripts/rch_incident_packet_gate.sh` and `scripts/e2e/rch_incident_packet_gate_smoke.sh` classify local fallback, worker timeout, SIGKILL, artifact retrieval failure, missing completion markers, and unknown remote failures into `franken-engine.rch-incident-packet.v1`. |
+| Proof artifacts are indexed with freshness and decay status tied to source revisions and changed paths. | `scripts/proof_freshness_decay_gate.sh`, `scripts/proof_reuse_cache_planner.sh`, `scripts/e2e/proof_reuse_cache_planner_smoke.sh`, and the proof-cost history inputs consumed by the validation planner keep stale, superseded, incomplete, mismatched, and source-revision-drift evidence fail-closed. |
+| The operator status feed can power a future frankentui dashboard without schema churn. | `scripts/swarm_operator_status_report.sh`, `scripts/e2e/swarm_operator_status_report_smoke.sh`, `docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md`, and `docs/swarm_predictive_dashboard_contract_v1.json` publish `franken-engine.swarm-predictive-dashboard.v1` while keeping local interactive rendering non-shipped and `/dp/frankentui`-owned. |
+| The composed workflow has a no-mock drill, stable logs, deterministic artifacts, and docs truth coverage. | `scripts/e2e/swarm_predictive_orchestration_e2e.sh` composes the planner, freshness gate, rch incident gate, and operator status reporter without executing Cargo; `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh` verifies shipped paths, contract fields, future-tense frankentui claims, and rch-wrapped heavy Cargo examples. |
+
+Child-bead closure evidence:
+
+| Bead | Scope | Closure artifact |
+| --- | --- | --- |
+| `bd-tgc6r` | Proof-cost history indexing | Proof-cost history rows consumed by `scripts/swarm_validation_planner.sh`. |
+| `bd-etd0s` | Predictive cost and target recommendations | Planner predicted-cost fields and `scripts/e2e/swarm_validation_planner_smoke.sh`. |
+| `bd-wlux9` | `rch` incident packets | `scripts/rch_incident_packet_gate.sh` and smoke coverage. |
+| `bd-l158y` | Conflict-aware write-set planning | Planner reservation and in-progress snapshots plus `collision_receipt.json`. |
+| `bd-wnl6b` | Proof freshness and decay | `scripts/proof_freshness_decay_gate.sh` and smoke coverage. |
+| `bd-znc7s` | Predictive dashboard contract | Dashboard contract docs, JSON contract, and operator-status goldens. |
+| `bd-ad31e` | No-mock predictive orchestration drill | `scripts/e2e/swarm_predictive_orchestration_e2e.sh` report artifacts. |
+| `bd-1y2bu` | Runbook and docs truth gate | This runbook plus `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh`. |
+
 ## Failure Handling
 
 | Condition | Decision | Operator action |

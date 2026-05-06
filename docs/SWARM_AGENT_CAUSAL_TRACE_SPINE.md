@@ -100,9 +100,28 @@ SWARM-CTRL-XVI child beads define the producer chain:
 - `scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh`
 - `scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh`
 
+## Normalizer Artifacts
+
+`scripts/swarm_agent_causal_trace_normalizer.sh` emits the first replayable
+source/event surface:
+
+- `swarm_agent_causal_trace_input.json`
+- `swarm_agent_causal_trace_sources.json`
+- `swarm_agent_causal_trace_events.json`
+- `events.jsonl`
+- `commands.txt`
+- `report.md`
+
+The normalizer exits `42` for fail-closed trace contamination while preserving
+all artifacts for inspection.
+
 ## Validation
 
 ```bash
+bash -n scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh
+shellcheck -x scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh
 jq empty docs/swarm_agent_causal_trace_spine_contract_v1.json
-git diff --check -- docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
+bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh check
+bash scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh selftest
+git diff --check -- scripts/swarm_agent_causal_trace_normalizer.sh scripts/e2e/swarm_agent_causal_trace_normalizer_smoke.sh docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md docs/swarm_agent_causal_trace_spine_contract_v1.json
 ```

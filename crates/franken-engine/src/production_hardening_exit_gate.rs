@@ -100,6 +100,9 @@ pub struct FuzzCampaignConfig {
     pub corpus_size_threshold: u32,
     pub coverage_threshold_pct: f64,
     pub crash_tolerance: u32,
+    pub actual_cpu_hours: Option<u32>,
+    pub actual_coverage_pct: Option<f64>,
+    pub actual_crash_count: Option<u32>,
     pub completion_status: ValidationStatus,
 }
 
@@ -110,6 +113,8 @@ pub struct PropertyTestConfig {
     pub property_type: PropertyType,
     pub test_cases_threshold: u32,
     pub success_rate_threshold_pct: f64,
+    pub actual_test_cases: Option<u32>,
+    pub actual_success_rate_pct: Option<f64>,
     pub validation_status: ValidationStatus,
 }
 
@@ -134,6 +139,8 @@ pub struct MetamorphicTestConfig {
     pub transformation: String,
     pub expected_preservation: String,
     pub test_cases_threshold: u32,
+    pub actual_test_cases: Option<u32>,
+    pub actual_preservation_validated: Option<bool>,
     pub validation_status: ValidationStatus,
 }
 
@@ -153,6 +160,8 @@ pub struct RolloutValidationConfig {
     pub metrics_collection_duration_mins: u32,
     pub error_rate_threshold_pct: f64,
     pub latency_threshold_p99_ms: u64,
+    pub actual_error_rate_pct: Option<f64>,
+    pub actual_latency_p99_ms: Option<u64>,
     pub validation_status: ValidationStatus,
 }
 
@@ -162,6 +171,8 @@ pub struct FaultInjectionConfig {
     pub fault_type: FaultType,
     pub duration_mins: u32,
     pub recovery_slo_mins: u32,
+    pub actual_recovery_time_mins: Option<u32>,
+    pub actual_system_recovered: Option<bool>,
     pub validation_status: ValidationStatus,
 }
 
@@ -232,6 +243,7 @@ pub struct ReplayAuditConfig {
     pub incident_severity: String,
     pub environment: String,
     pub replay_success_threshold_pct: f64,
+    pub actual_success_rate_pct: Option<f64>,
     pub validation_status: ValidationStatus,
 }
 
@@ -536,6 +548,9 @@ impl ProductionHardeningGateExecution {
 
             let fuzz_result =
                 Self::execute_fuzz_target(&self.evidence_artifacts, &campaign.target)?;
+            campaign.actual_cpu_hours = Some(fuzz_result.cpu_hours);
+            campaign.actual_coverage_pct = Some(fuzz_result.coverage_pct);
+            campaign.actual_crash_count = Some(fuzz_result.crash_count);
 
             if fuzz_result.cpu_hours >= campaign.min_cpu_hours
                 && fuzz_result.coverage_pct >= campaign.coverage_threshold_pct
@@ -582,6 +597,8 @@ impl ProductionHardeningGateExecution {
                 &test.component,
                 &test.property_type,
             )?;
+            test.actual_test_cases = Some(property_result.test_cases);
+            test.actual_success_rate_pct = Some(property_result.success_rate_pct);
 
             if property_result.test_cases >= test.test_cases_threshold
                 && property_result.success_rate_pct >= test.success_rate_threshold_pct
@@ -627,6 +644,8 @@ impl ProductionHardeningGateExecution {
                 &self.evidence_artifacts,
                 &test.transformation,
             )?;
+            test.actual_test_cases = Some(metamorphic_result.test_cases);
+            test.actual_preservation_validated = Some(metamorphic_result.preservation_validated);
 
             if metamorphic_result.test_cases >= test.test_cases_threshold
                 && metamorphic_result.preservation_validated
@@ -672,6 +691,8 @@ impl ProductionHardeningGateExecution {
 
             let rollout_result =
                 Self::validate_rollout_stage(&self.evidence_artifacts, &stage.stage)?;
+            stage.actual_error_rate_pct = Some(rollout_result.error_rate_pct);
+            stage.actual_latency_p99_ms = Some(rollout_result.latency_p99_ms);
 
             if rollout_result.error_rate_pct <= stage.error_rate_threshold_pct
                 && rollout_result.latency_p99_ms <= stage.latency_threshold_p99_ms
@@ -717,6 +738,8 @@ impl ProductionHardeningGateExecution {
 
             let drill_result =
                 Self::execute_fault_injection_drill(&self.evidence_artifacts, &drill.fault_type)?;
+            drill.actual_recovery_time_mins = Some(drill_result.recovery_time_mins);
+            drill.actual_system_recovered = Some(drill_result.system_recovered);
 
             if drill_result.recovery_time_mins <= drill.recovery_slo_mins
                 && drill_result.system_recovered
@@ -830,6 +853,7 @@ impl ProductionHardeningGateExecution {
                 &audit.incident_severity,
                 &audit.environment,
             )?;
+            audit.actual_success_rate_pct = Some(replay_result.success_rate_pct);
 
             if replay_result.success_rate_pct >= audit.replay_success_threshold_pct {
                 audit.validation_status = ValidationStatus::Passed;
@@ -971,7 +995,7 @@ impl ProductionHardeningGateExecution {
 
         let performance_assessment = PerformanceAssessment {
             fuzz_coverage_pct: self.calculate_fuzz_coverage(),
-            fuzz_cpu_hours_total: self.fuzz_campaigns.iter().map(|c| c.min_cpu_hours).sum(),
+            fuzz_cpu_hours_total: self.calculate_fuzz_cpu_hours_total(),
             property_test_coverage_pct: self.calculate_property_test_coverage(),
             metamorphic_preservation_rate_pct: self.calculate_metamorphic_preservation_rate(),
             performance_regression_risk: performance_regression_risk.to_string(),
@@ -1018,8 +1042,8 @@ impl ProductionHardeningGateExecution {
         };
 
         let operational_assessment = OperationalAssessment {
-            monitoring_coverage_pct: 95.0,  // Based on structured logging coverage
-            logging_completeness_pct: 98.0, // Based on event coverage
+            monitoring_coverage_pct: self.calculate_evidence_coverage_pct(),
+            logging_completeness_pct: self.calculate_evidence_domain_completeness_pct(),
             operator_tooling_validated: e2e_passed,
             deployment_automation_validated: e2e_passed,
             operational_risk: operational_risk.to_string(),
@@ -1308,27 +1332,142 @@ impl ProductionHardeningGateExecution {
     }
 
     fn calculate_fuzz_coverage(&self) -> f64 {
-        85.0 // Calculated based on fuzz campaign results
+        average_f64(
+            self.fuzz_campaigns
+                .iter()
+                .map(|campaign| campaign.actual_coverage_pct.unwrap_or(0.0)),
+        )
+    }
+
+    fn calculate_fuzz_cpu_hours_total(&self) -> u32 {
+        self.fuzz_campaigns
+            .iter()
+            .map(|campaign| campaign.actual_cpu_hours.unwrap_or(0))
+            .sum()
     }
 
     fn calculate_property_test_coverage(&self) -> f64 {
-        95.0 // Based on property test results
+        average_f64(
+            self.property_tests
+                .iter()
+                .map(|test| test.actual_success_rate_pct.unwrap_or(0.0)),
+        )
     }
 
     fn calculate_metamorphic_preservation_rate(&self) -> f64 {
-        99.5 // Based on metamorphic test results
+        let total_cases: u32 = self
+            .metamorphic_tests
+            .iter()
+            .map(|test| test.actual_test_cases.unwrap_or(0))
+            .sum();
+        if total_cases == 0 {
+            return 0.0;
+        }
+
+        let preserved_cases: u32 = self
+            .metamorphic_tests
+            .iter()
+            .filter(|test| test.actual_preservation_validated.unwrap_or(false))
+            .map(|test| test.actual_test_cases.unwrap_or(0))
+            .sum();
+
+        (preserved_cases as f64 / total_cases as f64) * 100.0
     }
 
     fn calculate_fault_recovery_success_rate(&self) -> f64 {
-        100.0 // Based on fault injection drill results
+        percentage(
+            self.fault_injection_drills
+                .iter()
+                .filter(|drill| {
+                    drill.actual_system_recovered == Some(true)
+                        && drill
+                            .actual_recovery_time_mins
+                            .is_some_and(|mins| mins <= drill.recovery_slo_mins)
+                })
+                .count(),
+            self.fault_injection_drills.len(),
+        )
     }
 
     fn calculate_rollout_success_rate(&self) -> f64 {
-        100.0 // Based on rollout validation results
+        percentage(
+            self.rollout_validation
+                .iter()
+                .filter(|stage| {
+                    stage
+                        .actual_error_rate_pct
+                        .is_some_and(|rate| rate <= stage.error_rate_threshold_pct)
+                        && stage
+                            .actual_latency_p99_ms
+                            .is_some_and(|latency| latency <= stage.latency_threshold_p99_ms)
+                })
+                .count(),
+            self.rollout_validation.len(),
+        )
     }
 
     fn calculate_replay_audit_success_rate(&self) -> f64 {
-        100.0 // Based on replay audit results
+        average_f64(
+            self.replay_audits
+                .iter()
+                .map(|audit| audit.actual_success_rate_pct.unwrap_or(0.0)),
+        )
+    }
+
+    fn calculate_evidence_coverage_pct(&self) -> f64 {
+        let required_entries = self.required_evidence_entries();
+        percentage(
+            self.evidence_artifacts.len().min(required_entries),
+            required_entries,
+        )
+    }
+
+    fn calculate_evidence_domain_completeness_pct(&self) -> f64 {
+        percentage(
+            [
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("security:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("fuzz:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("property:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("metamorphic:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("rollout:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("fault:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("quarantine:")),
+                self.evidence_artifacts
+                    .keys()
+                    .any(|key| key.starts_with("replay:")),
+                self.evidence_artifacts.contains_key("e2e:deployment"),
+            ]
+            .into_iter()
+            .filter(|covered| *covered)
+            .count(),
+            9,
+        )
+    }
+
+    fn required_evidence_entries(&self) -> usize {
+        self.security_matrix.len()
+            + self.fuzz_campaigns.len()
+            + self.property_tests.len()
+            + self.metamorphic_tests.len()
+            + self.rollout_validation.len()
+            + self.fault_injection_drills.len()
+            + self.quarantine_drills.len()
+            + self.replay_audits.len()
+            + 1
     }
 
     pub fn all_validations_passed(&self) -> bool {
@@ -1599,6 +1738,28 @@ fn parse_bool_evidence_field(artifact: &str, field: &str) -> Result<bool, String
     }
 }
 
+fn average_f64(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for value in values {
+        total += value;
+        count += 1;
+    }
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f64
+    }
+}
+
+fn percentage(numerator: usize, denominator: usize) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        (numerator as f64 / denominator as f64) * 100.0
+    }
+}
+
 // Result types for validation operations
 
 #[derive(Debug)]
@@ -1705,6 +1866,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 10000,
             coverage_threshold_pct: 80.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
         FuzzCampaignConfig {
@@ -1713,6 +1877,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 5000,
             coverage_threshold_pct: 85.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
         FuzzCampaignConfig {
@@ -1721,6 +1888,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 8000,
             coverage_threshold_pct: 75.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
         FuzzCampaignConfig {
@@ -1729,6 +1899,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 3000,
             coverage_threshold_pct: 90.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
         FuzzCampaignConfig {
@@ -1737,6 +1910,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 2000,
             coverage_threshold_pct: 95.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
         FuzzCampaignConfig {
@@ -1745,6 +1921,9 @@ fn create_default_fuzz_campaigns() -> Vec<FuzzCampaignConfig> {
             corpus_size_threshold: 1500,
             coverage_threshold_pct: 90.0,
             crash_tolerance: 0,
+            actual_cpu_hours: None,
+            actual_coverage_pct: None,
+            actual_crash_count: None,
             completion_status: ValidationStatus::Pending,
         },
     ]
@@ -1758,6 +1937,8 @@ fn create_default_property_tests() -> Vec<PropertyTestConfig> {
             property_type: PropertyType::ParserInvariants,
             test_cases_threshold: 10000,
             success_rate_threshold_pct: 99.9,
+            actual_test_cases: None,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         PropertyTestConfig {
@@ -1765,6 +1946,8 @@ fn create_default_property_tests() -> Vec<PropertyTestConfig> {
             property_type: PropertyType::IRInvariants,
             test_cases_threshold: 5000,
             success_rate_threshold_pct: 99.95,
+            actual_test_cases: None,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         PropertyTestConfig {
@@ -1772,6 +1955,8 @@ fn create_default_property_tests() -> Vec<PropertyTestConfig> {
             property_type: PropertyType::ExecutionInvariants,
             test_cases_threshold: 8000,
             success_rate_threshold_pct: 99.9,
+            actual_test_cases: None,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         PropertyTestConfig {
@@ -1779,6 +1964,8 @@ fn create_default_property_tests() -> Vec<PropertyTestConfig> {
             property_type: PropertyType::PolicyMonotonicity,
             test_cases_threshold: 3000,
             success_rate_threshold_pct: 100.0,
+            actual_test_cases: None,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         PropertyTestConfig {
@@ -1786,6 +1973,8 @@ fn create_default_property_tests() -> Vec<PropertyTestConfig> {
             property_type: PropertyType::EvidenceDeterminism,
             test_cases_threshold: 2000,
             success_rate_threshold_pct: 100.0,
+            actual_test_cases: None,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
     ]
@@ -1798,18 +1987,24 @@ fn create_default_metamorphic_tests() -> Vec<MetamorphicTestConfig> {
             transformation: "optimization-level".to_string(),
             expected_preservation: "semantic-equivalence".to_string(),
             test_cases_threshold: 2000,
+            actual_test_cases: None,
+            actual_preservation_validated: None,
             validation_status: ValidationStatus::Pending,
         },
         MetamorphicTestConfig {
             transformation: "policy-merge-order".to_string(),
             expected_preservation: "policy-equivalence".to_string(),
             test_cases_threshold: 1000,
+            actual_test_cases: None,
+            actual_preservation_validated: None,
             validation_status: ValidationStatus::Pending,
         },
         MetamorphicTestConfig {
             transformation: "code-reordering".to_string(),
             expected_preservation: "execution-equivalence".to_string(),
             test_cases_threshold: 3000,
+            actual_test_cases: None,
+            actual_preservation_validated: None,
             validation_status: ValidationStatus::Pending,
         },
     ]
@@ -1823,6 +2018,8 @@ fn create_default_rollout_validation() -> Vec<RolloutValidationConfig> {
             metrics_collection_duration_mins: 60,
             error_rate_threshold_pct: 0.01,
             latency_threshold_p99_ms: 100,
+            actual_error_rate_pct: None,
+            actual_latency_p99_ms: None,
             validation_status: ValidationStatus::Pending,
         },
         RolloutValidationConfig {
@@ -1830,6 +2027,8 @@ fn create_default_rollout_validation() -> Vec<RolloutValidationConfig> {
             metrics_collection_duration_mins: 120,
             error_rate_threshold_pct: 0.1,
             latency_threshold_p99_ms: 200,
+            actual_error_rate_pct: None,
+            actual_latency_p99_ms: None,
             validation_status: ValidationStatus::Pending,
         },
         RolloutValidationConfig {
@@ -1837,6 +2036,8 @@ fn create_default_rollout_validation() -> Vec<RolloutValidationConfig> {
             metrics_collection_duration_mins: 240,
             error_rate_threshold_pct: 0.5,
             latency_threshold_p99_ms: 300,
+            actual_error_rate_pct: None,
+            actual_latency_p99_ms: None,
             validation_status: ValidationStatus::Pending,
         },
         RolloutValidationConfig {
@@ -1844,6 +2045,8 @@ fn create_default_rollout_validation() -> Vec<RolloutValidationConfig> {
             metrics_collection_duration_mins: 480,
             error_rate_threshold_pct: 1.0,
             latency_threshold_p99_ms: 500,
+            actual_error_rate_pct: None,
+            actual_latency_p99_ms: None,
             validation_status: ValidationStatus::Pending,
         },
     ]
@@ -1856,30 +2059,40 @@ fn create_default_fault_injection_drills() -> Vec<FaultInjectionConfig> {
             fault_type: FaultType::NetworkPartition,
             duration_mins: 10,
             recovery_slo_mins: 5,
+            actual_recovery_time_mins: None,
+            actual_system_recovered: None,
             validation_status: ValidationStatus::Pending,
         },
         FaultInjectionConfig {
             fault_type: FaultType::NodeFailure,
             duration_mins: 5,
             recovery_slo_mins: 3,
+            actual_recovery_time_mins: None,
+            actual_system_recovered: None,
             validation_status: ValidationStatus::Pending,
         },
         FaultInjectionConfig {
             fault_type: FaultType::KeyCompromise,
             duration_mins: 1,
             recovery_slo_mins: 2,
+            actual_recovery_time_mins: None,
+            actual_system_recovered: None,
             validation_status: ValidationStatus::Pending,
         },
         FaultInjectionConfig {
             fault_type: FaultType::StaleRevocation,
             duration_mins: 15,
             recovery_slo_mins: 10,
+            actual_recovery_time_mins: None,
+            actual_system_recovered: None,
             validation_status: ValidationStatus::Pending,
         },
         FaultInjectionConfig {
             fault_type: FaultType::ClockSkew,
             duration_mins: 30,
             recovery_slo_mins: 5,
+            actual_recovery_time_mins: None,
+            actual_system_recovered: None,
             validation_status: ValidationStatus::Pending,
         },
     ]
@@ -1919,18 +2132,21 @@ fn create_default_replay_audits() -> Vec<ReplayAuditConfig> {
             incident_severity: "high".to_string(),
             environment: "canary".to_string(),
             replay_success_threshold_pct: 100.0,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         ReplayAuditConfig {
             incident_severity: "critical".to_string(),
             environment: "canary".to_string(),
             replay_success_threshold_pct: 100.0,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
         ReplayAuditConfig {
             incident_severity: "high".to_string(),
             environment: "production".to_string(),
             replay_success_threshold_pct: 95.0,
+            actual_success_rate_pct: None,
             validation_status: ValidationStatus::Pending,
         },
     ]
@@ -2005,6 +2221,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
 
     #[test]
     fn test_production_hardening_gate_creation() {
@@ -2304,6 +2527,114 @@ mod tests {
                 | ProductionGoDecision::GoWithRestrictions(_)
                 | ProductionGoDecision::NoGo
         ));
+    }
+
+    #[test]
+    fn operational_readiness_report_uses_evidence_derived_metrics() {
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-metrics".to_string())
+            .expect("serde deserialization should succeed");
+
+        for (campaign, (cpu_hours, coverage_pct)) in gate.fuzz_campaigns.iter_mut().zip([
+            (30, 60.0),
+            (32, 70.0),
+            (34, 80.0),
+            (36, 90.0),
+            (38, 100.0),
+            (40, 50.0),
+        ]) {
+            campaign.actual_cpu_hours = Some(cpu_hours);
+            campaign.actual_coverage_pct = Some(coverage_pct);
+            campaign.actual_crash_count = Some(0);
+        }
+
+        for (test, success_rate_pct) in gate
+            .property_tests
+            .iter_mut()
+            .zip([10.0, 20.0, 30.0, 40.0, 50.0])
+        {
+            test.actual_test_cases = Some(test.test_cases_threshold);
+            test.actual_success_rate_pct = Some(success_rate_pct);
+        }
+
+        gate.metamorphic_tests[0].actual_test_cases = Some(10);
+        gate.metamorphic_tests[0].actual_preservation_validated = Some(true);
+        gate.metamorphic_tests[1].actual_test_cases = Some(20);
+        gate.metamorphic_tests[1].actual_preservation_validated = Some(false);
+        gate.metamorphic_tests[2].actual_test_cases = Some(30);
+        gate.metamorphic_tests[2].actual_preservation_validated = Some(true);
+
+        gate.rollout_validation[0].actual_error_rate_pct = Some(0.001);
+        gate.rollout_validation[0].actual_latency_p99_ms = Some(90);
+        gate.rollout_validation[1].actual_error_rate_pct = Some(0.05);
+        gate.rollout_validation[1].actual_latency_p99_ms = Some(150);
+        gate.rollout_validation[2].actual_error_rate_pct = Some(0.4);
+        gate.rollout_validation[2].actual_latency_p99_ms = Some(250);
+        gate.rollout_validation[3].actual_error_rate_pct = Some(2.0);
+        gate.rollout_validation[3].actual_latency_p99_ms = Some(800);
+
+        gate.fault_injection_drills[0].actual_recovery_time_mins = Some(4);
+        gate.fault_injection_drills[0].actual_system_recovered = Some(true);
+        gate.fault_injection_drills[1].actual_recovery_time_mins = Some(2);
+        gate.fault_injection_drills[1].actual_system_recovered = Some(true);
+        gate.fault_injection_drills[2].actual_recovery_time_mins = Some(5);
+        gate.fault_injection_drills[2].actual_system_recovered = Some(false);
+        gate.fault_injection_drills[3].actual_recovery_time_mins = Some(11);
+        gate.fault_injection_drills[3].actual_system_recovered = Some(true);
+
+        for (audit, success_rate_pct) in gate.replay_audits.iter_mut().zip([80.0, 90.0, 100.0]) {
+            audit.actual_success_rate_pct = Some(success_rate_pct);
+        }
+
+        for key in [
+            "security:memory-corruption",
+            "fuzz:parser",
+            "property:parser:parser_invariants",
+            "metamorphic:optimization-level",
+            "rollout:shadow",
+            "replay:high:canary",
+        ] {
+            gate.evidence_artifacts
+                .insert(key.to_string(), "placeholder=true".to_string());
+        }
+
+        let report = gate
+            .generate_operational_readiness_report()
+            .expect("serde deserialization should succeed");
+
+        assert_close(report.performance_assessment.fuzz_coverage_pct, 75.0);
+        assert_eq!(report.performance_assessment.fuzz_cpu_hours_total, 210);
+        assert_close(
+            report.performance_assessment.property_test_coverage_pct,
+            30.0,
+        );
+        assert_close(
+            report
+                .performance_assessment
+                .metamorphic_preservation_rate_pct,
+            66.66666666666666,
+        );
+        assert_close(
+            report
+                .reliability_assessment
+                .fault_recovery_success_rate_pct,
+            40.0,
+        );
+        assert_close(
+            report.reliability_assessment.rollout_stage_success_rate_pct,
+            75.0,
+        );
+        assert_close(
+            report.reliability_assessment.replay_audit_success_rate_pct,
+            90.0,
+        );
+        assert_close(
+            report.operational_assessment.monitoring_coverage_pct,
+            17.647058823529413,
+        );
+        assert_close(
+            report.operational_assessment.logging_completeness_pct,
+            66.66666666666666,
+        );
     }
 
     #[test]

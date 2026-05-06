@@ -31,6 +31,14 @@
     "producer_integration": false,
     "handoff_note": "The standalone high-core scenario matrix replays deterministic SWARM-CTRL-IX calibration scenarios through the telemetry snapshot normalizer and freezes scrubbed representative outputs as reviewed goldens. The current swarm_operator_status_report producer does not emit or compare this matrix yet."
   },
+  "slo_calibrator": {
+    "script": "scripts/swarm_slo_calibrator.sh",
+    "receipt_schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+    "contract_json": "docs/swarm_slo_threshold_receipt_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone SWARM-CTRL-IX calibrator composes the reviewed high-core scenario matrix, telemetry snapshot, archive pressure scoreboard, and warm-target ROI advisory into deterministic advisory thresholds. The current swarm_operator_status_report producer does not emit this receipt yet."
+  },
   "capacity_forecaster": {
     "script": "scripts/swarm_capacity_forecaster.sh",
     "forecast_schema_version": "franken-engine.swarm-capacity-forecast.v1",
@@ -69,6 +77,11 @@
     "predictive_dashboard.telemetry_quality.decision",
     "predictive_dashboard.telemetry_quality.confidence_band",
     "predictive_dashboard.telemetry_quality.missing_input_count",
+    "predictive_dashboard.slo_calibration.decision",
+    "predictive_dashboard.slo_calibration.confidence_class",
+    "predictive_dashboard.slo_calibration.queue_wait_band.current_band",
+    "predictive_dashboard.slo_calibration.validation_latency_band.current_band",
+    "predictive_dashboard.slo_calibration.rch_fallback.current_band",
     "predictive_dashboard.capacity_forecast.overall_state",
     "predictive_dashboard.capacity_forecast.blocked_categories",
     "predictive_dashboard.capacity_forecast.degraded_categories",
@@ -98,7 +111,8 @@
     "franken-engine.tail-latency-control-plane.v1",
     "franken-engine.rgc-fault-injection-chaos-verification-pack.report.v1",
     "franken-engine.swarm-responsiveness-claim-map.v1",
-    "franken-engine.swarm-high-core-scenario-matrix-report.v1"
+    "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+    "franken-engine.swarm-slo-threshold-receipt.v1"
   ],
   "golden_fixture_cases": [
     "healthy",
@@ -124,6 +138,7 @@
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
     "scripts/swarm_operator_status_report.sh remains the single predictive dashboard producer in franken_engine; do not add a second dashboard implementation here.",
     "The high-core scenario matrix is a reviewed fixture and golden surface backed by scripts/swarm_high_core_slo_scenario_matrix.sh; it must not be described as live scheduler tuning, live worker execution, or automatic worker mutation.",
+    "The SWARM-CTRL-IX threshold receipt is advisory snapshot evidence backed by scripts/swarm_slo_calibrator.sh; it must not be described as live scheduler tuning, live worker mutation, or automatic resource-governor reconfiguration.",
     "The telemetry quality and capacity forecast sections are advisory snapshots backed by scripts/swarm_capacity_forecaster.sh; they must not be described as live scheduling or automatic worker mutation.",
     "The admission budget section is advisory snapshot evidence backed by scripts/swarm_admission_budget_planner.sh; it must not be described as live worker allocation, queue mutation, or automatic bead claiming.",
     "The lease exchange and salvage section is advisory snapshot evidence backed by scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh; it must not be described as automatic ownership transfer or cancellation.",

@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.swarm-slo-threshold-receipt-contract.v1",
+  "receipt_schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+  "producer_script": "scripts/swarm_slo_calibrator.sh",
+  "smoke_script": "scripts/e2e/swarm_slo_calibrator_smoke.sh",
+  "required_args": [
+    "--telemetry-snapshot-json",
+    "--scenario-matrix-report-json",
+    "--archive-pressure-scoreboard-json",
+    "--warm-target-prefetch-roi-advisory-json"
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "required_output_fields": [
+    "decision",
+    "confidence_class",
+    "assumptions",
+    "evidence_hashes.telemetry_snapshot_sha256",
+    "evidence_hashes.scenario_matrix_report_sha256",
+    "evidence_hashes.archive_pressure_scoreboard_sha256",
+    "evidence_hashes.warm_target_prefetch_roi_advisory_sha256",
+    "summary.accepted_threshold_count",
+    "summary.downgraded_threshold_count",
+    "summary.rejected_threshold_count",
+    "thresholds.queue_wait_budget_band.status",
+    "thresholds.validation_latency_band.status",
+    "thresholds.rch_fallback_rate_tolerance.status",
+    "thresholds.starvation_brownout_guardrails.status",
+    "thresholds.proof_cache_freshness_and_warm_target_roi.status",
+    "thresholds.archive_salvage_pressure_thresholds.status",
+    "artifact_paths.swarm_slo_threshold_receipt_json",
+    "artifact_paths.report_md"
+  ],
+  "threshold_families": [
+    "queue_wait_budget_band",
+    "validation_latency_band",
+    "rch_fallback_rate_tolerance",
+    "starvation_brownout_guardrails",
+    "proof_cache_freshness_and_warm_target_roi",
+    "archive_salvage_pressure_thresholds"
+  ],
+  "compatibility_contracts": [
+    "franken-engine.swarm-capacity-snapshot.v1",
+    "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+    "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+    "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1"
+  ],
+  "truth_constraints": [
+    "The calibrator must remain fixture-fed and advisory only.",
+    "Fail-closed archive or warm-target evidence must stay rejected in the receipt instead of being softened into a synthetic pass.",
+    "Any current high-core surface that is local or otherwise non-rch-traceable must reject the threshold receipt with exit code 42.",
+    "Downgraded threshold bands are allowed, but rejected threshold bands must represent insufficient evidence or contradictory signals."
+  ]
+}

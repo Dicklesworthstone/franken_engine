@@ -50,6 +50,18 @@ reviewed goldens. It is not another dashboard producer and must not be
 described as live scheduler tuning, live worker execution, or automatic worker
 mutation.
 
+The same SWARM-CTRL-IX chain also adds a standalone advisory threshold receipt:
+
+- Script: `scripts/swarm_slo_calibrator.sh`
+- Receipt schema: `franken-engine.swarm-slo-threshold-receipt.v1`
+- Static contract: `docs/swarm_slo_threshold_receipt_contract_v1.json`
+
+That calibrator composes the reviewed scenario matrix, one normalized telemetry
+snapshot, the archive pressure scoreboard, and the warm-target ROI advisory into
+deterministic threshold families. It is advisory-only and must not be
+described as live scheduler tuning, worker mutation, or automatic
+resource-governor reconfiguration.
+
 The telemetry snapshot also feeds a standalone predictive capacity forecaster:
 
 - Script: `scripts/swarm_capacity_forecaster.sh`
@@ -113,6 +125,7 @@ consumption:
 | `qos_batches` | `build-storm-batch-plan.v1` | Show admitted and deferred validation work, fairness reason, retry delay, and bounded command rows. |
 | `stale_lock_recommendations` | `stale-lock-recommendations.v1` | Show safe-to-reopen and contact-first bead recommendations with operator command strings. |
 | `telemetry_quality` | `swarm-capacity-forecast.v1` | Show telemetry completeness, confidence band, missing inputs, and whether the forecast can be trusted as advisory evidence. |
+| `slo_calibration` | `swarm-slo-threshold-receipt.v1` | Show reviewed high-core threshold bands, confidence class, and whether current evidence is accepted, downgraded, or rejected. |
 | `capacity_forecast` | `swarm-capacity-forecast.v1` | Show bounded forecast state, blocked and degraded categories, and per-category recommended operator actions. |
 | `admission_budgets` | `swarm-admission-budget-plan.v1` | Show budget profile, admitted vs deferred work, protected-request counts, and bounded per-request recommendations. |
 | `lease_exchange_salvage` | `swarm-lease-exchange-cancellation-salvage-simulation.v1` | Show whether lease exchange, salvage promotion, or manual review is appropriate before reassigning work. |
@@ -162,6 +175,10 @@ Those are calibration fixtures and downstream SWARM-CTRL-IX handoff payloads.
 They are not evidence that the current predictive dashboard producer already
 renders or consumes the matrix directly.
 
+The standalone SWARM-CTRL-IX threshold receipt is also a downstream handoff
+payload. It is not evidence that the current predictive dashboard producer
+already renders or consumes the calibrator directly.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -172,6 +189,9 @@ renders or consumes the matrix directly.
 - The docs must describe the high-core scenario matrix as a reviewed fixture
   and golden surface only, not as a live tuning or worker-mutation control
   plane.
+- The docs must describe the SWARM-CTRL-IX threshold receipt as advisory-only
+  threshold evidence, not as live scheduler tuning or automatic
+  resource-governor mutation.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -248,4 +268,14 @@ bash -n scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh
 ./scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh check
 ./scripts/e2e/swarm_high_core_scenario_matrix_smoke.sh selftest
 jq empty docs/swarm_high_core_scenario_matrix_contract_v1.json
+```
+
+When changing the SWARM-CTRL-IX threshold calibrator, also run:
+
+```bash
+bash -n scripts/swarm_slo_calibrator.sh
+bash -n scripts/e2e/swarm_slo_calibrator_smoke.sh
+./scripts/e2e/swarm_slo_calibrator_smoke.sh check
+./scripts/e2e/swarm_slo_calibrator_smoke.sh selftest
+jq empty docs/swarm_slo_threshold_receipt_contract_v1.json
 ```

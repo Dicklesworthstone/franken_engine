@@ -1,0 +1,39 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-exporter-contract.v1",
+  "archive_pack_schema": "franken-engine.remote-proof-archive-pack.v1",
+  "restore_verification_schema": "franken-engine.remote-proof-archive-restore-verification.v1",
+  "required_inputs": [
+    "--residency-manifest-json",
+    "--compaction-plan-json"
+  ],
+  "optional_inputs": [
+    "--archive-source-files-json",
+    "--archive-pack-json",
+    "--output-dir"
+  ],
+  "mode_requirement": "At least one of --archive-source-files-json or --archive-pack-json must be provided.",
+  "required_upstream_schemas": [
+    "franken-engine.remote-proof-evidence-residency-manifest.v1",
+    "franken-engine.remote-proof-compaction-plan.v1"
+  ],
+  "required_artifacts": [
+    "archive_pack.json",
+    "restore_verification_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "restore_verdicts": [
+    "verified",
+    "fail_closed"
+  ],
+  "hash_requirements": [
+    "archive_pack.hash_basis.archive_manifest_hash",
+    "restore_verification_report.hash_basis.verification_hash"
+  ],
+  "determinism": {
+    "stable_verification_hash_expectation": "Repeated runs over identical normalized inputs must preserve the same restore verification hash.",
+    "compaction_preservation_rule": "Replay-critical artifacts remain required after compaction, but duplicate replay paths collapse to the retained path from the compaction plan.",
+    "execution_mode": "Exporter and verifier only; no live remote fetches and no cargo execution."
+  }
+}

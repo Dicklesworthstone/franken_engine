@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "fixture_id": "proof_brownout",
+  "source_revision": "fixture-rev",
+  "generated_epoch_seconds": 1800000000,
+  "source_snapshots": {
+    "br_ready_json": "fixture",
+    "br_list_json": "fixture",
+    "bv_actionable_plan_json": "fixture",
+    "agent_mail_activity_json": "fixture",
+    "file_reservations_json": "fixture",
+    "stale_lock_recommendations_json": "fixture",
+    "proof_transport_health_json": "fixture"
+  },
+  "cross_cutting_signals": {
+    "observability_quality_millionths": 760000,
+    "catastrophic_tail_score_millionths": 410000,
+    "bifurcation_distance_millionths": 740000,
+    "unit_depth_score_millionths": 760000,
+    "e2e_stability_score_millionths": 700000,
+    "logging_integrity_score_millionths": 820000
+  },
+  "risk_budget": {
+    "remaining_millionths": 180000,
+    "consumed_millionths": 820000,
+    "conservative_threshold_millionths": 200000
+  },
+  "tasks": [
+    {
+      "task_id": "bd-brownout-ready",
+      "title": "Broad proof lane during brownout",
+      "status": "open",
+      "priority": 2,
+      "assignee": "",
+      "depends_on": [],
+      "dependents": [],
+      "completed": false,
+      "open_blocker_count": 0,
+      "owner_freshness": {
+        "state": "unassigned",
+        "last_active_age_seconds": 0
+      },
+      "reservation_pressure": {
+        "state": "contended",
+        "active_reservation_count": 4
+      },
+      "proof_transport": {
+        "state": "brownout",
+        "local_fallback_detected": false
+      },
+      "scores": {
+        "impact_millionths": 700000,
+        "confidence_millionths": 700000,
+        "reuse_millionths": 500000,
+        "effort_millionths": 600000,
+        "friction_millionths": 500000
+      },
+      "fallback_trigger": "proof_brownout_conservative_mode",
+      "first_action": "defer broad proof and select a narrower no-cargo task"
+    }
+  ],
+  "expected_output_assertions": {
+    "decision": "degraded",
+    "top_queue": ["bd-brownout-ready"],
+    "conservative_mode": true,
+    "bottleneck_ids": []
+  }
+}

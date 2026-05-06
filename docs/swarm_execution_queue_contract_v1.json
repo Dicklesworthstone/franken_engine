@@ -1,0 +1,215 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-contract.v1",
+  "bead_id": "bd-1wrlq",
+  "parent_bead_id": "bd-g347f",
+  "input_schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "queue_artifact_schema_version": "franken-engine.swarm-execution-queue-artifact.v1",
+  "risk_budget_receipt_schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1",
+  "bottleneck_report_schema_version": "franken-engine.swarm-execution-bottleneck-report.v1",
+  "rust_module": "crates/franken-engine/src/swarm_control_loop.rs",
+  "future_surfaces": [
+    "scripts/swarm_execution_queue_input_normalizer.sh",
+    "crates/franken-engine/src/bin/franken_swarm_execution_queue.rs",
+    "scripts/e2e/swarm_execution_queue_contract_smoke.sh",
+    "scripts/e2e/swarm_execution_queue_conformance_gate.sh"
+  ],
+  "source_snapshot_contracts": [
+    {
+      "source_id": "br_ready_json",
+      "capture_command": "br ready --json",
+      "required": true,
+      "missing_decision": "fail_closed"
+    },
+    {
+      "source_id": "br_list_json",
+      "capture_command": "br list --json",
+      "required": true,
+      "missing_decision": "fail_closed"
+    },
+    {
+      "source_id": "bv_actionable_plan_json",
+      "capture_command": "bv --recipe actionable --robot-plan",
+      "required": true,
+      "missing_decision": "fail_closed"
+    },
+    {
+      "source_id": "agent_mail_activity_json",
+      "capture_command": "Agent Mail profile/message snapshot fixture",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "file_reservations_json",
+      "capture_command": "Agent Mail reservation snapshot fixture",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "stale_lock_recommendations_json",
+      "capture_command": "scripts/stale_lock_stalled_bead_recommender.sh fixture output",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "proof_transport_health_json",
+      "capture_command": "proof brownout/admission/rch transport fixture",
+      "required": false,
+      "missing_decision": "degraded"
+    }
+  ],
+  "required_task_fields": [
+    "task_id",
+    "title",
+    "status",
+    "priority",
+    "assignee",
+    "depends_on",
+    "dependents",
+    "completed",
+    "open_blocker_count",
+    "owner_freshness.state",
+    "owner_freshness.last_active_age_seconds",
+    "reservation_pressure.state",
+    "reservation_pressure.active_reservation_count",
+    "proof_transport.state",
+    "proof_transport.local_fallback_detected",
+    "scores.impact_millionths",
+    "scores.confidence_millionths",
+    "scores.reuse_millionths",
+    "scores.effort_millionths",
+    "scores.friction_millionths",
+    "fallback_trigger",
+    "first_action"
+  ],
+  "required_signal_fields": [
+    "cross_cutting_signals.observability_quality_millionths",
+    "cross_cutting_signals.catastrophic_tail_score_millionths",
+    "cross_cutting_signals.bifurcation_distance_millionths",
+    "cross_cutting_signals.unit_depth_score_millionths",
+    "cross_cutting_signals.e2e_stability_score_millionths",
+    "cross_cutting_signals.logging_integrity_score_millionths",
+    "risk_budget.remaining_millionths",
+    "risk_budget.consumed_millionths",
+    "risk_budget.conservative_threshold_millionths"
+  ],
+  "output_artifact_contracts": [
+    {
+      "path_key": "artifact_paths.run_manifest_json",
+      "required": true,
+      "description": "top-level run metadata and validation command transcript"
+    },
+    {
+      "path_key": "artifact_paths.events_jsonl",
+      "required": true,
+      "description": "structured event stream for replay and diagnosis"
+    },
+    {
+      "path_key": "artifact_paths.commands_txt",
+      "required": true,
+      "description": "exact command transcript"
+    },
+    {
+      "path_key": "artifact_paths.normalized_input_json",
+      "required": true,
+      "schema_version": "franken-engine.swarm-execution-queue-input.v1"
+    },
+    {
+      "path_key": "artifact_paths.execution_queue_artifact_json",
+      "required": true,
+      "schema_version": "franken-engine.swarm-execution-queue-artifact.v1"
+    },
+    {
+      "path_key": "artifact_paths.risk_budget_receipt_json",
+      "required": true,
+      "schema_version": "franken-engine.swarm-execution-risk-budget-receipt.v1"
+    },
+    {
+      "path_key": "artifact_paths.bottleneck_report_json",
+      "required": true,
+      "schema_version": "franken-engine.swarm-execution-bottleneck-report.v1"
+    },
+    {
+      "path_key": "artifact_paths.operator_summary_md",
+      "required": true,
+      "description": "concise operator-facing summary"
+    }
+  ],
+  "required_queue_entry_fields": [
+    "rank",
+    "task_id",
+    "title",
+    "wave",
+    "open_blocker_count",
+    "ev_millionths",
+    "first_action",
+    "fallback_trigger"
+  ],
+  "score_policy": {
+    "scale": "millionths",
+    "impact_millionths": "higher means larger project value",
+    "confidence_millionths": "higher means stronger evidence",
+    "reuse_millionths": "higher means more existing surface reuse",
+    "effort_millionths": "higher means more expensive",
+    "friction_millionths": "higher means more coordination or proof friction",
+    "must_preserve_rust_ordering": true
+  },
+  "fail_closed_rules": [
+    "empty task graphs fail closed",
+    "unknown dependencies fail closed",
+    "dependency cycles fail closed",
+    "missing required artifact paths fail closed",
+    "queue entries without first_action fail closed",
+    "local-rch fallback cannot be promoted as successful proof health",
+    "advisory output must not claim it mutates live br state",
+    "advisory output must not claim it releases file reservations",
+    "advisory output must not claim it sends Agent Mail",
+    "advisory output must not claim it mutates remote workers"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "fixture_examples": [
+    {
+      "fixture_id": "healthy",
+      "path": "scripts/testdata/swarm_execution_queue/healthy_input.json",
+      "expected_decision": "pass"
+    },
+    {
+      "fixture_id": "stale_owner",
+      "path": "scripts/testdata/swarm_execution_queue/stale_owner_input.json",
+      "expected_decision": "degraded"
+    },
+    {
+      "fixture_id": "proof_brownout",
+      "path": "scripts/testdata/swarm_execution_queue/proof_brownout_input.json",
+      "expected_decision": "degraded"
+    },
+    {
+      "fixture_id": "blocked_parent",
+      "path": "scripts/testdata/swarm_execution_queue/blocked_parent_input.json",
+      "expected_decision": "pass"
+    }
+  ],
+  "downstream_beads": [
+    "bd-lb6j0",
+    "bd-pthn9",
+    "bd-zllzm",
+    "bd-d07ro",
+    "bd-w9sxz"
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_execution_queue_contract_v1.json",
+    "jq empty scripts/testdata/swarm_execution_queue/healthy_input.json",
+    "jq empty scripts/testdata/swarm_execution_queue/stale_owner_input.json",
+    "jq empty scripts/testdata/swarm_execution_queue/proof_brownout_input.json",
+    "jq empty scripts/testdata/swarm_execution_queue/blocked_parent_input.json",
+    "bash -n scripts/e2e/swarm_execution_queue_contract_smoke.sh",
+    "bash scripts/e2e/swarm_execution_queue_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_contract_smoke.sh selftest"
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "fixture_id": "stale_owner",
+  "source_revision": "fixture-rev",
+  "generated_epoch_seconds": 1800000000,
+  "source_snapshots": {
+    "br_ready_json": "fixture",
+    "br_list_json": "fixture",
+    "bv_actionable_plan_json": "fixture",
+    "agent_mail_activity_json": "fixture",
+    "file_reservations_json": "fixture",
+    "stale_lock_recommendations_json": "fixture",
+    "proof_transport_health_json": "fixture"
+  },
+  "cross_cutting_signals": {
+    "observability_quality_millionths": 820000,
+    "catastrophic_tail_score_millionths": 90000,
+    "bifurcation_distance_millionths": 800000,
+    "unit_depth_score_millionths": 820000,
+    "e2e_stability_score_millionths": 780000,
+    "logging_integrity_score_millionths": 860000
+  },
+  "risk_budget": {
+    "remaining_millionths": 650000,
+    "consumed_millionths": 350000,
+    "conservative_threshold_millionths": 200000
+  },
+  "tasks": [
+    {
+      "task_id": "bd-stale-owner",
+      "title": "Stale high-impact proof lane",
+      "status": "in_progress",
+      "priority": 1,
+      "assignee": "DormantAgent",
+      "depends_on": [],
+      "dependents": ["bd-parent"],
+      "completed": false,
+      "open_blocker_count": 0,
+      "owner_freshness": {
+        "state": "stale",
+        "last_active_age_seconds": 86400
+      },
+      "reservation_pressure": {
+        "state": "no_active_reservations",
+        "active_reservation_count": 0
+      },
+      "proof_transport": {
+        "state": "remote_only_ok",
+        "local_fallback_detected": false
+      },
+      "scores": {
+        "impact_millionths": 950000,
+        "confidence_millionths": 800000,
+        "reuse_millionths": 600000,
+        "effort_millionths": 250000,
+        "friction_millionths": 350000
+      },
+      "fallback_trigger": "contact_or_reopen_required",
+      "first_action": "contact owner or reopen only after stale-lock evidence says safe_to_reopen"
+    }
+  ],
+  "expected_output_assertions": {
+    "decision": "degraded",
+    "top_queue": ["bd-stale-owner"],
+    "conservative_mode": false,
+    "bottleneck_ids": ["bd-stale-owner"]
+  }
+}

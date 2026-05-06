@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "fixture_id": "healthy",
+  "source_revision": "fixture-rev",
+  "generated_epoch_seconds": 1800000000,
+  "source_snapshots": {
+    "br_ready_json": "fixture",
+    "br_list_json": "fixture",
+    "bv_actionable_plan_json": "fixture",
+    "agent_mail_activity_json": "fixture",
+    "file_reservations_json": "fixture",
+    "stale_lock_recommendations_json": "fixture",
+    "proof_transport_health_json": "fixture"
+  },
+  "cross_cutting_signals": {
+    "observability_quality_millionths": 950000,
+    "catastrophic_tail_score_millionths": 20000,
+    "bifurcation_distance_millionths": 900000,
+    "unit_depth_score_millionths": 880000,
+    "e2e_stability_score_millionths": 900000,
+    "logging_integrity_score_millionths": 940000
+  },
+  "risk_budget": {
+    "remaining_millionths": 900000,
+    "consumed_millionths": 100000,
+    "conservative_threshold_millionths": 200000
+  },
+  "tasks": [
+    {
+      "task_id": "bd-ready-a",
+      "title": "Implement focused proof runner",
+      "status": "open",
+      "priority": 1,
+      "assignee": "",
+      "depends_on": [],
+      "dependents": ["bd-parent"],
+      "completed": false,
+      "open_blocker_count": 0,
+      "owner_freshness": {
+        "state": "unassigned",
+        "last_active_age_seconds": 0
+      },
+      "reservation_pressure": {
+        "state": "clear",
+        "active_reservation_count": 0
+      },
+      "proof_transport": {
+        "state": "remote_only_ok",
+        "local_fallback_detected": false
+      },
+      "scores": {
+        "impact_millionths": 900000,
+        "confidence_millionths": 850000,
+        "reuse_millionths": 700000,
+        "effort_millionths": 220000,
+        "friction_millionths": 40000
+      },
+      "fallback_trigger": "none",
+      "first_action": "claim bead and reserve focused proof files"
+    }
+  ],
+  "expected_output_assertions": {
+    "decision": "pass",
+    "top_queue": ["bd-ready-a"],
+    "conservative_mode": false,
+    "bottleneck_ids": []
+  }
+}

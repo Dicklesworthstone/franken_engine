@@ -1,0 +1,22 @@
+{
+  "schema_version": "franken-engine.swarm-capacity-snapshot.v1",
+  "snapshot_id": "checkpoint-lifecycle-healthy",
+  "generated_epoch_seconds": 1900,
+  "decision": "pass",
+  "summary": {
+    "overall_state": "normal",
+    "ready_count": 2,
+    "in_progress_count": 1
+  },
+  "telemetry_summary": {
+    "snapshot_decision": "pass"
+  },
+  "evidence": {
+    "rch_transport": {
+      "failure_kind": "none"
+    }
+  },
+  "artifact_paths": {
+    "swarm_capacity_snapshot_json": "/fixture/swarm_capacity_snapshot.json"
+  }
+}

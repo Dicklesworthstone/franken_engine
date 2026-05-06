@@ -1,0 +1,11 @@
+{
+  "schema_version": "franken-engine.swarm-high-core-scenario-matrix-report.v1",
+  "generated_epoch_seconds": 1900,
+  "matrix_schema_version": "franken-engine.swarm-high-core-scenario-matrix.v1",
+  "summary": {
+    "scenario_count": 4
+  },
+  "artifact_paths": {
+    "swarm_high_core_scenario_matrix_report_json": "/fixture/swarm_high_core_scenario_matrix_report.json"
+  }
+}

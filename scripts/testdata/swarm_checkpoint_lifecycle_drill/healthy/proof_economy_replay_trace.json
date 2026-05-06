@@ -1,0 +1,10 @@
+{
+  "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+  "generated_epoch_seconds": 1900,
+  "summary": {
+    "replay_event_count": 6
+  },
+  "artifact_paths": {
+    "proof_economy_replay_trace_json": "/fixture/proof_economy_replay_trace.json"
+  }
+}

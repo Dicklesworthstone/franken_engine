@@ -1,0 +1,22 @@
+{
+  "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+  "generated_epoch_seconds": 1900,
+  "decision": "pass",
+  "confidence_band": "high",
+  "summary": {
+    "overall_state": "normal",
+    "blocked_categories": [],
+    "degraded_categories": []
+  },
+  "forecasts": {
+    "rch_transport": {
+      "state": "normal",
+      "supporting_signals": {
+        "failure_kind": "none"
+      }
+    }
+  },
+  "artifact_paths": {
+    "swarm_capacity_forecast_json": "/fixture/swarm_capacity_forecast.json"
+  }
+}

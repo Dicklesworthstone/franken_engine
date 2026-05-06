@@ -1,0 +1,12 @@
+{
+  "schema_version": "franken-engine.stale-lock-recommendations.v1",
+  "generated_epoch_seconds": 1900,
+  "stale_lock_recommendations": [],
+  "safe_to_reopen": [
+    "bd-ready"
+  ],
+  "contact_first": [],
+  "artifact_paths": {
+    "stale_lock_recommendations_json": "/fixture/stale_lock_recommendations.json"
+  }
+}

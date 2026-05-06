@@ -1,0 +1,30 @@
+{
+  "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+  "advisory": "prefetch_recommended",
+  "exit_code": 0,
+  "recommended_action": "Prefetch the warm target before replaying the checkpoint bundle.",
+  "reason": "Expected reuse exceeds archive pressure cost in the healthy fixture.",
+  "budget_summary": {
+    "budget_profile": "steady_state"
+  },
+  "warm_target_summary": {
+    "target_dir": "/tmp/rch_target_franken_engine_swarm_ctrl_xi"
+  },
+  "proof_cache_summary": {
+    "proof_cache_decision": "cache_hit"
+  },
+  "archive_pressure_summary": {
+    "advisory": "retain"
+  },
+  "validation_cost_summary": {
+    "estimated_cpu_slots_total": 2
+  },
+  "roi_summary": {
+    "expected_reuse_score": 6,
+    "realized_reuse_score": 5,
+    "reuse_delta": 1
+  },
+  "artifact_paths": {
+    "swarm_warm_target_prefetch_roi_advisory_json": "/fixture/swarm_warm_target_prefetch_roi_advisory.json"
+  }
+}

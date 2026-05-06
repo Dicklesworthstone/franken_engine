@@ -1,0 +1,22 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-conformance-report.v1",
+  "decision": "pass",
+  "summary": {
+    "plan_decision": "pass",
+    "scenario_class": "healthy",
+    "gate_failure_count": 0,
+    "checked_artifact_path_count": 2
+  },
+  "verified_invariants": [
+    {
+      "name": "healthy_starvation_rescue_truth",
+      "outcome": "pass",
+      "detail": "healthy starvation rescue handoff remains truthful"
+    }
+  ],
+  "gate_failures": [],
+  "artifact_paths": {
+    "swarm_starvation_rescue_conformance_report_json": "/fixture/swarm_starvation_rescue_conformance_report.json",
+    "report_md": "/fixture/swarm_starvation_rescue_conformance_report.md"
+  }
+}

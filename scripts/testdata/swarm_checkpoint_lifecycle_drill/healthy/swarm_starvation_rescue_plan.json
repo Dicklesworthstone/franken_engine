@@ -1,0 +1,19 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-plan.v1",
+  "generated_epoch_seconds": 1900,
+  "decision": "pass",
+  "scenario_class": "healthy",
+  "summary": {
+    "recommendation_count": 1,
+    "top_recommendation_action": "resume_from_checkpoint",
+    "readiness": "ready",
+    "manual_review_count": 0,
+    "contact_first_count": 0,
+    "ownership_fail_closed_count": 0
+  },
+  "recommendations": [],
+  "fail_closed_reasons": [],
+  "artifact_paths": {
+    "swarm_starvation_rescue_plan_json": "/fixture/swarm_starvation_rescue_plan.json"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+  "generated_epoch_seconds": 1900,
+  "decision": "admit",
+  "budget_profile": "steady_state",
+  "summary": {
+    "admitted_count": 2,
+    "admitted_narrow_count": 0,
+    "deferred_count": 0
+  },
+  "recommendations": [],
+  "artifact_paths": {
+    "swarm_admission_budget_plan_json": "/fixture/swarm_admission_budget_plan.json"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "franken-engine.swarm-operator-slo-tuning-advisory.v1",
+  "generated_epoch_seconds": 1900,
+  "summary": {
+    "recommendation_count": 2
+  },
+  "artifact_paths": {
+    "swarm_operator_slo_tuning_advisory_json": "/fixture/swarm_operator_slo_tuning_advisory.json"
+  }
+}

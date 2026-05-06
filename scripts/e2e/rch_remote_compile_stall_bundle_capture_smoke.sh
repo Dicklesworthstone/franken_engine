@@ -68,7 +68,7 @@ run_case() {
   optional_args=()
   while IFS= read -r arg; do
     [[ -n "$arg" ]] && optional_args+=("$arg")
-  done < <(fixture_arg_if_exists --command-log "${case_dir}/command.log")
+  done < <(fixture_arg_if_exists --command-log "${case_dir}/command_excerpt.txt")
   while IFS= read -r arg; do
     [[ -n "$arg" ]] && optional_args+=("$arg")
   done < <(fixture_arg_if_exists --worker-inventory-json "${case_dir}/worker_inventory.json")
@@ -114,8 +114,8 @@ run_check() {
     jq empty "$json_path" >/dev/null
   done < <(find "$fixture_root" -type f -name '*.json' | sort)
 
-  test -f "${fixture_root}/confirmed/command.log"
-  test -f "${fixture_root}/contaminated_local_fallback/command.log"
+  test -f "${fixture_root}/confirmed/command_excerpt.txt"
+  test -f "${fixture_root}/contaminated_local_fallback/command_excerpt.txt"
 
   record_pass "shell syntax, shellcheck, and fixture JSON"
 }

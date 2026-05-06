@@ -21,6 +21,14 @@
     "producer_integration": false,
     "handoff_note": "The standalone snapshot normalizer reuses admission, archive, and proof-economy artifacts directly. The current swarm_operator_status_report producer does not emit this snapshot yet."
   },
+  "capacity_forecaster": {
+    "script": "scripts/swarm_capacity_forecaster.sh",
+    "forecast_schema_version": "franken-engine.swarm-capacity-forecast.v1",
+    "contract_json": "docs/swarm_capacity_forecaster_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone capacity forecaster consumes the telemetry snapshot plus its normalized child artifacts to publish deterministic confidence-banded risk categories. The current swarm_operator_status_report producer does not emit this forecast yet."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -66,6 +74,7 @@
     "No rich interactive renderer is implemented in franken_engine by this contract.",
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
-    "The telemetry snapshot normalizer is a fixture-only extension point; it must not be described as live scheduling or worker mutation."
+    "The telemetry snapshot normalizer is a fixture-only extension point; it must not be described as live scheduling or worker mutation.",
+    "The capacity forecaster is a fixture-only extension point; it must not be described as live admission control or automatic worker mutation."
   ]
 }

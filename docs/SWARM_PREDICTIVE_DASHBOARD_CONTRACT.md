@@ -29,6 +29,17 @@ That normalizer reuses admission, archive, and proof-economy artifacts directly
 and stays fixture-only. It does not replace `scripts/swarm_operator_status_report.sh`
 and must not be described as a live scheduling control surface.
 
+The telemetry snapshot also feeds a standalone predictive capacity forecaster:
+
+- Script: `scripts/swarm_capacity_forecaster.sh`
+- Forecast schema: `franken-engine.swarm-capacity-forecast.v1`
+- Static contract: `docs/swarm_capacity_forecaster_contract_v1.json`
+
+That forecaster publishes deterministic confidence-banded risk categories for
+compile pressure, disk and memory pressure, `rch` degradation, target-dir heat,
+proof availability, and coordination pressure. It is also fixture-only and must
+not be described as live admission control or automatic worker mutation.
+
 ## Dashboard Sections
 
 The `predictive_dashboard` object contains bounded sections for renderer
@@ -86,4 +97,14 @@ bash -n scripts/e2e/swarm_operator_status_report_smoke.sh
 ./scripts/e2e/swarm_operator_status_report_smoke.sh check
 ./scripts/e2e/swarm_operator_status_report_smoke.sh selftest
 jq empty docs/swarm_predictive_dashboard_contract_v1.json
+```
+
+When changing the capacity forecaster extension, also run:
+
+```bash
+bash -n scripts/swarm_capacity_forecaster.sh
+bash -n scripts/e2e/swarm_capacity_forecaster_smoke.sh
+./scripts/e2e/swarm_capacity_forecaster_smoke.sh check
+./scripts/e2e/swarm_capacity_forecaster_smoke.sh selftest
+jq empty docs/swarm_capacity_forecaster_contract_v1.json
 ```

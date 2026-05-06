@@ -5,6 +5,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="${root_dir}/scripts/remote_proof_contract_catalog_gate.sh"
 docs_path="${root_dir}/docs/REMOTE_PROOF_CONTRACT_CATALOG_GATE.md"
 contract_path="${root_dir}/docs/remote_proof_contract_catalog_contract_v1.json"
+canonical_manifest_path="${root_dir}/docs/remote_proof_surface_manifest_v1.json"
 
 record_pass() {
   printf 'PASS remote-proof-contract-catalog %s\n' "$1"
@@ -234,10 +235,12 @@ write_fixture_manifest() {
 
 run_check() {
   local tmp_parent tmp_root manifest_path gate_dir scope_file
+  local generated_canonical checked_in_canonical
 
   bash -n "$gate"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
+  jq empty "$canonical_manifest_path"
   grep -q 'franken-engine.remote-proof-contract-catalog-report.v1' "$docs_path"
   record_pass "bash syntax and docs contract"
 
@@ -246,8 +249,15 @@ run_check() {
   tmp_root="$(mktemp -d "${tmp_parent%/}/remote-proof-contract-catalog-check.XXXXXX")"
   manifest_path="${tmp_root}/real-surfaces.json"
   gate_dir="${tmp_root}/real-surface-check"
+  generated_canonical="${tmp_root}/generated-real-surfaces.canonical.json"
+  checked_in_canonical="${tmp_root}/checked-in-surfaces.canonical.json"
   write_real_surface_manifest "$manifest_path"
-  "$gate" --surface-manifest-json "$manifest_path" --output-dir "$gate_dir" >/dev/null
+  jq -cS . "$manifest_path" >"$generated_canonical"
+  jq -cS . "$canonical_manifest_path" >"$checked_in_canonical"
+  diff -u "$checked_in_canonical" "$generated_canonical" >/dev/null
+  record_pass "checked-in surface manifest golden"
+
+  "$gate" --surface-manifest-json "$canonical_manifest_path" --output-dir "$gate_dir" >/dev/null
   jq -e '
     .catalog_decision == "pass"
     and .surface_count == 6
@@ -261,7 +271,8 @@ run_check() {
     "scripts/remote_proof_contract_catalog_gate.sh" \
     "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh" \
     "docs/REMOTE_PROOF_CONTRACT_CATALOG_GATE.md" \
-    "docs/remote_proof_contract_catalog_contract_v1.json" >"$scope_file"
+    "docs/remote_proof_contract_catalog_contract_v1.json" \
+    "docs/remote_proof_surface_manifest_v1.json" >"$scope_file"
   "${root_dir}/scripts/rch_policy_compliance_gate.sh" \
     --output-dir "${TMPDIR:-/tmp}/remote-proof-contract-catalog-rch-policy" \
     --scope-file "$scope_file" >/dev/null

@@ -12,7 +12,7 @@ declared there, and emits a deterministic catalog report.
 
 ```bash
 ./scripts/remote_proof_contract_catalog_gate.sh \
-  --surface-manifest-json artifacts/remote_proof_surface_manifest.json \
+  --surface-manifest-json docs/remote_proof_surface_manifest_v1.json \
   --output-dir /tmp/remote-proof-contract-catalog
 ```
 
@@ -24,6 +24,11 @@ the default repository root.
 
 The input manifest uses schema version
 `franken-engine.remote-proof-contract-catalog-manifest.v1`.
+
+The checked-in canonical manifest is
+`docs/remote_proof_surface_manifest_v1.json`. The smoke harness compares its
+generated real-surface manifest against this file before running the catalog
+gate, so intentional catalog changes require a reviewed manifest diff.
 
 Each surface declares:
 

@@ -1,0 +1,242 @@
+{
+  "schema_version": "franken-engine.swarm-ops-state-snapshot-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy",
+      "description": "fresh br JSONL, available Agent Mail, healthy RCH, and no dirty files",
+      "inputs": {
+        "br_ready": [
+          {
+            "id": "bd-lfwy6",
+            "title": "Capture no-mock br/bv/Agent Mail/RCH state snapshot",
+            "priority": 1,
+            "status": "open"
+          }
+        ],
+        "br_in_progress": {
+          "issues": []
+        },
+        "br_sync_status": {
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "jsonl_exists": true
+        },
+        "bv_plan": "track-A bd-lfwy6 ready\n",
+        "agent_mail_agents": [
+          {
+            "name": "BrownCreek",
+            "last_active_ts": "2026-05-06T23:30:00Z"
+          }
+        ],
+        "agent_mail_inbox": [],
+        "agent_mail_reservations": "BrownCreek exclusive scripts/swarm_ops_state_snapshot_capture.sh\n",
+        "rch_status": {
+          "workers": [
+            {
+              "worker_id": "vmi-healthy",
+              "state": "healthy"
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue": {
+          "jobs": []
+        },
+        "git_status": ""
+      },
+      "expected": {
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "bv_plan_state": "fresh",
+        "unowned_dirty_count": 0,
+        "active_stall_count": 0
+      }
+    },
+    {
+      "case_id": "stale_bv",
+      "description": "bv plan is contaminated because br DB is newer than exported JSONL",
+      "inputs": {
+        "br_ready": [
+          {
+            "id": "bd-lfwy6",
+            "title": "Capture no-mock br/bv/Agent Mail/RCH state snapshot",
+            "priority": 1,
+            "status": "open"
+          }
+        ],
+        "br_in_progress": {
+          "issues": []
+        },
+        "br_sync_status": {
+          "dirty_count": 1,
+          "db_newer": true,
+          "jsonl_newer": false,
+          "jsonl_exists": true
+        },
+        "bv_plan": "track-A bd-lfwy6 ready from stale export\n",
+        "agent_mail_agents": [
+          {
+            "name": "BrownCreek",
+            "last_active_ts": "2026-05-06T23:30:00Z"
+          }
+        ],
+        "agent_mail_inbox": [],
+        "agent_mail_reservations": "BrownCreek exclusive scripts/swarm_ops_state_snapshot_capture.sh\n",
+        "rch_status": {
+          "workers": [
+            {
+              "worker_id": "vmi-healthy",
+              "state": "healthy"
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue": {
+          "jobs": []
+        },
+        "git_status": " M .beads/issues.jsonl\n"
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "stale_bv_due_to_br_sync"
+        ],
+        "blocked_reasons": [],
+        "degraded_reasons": [],
+        "bv_plan_state": "stale_due_to_br_sync",
+        "unowned_dirty_count": 0,
+        "active_stall_count": 0
+      }
+    },
+    {
+      "case_id": "active_rch_stall",
+      "description": "RCH has an active fresh-heartbeat stale-progress job",
+      "inputs": {
+        "br_ready": [
+          {
+            "id": "bd-lfwy6",
+            "title": "Capture no-mock br/bv/Agent Mail/RCH state snapshot",
+            "priority": 1,
+            "status": "open"
+          }
+        ],
+        "br_in_progress": {
+          "issues": []
+        },
+        "br_sync_status": {
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "jsonl_exists": true
+        },
+        "bv_plan": "track-A bd-lfwy6 ready\n",
+        "agent_mail_agents": [
+          {
+            "name": "BrownCreek",
+            "last_active_ts": "2026-05-06T23:30:00Z"
+          }
+        ],
+        "agent_mail_inbox": [],
+        "agent_mail_reservations": "BrownCreek exclusive scripts/swarm_ops_state_snapshot_capture.sh\n",
+        "rch_status": {
+          "workers": [
+            {
+              "worker_id": "vmi-stalled",
+              "state": "healthy"
+            }
+          ],
+          "jobs": [
+            {
+              "build_id": "29830575799926875",
+              "worker_id": "vmi-stalled",
+              "state": "running",
+              "stale_progress": true,
+              "progress_age_seconds": 900
+            }
+          ]
+        },
+        "rch_queue": {
+          "jobs": [
+            {
+              "build_id": "29830575799926875",
+              "worker_id": "vmi-stalled",
+              "state": "running",
+              "progress_age_seconds": 900
+            }
+          ]
+        },
+        "git_status": ""
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "active_rch_stall"
+        ],
+        "bv_plan_state": "fresh",
+        "unowned_dirty_count": 0,
+        "active_stall_count": 2
+      }
+    },
+    {
+      "case_id": "dirty_unowned_file",
+      "description": "worktree contains dirty files outside the capture lane",
+      "inputs": {
+        "br_ready": [
+          {
+            "id": "bd-lfwy6",
+            "title": "Capture no-mock br/bv/Agent Mail/RCH state snapshot",
+            "priority": 1,
+            "status": "open"
+          }
+        ],
+        "br_in_progress": {
+          "issues": []
+        },
+        "br_sync_status": {
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false,
+          "jsonl_exists": true
+        },
+        "bv_plan": "track-A bd-lfwy6 ready\n",
+        "agent_mail_agents": [
+          {
+            "name": "BrownCreek",
+            "last_active_ts": "2026-05-06T23:30:00Z"
+          }
+        ],
+        "agent_mail_inbox": [],
+        "agent_mail_reservations": "BrownCreek exclusive scripts/swarm_ops_state_snapshot_capture.sh\n",
+        "rch_status": {
+          "workers": [
+            {
+              "worker_id": "vmi-healthy",
+              "state": "healthy"
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue": {
+          "jobs": []
+        },
+        "git_status": " M crates/franken-engine/src/lib.rs\n?? scripts/swarm_ops_state_snapshot_capture.sh\n"
+      },
+      "expected": {
+        "decision": "blocked",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [
+          "dirty_unowned_files"
+        ],
+        "degraded_reasons": [],
+        "bv_plan_state": "fresh",
+        "unowned_dirty_count": 1,
+        "active_stall_count": 0
+      }
+    }
+  ]
+}

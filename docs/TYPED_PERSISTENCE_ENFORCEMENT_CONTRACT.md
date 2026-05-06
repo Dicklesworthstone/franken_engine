@@ -12,6 +12,12 @@ Machine-readable contract:
 Smoke gate:
 `scripts/e2e/typed_persistence_enforcement_contract_smoke.sh`.
 
+No-mock drill:
+`scripts/e2e/typed_persistence_no_mock_drill.sh`.
+
+Truth gate:
+`scripts/e2e/typed_persistence_truth_gate.sh`.
+
 ## Stores In Scope
 
 The enforcement contract applies only to the typed-heavy stores that the
@@ -78,6 +84,73 @@ The full track is not complete until future beads prove all of the following:
 - no-mock end-to-end proof exercises the real stores and migration-planning
   seams together
 
+## No-Mock Drill
+
+Run the composed typed-persistence proof with:
+
+```bash
+bash scripts/e2e/typed_persistence_no_mock_drill.sh check
+bash scripts/e2e/typed_persistence_no_mock_drill.sh selftest
+```
+
+The drill is fixture-fed, proof-only, and advisory-only. It reads the checked-in
+suite at `scripts/testdata/typed_persistence_no_mock_drill/cases.json` together
+with the real store and guard surfaces:
+
+- `crates/franken-engine/src/replacement_lineage_log.rs`
+- `crates/franken-engine/src/ifc_provenance_index.rs`
+- `crates/franken-engine/src/specialization_index.rs`
+- `crates/franken-engine/src/storage_adapter.rs`
+- `crates/franken-engine/src/typed_persistence_models.rs`
+
+It covers four exact proof categories:
+
+- healthy typed writes
+- supported lossless legacy backfill planning
+- unsupported legacy rejection
+- generic-authority rejection
+
+The drill does not run Cargo or RCH.
+The drill does not mutate live storage.
+The drill does not update, reopen, close, or reassign beads.
+The drill does not release file reservations.
+The drill does not send Agent Mail.
+The drill does not query live Agent Mail.
+
+Artifacts written by the drill:
+
+- `typed_persistence_no_mock_drill_report.json`
+- `case_results.jsonl`
+- `commands.txt`
+- `events.jsonl`
+- `report.md`
+
+## Truth Gate
+
+Run the truth gate whenever this contract, the suite, or the drill changes:
+
+```bash
+bash scripts/e2e/typed_persistence_truth_gate.sh check
+bash scripts/e2e/typed_persistence_truth_gate.sh selftest
+```
+
+The truth gate reruns the drill over the checked-in fixtures and rejects:
+
+- forbidden wording that claims implicit legacy acceptance
+- forbidden wording that restores generic authority to authoritative status
+- forbidden wording that claims the drill runs Cargo or RCH
+- forbidden wording that claims the drill mutates live storage, beads, reservations, or Agent Mail
+- contract drift that removes one of the four proof categories
+
+## Smoke Harness
+
+Use the repo-local smoke harness for the full shell/docs/testdata surface:
+
+```bash
+bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh check
+bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh selftest
+```
+
 ## Validation
 
 ```bash
@@ -86,5 +159,10 @@ shellcheck -x scripts/e2e/typed_persistence_enforcement_contract_smoke.sh
 jq empty docs/typed_persistence_enforcement_contract_v1.json
 bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh check
 bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh selftest
+bash -n scripts/e2e/typed_persistence_no_mock_drill.sh scripts/e2e/typed_persistence_truth_gate.sh scripts/e2e/typed_persistence_no_mock_drill_smoke.sh
+shellcheck -x scripts/e2e/typed_persistence_no_mock_drill.sh scripts/e2e/typed_persistence_truth_gate.sh scripts/e2e/typed_persistence_no_mock_drill_smoke.sh
+jq empty scripts/testdata/typed_persistence_no_mock_drill/cases.json
+bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh check
+bash scripts/e2e/typed_persistence_no_mock_drill_smoke.sh selftest
 git diff --check -- docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md docs/typed_persistence_enforcement_contract_v1.json scripts/e2e/typed_persistence_enforcement_contract_smoke.sh
 ```

@@ -1,0 +1,126 @@
+{
+  "schema_version": "franken-engine.typed-persistence-no-mock-drill-suite.v1",
+  "cases": [
+    {
+      "case_id": "healthy_typed_primary_authority",
+      "title": "Healthy typed writes and authoritative reads stay on typed boundaries",
+      "category": "healthy typed writes",
+      "evidence": [
+        {
+          "path": "crates/franken-engine/src/replacement_lineage_log.rs",
+          "must_contain": [
+            "self.store_typed_lineage_mirror(&stored_record, context)?;",
+            "fn typed_lineage_entries(",
+            "evidence_index_slot_lineage_prefers_typed_mirror",
+            "evidence_index_replay_join_prefers_typed_mirror"
+          ]
+        },
+        {
+          "path": "crates/franken-engine/src/ifc_provenance_index.rs",
+          "must_contain": [
+            "pub fn insert_flow_event(",
+            ".put_typed(&entry, ctx)",
+            "fn query_typed_entries(",
+            ".query_typed::<IfcProvenanceEntry>(",
+            "pub fn flow_events_by_extension("
+          ]
+        },
+        {
+          "path": "crates/franken-engine/src/specialization_index.rs",
+          "must_contain": [
+            "pub fn insert_receipt(",
+            "self.storage.put_typed_batch(&entries, &ctx)?;",
+            "fn query_typed_receipt_entries(",
+            "self.storage.query_typed::<SpecializationIndexEntry>(",
+            "pub fn get_receipt("
+          ]
+        },
+        {
+          "path": "crates/franken-engine/src/typed_persistence_models.rs",
+          "must_contain": [
+            "fn put_typed<T: TypedStoreRecord>(",
+            "fn get_typed_by_id<T: TypedStoreRecord>(",
+            "fn query_typed<T: TypedStoreRecord>("
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "supported_lossless_legacy_backfill_planning",
+      "title": "Supported legacy rows stay in explicit lossless backfill planning",
+      "category": "supported lossless legacy backfill planning",
+      "evidence": [
+        {
+          "path": "crates/franken-engine/src/typed_persistence_models.rs",
+          "must_contain": [
+            "pub fn plan_typed_store_backfill<T: TypedStoreRecord>(",
+            "pub fn map_legacy_replacement_lineage_record(",
+            "pub fn map_legacy_ifc_provenance_record(",
+            "pub fn map_legacy_specialization_index_record(",
+            "legacy_replacement_lineage_chain_maps_losslessly_and_rejects_hash_pointer",
+            "legacy_replacement_demotion_receipt_maps_integrity_reference",
+            "legacy_ifc_flow_event_maps_label_json_and_rejects_proof_side_table",
+            "legacy_ifc_declassification_receipt_maps_route_metadata",
+            "legacy_specialization_receipt_splits_proofs_and_rejects_side_tables",
+            "typed_backfill_plan_marks_domain_legacy_prefixes_as_mapper_required"
+          ]
+        },
+        {
+          "path": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
+          "must_contain": [
+            "Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning"
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "unsupported_legacy_rejection",
+      "title": "Unsupported or malformed legacy inputs fail closed",
+      "category": "unsupported legacy rejection",
+      "evidence": [
+        {
+          "path": "crates/franken-engine/src/typed_persistence_models.rs",
+          "must_contain": [
+            "TypedBackfillStatus::LegacyUnsupported",
+            "legacy_mapper_rejects_malformed_supported_json",
+            "typed_backfill_plan_separates_ready_legacy_corrupt_and_wrong_store_records",
+            "typed_backfill_plan_rejects_partial_typed_envelopes",
+            "unsupported_legacy_record::<ReplacementLineageEntry>",
+            "partial typed envelope"
+          ]
+        },
+        {
+          "path": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
+          "must_contain": [
+            "unsupported legacy rejection",
+            "Ambiguous legacy data must fail closed."
+          ]
+        }
+      ]
+    },
+    {
+      "case_id": "generic_authority_rejection",
+      "title": "Generic authority is bounded and fail-closed for typed-heavy stores",
+      "category": "generic-authority rejection",
+      "evidence": [
+        {
+          "path": "crates/franken-engine/src/storage_adapter.rs",
+          "must_contain": [
+            "generic {operation} on typed-heavy store {store} for key `{key}` is non-authoritative; use a sqlmodel_rust typed envelope or an explicitly marked legacy compatibility row",
+            "frankensqlite_typed_heavy_put_rejects_unmarked_generic_legacy_rows",
+            "frankensqlite_typed_heavy_query_requires_typed_or_compatibility_scope",
+            "in_memory_typed_heavy_get_query_and_delete_reject_unrecognized_keys",
+            "in_memory_typed_heavy_batch_put_is_atomic_when_policy_rejects_entry"
+          ]
+        },
+        {
+          "path": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
+          "must_contain": [
+            "Generic `StorageAdapter` operations for these typed-heavy stores must become non-authoritative",
+            "generic-authority rejection"
+          ]
+        }
+      ]
+    }
+  ]
+}

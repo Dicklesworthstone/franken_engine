@@ -74,6 +74,19 @@
     "producer_integration": true,
     "handoff_note": "The operator status report now integrates the starvation rescue planner plus the ownership-safe conformance report into one advisory-only rescue handoff. It must not be described as a second predictive dashboard producer, a live reopen controller, or an automatic ownership transfer surface."
   },
+  "checkpoint_restore_handoff": {
+    "bundle_contract_doc": "docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md",
+    "bundle_contract_json": "docs/swarm_checkpoint_bundle_contract_v1.json",
+    "planner_script": "scripts/swarm_checkpoint_restore_planner.sh",
+    "plan_schema_version": "franken-engine.swarm-checkpoint-restore-plan.v1",
+    "planner_contract_json": "docs/swarm_checkpoint_restore_planner_contract_v1.json",
+    "conformance_script": "scripts/swarm_checkpoint_restore_conformance_gate.sh",
+    "conformance_report_schema_version": "franken-engine.swarm-checkpoint-restore-conformance-report.v1",
+    "conformance_contract_json": "docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "handoff_note": "The operator status report now integrates checkpoint bundle capture truth, the restore planner, and the restore conformance report into one advisory-only restore handoff. It must not be described as live checkpoint replay, automatic worker mutation, or automatic ownership transfer."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -117,6 +130,12 @@
     "predictive_dashboard.starvation_rescue.escalation_band",
     "predictive_dashboard.starvation_rescue.recommended_ordering",
     "predictive_dashboard.starvation_rescue.unresolved_risks",
+    "predictive_dashboard.checkpoint_restore.plan_decision",
+    "predictive_dashboard.checkpoint_restore.conformance_decision",
+    "predictive_dashboard.checkpoint_restore.checkpoint_capture_decision",
+    "predictive_dashboard.checkpoint_restore.restore_readiness_hint",
+    "predictive_dashboard.checkpoint_restore.top_restore_action",
+    "predictive_dashboard.checkpoint_restore.unresolved_risks",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -131,6 +150,9 @@
     "franken-engine.swarm-admission-budget-plan.v1",
     "franken-engine.swarm-starvation-rescue-plan.v1",
     "franken-engine.swarm-starvation-rescue-conformance-report.v1",
+    "franken-engine.swarm-checkpoint-bundle.v1",
+    "franken-engine.swarm-checkpoint-restore-plan.v1",
+    "franken-engine.swarm-checkpoint-restore-conformance-report.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -181,6 +203,7 @@
     "The lease exchange and salvage section is advisory snapshot evidence backed by scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh; it must not be described as automatic ownership transfer or cancellation.",
     "The prefetch ROI section is advisory snapshot evidence backed by scripts/swarm_warm_target_prefetch_roi_advisory.sh; it must not be described as automatic target warming or archive mutation.",
     "The starvation rescue section is advisory snapshot evidence backed by scripts/swarm_starvation_rescue_planner.sh and scripts/swarm_starvation_rescue_conformance_gate.sh; it must not be described as live bead reopening, automatic ownership transfer, or automatic queue mutation.",
+    "The checkpoint restore section is advisory snapshot evidence backed by docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md, scripts/swarm_checkpoint_restore_planner.sh, and scripts/swarm_checkpoint_restore_conformance_gate.sh; it must not be described as live checkpoint replay, automatic worker mutation, or automatic ownership transfer.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

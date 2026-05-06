@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 10,
+    "degraded_count": 11,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -49,6 +49,10 @@
     "starvation_rescue_escalation_band": "manual_review",
     "starvation_rescue_top_action": "preserve_pinned_evidence",
     "starvation_rescue_unresolved_risk_count": 3,
+    "checkpoint_restore_plan_decision": "advisory_manual_review",
+    "checkpoint_restore_escalation_band": "manual_review",
+    "checkpoint_restore_top_action": "review_salvage_pressure_before_resume",
+    "checkpoint_restore_unresolved_risk_count": 1,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -510,6 +514,35 @@
       "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/starvation_rescue_plan.json",
       "conformance_artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/starvation_rescue_conformance_report.json"
     },
+    "checkpoint_restore": {
+      "artifact_status": "provided",
+      "plan_artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "warning",
+      "checkpoint_id": "checkpoint-operator-status-smoke",
+      "checkpoint_capture_decision": "captured_degraded",
+      "restore_readiness_hint": "manual_review",
+      "plan_decision": "advisory_manual_review",
+      "conformance_decision": "pass",
+      "drift_class": "soft",
+      "checkpoint_age_seconds": 300,
+      "top_restore_action": "review_salvage_pressure_before_resume",
+      "gate_failure_count": 0,
+      "escalation_band": "manual_review",
+      "unresolved_risks": [
+        {
+          "kind": "salvage_manual_review",
+          "severity": "advisory",
+          "captured_value": "retain_current_assignments",
+          "current_value": "manual_confirmation_required",
+          "detail": "current salvage truth requires manual review before restore"
+        }
+      ],
+      "checked_artifact_path_count": 8,
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/checkpoint_restore_conformance_report.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -597,13 +630,19 @@
       "status": "manual_review",
       "impact": "starvation rescue handoff still has unresolved risks or manual review pressure",
       "remediation": "Respect the rescue escalation band and recommended ordering before reopening or reassigning work."
+    },
+    {
+      "component": "checkpoint_restore_handoff",
+      "status": "manual_review",
+      "impact": "checkpoint restore handoff still carries fail-closed or manual-review drift",
+      "remediation": "Respect the checkpoint restore escalation band and top restore action before resuming from a saved checkpoint."
     }
   ],
   "recommendations": [
     {
-      "action": "review_starvation_rescue_handoff",
+      "action": "review_checkpoint_restore_handoff",
       "bead_id": null,
-      "reason": "starvation rescue handoff requires manual review or degraded coordination"
+      "reason": "checkpoint restore handoff requires manual review before resume"
     }
   ]
 }

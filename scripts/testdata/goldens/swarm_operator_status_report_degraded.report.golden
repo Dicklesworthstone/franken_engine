@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `20`
+- Degraded fields: `21`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
@@ -11,6 +11,7 @@
 - Lease exchange posture: `missing`
 - Prefetch advisory: `missing`
 - Starvation rescue escalation: `unknown` via `null`
+- Checkpoint restore escalation: `unknown` via `null`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -23,8 +24,11 @@
 - Warm target prefetch ROI advisory: `missing`
 - Starvation rescue plan: `missing`
 - Starvation rescue conformance report: `missing`
+- Checkpoint bundle: `missing`
+- Checkpoint restore plan: `missing`
+- Checkpoint restore conformance report: `missing`
 
-- `review_starvation_rescue_handoff`: starvation rescue handoff requires manual review or degraded coordination
+- `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
 ## Degraded
 
@@ -47,4 +51,5 @@
 - `lease_exchange_salvage` `missing`: lease-exchange salvage simulation artifact is missing. Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles.
 - `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
 - `starvation_rescue_handoff` `missing`: starvation rescue handoff artifacts are incomplete. Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness.
+- `checkpoint_restore_handoff` `missing`: checkpoint restore handoff artifacts are incomplete. Provide --checkpoint-bundle-json, --checkpoint-restore-plan-json, and --checkpoint-restore-conformance-report-json before trusting restore readiness.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

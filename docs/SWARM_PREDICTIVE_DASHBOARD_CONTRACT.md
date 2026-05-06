@@ -129,6 +129,24 @@ producer. It is advisory-only. It must not be described as live bead reopen
 automation, automatic ownership transfer, or a second predictive dashboard
 producer.
 
+The same operator report now also integrates a checkpoint-restore handoff:
+
+- Bundle contract: `docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md`
+- Bundle contract JSON: `docs/swarm_checkpoint_bundle_contract_v1.json`
+- Planner script: `scripts/swarm_checkpoint_restore_planner.sh`
+- Plan schema: `franken-engine.swarm-checkpoint-restore-plan.v1`
+- Planner contract: `docs/swarm_checkpoint_restore_planner_contract_v1.json`
+
+- Conformance script: `scripts/swarm_checkpoint_restore_conformance_gate.sh`
+- Report schema: `franken-engine.swarm-checkpoint-restore-conformance-report.v1`
+- Conformance contract: `docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json`
+
+That handoff carries checkpoint capture truth, restore readiness, top restore
+actions, and unresolved restore drift into the existing
+`scripts/swarm_operator_status_report.sh` producer. It is advisory-only. It
+must not be described as live checkpoint replay, automatic worker mutation, or
+automatic ownership transfer.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -163,6 +181,7 @@ consumption:
 | `lease_exchange_salvage` | `swarm-lease-exchange-cancellation-salvage-simulation.v1` | Show whether lease exchange, salvage promotion, or manual review is appropriate before reassigning work. |
 | `prefetch_roi` | `swarm-warm-target-prefetch-roi-advisory.v1` | Show whether warm-target or archive prefetch has enough bounded ROI to recommend, plus target-dir and proof-cache posture. |
 | `starvation_rescue` | `swarm-starvation-rescue-plan.v1` plus `swarm-starvation-rescue-conformance-report.v1` | Show ordered rescue actions, escalation band, and unresolved rescue risks without creating a second dashboard producer. |
+| `checkpoint_restore` | `swarm-checkpoint-bundle.v1` plus `swarm-checkpoint-restore-plan.v1` plus `swarm-checkpoint-restore-conformance-report.v1` | Show whether a saved checkpoint can be resumed, must fail closed, or needs manual review, plus the top restore action and unresolved restore drift. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -221,6 +240,11 @@ predictive dashboard producer does integrate their handoff directly, but only
 as advisory snapshot evidence. That does not make the dashboard a live reopen
 controller or an automatic ownership-transfer surface.
 
+The checkpoint bundle, restore planner, and restore conformance gate are also
+different: the current predictive dashboard producer does integrate their
+handoff directly, but only as advisory snapshot evidence. That does not make
+the dashboard a live checkpoint replay or automatic restore surface.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -239,6 +263,9 @@ controller or an automatic ownership-transfer surface.
 - The docs must describe the starvation rescue handoff as integrated advisory
   snapshot evidence, not as live bead reopen automation, automatic ownership
   transfer, or a second predictive dashboard producer.
+- The docs must describe the checkpoint restore handoff as integrated advisory
+  snapshot evidence, not as live checkpoint replay, automatic worker
+  mutation, or automatic ownership transfer.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a

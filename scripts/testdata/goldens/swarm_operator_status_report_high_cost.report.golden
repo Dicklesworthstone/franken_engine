@@ -11,6 +11,7 @@
 - Lease exchange posture: `retain_current_assignments`
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
+- Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
 - High-cost commands: `1`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -23,6 +24,9 @@
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/high_cost-fixtures/warm_target_prefetch_roi_advisory.json`
 - Starvation rescue plan: `[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_plan.json`
 - Starvation rescue conformance report: `[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_conformance_report.json`
+- Checkpoint bundle: `[SMOKE_ROOT]/high_cost-fixtures/checkpoint_bundle.json`
+- Checkpoint restore plan: `[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_plan.json`
+- Checkpoint restore conformance report: `[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_conformance_report.json`
 
 - `narrow_high_cost_validation`: predicted validation cost is elevated
 

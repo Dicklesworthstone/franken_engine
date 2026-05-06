@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2094
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -141,6 +142,7 @@ write_predictive_extension_fixtures() {
   }' >"${fixture_dir}/warm_target_prefetch_roi_advisory.json"
 
   write_starvation_rescue_fixtures "$fixture_dir" "advisory"
+  write_checkpoint_restore_fixtures "$fixture_dir" "healthy"
 }
 
 write_starvation_rescue_fixtures() {
@@ -272,6 +274,190 @@ write_starvation_rescue_fixtures() {
   esac
 }
 
+write_checkpoint_restore_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local capture_decision="captured"
+  local restore_hint="candidate"
+  local plan_decision="resume"
+  local drift_class="none"
+  local top_restore_action="resume_from_checkpoint"
+  local checkpoint_age_seconds=300
+  local provided_current_comparison_count=6
+  local missing_current_comparison_count=0
+  local fail_closed_reasons='[]'
+  local drift_findings='[]'
+
+  case "$mode" in
+    healthy)
+      ;;
+    stale)
+      plan_decision="fail_closed"
+      drift_class="blocked"
+      top_restore_action="capture_fresh_checkpoint_bundle"
+      checkpoint_age_seconds=7200
+      fail_closed_reasons='[
+        {
+          "kind": "checkpoint_stale",
+          "detail": "checkpoint age exceeded the restore freshness window"
+        }
+      ]'
+      ;;
+    owner_drift)
+      plan_decision="fail_closed"
+      drift_class="blocked"
+      top_restore_action="manual_ownership_review"
+      fail_closed_reasons='[
+        {
+          "kind": "ownership_drift",
+          "detail": "current stale-lock reopen/contact truth drifted from the captured checkpoint evidence"
+        }
+      ]'
+      ;;
+    manual_review)
+      capture_decision="captured_degraded"
+      restore_hint="manual_review"
+      plan_decision="advisory_manual_review"
+      drift_class="soft"
+      top_restore_action="review_salvage_pressure_before_resume"
+      drift_findings='[
+        {
+          "kind": "salvage_manual_review",
+          "severity": "advisory",
+          "captured_value": "retain_current_assignments",
+          "current_value": "manual_confirmation_required",
+          "detail": "current salvage truth requires manual review before restore"
+        }
+      ]'
+      ;;
+    *)
+      record_failure "unknown checkpoint restore fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  : >"${fixture_dir}/checkpoint_bundle.events.jsonl"
+  printf 'checkpoint bundle fixture\n' >"${fixture_dir}/checkpoint_bundle.summary.md"
+  printf './scripts/swarm_checkpoint_bundle_packer.sh --smoke-fixture\n' >"${fixture_dir}/checkpoint_bundle.commands.txt"
+  : >"${fixture_dir}/checkpoint_restore_plan.events.jsonl"
+  printf 'checkpoint restore plan fixture\n' >"${fixture_dir}/checkpoint_restore_plan.report.md"
+  printf './scripts/swarm_checkpoint_restore_planner.sh --smoke-fixture\n' >"${fixture_dir}/checkpoint_restore_plan.commands.txt"
+  : >"${fixture_dir}/checkpoint_restore_conformance.events.jsonl"
+  printf 'checkpoint restore conformance fixture\n' >"${fixture_dir}/checkpoint_restore_conformance.report.md"
+  printf './scripts/swarm_checkpoint_restore_conformance_gate.sh --smoke-fixture\n' >"${fixture_dir}/checkpoint_restore_conformance.commands.txt"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/checkpoint_bundle.json" \
+    --arg fixture_dir "$fixture_dir" \
+    --arg capture_decision "$capture_decision" \
+    --arg restore_hint "$restore_hint" \
+    '{
+      schema_version:"franken-engine.swarm-checkpoint-bundle.v1",
+      checkpoint_id:"checkpoint-operator-status-smoke",
+      capture_decision:$capture_decision,
+      restore_readiness_hint:$restore_hint,
+      captured_epoch_seconds:1700000000,
+      stale_after_seconds:1800,
+      upstream_evidence:{required_count:8, optional_count:0, optional_present_count:0},
+      artifact_ledger:{
+        swarm_capacity_snapshot:{schema_version:"franken-engine.swarm-capacity-snapshot.v1", path:($fixture_dir + "/capacity_snapshot.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        swarm_capacity_forecast:{schema_version:"franken-engine.swarm-capacity-forecast.v1", path:($fixture_dir + "/capacity_forecast.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        swarm_admission_budget_plan:{schema_version:"franken-engine.swarm-admission-budget-plan.v1", path:($fixture_dir + "/admission_budget_plan.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        remote_proof_archive_pressure_scoreboard:{schema_version:"franken-engine.remote-proof-archive-pressure-scoreboard.v1", path:($fixture_dir + "/archive_pressure_scoreboard.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        stale_lock_recommendations:{schema_version:"franken-engine.stale-lock-recommendations.v1", path:($fixture_dir + "/stale_lock_recommendations.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        swarm_lease_exchange_cancellation_salvage_simulation:{schema_version:"franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1", path:($fixture_dir + "/lease_exchange_salvage_simulation.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        swarm_starvation_rescue_plan:{schema_version:"franken-engine.swarm-starvation-rescue-plan.v1", path:($fixture_dir + "/starvation_rescue_plan.json"), trust_state:"primary", freshness_state:"fresh", required:true},
+        swarm_operator_status_report:{schema_version:"franken-engine.swarm-operator-status-report.v1", path:($fixture_dir + "/operator_status_report.json"), trust_state:"primary", freshness_state:"fresh", required:true}
+      },
+      blockers:[],
+      artifact_paths:{
+        checkpoint_bundle_json:$artifact_path,
+        events_jsonl:($fixture_dir + "/checkpoint_bundle.events.jsonl"),
+        commands_txt:($fixture_dir + "/checkpoint_bundle.commands.txt"),
+        summary_md:($fixture_dir + "/checkpoint_bundle.summary.md")
+      }
+    }' >"${fixture_dir}/checkpoint_bundle.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/checkpoint_restore_plan.json" \
+    --arg fixture_dir "$fixture_dir" \
+    --arg plan_decision "$plan_decision" \
+    --arg drift_class "$drift_class" \
+    --arg top_restore_action "$top_restore_action" \
+    --argjson checkpoint_age_seconds "$checkpoint_age_seconds" \
+    --argjson provided_current_comparison_count "$provided_current_comparison_count" \
+    --argjson missing_current_comparison_count "$missing_current_comparison_count" \
+    --argjson fail_closed_reasons "$fail_closed_reasons" \
+    --argjson drift_findings "$drift_findings" \
+    '{
+      schema_version:"franken-engine.swarm-checkpoint-restore-plan.v1",
+      checkpoint_id:"checkpoint-operator-status-smoke",
+      decision:$plan_decision,
+      exit_code:0,
+      drift_class:$drift_class,
+      summary:{
+        top_restore_action:$top_restore_action,
+        provided_current_comparison_count:$provided_current_comparison_count,
+        missing_current_comparison_count:$missing_current_comparison_count,
+        drift_count:($drift_findings | length),
+        fail_closed_reason_count:($fail_closed_reasons | length)
+      },
+      drift_receipt:{
+        checkpoint_age_seconds:$checkpoint_age_seconds,
+        fail_closed_reasons:$fail_closed_reasons,
+        findings:$drift_findings
+      },
+      resolved_inputs:[
+        {input:"checkpoint_bundle_json", status:"provided", path:($fixture_dir + "/checkpoint_bundle.json"), schema_version:"franken-engine.swarm-checkpoint-bundle.v1"},
+        {input:"current_swarm_capacity_snapshot_json", status:"provided", path:($fixture_dir + "/capacity_snapshot.json"), schema_version:"franken-engine.swarm-capacity-snapshot.v1"},
+        {input:"current_swarm_capacity_forecast_json", status:"provided", path:($fixture_dir + "/capacity_forecast.json"), schema_version:"franken-engine.swarm-capacity-forecast.v1"},
+        {input:"current_remote_proof_archive_pressure_scoreboard_json", status:"provided", path:($fixture_dir + "/archive_pressure_scoreboard.json"), schema_version:"franken-engine.remote-proof-archive-pressure-scoreboard.v1"},
+        {input:"current_stale_lock_recommendations_json", status:"provided", path:($fixture_dir + "/stale_lock_recommendations.json"), schema_version:"franken-engine.stale-lock-recommendations.v1"},
+        {input:"current_swarm_lease_exchange_cancellation_salvage_simulation_json", status:"provided", path:($fixture_dir + "/lease_exchange_salvage_simulation.json"), schema_version:"franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1"},
+        {input:"current_swarm_operator_status_report_json", status:"provided", path:($fixture_dir + "/operator_status_report.json"), schema_version:"franken-engine.swarm-operator-status-report.v1"}
+      ],
+      artifact_paths:{
+        swarm_checkpoint_restore_plan_json:$artifact_path,
+        events_jsonl:($fixture_dir + "/checkpoint_restore_plan.events.jsonl"),
+        commands_txt:($fixture_dir + "/checkpoint_restore_plan.commands.txt"),
+        report_md:($fixture_dir + "/checkpoint_restore_plan.report.md")
+      }
+    }' >"${fixture_dir}/checkpoint_restore_plan.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/checkpoint_restore_conformance_report.json" \
+    --arg fixture_dir "$fixture_dir" \
+    --arg plan_decision "$plan_decision" \
+    --arg capture_decision "$capture_decision" \
+    --arg top_restore_action "$top_restore_action" \
+    '{
+      schema_version:"franken-engine.swarm-checkpoint-restore-conformance-report.v1",
+      decision:"pass",
+      summary:{
+        restore_decision:$plan_decision,
+        checkpoint_capture_decision:$capture_decision,
+        top_restore_action:$top_restore_action,
+        gate_failure_count:0,
+        checked_artifact_path_count:8
+      },
+      verified_invariants:[
+        {name:"checkpoint_id_alignment", outcome:"pass"},
+        {name:"resume_requires_clean_comparison_set", outcome:"pass"}
+      ],
+      gate_failures:[],
+      resolved_sources:{
+        checkpoint_bundle_json:{path:($fixture_dir + "/checkpoint_bundle.json"), schema_version:"franken-engine.swarm-checkpoint-bundle.v1"},
+        checkpoint_restore_plan_json:{path:($fixture_dir + "/checkpoint_restore_plan.json"), schema_version:"franken-engine.swarm-checkpoint-restore-plan.v1"}
+      },
+      artifact_paths:{
+        swarm_checkpoint_restore_conformance_report_json:$artifact_path,
+        events_jsonl:($fixture_dir + "/checkpoint_restore_conformance.events.jsonl"),
+        commands_txt:($fixture_dir + "/checkpoint_restore_conformance.commands.txt"),
+        report_md:($fixture_dir + "/checkpoint_restore_conformance.report.md")
+      }
+    }' >"${fixture_dir}/checkpoint_restore_conformance_report.json"
+}
+
 write_healthy_fixtures() {
   local fixture_dir="$1"
 
@@ -390,6 +576,7 @@ write_stale_proof_fixtures() {
   local fixture_dir="$1"
 
   write_healthy_fixtures "$fixture_dir"
+  write_checkpoint_restore_fixtures "$fixture_dir" "stale"
   jq -n '{schema_version:"franken-engine.proof-freshness-decay-report.v1", proof_artifact_id:"proof-stale", artifact_path:"artifacts/proof/current/manifest.json", freshness_state:"stale_by_time", reusable:false, reason:"current time exceeds the artifact freshness deadline", recommended_next_action:"Refresh the proof artifact before publishing or relying on the claim.", covered_paths:["scripts/swarm_operator_status_report.sh"], changed_paths:[]}' >"${fixture_dir}/proof_freshness.json"
 }
 
@@ -435,6 +622,7 @@ write_collision_risk_fixtures() {
   local fixture_dir="$1"
 
   write_healthy_fixtures "$fixture_dir"
+  write_checkpoint_restore_fixtures "$fixture_dir" "owner_drift"
   jq -n '[{path:"scripts/swarm_operator_status_report.sh", holder:"CyanOak", exclusive:true}]' >"${fixture_dir}/reservations.json"
   jq -n '{
     decision:"admit_narrow",
@@ -619,6 +807,7 @@ write_overloaded_fixtures() {
     artifact_paths:{swarm_warm_target_prefetch_roi_advisory_json:$artifact_path}
   }' >"${fixture_dir}/warm_target_prefetch_roi_advisory.json"
   write_starvation_rescue_fixtures "$fixture_dir" "manual"
+  write_checkpoint_restore_fixtures "$fixture_dir" "manual_review"
 }
 
 run_case() {
@@ -676,6 +865,9 @@ run_case() {
   [[ -f "${fixture_dir}/warm_target_prefetch_roi_advisory.json" ]] && extra_args+=(--warm-target-prefetch-roi-advisory-json "${fixture_dir}/warm_target_prefetch_roi_advisory.json")
   [[ -f "${fixture_dir}/starvation_rescue_plan.json" ]] && extra_args+=(--starvation-rescue-plan-json "${fixture_dir}/starvation_rescue_plan.json")
   [[ -f "${fixture_dir}/starvation_rescue_conformance_report.json" ]] && extra_args+=(--starvation-rescue-conformance-report-json "${fixture_dir}/starvation_rescue_conformance_report.json")
+  [[ -f "${fixture_dir}/checkpoint_bundle.json" ]] && extra_args+=(--checkpoint-bundle-json "${fixture_dir}/checkpoint_bundle.json")
+  [[ -f "${fixture_dir}/checkpoint_restore_plan.json" ]] && extra_args+=(--checkpoint-restore-plan-json "${fixture_dir}/checkpoint_restore_plan.json")
+  [[ -f "${fixture_dir}/checkpoint_restore_conformance_report.json" ]] && extra_args+=(--checkpoint-restore-conformance-report-json "${fixture_dir}/checkpoint_restore_conformance_report.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -728,6 +920,9 @@ run_case() {
     and (.predictive_dashboard.starvation_rescue.escalation_band | type == "string")
     and (.predictive_dashboard.starvation_rescue.recommended_ordering | type == "array")
     and (.predictive_dashboard.starvation_rescue.unresolved_risks | type == "array")
+    and (.predictive_dashboard.checkpoint_restore.plan_decision | type == "string")
+    and (.predictive_dashboard.checkpoint_restore.escalation_band | type == "string")
+    and (.predictive_dashboard.checkpoint_restore.unresolved_risks | type == "array")
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -735,6 +930,9 @@ run_case() {
     and ((.artifact_paths.warm_target_prefetch_roi_advisory_json == null) or (.artifact_paths.warm_target_prefetch_roi_advisory_json | type == "string"))
     and ((.artifact_paths.starvation_rescue_plan_json == null) or (.artifact_paths.starvation_rescue_plan_json | type == "string"))
     and ((.artifact_paths.starvation_rescue_conformance_report_json == null) or (.artifact_paths.starvation_rescue_conformance_report_json | type == "string"))
+    and ((.artifact_paths.checkpoint_bundle_json == null) or (.artifact_paths.checkpoint_bundle_json | type == "string"))
+    and ((.artifact_paths.checkpoint_restore_plan_json == null) or (.artifact_paths.checkpoint_restore_plan_json | type == "string"))
+    and ((.artifact_paths.checkpoint_restore_conformance_report_json == null) or (.artifact_paths.checkpoint_restore_conformance_report_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -758,6 +956,9 @@ run_case() {
         and .predictive_dashboard.starvation_rescue.plan_decision == "advisory"
         and .predictive_dashboard.starvation_rescue.escalation_band == "ready"
         and (.predictive_dashboard.starvation_rescue.unresolved_risks | length) == 0
+        and .predictive_dashboard.checkpoint_restore.plan_decision == "resume"
+        and .predictive_dashboard.checkpoint_restore.escalation_band == "ready"
+        and (.predictive_dashboard.checkpoint_restore.unresolved_risks | length) == 0
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -774,6 +975,7 @@ run_case() {
         and .predictive_dashboard.lease_exchange_salvage.artifact_status == "missing"
         and .predictive_dashboard.prefetch_roi.artifact_status == "missing"
         and .predictive_dashboard.starvation_rescue.artifact_status == "missing"
+        and .predictive_dashboard.checkpoint_restore.artifact_status == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -781,6 +983,10 @@ run_case() {
       jq -e '
         .predictive_dashboard.proof_freshness.state == "stale_by_time"
         and .predictive_dashboard.proof_freshness.reusable == false
+        and .predictive_dashboard.checkpoint_restore.plan_decision == "fail_closed"
+        and .predictive_dashboard.checkpoint_restore.escalation_band == "fail_closed"
+        and .predictive_dashboard.checkpoint_restore.top_restore_action == "capture_fresh_checkpoint_bundle"
+        and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("checkpoint_stale"))
         and any(.degraded[]; .component == "proof_freshness")
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -795,6 +1001,9 @@ run_case() {
       jq -e '
         .predictive_dashboard.collision_risk.risk == "reserved_overlap"
         and (.predictive_dashboard.collision_risk.conflicting_agents | index("CyanOak"))
+        and .predictive_dashboard.checkpoint_restore.plan_decision == "fail_closed"
+        and .predictive_dashboard.checkpoint_restore.top_restore_action == "manual_ownership_review"
+        and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("ownership_drift"))
         and any(.degraded[]; .component == "collision_risk")
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -811,6 +1020,10 @@ run_case() {
         and .predictive_dashboard.starvation_rescue.plan_decision == "manual_review_required"
         and .predictive_dashboard.starvation_rescue.escalation_band == "manual_review"
         and (.predictive_dashboard.starvation_rescue.unresolved_risks | map(.code) | index("contact_first_uncertainty"))
+        and .predictive_dashboard.checkpoint_restore.plan_decision == "advisory_manual_review"
+        and .predictive_dashboard.checkpoint_restore.escalation_band == "manual_review"
+        and .predictive_dashboard.checkpoint_restore.top_restore_action == "review_salvage_pressure_before_resume"
+        and (.predictive_dashboard.checkpoint_restore.unresolved_risks | map(.kind) | index("salvage_manual_review"))
         and .predictive_dashboard.staged_contamination.decision == "pass"
         and any(.degraded[]; .component == "qos_batches")
       ' "${output_dir}/status.json" >/dev/null
@@ -863,11 +1076,15 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.plan_decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.escalation_band"))
     and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.unresolved_risks"))
+    and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.plan_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.restore_readiness_hint"))
+    and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.top_restore_action"))
+    and (.required_dashboard_fields | index("predictive_dashboard.checkpoint_restore.unresolved_risks"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
   grep -Fq 'FrankenEngine does not ship a local TUI renderer for this contract.' "$contract_doc"
-  grep -Fq 'It remains the only predictive dashboard producer in `franken_engine`.' "$contract_doc"
+  grep -Fq "It remains the only predictive dashboard producer in \`franken_engine\`." "$contract_doc"
   grep -Fq 'scripts/swarm_capacity_forecaster.sh' "$contract_doc"
   grep -Fq 'docs/swarm_capacity_forecaster_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_admission_budget_planner.sh' "$contract_doc"
@@ -880,6 +1097,12 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_starvation_rescue_planner_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_starvation_rescue_conformance_gate.sh' "$contract_doc"
   grep -Fq 'docs/swarm_starvation_rescue_conformance_gate_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md' "$contract_doc"
+  grep -Fq 'docs/swarm_checkpoint_bundle_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_checkpoint_restore_planner.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_checkpoint_restore_planner_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_checkpoint_restore_conformance_gate.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then

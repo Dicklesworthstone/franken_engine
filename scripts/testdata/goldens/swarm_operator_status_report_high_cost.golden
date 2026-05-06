@@ -49,6 +49,10 @@
     "starvation_rescue_escalation_band": "ready",
     "starvation_rescue_top_action": "reopen_stale_claim_then_rebalance",
     "starvation_rescue_unresolved_risk_count": 0,
+    "checkpoint_restore_plan_decision": "resume",
+    "checkpoint_restore_escalation_band": "ready",
+    "checkpoint_restore_top_action": "resume_from_checkpoint",
+    "checkpoint_restore_unresolved_risk_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -487,6 +491,27 @@
       "unresolved_risks": [],
       "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_plan.json",
       "conformance_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/starvation_rescue_conformance_report.json"
+    },
+    "checkpoint_restore": {
+      "artifact_status": "provided",
+      "plan_artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "ok",
+      "checkpoint_id": "checkpoint-operator-status-smoke",
+      "checkpoint_capture_decision": "captured",
+      "restore_readiness_hint": "candidate",
+      "plan_decision": "resume",
+      "conformance_decision": "pass",
+      "drift_class": "none",
+      "checkpoint_age_seconds": 300,
+      "top_restore_action": "resume_from_checkpoint",
+      "gate_failure_count": 0,
+      "escalation_band": "ready",
+      "unresolved_risks": [],
+      "checked_artifact_path_count": 8,
+      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/checkpoint_restore_conformance_report.json"
     },
     "staged_contamination": {
       "artifact_status": "provided",

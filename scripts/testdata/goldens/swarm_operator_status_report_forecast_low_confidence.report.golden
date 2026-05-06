@@ -11,6 +11,7 @@
 - Lease exchange posture: `retain_current_assignments`
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
+- Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -23,6 +24,9 @@
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/warm_target_prefetch_roi_advisory.json`
 - Starvation rescue plan: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/starvation_rescue_plan.json`
 - Starvation rescue conformance report: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/starvation_rescue_conformance_report.json`
+- Checkpoint bundle: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/checkpoint_bundle.json`
+- Checkpoint restore plan: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/checkpoint_restore_plan.json`
+- Checkpoint restore conformance report: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/checkpoint_restore_conformance_report.json`
 
 - `refresh_capacity_forecast`: predictive capacity forecast is fail-closed or low-confidence
 

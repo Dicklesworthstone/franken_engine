@@ -177,7 +177,7 @@ fn validate_manifest_schema(manifest_path: &Path) -> Result<(), String> {
     ];
 
     for field in required_fields {
-        if !manifest.get(field).is_some() {
+        if manifest.get(field).is_none() {
             return Err(format!("Missing required field: {}", field));
         }
     }
@@ -197,7 +197,7 @@ fn validate_manifest_schema(manifest_path: &Path) -> Result<(), String> {
     ];
 
     for path_field in required_artifact_paths {
-        if !artifact_paths.get(path_field).is_some() {
+        if artifact_paths.get(path_field).is_none() {
             return Err(format!("Missing artifact path: {}", path_field));
         }
     }
@@ -300,7 +300,7 @@ fn validate_required_fields(manifest_path: &Path) -> Result<(), String> {
 
     let required_freshness_fields = &["generated_utc", "freshness_days", "max_freshness_days"];
     for field in required_freshness_fields {
-        if !freshness.get(field).is_some() {
+        if freshness.get(field).is_none() {
             return Err(format!("Missing freshness field: {}", field));
         }
     }

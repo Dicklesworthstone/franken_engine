@@ -1334,7 +1334,7 @@ mod tests {
         );
 
         assert_eq!(
-            aggregate_memory_envelope_verdict(&[matching.clone()]),
+            aggregate_memory_envelope_verdict(std::slice::from_ref(&matching)),
             MemoryEnvelopeVerdict::Matching
         );
         assert_eq!(

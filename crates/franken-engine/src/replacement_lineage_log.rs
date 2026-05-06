@@ -21,7 +21,10 @@ use crate::security_epoch::SecurityEpoch;
 use crate::self_replacement::{ReplacementReceipt, ValidationArtifactKind};
 use crate::slot_registry::SlotId;
 use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
-use crate::typed_persistence_models::{ReplacementLineageEntry, TypedStorageAdapterExt};
+use crate::typed_persistence_models::{
+    ReplacementLineageEntry, TypedStorageAdapterExt, TypedStoreRecord, allocate_typed_record_id,
+    map_legacy_replacement_lineage_record,
+};
 
 // ---------------------------------------------------------------------------
 // Replacement types
@@ -1392,13 +1395,14 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     operation: "serialize replacement record".to_string(),
                     detail: err.to_string(),
                 })?;
-            self.adapter.put(
+            let stored_record = self.adapter.put(
                 StoreKind::ReplacementLineage,
                 key.clone(),
                 value,
                 metadata,
                 context,
             )?;
+            self.store_typed_lineage_mirror(&stored_record, context)?;
 
             self.adapter.put(
                 StoreKind::ReplacementLineage,
@@ -1540,13 +1544,14 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     operation: "serialize demotion record".to_string(),
                     detail: err.to_string(),
                 })?;
-            self.adapter.put(
+            let stored_record = self.adapter.put(
                 StoreKind::ReplacementLineage,
                 key.clone(),
                 value,
                 metadata,
                 context,
             )?;
+            self.store_typed_lineage_mirror(&stored_record, context)?;
 
             self.adapter.put(
                 StoreKind::ReplacementLineage,
@@ -1608,37 +1613,43 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         receipt_content_hash: &str,
         context: &EventContext,
     ) -> Result<Option<ReplacementReceiptRecord>, LineageIndexError> {
-        let result =
-            (|| {
-                let Some(pointer_record) = self.adapter.get(
-                    StoreKind::ReplacementLineage,
-                    &replacement_by_hash_key(receipt_content_hash),
-                    context,
-                )?
-                else {
-                    return Ok(None);
-                };
+        let result = (|| {
+            let Some(pointer_record) = self.adapter.get(
+                StoreKind::ReplacementLineage,
+                &replacement_by_hash_key(receipt_content_hash),
+                context,
+            )?
+            else {
+                return Ok(None);
+            };
 
-                let pointed_key = String::from_utf8(pointer_record.value).map_err(|err| {
-                    LineageIndexError::CorruptRecord {
-                        key: pointer_record.key,
-                        detail: err.to_string(),
-                    }
-                })?;
+            let pointed_key = String::from_utf8(pointer_record.value).map_err(|err| {
+                LineageIndexError::CorruptRecord {
+                    key: pointer_record.key,
+                    detail: err.to_string(),
+                }
+            })?;
 
-                let Some(record) =
-                    self.adapter
-                        .get(StoreKind::ReplacementLineage, &pointed_key, context)?
-                else {
-                    return Ok(None);
-                };
-                let decoded: ReplacementReceiptRecord = serde_json::from_slice(&record.value)
-                    .map_err(|err| LineageIndexError::CorruptRecord {
-                        key: record.key,
-                        detail: err.to_string(),
-                    })?;
-                Ok(Some(decoded))
-            })();
+            let Some(receipt_id) = receipt_id_from_index_key(&pointed_key) else {
+                return Err(LineageIndexError::CorruptRecord {
+                    key: pointed_key,
+                    detail: "replacement pointer target is missing receipt id".to_string(),
+                });
+            };
+            if let Some(decoded) =
+                self.typed_replacement_record_by_receipt_id(receipt_id, context)?
+            {
+                return Ok(Some(decoded));
+            }
+
+            let Some(record) =
+                self.adapter
+                    .get(StoreKind::ReplacementLineage, &pointed_key, context)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(decode_replacement_record(record)?))
+        })();
 
         self.emit_event(
             context,
@@ -1655,37 +1666,41 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         receipt_content_hash: &str,
         context: &EventContext,
     ) -> Result<Option<DemotionReceiptRecord>, LineageIndexError> {
-        let result =
-            (|| {
-                let Some(pointer_record) = self.adapter.get(
-                    StoreKind::ReplacementLineage,
-                    &demotion_by_hash_key(receipt_content_hash),
-                    context,
-                )?
-                else {
-                    return Ok(None);
-                };
+        let result = (|| {
+            let Some(pointer_record) = self.adapter.get(
+                StoreKind::ReplacementLineage,
+                &demotion_by_hash_key(receipt_content_hash),
+                context,
+            )?
+            else {
+                return Ok(None);
+            };
 
-                let pointed_key = String::from_utf8(pointer_record.value).map_err(|err| {
-                    LineageIndexError::CorruptRecord {
-                        key: pointer_record.key,
-                        detail: err.to_string(),
-                    }
-                })?;
+            let pointed_key = String::from_utf8(pointer_record.value).map_err(|err| {
+                LineageIndexError::CorruptRecord {
+                    key: pointer_record.key,
+                    detail: err.to_string(),
+                }
+            })?;
 
-                let Some(record) =
-                    self.adapter
-                        .get(StoreKind::ReplacementLineage, &pointed_key, context)?
-                else {
-                    return Ok(None);
-                };
-                let decoded: DemotionReceiptRecord = serde_json::from_slice(&record.value)
-                    .map_err(|err| LineageIndexError::CorruptRecord {
-                        key: record.key,
-                        detail: err.to_string(),
-                    })?;
-                Ok(Some(decoded))
-            })();
+            let Some(receipt_id) = receipt_id_from_index_key(&pointed_key) else {
+                return Err(LineageIndexError::CorruptRecord {
+                    key: pointed_key,
+                    detail: "demotion pointer target is missing receipt id".to_string(),
+                });
+            };
+            if let Some(decoded) = self.typed_demotion_record_by_receipt_id(receipt_id, context)? {
+                return Ok(Some(decoded));
+            }
+
+            let Some(record) =
+                self.adapter
+                    .get(StoreKind::ReplacementLineage, &pointed_key, context)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(decode_demotion_record(record)?))
+        })();
 
         self.emit_event(
             context,
@@ -1704,6 +1719,21 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         context: &EventContext,
     ) -> Result<Vec<LineageChainEntry>, LineageIndexError> {
         let result = (|| {
+            let typed_entries = self.typed_lineage_entries(
+                BTreeMap::from([("slot_id".to_string(), slot_id.as_str().to_string())]),
+                context,
+            )?;
+            let mut typed_receipt_ids = BTreeSet::new();
+            let mut decoded = Vec::new();
+            for entry in typed_entries {
+                if let Some(chain_entry) = typed_entry_to_chain_entry(&entry)? {
+                    typed_receipt_ids.insert(chain_entry.receipt_id.clone());
+                    if query.matches(&chain_entry) {
+                        decoded.push(chain_entry);
+                    }
+                }
+            }
+
             let rows = self.adapter.query(
                 StoreKind::ReplacementLineage,
                 &StoreQuery {
@@ -1713,8 +1743,17 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                 },
                 context,
             )?;
-            let mut decoded = decode_chain_entries(rows)?;
-            decoded.retain(|entry| query.matches(entry));
+            for row in rows {
+                if receipt_id_from_index_key(&row.key)
+                    .is_some_and(|receipt_id| typed_receipt_ids.contains(receipt_id))
+                {
+                    continue;
+                }
+                let entry = decode_chain_record(row)?;
+                if query.matches(&entry) {
+                    decoded.push(entry);
+                }
+            }
             decoded.sort_by(|a, b| {
                 a.timestamp_ns
                     .cmp(&b.timestamp_ns)
@@ -1743,7 +1782,27 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
         context: &EventContext,
     ) -> Result<Vec<ReplayJoinRow>, LineageIndexError> {
         let result = (|| {
-            let mut replacements = decode_replacement_records(self.adapter.query(
+            let typed_entries = self.typed_lineage_entries(BTreeMap::new(), context)?;
+            let mut typed_receipt_ids = BTreeSet::new();
+            let mut replacements = Vec::new();
+            let mut demotions = Vec::new();
+            for entry in typed_entries {
+                if let Some(record) = typed_entry_to_replacement_record(&entry)? {
+                    if replay_query_matches(query, &record.slot_id, record.promotion_timestamp_ns) {
+                        typed_receipt_ids.insert(record.receipt_id.clone());
+                        replacements.push(record);
+                    }
+                    continue;
+                }
+                if let Some(record) = typed_entry_to_demotion_record(&entry)?
+                    && replay_query_matches(query, &record.slot_id, record.timestamp_ns)
+                {
+                    typed_receipt_ids.insert(record.receipt_id.clone());
+                    demotions.push(record);
+                }
+            }
+
+            for row in self.adapter.query(
                 StoreKind::ReplacementLineage,
                 &StoreQuery {
                     key_prefix: Some("replacement_receipts/".to_string()),
@@ -1751,17 +1810,24 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     limit: None,
                 },
                 context,
-            )?)?;
-            replacements.retain(|record| {
-                replay_query_matches(query, &record.slot_id, record.promotion_timestamp_ns)
-            });
+            )? {
+                if receipt_id_from_index_key(&row.key)
+                    .is_some_and(|receipt_id| typed_receipt_ids.contains(receipt_id))
+                {
+                    continue;
+                }
+                let record = decode_replacement_record(row)?;
+                if replay_query_matches(query, &record.slot_id, record.promotion_timestamp_ns) {
+                    replacements.push(record);
+                }
+            }
             replacements.sort_by(|a, b| {
                 a.promotion_timestamp_ns
                     .cmp(&b.promotion_timestamp_ns)
                     .then(a.receipt_id.cmp(&b.receipt_id))
             });
 
-            let mut demotions = decode_demotion_records(self.adapter.query(
+            for row in self.adapter.query(
                 StoreKind::ReplacementLineage,
                 &StoreQuery {
                     key_prefix: Some("demotion_receipts/".to_string()),
@@ -1769,7 +1835,17 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     limit: None,
                 },
                 context,
-            )?)?;
+            )? {
+                if receipt_id_from_index_key(&row.key)
+                    .is_some_and(|receipt_id| typed_receipt_ids.contains(receipt_id))
+                {
+                    continue;
+                }
+                let record = decode_demotion_record(row)?;
+                if replay_query_matches(query, &record.slot_id, record.timestamp_ns) {
+                    demotions.push(record);
+                }
+            }
             demotions.sort_by(|a, b| {
                 a.timestamp_ns
                     .cmp(&b.timestamp_ns)
@@ -1883,6 +1959,85 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
             result.as_ref().err(),
         );
         result
+    }
+
+    fn store_typed_lineage_mirror(
+        &mut self,
+        legacy_record: &crate::storage_adapter::StoreRecord,
+        context: &EventContext,
+    ) -> Result<(), LineageIndexError> {
+        let typed_record_id = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut self.adapter,
+            &legacy_record.key,
+            context,
+        )
+        .map_err(LineageIndexError::Storage)?;
+        for entry in map_legacy_replacement_lineage_record(legacy_record, typed_record_id)
+            .map_err(LineageIndexError::Storage)?
+        {
+            self.adapter
+                .put_typed(&entry, context)
+                .map_err(LineageIndexError::Storage)?;
+        }
+        Ok(())
+    }
+
+    fn typed_lineage_entries(
+        &mut self,
+        metadata_filters: BTreeMap<String, String>,
+        context: &EventContext,
+    ) -> Result<Vec<ReplacementLineageEntry>, LineageIndexError> {
+        let mut entries = Vec::new();
+        for row in self.adapter.query(
+            StoreKind::ReplacementLineage,
+            &StoreQuery {
+                key_prefix: Some(typed_replacement_lineage_prefix()),
+                metadata_filters,
+                limit: None,
+            },
+            context,
+        )? {
+            entries.push(
+                ReplacementLineageEntry::from_store_record(&row)
+                    .map_err(LineageIndexError::Storage)?,
+            );
+        }
+        entries.sort_by_key(|a| a.sequence_id);
+        Ok(entries)
+    }
+
+    fn typed_replacement_record_by_receipt_id(
+        &mut self,
+        receipt_id: &str,
+        context: &EventContext,
+    ) -> Result<Option<ReplacementReceiptRecord>, LineageIndexError> {
+        let entries = self.typed_lineage_entries(
+            BTreeMap::from([("receipt_artifact_id".to_string(), receipt_id.to_string())]),
+            context,
+        )?;
+        for entry in entries {
+            if let Some(record) = typed_entry_to_replacement_record(&entry)? {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
+    }
+
+    fn typed_demotion_record_by_receipt_id(
+        &mut self,
+        receipt_id: &str,
+        context: &EventContext,
+    ) -> Result<Option<DemotionReceiptRecord>, LineageIndexError> {
+        let entries = self.typed_lineage_entries(
+            BTreeMap::from([("receipt_artifact_id".to_string(), receipt_id.to_string())]),
+            context,
+        )?;
+        for entry in entries {
+            if let Some(record) = typed_entry_to_demotion_record(&entry)? {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
     }
 
     fn store_evidence(
@@ -2029,6 +2184,10 @@ fn demotion_by_hash_key(content_hash: &str) -> String {
     format!("demotion_by_hash/{content_hash}")
 }
 
+fn typed_replacement_lineage_prefix() -> String {
+    format!("typed/{}/", StoreKind::ReplacementLineage.as_str())
+}
+
 fn evidence_key(
     receipt_id: &str,
     category: EvidenceCategory,
@@ -2042,6 +2201,10 @@ fn evidence_key(
         ordinal,
         artifact_digest
     )
+}
+
+fn receipt_id_from_index_key(key: &str) -> Option<&str> {
+    key.rsplit('/').next().filter(|segment| !segment.is_empty())
 }
 
 impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
@@ -2095,49 +2258,121 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
     }
 }
 
-fn decode_replacement_records(
-    rows: Vec<crate::storage_adapter::StoreRecord>,
-) -> Result<Vec<ReplacementReceiptRecord>, LineageIndexError> {
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let record: ReplacementReceiptRecord =
-            serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
-                key: row.key,
-                detail: err.to_string(),
-            })?;
-        out.push(record);
-    }
-    Ok(out)
+fn decode_replacement_record(
+    row: crate::storage_adapter::StoreRecord,
+) -> Result<ReplacementReceiptRecord, LineageIndexError> {
+    serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
+        key: row.key,
+        detail: err.to_string(),
+    })
 }
 
-fn decode_demotion_records(
-    rows: Vec<crate::storage_adapter::StoreRecord>,
-) -> Result<Vec<DemotionReceiptRecord>, LineageIndexError> {
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let record: DemotionReceiptRecord =
-            serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
-                key: row.key,
-                detail: err.to_string(),
-            })?;
-        out.push(record);
-    }
-    Ok(out)
+fn decode_demotion_record(
+    row: crate::storage_adapter::StoreRecord,
+) -> Result<DemotionReceiptRecord, LineageIndexError> {
+    serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
+        key: row.key,
+        detail: err.to_string(),
+    })
 }
 
-fn decode_chain_entries(
-    rows: Vec<crate::storage_adapter::StoreRecord>,
-) -> Result<Vec<LineageChainEntry>, LineageIndexError> {
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let record: LineageChainEntry =
-            serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
-                key: row.key,
-                detail: err.to_string(),
-            })?;
-        out.push(record);
+fn decode_chain_record(
+    row: crate::storage_adapter::StoreRecord,
+) -> Result<LineageChainEntry, LineageIndexError> {
+    serde_json::from_slice(&row.value).map_err(|err| LineageIndexError::CorruptRecord {
+        key: row.key,
+        detail: err.to_string(),
+    })
+}
+
+fn typed_lineage_entry_key(entry: &ReplacementLineageEntry) -> Result<String, LineageIndexError> {
+    <ReplacementLineageEntry as TypedStoreRecord>::typed_record_key_for_id(entry.sequence_id)
+        .map_err(LineageIndexError::Storage)
+}
+
+fn decode_typed_legacy_payload<T>(
+    entry: &ReplacementLineageEntry,
+    expected_type: &str,
+) -> Result<Option<T>, LineageIndexError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let key = typed_lineage_entry_key(entry)?;
+    let metadata: serde_json::Value =
+        serde_json::from_str(&entry.metadata_json).map_err(|err| {
+            LineageIndexError::CorruptRecord {
+                key: key.clone(),
+                detail: format!("typed lineage metadata is not valid JSON: {err}"),
+            }
+        })?;
+    let Some(record_type) = metadata
+        .get("legacy_record_type")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    if record_type != expected_type {
+        return Ok(None);
     }
-    Ok(out)
+    let Some(payload) = metadata.get("legacy_payload").cloned() else {
+        return Err(LineageIndexError::CorruptRecord {
+            key,
+            detail: format!(
+                "typed lineage metadata for `{expected_type}` is missing legacy_payload"
+            ),
+        });
+    };
+    serde_json::from_value(payload)
+        .map(Some)
+        .map_err(|err| LineageIndexError::CorruptRecord {
+            key,
+            detail: format!(
+                "typed lineage metadata payload for `{expected_type}` failed to decode: {err}"
+            ),
+        })
+}
+
+fn typed_entry_to_replacement_record(
+    entry: &ReplacementLineageEntry,
+) -> Result<Option<ReplacementReceiptRecord>, LineageIndexError> {
+    decode_typed_legacy_payload(entry, "replacement_receipt")
+}
+
+fn typed_entry_to_demotion_record(
+    entry: &ReplacementLineageEntry,
+) -> Result<Option<DemotionReceiptRecord>, LineageIndexError> {
+    decode_typed_legacy_payload(entry, "demotion_receipt")
+}
+
+fn typed_entry_to_chain_entry(
+    entry: &ReplacementLineageEntry,
+) -> Result<Option<LineageChainEntry>, LineageIndexError> {
+    if let Some(record) = decode_typed_legacy_payload(entry, "lineage_chain")? {
+        return Ok(Some(record));
+    }
+    if let Some(record) = typed_entry_to_replacement_record(entry)? {
+        return Ok(Some(LineageChainEntry {
+            slot_id: record.slot_id.clone(),
+            timestamp_ns: record.promotion_timestamp_ns,
+            receipt_id: record.receipt_id.clone(),
+            kind: record.replacement_kind,
+            from_cell_digest: record.old_cell_digest.clone(),
+            to_cell_digest: record.new_cell_digest.clone(),
+            receipt_content_hash: record.receipt_content_hash.clone(),
+        }));
+    }
+    if let Some(record) = typed_entry_to_demotion_record(entry)? {
+        return Ok(Some(LineageChainEntry {
+            slot_id: record.slot_id.clone(),
+            timestamp_ns: record.timestamp_ns,
+            receipt_id: record.receipt_id.clone(),
+            kind: ReplacementKind::Demotion,
+            from_cell_digest: record.demoted_cell_digest.clone(),
+            to_cell_digest: record.restored_cell_digest.clone(),
+            receipt_content_hash: record.receipt_content_hash.clone(),
+        }));
+    }
+    Ok(None)
 }
 
 // ---------------------------------------------------------------------------
@@ -3437,6 +3672,139 @@ mod tests {
         assert!(!rows[0].performance_benchmarks.is_empty());
     }
 
+    fn overwrite_lineage_row_with_invalid_json(
+        idx: &mut ReplacementLineageEvidenceIndex<crate::storage_adapter::InMemoryStorageAdapter>,
+        key: &str,
+        context: &EventContext,
+    ) {
+        let stored = idx
+            .adapter
+            .get(StoreKind::ReplacementLineage, key, context)
+            .expect("stored lineage row should be readable")
+            .expect("stored lineage row should exist");
+        idx.adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                key.to_string(),
+                b"not-json".to_vec(),
+                stored.metadata,
+                context,
+            )
+            .expect("overwriting test lineage row should succeed");
+    }
+
+    #[test]
+    fn evidence_index_replacement_hash_lookup_prefers_typed_mirror() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let ctx = test_context();
+        let receipt = test_receipt("slot-typed-pref", "old", "new", 9100);
+        let record = idx
+            .index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &[], &ctx)
+            .expect("replacement receipt indexing should succeed");
+        let key = replacement_receipt_key(
+            &record.slot_id,
+            record.promotion_timestamp_ns,
+            &record.receipt_id,
+        );
+        overwrite_lineage_row_with_invalid_json(&mut idx, &key, &ctx);
+
+        let found = idx
+            .replacement_by_content_hash(&record.receipt_content_hash, &ctx)
+            .expect("typed replacement mirror should survive corrupt generic duplicate")
+            .expect("typed replacement mirror should be found");
+        assert_eq!(found.receipt_id, record.receipt_id);
+        assert_eq!(found.old_cell_digest, "old");
+        assert_eq!(found.new_cell_digest, "new");
+    }
+
+    #[test]
+    fn evidence_index_demotion_hash_lookup_prefers_typed_mirror() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let ctx = test_context();
+        let input = DemotionReceiptInput {
+            receipt_id: "demotion-typed-pref".to_string(),
+            slot_id: test_slot_id("slot-typed-dem"),
+            demoted_cell_digest: "new".to_string(),
+            restored_cell_digest: "old".to_string(),
+            demotion_reason: "typed mirror".to_string(),
+            timestamp_ns: 9200,
+            rollback_token_used: "rollback-token".to_string(),
+            linked_replacement_receipt_id: Some("replacement-typed-pref".to_string()),
+            evidence: Vec::new(),
+        };
+        let record = idx
+            .index_demotion_receipt(input, &ctx)
+            .expect("demotion receipt indexing should succeed");
+        let key = demotion_receipt_key(&record.slot_id, record.timestamp_ns, &record.receipt_id);
+        overwrite_lineage_row_with_invalid_json(&mut idx, &key, &ctx);
+
+        let found = idx
+            .demotion_by_content_hash(&record.receipt_content_hash, &ctx)
+            .expect("typed demotion mirror should survive corrupt generic duplicate")
+            .expect("typed demotion mirror should be found");
+        assert_eq!(found.receipt_id, record.receipt_id);
+        assert_eq!(found.demotion_reason, "typed mirror");
+        assert_eq!(found.demoted_cell_digest, "new");
+    }
+
+    #[test]
+    fn evidence_index_slot_lineage_prefers_typed_mirror() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let ctx = test_context();
+        let receipt = test_receipt("slot-typed-lineage", "old-a", "new-a", 9300);
+        let record = idx
+            .index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &[], &ctx)
+            .expect("replacement receipt indexing should succeed");
+        let chain_key = lineage_chain_key(
+            &record.slot_id,
+            record.promotion_timestamp_ns,
+            &record.receipt_id,
+        );
+        overwrite_lineage_row_with_invalid_json(&mut idx, &chain_key, &ctx);
+
+        let chain = idx
+            .slot_lineage(&record.slot_id, &SlotLineageQuery::default(), &ctx)
+            .expect("typed lineage mirror should survive corrupt generic chain duplicate");
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].receipt_id, record.receipt_id);
+        assert_eq!(chain[0].from_cell_digest, "old-a");
+        assert_eq!(chain[0].to_cell_digest, "new-a");
+    }
+
+    #[test]
+    fn evidence_index_replay_join_prefers_typed_mirror() {
+        use crate::storage_adapter::InMemoryStorageAdapter;
+        let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
+        let ctx = test_context();
+        let receipt = test_receipt("slot-typed-rj", "old-rj", "new-rj", 9400);
+        let evidence = vec![EvidencePointerInput {
+            category: EvidenceCategory::GateResult,
+            artifact_digest: "gate-rj".to_string(),
+            passed: Some(true),
+            summary: "gate ok".to_string(),
+        }];
+        let record = idx
+            .index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &evidence, &ctx)
+            .expect("replacement receipt indexing should succeed");
+        let key = replacement_receipt_key(
+            &record.slot_id,
+            record.promotion_timestamp_ns,
+            &record.receipt_id,
+        );
+        overwrite_lineage_row_with_invalid_json(&mut idx, &key, &ctx);
+
+        let rows = idx
+            .replay_join(&ReplayJoinQuery::default(), &ctx)
+            .expect("typed replay join should survive corrupt generic duplicate");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].replacement_receipt_id, record.receipt_id);
+        assert_eq!(rows[0].old_cell_digest, "old-rj");
+        assert!(!rows[0].gate_results.is_empty());
+    }
+
     // ── Merkle root empty log ──────────────────────────────────────
 
     #[test]
@@ -4188,7 +4556,7 @@ mod tests {
     fn insert_typed_lineage_entry_succeeds() {
         use crate::storage_adapter::InMemoryStorageAdapter;
         let mut idx = ReplacementLineageEvidenceIndex::new(InMemoryStorageAdapter::new());
-        let entry = make_typed_lineage_entry(300, "slot-typed", "replacement");
+        let entry = make_typed_lineage_entry(300, "slot-typed", "delegate_to_native");
         let ctx = test_context();
 
         let result = idx.insert_typed_lineage_entry(&entry, &ctx);

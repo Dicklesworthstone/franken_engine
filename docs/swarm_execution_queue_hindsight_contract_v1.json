@@ -1,0 +1,177 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-hindsight-contract.v1",
+  "bead_id": "bd-7s7ui",
+  "parent_bead_id": "bd-d5daf",
+  "depends_on": [
+    "bd-g347f"
+  ],
+  "docs": "docs/SWARM_EXECUTION_QUEUE_HINDSIGHT_CONTRACT.md",
+  "smoke_gate": "scripts/e2e/swarm_execution_queue_hindsight_contract_smoke.sh",
+  "input_schema_version": "franken-engine.swarm-execution-queue-hindsight-input.v1",
+  "report_schema_version": "franken-engine.swarm-execution-queue-hindsight-report.v1",
+  "evidence_ledger_schema_version": "franken-engine.swarm-execution-queue-hindsight-evidence-ledger.v1",
+  "upstream_contracts": [
+    "docs/swarm_execution_queue_input_contract_v1.json",
+    "docs/swarm_execution_queue_runner_contract_v1.json",
+    "docs/swarm_execution_queue_conformance_contract_v1.json",
+    "docs/swarm_execution_queue_runbook_truth_contract_v1.json",
+    "docs/swarm_predictive_dashboard_contract_v1.json"
+  ],
+  "required_queue_inputs": [
+    "queue_artifact_json",
+    "queue_run_manifest_json",
+    "normalized_queue_input_json",
+    "risk_budget_receipt_json",
+    "bottleneck_report_json"
+  ],
+  "required_aftermath_inputs": [
+    "bead_status_snapshot_json",
+    "bead_timing_snapshot_json",
+    "owner_contact_snapshot_json",
+    "reservation_friction_snapshot_json",
+    "proof_outcome_snapshot_json",
+    "checkpoint_restore_state_json"
+  ],
+  "required_input_metadata": [
+    "schema_version",
+    "captured_epoch_seconds",
+    "source_revision",
+    "artifact_path",
+    "content_hash_hex"
+  ],
+  "timestamp_policy": {
+    "timezone": "UTC",
+    "required_fields": [
+      "queue_issued_epoch_seconds",
+      "observation_epoch_seconds"
+    ],
+    "optional_fields": [
+      "queue_issued_timestamp_ns",
+      "observation_timestamp_ns",
+      "actual_started_epoch_seconds",
+      "actual_closed_epoch_seconds",
+      "owner_last_contact_epoch_seconds"
+    ],
+    "ordering_rules": [
+      "observation_epoch_seconds must be greater than or equal to queue_issued_epoch_seconds",
+      "actual_started_epoch_seconds must not precede queue_issued_epoch_seconds unless actual_outcome is preexisting_work",
+      "actual_closed_epoch_seconds must not precede actual_started_epoch_seconds when both are present"
+    ],
+    "ambiguity_decision": "fail_closed"
+  },
+  "evidence_ledger_required_fields": [
+    "artifact_id",
+    "schema_version",
+    "path",
+    "content_hash_hex",
+    "source_revision",
+    "captured_epoch_seconds",
+    "trust_state",
+    "freshness_state",
+    "required"
+  ],
+  "required_output_artifacts": [
+    "hindsight_input.json",
+    "hindsight_report.json",
+    "evidence_ledger.json",
+    "counterfactual_candidates.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_hindsight_row_fields": [
+    "task_id",
+    "recommended_rank",
+    "recommended_wave",
+    "recommended_first_action",
+    "actual_outcome",
+    "actual_start_delta_seconds",
+    "actual_close_delta_seconds",
+    "rank_delta",
+    "defer_reason",
+    "override_reason",
+    "owner_friction_outcome",
+    "reservation_friction_outcome",
+    "proof_outcome",
+    "checkpoint_restore_outcome",
+    "fidelity_class",
+    "drift_class",
+    "confidence_band",
+    "counterfactual_candidate"
+  ],
+  "allowed_actual_outcomes": [
+    "started",
+    "closed",
+    "deferred",
+    "blocked",
+    "preexisting_work",
+    "not_observed"
+  ],
+  "allowed_fidelity_classes": [
+    "matched",
+    "delayed_match",
+    "justified_override",
+    "stale_advice",
+    "unsafe_to_score",
+    "insufficient_evidence"
+  ],
+  "allowed_drift_classes": [
+    "none",
+    "timing_drift",
+    "ownership_drift",
+    "reservation_drift",
+    "proof_drift",
+    "restore_drift",
+    "ranking_drift",
+    "data_gap"
+  ],
+  "allowed_confidence_bands": [
+    "high",
+    "medium",
+    "low",
+    "insufficient_evidence"
+  ],
+  "counterfactual_candidate_fields": [
+    "candidate_id",
+    "task_id",
+    "reason",
+    "proposed_weight_delta",
+    "expected_fidelity_gain_millionths",
+    "risk",
+    "required_replay_inputs"
+  ],
+  "fail_closed_rules": [
+    "missing required inputs fail closed",
+    "missing or contradictory required timestamps fail closed",
+    "unknown task references fail closed",
+    "duplicate task IDs in queue or aftermath snapshots fail closed",
+    "queue rows without first_action fail closed",
+    "inconsistent owner identity or reservation-holder evidence fails closed",
+    "proof outcomes that report local-rch fallback as healthy proof completion fail closed",
+    "checkpoint restore blocked or manual-review evidence must remain visible in affected rows",
+    "docs and contract output claiming live mutation or automatic queue actuation fail closed"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_active_queue": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "downstream_beads": [
+    "bd-p5j9g",
+    "bd-eiqk4",
+    "bd-mp7x3",
+    "bd-t3owl",
+    "bd-nt8fa"
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_execution_queue_hindsight_contract_v1.json",
+    "bash -n scripts/e2e/swarm_execution_queue_hindsight_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_execution_queue_hindsight_contract_smoke.sh",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_hindsight_contract_smoke.sh selftest"
+  ]
+}

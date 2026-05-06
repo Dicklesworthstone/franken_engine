@@ -55,6 +55,14 @@
     "producer_integration": false,
     "handoff_note": "The standalone admission budget planner consumes the predictive capacity forecast plus bounded request fixtures to publish deterministic per-priority and per-agent admission budgets. The current swarm_operator_status_report producer does not emit this budget plan yet."
   },
+  "slo_tuning_advisory": {
+    "script": "scripts/swarm_operator_slo_tuning_advisory.sh",
+    "advisory_schema_version": "franken-engine.swarm-operator-slo-tuning-advisory.v1",
+    "contract_json": "docs/swarm_operator_slo_tuning_advisory_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone SWARM-CTRL-IX operator SLO tuning advisory composes the reviewed threshold receipt, capacity forecast, chaos conformance report, admission budget plan, lease exchange salvage simulation, and warm-target ROI advisory into bounded operator recommendations. The current swarm_operator_status_report producer does not emit this advisory yet."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -132,6 +140,17 @@
     "proof_cache_stale_miss",
     "chaos_recovery_saturated_queue"
   ],
+  "slo_tuning_advisory_fixture_cases": [
+    "healthy",
+    "degraded"
+  ],
+  "slo_tuning_advisory_dashboard_fields": [
+    "predictive_dashboard.slo_tuning_advisory.evidence_quality",
+    "predictive_dashboard.slo_tuning_advisory.confidence_band",
+    "predictive_dashboard.slo_tuning_advisory.recommended_actions",
+    "predictive_dashboard.slo_tuning_advisory.supported_claims",
+    "predictive_dashboard.slo_tuning_advisory.evidence_links"
+  ],
   "truth_constraints": [
     "No rich interactive renderer is implemented in franken_engine by this contract.",
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
@@ -143,6 +162,7 @@
     "The admission budget section is advisory snapshot evidence backed by scripts/swarm_admission_budget_planner.sh; it must not be described as live worker allocation, queue mutation, or automatic bead claiming.",
     "The lease exchange and salvage section is advisory snapshot evidence backed by scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh; it must not be described as automatic ownership transfer or cancellation.",
     "The prefetch ROI section is advisory snapshot evidence backed by scripts/swarm_warm_target_prefetch_roi_advisory.sh; it must not be described as automatic target warming or archive mutation.",
+    "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]
 }

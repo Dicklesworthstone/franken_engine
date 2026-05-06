@@ -18,6 +18,7 @@ Rich interactive rendering belongs in `/dp/frankentui`, following
 The producer only reads explicit JSON snapshots. It does not claim beads, query
 Agent Mail, run `rch`, execute Cargo, or mutate tracker state.
 It remains the only predictive dashboard producer in `franken_engine`.
+scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer in `franken_engine`.
 
 The predictive dashboard contract also has a pre-dashboard telemetry snapshot
 extension:
@@ -85,6 +86,20 @@ admission budgets. The operator status report integrates it as advisory snapshot
 evidence only. It must not be described as live worker allocation, queue
 mutation, or automatic bead claiming.
 
+The same reviewed SWARM-CTRL-IX chain now also publishes a standalone operator
+SLO tuning handoff:
+
+- Script: `scripts/swarm_operator_slo_tuning_advisory.sh`
+- Advisory schema: `franken-engine.swarm-operator-slo-tuning-advisory.v1`
+- Static contract: `docs/swarm_operator_slo_tuning_advisory_contract_v1.json`
+
+That advisory composes the reviewed threshold receipt, capacity forecast, chaos
+conformance report, admission budget plan, lease exchange / salvage simulation,
+and warm-target ROI advisory into bounded operator recommendations. It is a
+future dashboard handoff only. It is not another predictive dashboard
+producer, it does not ship a local TUI renderer, and any future rich renderer
+must still live in `/dp/frankentui`.
+
 The same operator report now integrates two more advisory-only child producers:
 
 - Script: `scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh`
@@ -128,6 +143,7 @@ consumption:
 | `slo_calibration` | `swarm-slo-threshold-receipt.v1` | Show reviewed high-core threshold bands, confidence class, and whether current evidence is accepted, downgraded, or rejected. |
 | `capacity_forecast` | `swarm-capacity-forecast.v1` | Show bounded forecast state, blocked and degraded categories, and per-category recommended operator actions. |
 | `admission_budgets` | `swarm-admission-budget-plan.v1` | Show budget profile, admitted vs deferred work, protected-request counts, and bounded per-request recommendations. |
+| `slo_tuning_advisory` | `swarm-operator-slo-tuning-advisory.v1` (handoff only) | Carry reviewed evidence quality, claim support, and bounded admit/narrow/defer/prewarm/archive/salvage/coordination recommendations for a future renderer. |
 | `lease_exchange_salvage` | `swarm-lease-exchange-cancellation-salvage-simulation.v1` | Show whether lease exchange, salvage promotion, or manual review is appropriate before reassigning work. |
 | `prefetch_roi` | `swarm-warm-target-prefetch-roi-advisory.v1` | Show whether warm-target or archive prefetch has enough bounded ROI to recommend, plus target-dir and proof-cache posture. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
@@ -179,6 +195,10 @@ The standalone SWARM-CTRL-IX threshold receipt is also a downstream handoff
 payload. It is not evidence that the current predictive dashboard producer
 already renders or consumes the calibrator directly.
 
+The standalone operator SLO tuning advisory is another downstream handoff
+payload. It is not evidence that the current predictive dashboard producer
+already renders or consumes the advisory directly.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -192,6 +212,8 @@ already renders or consumes the calibrator directly.
 - The docs must describe the SWARM-CTRL-IX threshold receipt as advisory-only
   threshold evidence, not as live scheduler tuning or automatic
   resource-governor mutation.
+- The docs must describe the operator SLO tuning advisory as a future handoff
+  only, not as a second predictive dashboard producer or a shipped local TUI.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -278,4 +300,14 @@ bash -n scripts/e2e/swarm_slo_calibrator_smoke.sh
 ./scripts/e2e/swarm_slo_calibrator_smoke.sh check
 ./scripts/e2e/swarm_slo_calibrator_smoke.sh selftest
 jq empty docs/swarm_slo_threshold_receipt_contract_v1.json
+```
+
+When changing the SWARM-CTRL-IX operator SLO tuning advisory, also run:
+
+```bash
+bash -n scripts/swarm_operator_slo_tuning_advisory.sh
+bash -n scripts/e2e/swarm_operator_slo_tuning_advisory_smoke.sh
+./scripts/e2e/swarm_operator_slo_tuning_advisory_smoke.sh check
+./scripts/e2e/swarm_operator_slo_tuning_advisory_smoke.sh selftest
+jq empty docs/swarm_operator_slo_tuning_advisory_contract_v1.json
 ```

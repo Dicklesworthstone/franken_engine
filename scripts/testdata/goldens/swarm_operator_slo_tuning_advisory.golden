@@ -1,0 +1,199 @@
+{
+  "schema_version": "franken-engine.swarm-operator-slo-tuning-advisory.v1",
+  "source_revision": "ebc09bba12a9215c0cd54555e6c272165ca70489",
+  "stale_after_seconds": 1800,
+  "decision": "pass",
+  "exit_code": 0,
+  "evidence_quality": {
+    "decision": "reviewed",
+    "confidence_band": "high",
+    "reviewed_inputs": 6,
+    "accepted_threshold_count": 6,
+    "downgraded_threshold_count": 0,
+    "rejected_threshold_count": 0,
+    "overall_state": "nominal",
+    "chaos_conformance_decision": "pass"
+  },
+  "calibrated_thresholds": {
+    "receipt_id": null,
+    "accepted_threshold_count": 6,
+    "downgraded_threshold_count": 0,
+    "rejected_threshold_count": 0,
+    "thresholds": [
+      {
+        "claim_id": "queue_wait_budget_band",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "healthy",
+        "reason": "queue p99 remains healthy"
+      },
+      {
+        "claim_id": "validation_latency_band",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "healthy",
+        "reason": "latency remains healthy"
+      },
+      {
+        "claim_id": "rch_fallback_rate_tolerance",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "rch_backed_only",
+        "reason": "all high-core evidence stayed rch-backed"
+      },
+      {
+        "claim_id": "starvation_brownout_guardrails",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "healthy",
+        "reason": "guardrails stay healthy"
+      },
+      {
+        "claim_id": "proof_cache_freshness_and_warm_target_roi",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "reuse_hot_cache",
+        "reason": "proof cache and ROI both support reuse"
+      },
+      {
+        "claim_id": "archive_salvage_pressure_thresholds",
+        "status": "accepted",
+        "confidence_class": "high",
+        "current_band": "retain",
+        "reason": "archive pressure remains low"
+      }
+    ]
+  },
+  "claim_support": {
+    "supported_claims": [
+      "queue_wait_budget_band",
+      "validation_latency_band",
+      "rch_fallback_rate_tolerance",
+      "starvation_brownout_guardrails",
+      "proof_cache_freshness_and_warm_target_roi",
+      "archive_salvage_pressure_thresholds"
+    ],
+    "unsupported_claims": [],
+    "reviewed_claims": [
+      "archive_salvage_pressure_thresholds",
+      "proof_cache_freshness_and_warm_target_roi",
+      "queue_wait_budget_band",
+      "rch_fallback_rate_tolerance",
+      "starvation_brownout_guardrails",
+      "validation_latency_band"
+    ]
+  },
+  "forecast_summary": {
+    "forecast_id": null,
+    "decision": "pass",
+    "confidence_band": "high",
+    "overall_state": "nominal",
+    "blocked_categories": [],
+    "degraded_categories": []
+  },
+  "recommended_actions": [
+    {
+      "action": "admit",
+      "state": "recommended",
+      "reason": "admission budget and reviewed threshold evidence both allow full admission",
+      "advisory_only": true
+    },
+    {
+      "action": "narrow",
+      "state": "hold",
+      "reason": "narrowing is not required while reviewed evidence stays healthy",
+      "advisory_only": true
+    },
+    {
+      "action": "defer",
+      "state": "hold",
+      "reason": "defer is not currently required",
+      "advisory_only": true
+    },
+    {
+      "action": "prewarm",
+      "state": "recommended",
+      "reason": "warm-target ROI supports prewarming before the next protected proof",
+      "advisory_only": true
+    },
+    {
+      "action": "archive",
+      "state": "hold",
+      "reason": "archive pressure remains bounded and retain-only",
+      "advisory_only": true
+    },
+    {
+      "action": "salvage",
+      "state": "hold",
+      "reason": "no salvage promotion is currently justified",
+      "advisory_only": true
+    },
+    {
+      "action": "require_human_coordination",
+      "state": "hold",
+      "reason": "human coordination is not required while evidence remains reviewed and high confidence",
+      "advisory_only": true
+    }
+  ],
+  "dashboard_handoff": {
+    "future_section_path": "predictive_dashboard.slo_tuning_advisory",
+    "renderer_provider": "/dp/frankentui",
+    "shipped_in_franken_engine": false,
+    "local_renderer": false,
+    "producer_integration": false,
+    "contract_json": "docs/swarm_predictive_dashboard_contract_v1.json",
+    "handoff_note": "This standalone advisory is a future dashboard handoff only; scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer in franken_engine."
+  },
+  "evidence_links": [
+    {
+      "input_id": "threshold_receipt_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/threshold.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/threshold.json",
+      "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1"
+    },
+    {
+      "input_id": "capacity_forecast_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/forecast.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/forecast.json",
+      "schema_version": "franken-engine.swarm-capacity-forecast.v1"
+    },
+    {
+      "input_id": "admission_budget_plan_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/admission.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/admission.json",
+      "schema_version": "franken-engine.swarm-admission-budget-plan.v1"
+    },
+    {
+      "input_id": "lease_exchange_salvage_simulation_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/salvage.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/salvage.json",
+      "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1"
+    },
+    {
+      "input_id": "warm_target_prefetch_roi_advisory_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/roi.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/roi.json",
+      "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1"
+    },
+    {
+      "input_id": "chaos_conformance_report_json",
+      "input_path": "[SMOKE_ROOT]/healthy/fixtures/chaos.json",
+      "artifact_path": "[SMOKE_ROOT]/healthy/fixtures/chaos.json",
+      "schema_version": "franken-engine.swarm-high-core-chaos-conformance-report.v1"
+    }
+  ],
+  "upstream_summary": {
+    "admission_decision": "admit",
+    "budget_profile": "balanced",
+    "lease_exchange_decision": "retain_current_assignments",
+    "archive_pressure_advisory": "retain",
+    "roi_advisory": "prefetch_recommended",
+    "roi_recommended_action": "Warm the preserved target before the next protected proof."
+  },
+  "gate_failures": [],
+  "truth_notes": [
+    "The advisory is report-only and does not mutate queue, lease, archive, or worker state.",
+    "Any future rich dashboard for this advisory must be implemented through /dp/frankentui.",
+    "scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer in franken_engine."
+  ]
+}

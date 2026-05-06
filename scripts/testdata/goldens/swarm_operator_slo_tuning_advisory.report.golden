@@ -1,0 +1,27 @@
+# Operator SLO Tuning Advisory
+
+- Advisory ID: `swarm-operator-slo-tuning-[ADVISORY_ID]`
+- Decision: `pass`
+- Evidence quality: `reviewed`
+- Confidence: `high`
+- Forecast state: `nominal`
+- Dashboard handoff: `predictive_dashboard.slo_tuning_advisory` via `/dp/frankentui`
+
+## Recommended Actions
+
+- `admit` `recommended`: admission budget and reviewed threshold evidence both allow full admission
+- `narrow` `hold`: narrowing is not required while reviewed evidence stays healthy
+- `defer` `hold`: defer is not currently required
+- `prewarm` `recommended`: warm-target ROI supports prewarming before the next protected proof
+- `archive` `hold`: archive pressure remains bounded and retain-only
+- `salvage` `hold`: no salvage promotion is currently justified
+- `require_human_coordination` `hold`: human coordination is not required while evidence remains reviewed and high confidence
+
+## Evidence Links
+
+- `threshold_receipt_json` -> `[SMOKE_ROOT]/healthy/fixtures/threshold.json` (`franken-engine.swarm-slo-threshold-receipt.v1`)
+- `capacity_forecast_json` -> `[SMOKE_ROOT]/healthy/fixtures/forecast.json` (`franken-engine.swarm-capacity-forecast.v1`)
+- `admission_budget_plan_json` -> `[SMOKE_ROOT]/healthy/fixtures/admission.json` (`franken-engine.swarm-admission-budget-plan.v1`)
+- `lease_exchange_salvage_simulation_json` -> `[SMOKE_ROOT]/healthy/fixtures/salvage.json` (`franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1`)
+- `warm_target_prefetch_roi_advisory_json` -> `[SMOKE_ROOT]/healthy/fixtures/roi.json` (`franken-engine.swarm-warm-target-prefetch-roi-advisory.v1`)
+- `chaos_conformance_report_json` -> `[SMOKE_ROOT]/healthy/fixtures/chaos.json` (`franken-engine.swarm-high-core-chaos-conformance-report.v1`)

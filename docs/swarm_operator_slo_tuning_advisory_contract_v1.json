@@ -1,0 +1,54 @@
+{
+  "schema_version": "franken-engine.swarm-operator-slo-tuning-advisory-contract.v1",
+  "report_schema_version": "franken-engine.swarm-operator-slo-tuning-advisory.v1",
+  "dashboard_section_path": "predictive_dashboard.slo_tuning_advisory",
+  "required_args": [
+    "--threshold-receipt-json",
+    "--capacity-forecast-json",
+    "--admission-budget-plan-json",
+    "--lease-exchange-salvage-simulation-json",
+    "--warm-target-prefetch-roi-advisory-json",
+    "--chaos-conformance-report-json"
+  ],
+  "supported_claim_ids": [
+    "queue_wait_budget_band",
+    "validation_latency_band",
+    "rch_fallback_rate_tolerance",
+    "starvation_brownout_guardrails",
+    "proof_cache_freshness_and_warm_target_roi",
+    "archive_salvage_pressure_thresholds"
+  ],
+  "required_report_fields": [
+    "evidence_quality.decision",
+    "evidence_quality.confidence_band",
+    "calibrated_thresholds.thresholds",
+    "claim_support.supported_claims",
+    "claim_support.unsupported_claims",
+    "forecast_summary.overall_state",
+    "recommended_actions",
+    "dashboard_handoff.future_section_path",
+    "evidence_links",
+    "artifact_paths.swarm_operator_slo_tuning_advisory_json"
+  ],
+  "required_markdown_sections": [
+    "Recommended Actions",
+    "Evidence Links"
+  ],
+  "compatible_inputs": [
+    "franken-engine.swarm-slo-threshold-receipt.v1",
+    "franken-engine.swarm-capacity-forecast.v1",
+    "franken-engine.swarm-admission-budget-plan.v1",
+    "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+    "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+    "franken-engine.swarm-high-core-chaos-conformance-report.v1"
+  ],
+  "truth_constraints": [
+    "The advisory is report-only and must not claim beads, mutate worker state, mutate archive state, or run cargo commands.",
+    "Unsupported SLO claims must fail closed instead of being silently ignored.",
+    "Missing evidence links must fail closed instead of producing an untraceable advisory.",
+    "Stale forecast references must fail closed instead of being treated as current guidance.",
+    "Any future rich dashboard for this advisory must reuse /dp/frankentui.",
+    "scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer in franken_engine."
+  ]
+}
+

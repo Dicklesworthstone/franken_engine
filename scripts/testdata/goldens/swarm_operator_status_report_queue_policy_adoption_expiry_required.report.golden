@@ -16,6 +16,7 @@
 - Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
 - Queue tuning promotion: readiness=`ready` decision=`eligible_canary` rollback=`better_than_current` canary=`continue_canary`
 - Queue policy adoption: readiness=`expiry_required` sustained=`regression_detected` expiry=`expire_adopted_policy` expire=`true` supersede=`false`
+- Causal trace: readiness=`complete` decision=`pass` anomalies=`0` missing-edges=`0`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -50,6 +51,8 @@
 - Queue policy sustained-gain receipt: `[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/sustained_gain_receipt.json`
 - Queue policy expiry/supersession plan: `[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/expiry_supersession_plan.json`
 - Queue policy expiry/supersession ledger: `expiry_supersession_ledger.json`
+- Causal trace graph: `[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/causal_trace_graph.json`
+- Causal trace anomalies: `[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/causal_trace_anomalies.json`
 
 - `review_queue_policy_adoption_lifecycle`: queue policy adoption lifecycle recommends expiry, supersession, or manual review
 

@@ -1044,7 +1044,121 @@ write_queue_policy_adoption_fixtures() {
       fail_closed_reasons:[],
       mutation_policy:{planning_artifact_only:true,changes_active_queue:false,applies_live_retuning:false,mutates_br:false,sends_agent_mail:false,mutates_remote_workers:false,rewrites_historical_outcomes:false,retirement_executed:false,supersession_executed:false},
       artifact_paths:{expiry_supersession_ledger_json:$artifact_path}
-    }' >"${fixture_dir}/expiry_supersession_ledger.json"
+  }' >"${fixture_dir}/expiry_supersession_ledger.json"
+}
+
+write_causal_trace_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local decision="pass"
+  local bead_status="closed"
+  local anomaly_class=""
+  local anomaly_severity=""
+  local anomaly_message=""
+
+  case "$mode" in
+    complete)
+      ;;
+    degraded)
+      decision="degraded"
+      bead_status="in_progress"
+      anomaly_class="missing_claim_message"
+      anomaly_severity="degraded"
+      anomaly_message="claim message evidence is absent from supplied coordination snapshots"
+      ;;
+    contaminated)
+      decision="fail_closed"
+      bead_status="in_progress"
+      anomaly_class="local_rch_fallback_contaminates_remote_proof"
+      anomaly_severity="fail_closed"
+      anomaly_message="local fallback marker contradicts claimed remote validation proof"
+      ;;
+    *)
+      record_failure "unknown causal trace fixture mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg mode "$mode" \
+    --arg decision "$decision" \
+    --arg bead_status "$bead_status" \
+    --arg anomaly_class "$anomaly_class" \
+    --arg anomaly_severity "$anomaly_severity" \
+    --arg anomaly_message "$anomaly_message" \
+    --arg graph_path "${fixture_dir}/causal_trace_graph.json" \
+    --arg anomaly_path "${fixture_dir}/causal_trace_anomalies.json" \
+    '{
+      schema_version:"franken-engine.swarm-agent-causal-trace-graph.v1",
+      trace_id:("trace-" + $mode),
+      bead_id:"bd-jw854",
+      source_revision:"smoke-rev",
+      nodes:[
+        {node_id:"agent:ScarletOwl",node_type:"agent_profile",payload:{agent_name:"ScarletOwl"}},
+        {node_id:"bead:bd-jw854",node_type:"bead_state",payload:{id:"bd-jw854",status:$bead_status,assignee:"ScarletOwl"}},
+        {node_id:"reservation:scripts/swarm_operator_status_report.sh",node_type:"file_reservation",payload:{path:"scripts/swarm_operator_status_report.sh",holder:"ScarletOwl"}},
+        {node_id:"validation:operator-status-smoke",node_type:"validation_command",payload:{command:"bash -n scripts/swarm_operator_status_report.sh",decision:"pass"}},
+        {node_id:"commit:operator-status-smoke",node_type:"git_commit",payload:{commit:"smoke-commit",message:"feat(swarm): add causal trace operator status"}}
+      ],
+      edges:(
+        [
+          {edge_id:"edge-reservation",edge_type:"reservation_covers_path",from:"reservation:scripts/swarm_operator_status_report.sh",to:"bead:bd-jw854",decision:"pass"},
+          {edge_id:"edge-validation",edge_type:"validation_proves_closeout",from:"validation:operator-status-smoke",to:"bead:bd-jw854",decision:"pass"},
+          {edge_id:"edge-commit",edge_type:"commit_closes_bead",from:"commit:operator-status-smoke",to:"bead:bd-jw854",decision:"pass"}
+        ]
+        + (if $mode == "degraded" then [] else [{edge_id:"edge-claim",edge_type:"bead_claimed",from:"agent:ScarletOwl",to:"bead:bd-jw854",decision:"pass"}] end)
+      ),
+      anomaly_summary:{
+        decision:$decision,
+        anomaly_count:(if $mode == "complete" then 0 else 1 end),
+        fail_closed_count:(if $mode == "contaminated" then 1 else 0 end),
+        degraded_count:(if $mode == "degraded" then 1 else 0 end),
+        anomaly_classes:(if $mode == "complete" then [] else [$anomaly_class] end)
+      },
+      mutation_policy:{
+        fixture_fed_only:true,
+        mutates_br:false,
+        reassigns_beads:false,
+        releases_reservations:false,
+        sends_agent_mail:false,
+        queries_live_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false,
+        rewrites_historical_outcomes:false,
+        operator_wording_required:"advisory-only"
+      },
+      artifact_paths:{
+        causal_graph_json:$graph_path,
+        anomaly_report_json:$anomaly_path
+      }
+    }' >"${fixture_dir}/causal_trace_graph.json"
+
+  jq -n \
+    --arg mode "$mode" \
+    --arg decision "$decision" \
+    --arg anomaly_class "$anomaly_class" \
+    --arg anomaly_severity "$anomaly_severity" \
+    --arg anomaly_message "$anomaly_message" \
+    --arg anomaly_path "${fixture_dir}/causal_trace_anomalies.json" \
+    '{
+      schema_version:"franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+      trace_id:("trace-" + $mode),
+      bead_id:"bd-jw854",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      anomaly_count:(if $mode == "complete" then 0 else 1 end),
+      fail_closed_count:(if $mode == "contaminated" then 1 else 0 end),
+      degraded_count:(if $mode == "degraded" then 1 else 0 end),
+      anomaly_classes:(if $mode == "complete" then [] else [$anomaly_class] end),
+      anomalies:(
+        if $mode == "complete" then []
+        else [{anomaly_id:("anomaly-" + $mode),anomaly_class:$anomaly_class,severity:$anomaly_severity,message:$anomaly_message,bead_id:"bd-jw854"}]
+        end
+      ),
+      artifact_paths:{anomaly_report_json:$anomaly_path}
+    }' >"${fixture_dir}/causal_trace_anomalies.json"
 }
 
 write_healthy_fixtures() {
@@ -1144,6 +1258,7 @@ write_healthy_fixtures() {
   write_queue_fidelity_fixtures "$fixture_dir" "healthy"
   write_queue_tuning_promotion_fixtures "$fixture_dir" "healthy"
   write_queue_policy_adoption_fixtures "$fixture_dir" "healthy"
+  write_causal_trace_fixtures "$fixture_dir" "complete"
 }
 
 write_degraded_fixtures() {
@@ -1476,6 +1591,14 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_queue_policy_adoption_fixtures "$fixture_dir" "supersession_required"
       ;;
+    causal_trace_degraded)
+      write_healthy_fixtures "$fixture_dir"
+      write_causal_trace_fixtures "$fixture_dir" "degraded"
+      ;;
+    causal_trace_contaminated)
+      write_healthy_fixtures "$fixture_dir"
+      write_causal_trace_fixtures "$fixture_dir" "contaminated"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1516,6 +1639,8 @@ run_case() {
   [[ -f "${fixture_dir}/sustained_gain_receipt.json" ]] && extra_args+=(--queue-policy-sustained-gain-receipt-json "${fixture_dir}/sustained_gain_receipt.json")
   [[ -f "${fixture_dir}/expiry_supersession_plan.json" ]] && extra_args+=(--queue-policy-expiry-supersession-plan-json "${fixture_dir}/expiry_supersession_plan.json")
   [[ -f "${fixture_dir}/expiry_supersession_ledger.json" ]] && extra_args+=(--queue-policy-expiry-supersession-ledger-json "${fixture_dir}/expiry_supersession_ledger.json")
+  [[ -f "${fixture_dir}/causal_trace_graph.json" ]] && extra_args+=(--swarm-agent-causal-trace-graph-json "${fixture_dir}/causal_trace_graph.json")
+  [[ -f "${fixture_dir}/causal_trace_anomalies.json" ]] && extra_args+=(--swarm-agent-causal-trace-anomaly-report-json "${fixture_dir}/causal_trace_anomalies.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1605,6 +1730,14 @@ run_case() {
     and (.predictive_dashboard.queue_policy_adoption.mutation_policy.applies_live_retuning == false)
     and (.predictive_dashboard.queue_policy_adoption.mutation_policy.retirement_executed == false)
     and (.predictive_dashboard.queue_policy_adoption.mutation_policy.supersession_executed == false)
+    and (.predictive_dashboard.swarm_agent_causal_trace.readiness | type == "string")
+    and (.predictive_dashboard.swarm_agent_causal_trace.decision | type == "string")
+    and (.predictive_dashboard.swarm_agent_causal_trace.missing_required_edges | type == "array")
+    and (.predictive_dashboard.swarm_agent_causal_trace.anomaly_classes | type == "array")
+    and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.fixture_fed_only == true)
+    and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.mutates_br == false)
+    and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.sends_agent_mail == false)
+    and (.predictive_dashboard.swarm_agent_causal_trace.mutation_policy.runs_rch == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1634,6 +1767,8 @@ run_case() {
     and ((.artifact_paths.queue_policy_sustained_gain_receipt_json == null) or (.artifact_paths.queue_policy_sustained_gain_receipt_json | type == "string"))
     and ((.artifact_paths.queue_policy_expiry_supersession_plan_json == null) or (.artifact_paths.queue_policy_expiry_supersession_plan_json | type == "string"))
     and ((.artifact_paths.queue_policy_expiry_supersession_ledger_json == null) or (.artifact_paths.queue_policy_expiry_supersession_ledger_json | type == "string"))
+    and ((.artifact_paths.swarm_agent_causal_trace_graph_json == null) or (.artifact_paths.swarm_agent_causal_trace_graph_json | type == "string"))
+    and ((.artifact_paths.swarm_agent_causal_trace_anomaly_report_json == null) or (.artifact_paths.swarm_agent_causal_trace_anomaly_report_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1680,6 +1815,11 @@ run_case() {
         and .predictive_dashboard.queue_policy_adoption.expiry_decision == "retain_adopted_policy"
         and .predictive_dashboard.queue_policy_adoption.expiry_required == false
         and .predictive_dashboard.queue_policy_adoption.supersession_required == false
+        and .predictive_dashboard.swarm_agent_causal_trace.readiness == "complete"
+        and .predictive_dashboard.swarm_agent_causal_trace.decision == "pass"
+        and .predictive_dashboard.swarm_agent_causal_trace.anomaly_count == 0
+        and (.predictive_dashboard.swarm_agent_causal_trace.missing_required_edges | length) == 0
+        and .summary.causal_trace_readiness == "complete"
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1701,6 +1841,9 @@ run_case() {
         and .predictive_dashboard.queue_fidelity.artifact_status == "missing"
         and .predictive_dashboard.queue_tuning_promotion.artifact_statuses.bundle == "missing"
         and .predictive_dashboard.queue_policy_adoption.artifact_statuses.adoption_receipt == "missing"
+        and .predictive_dashboard.swarm_agent_causal_trace.artifact_statuses.graph == "missing"
+        and .predictive_dashboard.swarm_agent_causal_trace.artifact_statuses.anomaly_report == "missing"
+        and .predictive_dashboard.swarm_agent_causal_trace.readiness == "degraded"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1865,6 +2008,30 @@ run_case() {
         and any(.degraded[]; .component == "queue_policy_adoption")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    causal_trace_degraded)
+      jq -e '
+        .predictive_dashboard.swarm_agent_causal_trace.readiness == "degraded"
+        and .predictive_dashboard.swarm_agent_causal_trace.decision == "degraded"
+        and .predictive_dashboard.swarm_agent_causal_trace.anomaly_count == 1
+        and (.predictive_dashboard.swarm_agent_causal_trace.anomaly_classes | index("missing_claim_message"))
+        and (.predictive_dashboard.swarm_agent_causal_trace.missing_required_edges | index("bead_claimed"))
+        and .summary.causal_trace_readiness == "degraded"
+        and .recommendations[0].action == "review_causal_trace_handoff"
+        and any(.degraded[]; .component == "swarm_agent_causal_trace")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    causal_trace_contaminated)
+      jq -e '
+        .predictive_dashboard.swarm_agent_causal_trace.readiness == "contaminated"
+        and .predictive_dashboard.swarm_agent_causal_trace.decision == "fail_closed"
+        and .predictive_dashboard.swarm_agent_causal_trace.fail_closed_count == 1
+        and (.predictive_dashboard.swarm_agent_causal_trace.anomaly_classes | index("local_rch_fallback_contaminates_remote_proof"))
+        and (.predictive_dashboard.swarm_agent_causal_trace.contaminating_anomaly_classes | index("local_rch_fallback_contaminates_remote_proof"))
+        and .summary.causal_trace_readiness == "contaminated"
+        and .recommendations[0].action == "respect_causal_trace_contamination"
+        and any(.degraded[]; .component == "swarm_agent_causal_trace")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -1905,6 +2072,8 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("queue_tuning_promotion_rollback_required"))
     and (.golden_fixture_cases | index("queue_policy_adoption_expiry_required"))
     and (.golden_fixture_cases | index("queue_policy_adoption_supersession_required"))
+    and (.golden_fixture_cases | index("causal_trace_degraded"))
+    and (.golden_fixture_cases | index("causal_trace_contaminated"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -1938,6 +2107,11 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.expiry_required"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.supersession_required"))
     and (.required_dashboard_fields | index("predictive_dashboard.queue_policy_adoption.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.missing_required_edges"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.anomaly_classes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_agent_causal_trace.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -1970,10 +2144,13 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_agent_causal_trace_graph.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_agent_causal_trace_spine_contract_v1.json' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
   grep -Fq 'queue_policy_adoption' "$contract_doc"
+  grep -Fq 'swarm_agent_causal_trace' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -2008,6 +2185,8 @@ run_selftest() {
   run_case "queue_tuning_promotion_rollback_required" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_policy_adoption_expiry_required" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "queue_policy_adoption_supersession_required" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "causal_trace_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "causal_trace_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

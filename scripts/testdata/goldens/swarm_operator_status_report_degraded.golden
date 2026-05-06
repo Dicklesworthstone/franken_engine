@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 25,
+    "degraded_count": 26,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -76,6 +76,10 @@
     "queue_policy_expiry_decision": "missing",
     "queue_policy_expiry_required": false,
     "queue_policy_supersession_required": false,
+    "causal_trace_readiness": "degraded",
+    "causal_trace_decision": "missing",
+    "causal_trace_anomaly_count": 0,
+    "causal_trace_missing_edge_count": 4,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -551,6 +555,59 @@
         "expiry_supersession_ledger_json": null
       }
     },
+    "swarm_agent_causal_trace": {
+      "artifact_statuses": {
+        "graph": "missing",
+        "anomaly_report": "missing"
+      },
+      "readiness": "degraded",
+      "severity": "warning",
+      "decision": "missing",
+      "trace_id": null,
+      "bead_id": null,
+      "source_revision": null,
+      "bead_status": "unknown",
+      "required_edge_types": [
+        "bead_claimed",
+        "reservation_covers_path",
+        "validation_proves_closeout",
+        "commit_closes_bead"
+      ],
+      "present_edge_types": [],
+      "missing_required_edges": [
+        "bead_claimed",
+        "reservation_covers_path",
+        "validation_proves_closeout",
+        "commit_closes_bead"
+      ],
+      "edge_counts": {},
+      "node_count": 0,
+      "edge_count": 0,
+      "anomaly_count": 0,
+      "fail_closed_count": 0,
+      "degraded_count": 0,
+      "anomaly_classes": [],
+      "contaminating_anomaly_classes": [],
+      "top_anomaly": null,
+      "mutation_policy": {
+        "fixture_fed_only": true,
+        "mutates_br": false,
+        "reassigns_beads": false,
+        "releases_reservations": false,
+        "sends_agent_mail": false,
+        "queries_live_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "rewrites_historical_outcomes": false,
+        "operator_wording_required": "advisory-only"
+      },
+      "artifact_paths": {
+        "causal_graph_json": null,
+        "anomaly_report_json": null
+      }
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -581,7 +638,9 @@
         "queue_tuning_promotion_stale_evidence",
         "queue_tuning_promotion_rollback_required",
         "queue_policy_adoption_expiry_required",
-        "queue_policy_adoption_supersession_required"
+        "queue_policy_adoption_supersession_required",
+        "causal_trace_degraded",
+        "causal_trace_contaminated"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -731,6 +790,12 @@
       "status": "missing",
       "impact": "policy adoption, sustained-gain, or expiry advisory artifacts are incomplete",
       "remediation": "Provide adoption receipt, snapshot, sustained-gain receipt, expiry plan, and expiry ledger before trusting policy lifecycle advice."
+    },
+    {
+      "component": "swarm_agent_causal_trace",
+      "status": "degraded",
+      "impact": "causal trace evidence is degraded or missing required in-progress edges",
+      "remediation": "Review missing causal edges and degraded anomaly classes before trusting the handoff."
     },
     {
       "component": "rch_incident_packet",

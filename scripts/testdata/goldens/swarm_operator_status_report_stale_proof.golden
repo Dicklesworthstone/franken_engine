@@ -76,6 +76,10 @@
     "queue_policy_expiry_decision": "retain_adopted_policy",
     "queue_policy_expiry_required": false,
     "queue_policy_supersession_required": false,
+    "causal_trace_readiness": "complete",
+    "causal_trace_decision": "pass",
+    "causal_trace_anomaly_count": 0,
+    "causal_trace_missing_edge_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -707,6 +711,64 @@
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
+    "swarm_agent_causal_trace": {
+      "artifact_statuses": {
+        "graph": "provided",
+        "anomaly_report": "provided"
+      },
+      "readiness": "complete",
+      "severity": "ok",
+      "decision": "pass",
+      "trace_id": "trace-complete",
+      "bead_id": "bd-jw854",
+      "source_revision": "smoke-rev",
+      "bead_status": "closed",
+      "required_edge_types": [
+        "bead_claimed",
+        "reservation_covers_path",
+        "validation_proves_closeout",
+        "commit_closes_bead"
+      ],
+      "present_edge_types": [
+        "bead_claimed",
+        "commit_closes_bead",
+        "reservation_covers_path",
+        "validation_proves_closeout"
+      ],
+      "missing_required_edges": [],
+      "edge_counts": {
+        "reservation_covers_path": 1,
+        "validation_proves_closeout": 1,
+        "commit_closes_bead": 1,
+        "bead_claimed": 1
+      },
+      "node_count": 5,
+      "edge_count": 4,
+      "anomaly_count": 0,
+      "fail_closed_count": 0,
+      "degraded_count": 0,
+      "anomaly_classes": [],
+      "contaminating_anomaly_classes": [],
+      "top_anomaly": null,
+      "mutation_policy": {
+        "fixture_fed_only": true,
+        "mutates_br": false,
+        "reassigns_beads": false,
+        "releases_reservations": false,
+        "sends_agent_mail": false,
+        "queries_live_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "rewrites_historical_outcomes": false,
+        "operator_wording_required": "advisory-only"
+      },
+      "artifact_paths": {
+        "causal_graph_json": "[SMOKE_ROOT]/stale_proof-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/stale_proof-fixtures/causal_trace_anomalies.json"
+      }
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -737,7 +799,9 @@
         "queue_tuning_promotion_stale_evidence",
         "queue_tuning_promotion_rollback_required",
         "queue_policy_adoption_expiry_required",
-        "queue_policy_adoption_supersession_required"
+        "queue_policy_adoption_supersession_required",
+        "causal_trace_degraded",
+        "causal_trace_contaminated"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

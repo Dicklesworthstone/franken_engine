@@ -3,7 +3,7 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `25`
+- Degraded fields: `26`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
@@ -16,6 +16,7 @@
 - Queue fidelity: trust=`missing` drift=`none` top-mismatch=`none` tuning=`none`
 - Queue tuning promotion: readiness=`missing` decision=`missing` rollback=`missing` canary=`missing`
 - Queue policy adoption: readiness=`missing` sustained=`missing` expiry=`missing` expire=`false` supersede=`false`
+- Causal trace: readiness=`degraded` decision=`missing` anomalies=`0` missing-edges=`4`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -50,6 +51,8 @@
 - Queue policy sustained-gain receipt: `missing`
 - Queue policy expiry/supersession plan: `missing`
 - Queue policy expiry/supersession ledger: `missing`
+- Causal trace graph: `missing`
+- Causal trace anomalies: `missing`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 
@@ -79,4 +82,5 @@
 - `queue_fidelity` `missing`: queue fidelity and tuning artifacts are incomplete. Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice.
 - `queue_tuning_promotion` `missing`: queue tuning promotion artifacts are incomplete. Provide bundle, promotion guard, rollout plan, rollback comparator, and canary verdict artifacts before trusting promotion advice.
 - `queue_policy_adoption` `missing`: policy adoption, sustained-gain, or expiry advisory artifacts are incomplete. Provide adoption receipt, snapshot, sustained-gain receipt, expiry plan, and expiry ledger before trusting policy lifecycle advice.
+- `swarm_agent_causal_trace` `degraded`: causal trace evidence is degraded or missing required in-progress edges. Review missing causal edges and degraded anomaly classes before trusting the handoff.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

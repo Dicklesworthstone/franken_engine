@@ -64,10 +64,10 @@
     "queue_fidelity_highest_mismatch": "none",
     "queue_tuning_plan_class": "no_improvement",
     "queue_tuning_top_recommendation": "none",
-    "queue_tuning_promotion_readiness": "rollback_required",
+    "queue_tuning_promotion_readiness": "ready",
     "queue_tuning_promotion_decision": "eligible_canary",
-    "queue_tuning_rollback_verdict": "worse_than_current",
-    "queue_tuning_canary_action": "rollback_required",
+    "queue_tuning_rollback_verdict": "better_than_current",
+    "queue_tuning_canary_action": "continue_canary",
     "queue_tuning_manual_blocker_count": 0,
     "queue_tuning_evidence_link_count": 3,
     "queue_policy_adoption_readiness": "retained",
@@ -76,9 +76,9 @@
     "queue_policy_expiry_decision": "retain_adopted_policy",
     "queue_policy_expiry_required": false,
     "queue_policy_supersession_required": false,
-    "causal_trace_readiness": "complete",
-    "causal_trace_decision": "pass",
-    "causal_trace_anomaly_count": 0,
+    "causal_trace_readiness": "contaminated",
+    "causal_trace_decision": "fail_closed",
+    "causal_trace_anomaly_count": 1,
     "causal_trace_missing_edge_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
@@ -356,7 +356,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -382,7 +382,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -403,7 +403,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/admission_budget_plan.json"
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -415,7 +415,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -431,7 +431,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -463,8 +463,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -483,9 +483,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -528,10 +528,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -570,11 +570,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -585,21 +585,21 @@
         "rollback_comparator_receipt": "provided",
         "canary_verdict_ledger": "provided"
       },
-      "severity": "critical",
-      "readiness": "rollback_required",
+      "severity": "ok",
+      "readiness": "ready",
       "bundle_id": "queue-tuning-policy-bundle-smoke",
       "candidate_id": "raise_proof_health_penalty",
       "candidate_delta_millionths": 240000,
       "bundle_decision": "ready",
       "promotion_decision": "eligible_canary",
       "rollout_decision": "ready_for_manual_approval",
-      "rollback_verdict": "worse_than_current",
-      "canary_verdict": "regressed",
-      "canary_recommended_action": "rollback_required",
+      "rollback_verdict": "better_than_current",
+      "canary_verdict": "canary_running",
+      "canary_recommended_action": "continue_canary",
       "manual_approval_required": true,
       "manual_approval_blocker_count": 0,
       "evidence_link_count": 3,
-      "rollback_trigger_count": 1,
+      "rollback_trigger_count": 0,
       "top_stop_condition": {
         "metric": "fidelity_delta_millionths",
         "operator": "lt",
@@ -607,25 +607,18 @@
         "recommended_action": "rollback_required"
       },
       "reject_reasons": [],
-      "rollback_triggers": [
-        {
-          "metric": "queue_fidelity_delta_millionths",
-          "observed_millionths": -64000,
-          "threshold_millionths": 0,
-          "recommended_action": "rollback_required"
-        }
-      ],
+      "rollback_triggers": [],
       "mutation_policy": {
         "advisory_only": true,
         "changes_active_queue": false,
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -706,10 +699,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -718,13 +711,13 @@
         "graph": "provided",
         "anomaly_report": "provided"
       },
-      "readiness": "complete",
-      "severity": "ok",
-      "decision": "pass",
-      "trace_id": "trace-complete",
+      "readiness": "contaminated",
+      "severity": "critical",
+      "decision": "fail_closed",
+      "trace_id": "trace-contaminated",
       "bead_id": "bd-jw854",
       "source_revision": "smoke-rev",
-      "bead_status": "closed",
+      "bead_status": "in_progress",
       "required_edge_types": [
         "bead_claimed",
         "reservation_covers_path",
@@ -746,12 +739,22 @@
       },
       "node_count": 5,
       "edge_count": 4,
-      "anomaly_count": 0,
-      "fail_closed_count": 0,
+      "anomaly_count": 1,
+      "fail_closed_count": 1,
       "degraded_count": 0,
-      "anomaly_classes": [],
-      "contaminating_anomaly_classes": [],
-      "top_anomaly": null,
+      "anomaly_classes": [
+        "local_rch_fallback_contaminates_remote_proof"
+      ],
+      "contaminating_anomaly_classes": [
+        "local_rch_fallback_contaminates_remote_proof"
+      ],
+      "top_anomaly": {
+        "anomaly_id": "anomaly-contaminated",
+        "anomaly_class": "local_rch_fallback_contaminates_remote_proof",
+        "severity": "fail_closed",
+        "message": "local fallback marker contradicts claimed remote validation proof",
+        "bead_id": "bd-jw854"
+      },
       "mutation_policy": {
         "fixture_fed_only": true,
         "mutates_br": false,
@@ -767,8 +770,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/queue_tuning_promotion_rollback_required-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/causal_trace_contaminated-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {
@@ -811,17 +814,17 @@
   },
   "degraded": [
     {
-      "component": "queue_tuning_promotion",
-      "status": "rollback_required",
-      "impact": "queue tuning promotion is blocked, rejected, or requires rollback",
-      "remediation": "Respect the promotion guard, rollback comparator, and canary verdict before changing queue policy."
+      "component": "swarm_agent_causal_trace",
+      "status": "contaminated",
+      "impact": "causal trace evidence is contaminated or failed closed",
+      "remediation": "Reject the handoff until ownership, acknowledgement, RCH proof, and closeout evidence are repaired."
     }
   ],
   "recommendations": [
     {
-      "action": "respect_queue_tuning_promotion_fail_closed",
-      "bead_id": null,
-      "reason": "queue tuning promotion is rejected, rollback-required, or unsafe"
+      "action": "respect_causal_trace_contamination",
+      "bead_id": "bd-jw854",
+      "reason": "causal trace handoff is contaminated by fail-closed anomaly evidence"
     }
   ]
 }

@@ -238,6 +238,24 @@ executed. If sustained-gain evidence regresses or the expiry planner recommends
 expiry or supersession, the `queue_policy_adoption` section must surface that
 operator advisory without implying execution.
 
+The same operator report now also integrates the SWARM-CTRL-XVI causal trace
+handoff:
+
+- Graph script: `scripts/swarm_agent_causal_trace_graph.sh`
+- Spine contract: `docs/swarm_agent_causal_trace_spine_contract_v1.json`
+- Graph schema: `franken-engine.swarm-agent-causal-trace-graph.v1`
+- Anomaly report schema: `franken-engine.swarm-agent-causal-trace-anomaly-report.v1`
+
+That handoff carries claim, reservation, validation, and closeout commit edges
+plus anomaly classes into the existing `scripts/swarm_operator_status_report.sh`
+producer. It is advisory-only. It must not be described as live Agent Mail
+querying, live reservation release, automatic bead repair, `rch` or Cargo
+execution, or live queue mutation. The operator status section reports
+`complete` only when required causal edges are present with no anomalies,
+`degraded` when optional snapshots are missing or only degraded anomalies are
+present, `blocked` when an in-progress bead is missing required handoff edges,
+and `contaminated` when fail-closed anomaly evidence invalidates closeout trust.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -277,6 +295,7 @@ consumption:
 | `queue_fidelity` | `swarm-execution-queue-fidelity-score-receipt.v1` plus drift ledger, counterfactual backtest, tuning plan, and frontier artifacts | Show hindsight trust level, highest-severity drift, and top tuning recommendation without live queue retuning. |
 | `queue_tuning_promotion` | `swarm-execution-queue-tuning-policy-bundle.v1` plus promotion guard, manual rollout, rollback comparator, and canary verdict artifacts | Show bundle readiness, canary recommendation, rollback readiness, manual-approval blockers, and evidence links without automatic promotion. |
 | `queue_policy_adoption` | `swarm-execution-queue-policy-adoption-receipt.v1` plus adoption snapshot, sustained-gain receipt, expiry/supersession plan, and expiry/supersession ledger artifacts | Show adoption state, sustained-gain verdict, expiry decision, and supersession advisory state without executing retirement or supersession. |
+| `swarm_agent_causal_trace` | `swarm-agent-causal-trace-graph.v1` plus `swarm-agent-causal-trace-anomaly-report.v1` | Show handoff readiness, required causal-edge coverage, and fail-closed coordination anomalies without querying live services or mutating ownership state. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -310,6 +329,8 @@ The smoke test publishes deterministic goldens for:
 - `queue_tuning_promotion_rollback_required`
 - `queue_policy_adoption_expiry_required`
 - `queue_policy_adoption_supersession_required`
+- `causal_trace_degraded`
+- `causal_trace_contaminated`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -379,6 +400,13 @@ without claiming executed retirement, and
 surfaces as a supersession advisory without claiming automatic promotion or
 executed supersession.
 
+The causal trace graph and anomaly report are integrated directly as advisory
+handoff evidence. The `healthy` fixture covers complete required claim,
+reservation, validation, and commit edges; `causal_trace_degraded` covers a
+missing claim edge plus degraded anomaly evidence; and
+`causal_trace_contaminated` proves a local `rch` fallback contamination anomaly
+stays fail-closed in operator recommendations.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -413,6 +441,9 @@ executed supersession.
   advisory lifecycle evidence, not as live queue retuning, automatic scheduler
   mutation, automatic retirement, automatic supersession, or proof that
   retirement already executed.
+- The docs must describe the causal trace handoff as integrated advisory
+  evidence, not as live Agent Mail querying, automatic reservation release,
+  automatic bead repair, `rch` execution, Cargo execution, or queue mutation.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -432,6 +463,16 @@ bash -n scripts/e2e/swarm_operator_status_report_smoke.sh
 ./scripts/e2e/swarm_operator_status_report_smoke.sh check
 ./scripts/e2e/swarm_operator_status_report_smoke.sh selftest
 jq empty docs/swarm_predictive_dashboard_contract_v1.json
+```
+
+When changing the causal trace handoff integration, also run:
+
+```bash
+bash -n scripts/swarm_agent_causal_trace_graph.sh
+bash -n scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh
+./scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check
+./scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh selftest
+jq empty docs/swarm_agent_causal_trace_spine_contract_v1.json
 ```
 
 When changing the capacity forecaster extension, also run:

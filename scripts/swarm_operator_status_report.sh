@@ -56,6 +56,8 @@ queue_policy_adoption_snapshot_bundle_json=""
 queue_policy_sustained_gain_receipt_json=""
 queue_policy_expiry_supersession_plan_json=""
 queue_policy_expiry_supersession_ledger_json=""
+swarm_agent_causal_trace_graph_json=""
+swarm_agent_causal_trace_anomaly_report_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -119,6 +121,8 @@ Options:
   --queue-policy-sustained-gain-receipt-json FILE
   --queue-policy-expiry-supersession-plan-json FILE
   --queue-policy-expiry-supersession-ledger-json FILE
+  --swarm-agent-causal-trace-graph-json FILE
+  --swarm-agent-causal-trace-anomaly-report-json FILE
 EOF
 }
 
@@ -344,6 +348,14 @@ while [[ "$#" -gt 0 ]]; do
       queue_policy_expiry_supersession_ledger_json="$2"
       shift 2
       ;;
+    --swarm-agent-causal-trace-graph-json)
+      swarm_agent_causal_trace_graph_json="$2"
+      shift 2
+      ;;
+    --swarm-agent-causal-trace-anomaly-report-json)
+      swarm_agent_causal_trace_anomaly_report_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -431,6 +443,8 @@ queue_policy_adoption_snapshot_bundle_status="missing"
 queue_policy_sustained_gain_receipt_status="missing"
 queue_policy_expiry_supersession_plan_status="missing"
 queue_policy_expiry_supersession_ledger_status="missing"
+swarm_agent_causal_trace_graph_status="missing"
+swarm_agent_causal_trace_anomaly_report_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -464,6 +478,8 @@ if [[ -n "$queue_policy_adoption_snapshot_bundle_json" ]]; then queue_policy_ado
 if [[ -n "$queue_policy_sustained_gain_receipt_json" ]]; then queue_policy_sustained_gain_receipt_status="provided"; fi
 if [[ -n "$queue_policy_expiry_supersession_plan_json" ]]; then queue_policy_expiry_supersession_plan_status="provided"; fi
 if [[ -n "$queue_policy_expiry_supersession_ledger_json" ]]; then queue_policy_expiry_supersession_ledger_status="provided"; fi
+if [[ -n "$swarm_agent_causal_trace_graph_json" ]]; then swarm_agent_causal_trace_graph_status="provided"; fi
+if [[ -n "$swarm_agent_causal_trace_anomaly_report_json" ]]; then swarm_agent_causal_trace_anomaly_report_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -497,6 +513,8 @@ queue_policy_adoption_snapshot_bundle_data="$(json_or_default "$queue_policy_ado
 queue_policy_sustained_gain_receipt_data="$(json_or_default "$queue_policy_sustained_gain_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1","verdict":"missing","sustained_gain_receipt_id":null,"adopted_policy_bundle_id":null,"candidate_id":null,"rollback_drift_count":0,"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false},"artifact_paths":{}}' 'queue-policy-sustained-gain-receipt')"
 queue_policy_expiry_supersession_plan_data="$(json_or_default "$queue_policy_expiry_supersession_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-plan.v1","decision":"missing","plan_id":null,"adopted_policy_bundle_id":null,"sustained_gain_verdict":"missing","expiry_required":false,"supersession_required":false,"advisory_status":{"execution_state":"missing","retirement_executed":false,"supersession_executed":false},"decision_reasons":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-plan')"
 queue_policy_expiry_supersession_ledger_data="$(json_or_default "$queue_policy_expiry_supersession_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1","decision":"missing","ledger_rows":[],"ownership_rows":[],"fail_closed_reasons":[],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"mutates_br":false,"sends_agent_mail":false,"mutates_remote_workers":false,"rewrites_historical_outcomes":false,"retirement_executed":false,"supersession_executed":false},"artifact_paths":{}}' 'queue-policy-expiry-supersession-ledger')"
+swarm_agent_causal_trace_graph_data="$(json_or_default "$swarm_agent_causal_trace_graph_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-graph.v1","trace_id":null,"bead_id":null,"source_revision":null,"nodes":[],"edges":[],"anomaly_summary":{"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[]},"mutation_policy":{"fixture_fed_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"queries_live_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"rewrites_historical_outcomes":false,"operator_wording_required":"advisory-only"},"artifact_paths":{}}' 'swarm-agent-causal-trace-graph')"
+swarm_agent_causal_trace_anomaly_report_data="$(json_or_default "$swarm_agent_causal_trace_anomaly_report_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-anomaly-report.v1","trace_id":null,"bead_id":null,"source_revision":null,"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[],"anomalies":[],"artifact_paths":{}}' 'swarm-agent-causal-trace-anomaly-report')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -539,6 +557,8 @@ jq -n \
   --arg queue_policy_sustained_gain_receipt_status "$queue_policy_sustained_gain_receipt_status" \
   --arg queue_policy_expiry_supersession_plan_status "$queue_policy_expiry_supersession_plan_status" \
   --arg queue_policy_expiry_supersession_ledger_status "$queue_policy_expiry_supersession_ledger_status" \
+  --arg swarm_agent_causal_trace_graph_status "$swarm_agent_causal_trace_graph_status" \
+  --arg swarm_agent_causal_trace_anomaly_report_status "$swarm_agent_causal_trace_anomaly_report_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -588,6 +608,8 @@ jq -n \
   --argjson queue_policy_sustained_gain_receipt "$queue_policy_sustained_gain_receipt_data" \
   --argjson queue_policy_expiry_supersession_plan "$queue_policy_expiry_supersession_plan_data" \
   --argjson queue_policy_expiry_supersession_ledger "$queue_policy_expiry_supersession_ledger_data" \
+  --argjson swarm_agent_causal_trace_graph "$swarm_agent_causal_trace_graph_data" \
+  --argjson swarm_agent_causal_trace_anomaly_report "$swarm_agent_causal_trace_anomaly_report_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -1437,6 +1459,78 @@ jq -n \
         expiry_supersession_ledger_json: ($queue_policy_expiry_supersession_plan.artifact_paths.expiry_supersession_ledger_json // null)
       }
     }) as $queue_policy_adoption_summary
+  | ($swarm_agent_causal_trace_graph.edges // []) as $causal_trace_edges
+  | ($swarm_agent_causal_trace_graph.nodes // []) as $causal_trace_nodes
+  | ($swarm_agent_causal_trace_anomaly_report.anomalies // []) as $causal_trace_anomalies
+  | ($causal_trace_edges | map(.edge_type // "unknown") | unique | sort) as $causal_trace_edge_types
+  | (["bead_claimed", "reservation_covers_path", "validation_proves_closeout", "commit_closes_bead"] - $causal_trace_edge_types) as $causal_trace_missing_edges
+  | (($causal_trace_nodes | map(select((.node_type // "") == "bead_state")) | .[0].payload.status) // "unknown") as $causal_trace_bead_status
+  | ($swarm_agent_causal_trace_anomaly_report.decision // $swarm_agent_causal_trace_graph.anomaly_summary.decision // "missing") as $causal_trace_decision
+  | ($swarm_agent_causal_trace_anomaly_report.anomaly_count // $swarm_agent_causal_trace_graph.anomaly_summary.anomaly_count // 0) as $causal_trace_anomaly_count
+  | ($swarm_agent_causal_trace_anomaly_report.fail_closed_count // $swarm_agent_causal_trace_graph.anomaly_summary.fail_closed_count // 0) as $causal_trace_fail_closed_count
+  | ($swarm_agent_causal_trace_anomaly_report.degraded_count // $swarm_agent_causal_trace_graph.anomaly_summary.degraded_count // 0) as $causal_trace_degraded_count
+  | ($swarm_agent_causal_trace_anomaly_report.anomaly_classes // $swarm_agent_causal_trace_graph.anomaly_summary.anomaly_classes // []) as $causal_trace_anomaly_classes
+  | ($causal_trace_anomaly_classes
+      | map(select(. == "local_rch_fallback_contaminates_remote_proof"
+          or . == "stale_owner_recent_activity_conflict"
+          or . == "ack_required_message_unacknowledged"))) as $causal_trace_contaminating_classes
+  | (reduce $causal_trace_edges[] as $edge ({}; .[$edge.edge_type // "unknown"] += 1)) as $causal_trace_edge_counts
+  | ({
+      artifact_statuses: {
+        graph: $swarm_agent_causal_trace_graph_status,
+        anomaly_report: $swarm_agent_causal_trace_anomaly_report_status
+      },
+      readiness: (
+        if ($causal_trace_decision == "fail_closed")
+          or ($causal_trace_fail_closed_count > 0)
+          or (($causal_trace_contaminating_classes | length) > 0) then "contaminated"
+        elif $swarm_agent_causal_trace_graph_status == "missing"
+          or $swarm_agent_causal_trace_anomaly_report_status == "missing" then "degraded"
+        elif ($causal_trace_decision == "degraded")
+          or ($causal_trace_anomaly_count > 0)
+          or ($causal_trace_degraded_count > 0) then "degraded"
+        elif $causal_trace_bead_status == "in_progress"
+          and (($causal_trace_missing_edges | length) > 0) then "blocked"
+        elif (($causal_trace_missing_edges | length) == 0) then "complete"
+        else "degraded"
+        end
+      ),
+      severity: (
+        if ($causal_trace_decision == "fail_closed")
+          or ($causal_trace_fail_closed_count > 0)
+          or (($causal_trace_contaminating_classes | length) > 0) then "critical"
+        elif $swarm_agent_causal_trace_graph_status == "missing"
+          or $swarm_agent_causal_trace_anomaly_report_status == "missing" then "warning"
+        elif ($causal_trace_decision == "degraded")
+          or ($causal_trace_anomaly_count > 0)
+          or ($causal_trace_degraded_count > 0)
+          or ($causal_trace_bead_status == "in_progress" and (($causal_trace_missing_edges | length) > 0)) then "warning"
+        else "ok"
+        end
+      ),
+      decision: $causal_trace_decision,
+      trace_id: ($swarm_agent_causal_trace_graph.trace_id // $swarm_agent_causal_trace_anomaly_report.trace_id // null),
+      bead_id: ($swarm_agent_causal_trace_graph.bead_id // $swarm_agent_causal_trace_anomaly_report.bead_id // null),
+      source_revision: ($swarm_agent_causal_trace_graph.source_revision // $swarm_agent_causal_trace_anomaly_report.source_revision // null),
+      bead_status: $causal_trace_bead_status,
+      required_edge_types: ["bead_claimed", "reservation_covers_path", "validation_proves_closeout", "commit_closes_bead"],
+      present_edge_types: $causal_trace_edge_types,
+      missing_required_edges: $causal_trace_missing_edges,
+      edge_counts: $causal_trace_edge_counts,
+      node_count: ($causal_trace_nodes | length),
+      edge_count: ($causal_trace_edges | length),
+      anomaly_count: $causal_trace_anomaly_count,
+      fail_closed_count: $causal_trace_fail_closed_count,
+      degraded_count: $causal_trace_degraded_count,
+      anomaly_classes: $causal_trace_anomaly_classes,
+      contaminating_anomaly_classes: $causal_trace_contaminating_classes,
+      top_anomaly: (if ($causal_trace_anomalies | length) == 0 then null else $causal_trace_anomalies[0] end),
+      mutation_policy: ($swarm_agent_causal_trace_graph.mutation_policy // {}),
+      artifact_paths: {
+        causal_graph_json: ($swarm_agent_causal_trace_graph.artifact_paths.causal_graph_json // null),
+        anomaly_report_json: ($swarm_agent_causal_trace_anomaly_report.artifact_paths.anomaly_report_json // $swarm_agent_causal_trace_graph.artifact_paths.anomaly_report_json // null)
+      }
+    }) as $causal_trace_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -1556,6 +1650,11 @@ jq -n \
       elif $queue_policy_adoption_summary.severity == "warning" then
         [{component: "queue_policy_adoption", status: $queue_policy_adoption_summary.readiness, impact: "policy lifecycle evidence recommends expiry, supersession, or manual review", remediation: "Route the advisory to a human operator; do not treat it as executed policy retirement or supersession."}]
       else [] end)
+    + (if $causal_trace_summary.severity == "critical" then
+        [{component: "swarm_agent_causal_trace", status: $causal_trace_summary.readiness, impact: "causal trace evidence is contaminated or failed closed", remediation: "Reject the handoff until ownership, acknowledgement, RCH proof, and closeout evidence are repaired."}]
+      elif $causal_trace_summary.severity == "warning" then
+        [{component: "swarm_agent_causal_trace", status: $causal_trace_summary.readiness, impact: "causal trace evidence is degraded or missing required in-progress edges", remediation: "Review missing causal edges and degraded anomaly classes before trusting the handoff."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -1645,6 +1744,10 @@ jq -n \
         queue_policy_expiry_decision: $queue_policy_adoption_summary.expiry_decision,
         queue_policy_expiry_required: $queue_policy_adoption_summary.expiry_required,
         queue_policy_supersession_required: $queue_policy_adoption_summary.supersession_required,
+        causal_trace_readiness: $causal_trace_summary.readiness,
+        causal_trace_decision: $causal_trace_summary.decision,
+        causal_trace_anomaly_count: $causal_trace_summary.anomaly_count,
+        causal_trace_missing_edge_count: (($causal_trace_summary.missing_required_edges // []) | length),
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -1711,9 +1814,10 @@ jq -n \
         queue_fidelity: $queue_fidelity_summary,
         queue_tuning_promotion: $queue_tuning_promotion_summary,
         queue_policy_adoption: $queue_policy_adoption_summary,
+        swarm_agent_causal_trace: $causal_trace_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1722,6 +1826,10 @@ jq -n \
       recommendations: (
         if $staged_contamination_summary.severity == "critical" then
           [recommendation("reject_staged_contamination"; null; "staged ownership guard reports contamination")]
+        elif $causal_trace_summary.readiness == "contaminated" then
+          [recommendation("respect_causal_trace_contamination"; $causal_trace_summary.bead_id; "causal trace handoff is contaminated by fail-closed anomaly evidence")]
+        elif $causal_trace_summary.readiness == "blocked" then
+          [recommendation("complete_causal_trace_edges"; $causal_trace_summary.bead_id; "in-progress causal trace is missing required handoff edges")]
         elif $checkpoint_restore_summary.severity == "critical" then
           [recommendation("respect_checkpoint_restore_fail_closed"; null; "checkpoint restore handoff is fail-closed or contradicted by conformance evidence")]
         elif $starvation_rescue_summary.severity == "critical" then
@@ -1748,6 +1856,8 @@ jq -n \
           [recommendation("respect_queue_policy_adoption_fail_closed"; null; "queue policy adoption lifecycle evidence failed closed")]
         elif $queue_policy_adoption_summary.severity == "warning" then
           [recommendation("review_queue_policy_adoption_lifecycle"; null; "queue policy adoption lifecycle recommends expiry, supersession, or manual review")]
+        elif $causal_trace_summary.readiness == "degraded" then
+          [recommendation("review_causal_trace_handoff"; $causal_trace_summary.bead_id; "causal trace handoff is degraded but not contaminated")]
         elif $starvation_rescue_summary.severity == "warning" then
           [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
@@ -1828,7 +1938,9 @@ jq -n \
         queue_policy_adoption_snapshot_bundle_json: $queue_policy_adoption_summary.artifact_paths.adoption_snapshot_bundle_json,
         queue_policy_sustained_gain_receipt_json: $queue_policy_adoption_summary.artifact_paths.sustained_gain_receipt_json,
         queue_policy_expiry_supersession_plan_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_plan_json,
-        queue_policy_expiry_supersession_ledger_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_ledger_json
+        queue_policy_expiry_supersession_ledger_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_ledger_json,
+        swarm_agent_causal_trace_graph_json: $causal_trace_summary.artifact_paths.causal_graph_json,
+        swarm_agent_causal_trace_anomaly_report_json: $causal_trace_summary.artifact_paths.anomaly_report_json
       }
     }
   ' >"$status_path"
@@ -1850,6 +1962,7 @@ jq -n \
   printf -- "- Queue fidelity: trust=\`%s\` drift=\`%s\` top-mismatch=\`%s\` tuning=\`%s\`\n" "$(jq -r '.summary.queue_fidelity_trust_level' "$status_path")" "$(jq -r '.summary.queue_fidelity_drift_class' "$status_path")" "$(jq -r '.summary.queue_fidelity_highest_mismatch' "$status_path")" "$(jq -r '.summary.queue_tuning_top_recommendation' "$status_path")"
   printf -- "- Queue tuning promotion: readiness=\`%s\` decision=\`%s\` rollback=\`%s\` canary=\`%s\`\n" "$(jq -r '.summary.queue_tuning_promotion_readiness' "$status_path")" "$(jq -r '.summary.queue_tuning_promotion_decision' "$status_path")" "$(jq -r '.summary.queue_tuning_rollback_verdict' "$status_path")" "$(jq -r '.summary.queue_tuning_canary_action' "$status_path")"
   printf -- "- Queue policy adoption: readiness=\`%s\` sustained=\`%s\` expiry=\`%s\` expire=\`%s\` supersede=\`%s\`\n" "$(jq -r '.summary.queue_policy_adoption_readiness' "$status_path")" "$(jq -r '.summary.queue_policy_sustained_gain_verdict' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_decision' "$status_path")" "$(jq -r '.summary.queue_policy_expiry_required' "$status_path")" "$(jq -r '.summary.queue_policy_supersession_required' "$status_path")"
+  printf -- "- Causal trace: readiness=\`%s\` decision=\`%s\` anomalies=\`%s\` missing-edges=\`%s\`\n" "$(jq -r '.summary.causal_trace_readiness' "$status_path")" "$(jq -r '.summary.causal_trace_decision' "$status_path")" "$(jq '.summary.causal_trace_anomaly_count' "$status_path")" "$(jq '.summary.causal_trace_missing_edge_count' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -1883,7 +1996,9 @@ jq -n \
       {label:"Queue policy adoption snapshot bundle", path:.artifact_paths.queue_policy_adoption_snapshot_bundle_json},
       {label:"Queue policy sustained-gain receipt", path:.artifact_paths.queue_policy_sustained_gain_receipt_json},
       {label:"Queue policy expiry/supersession plan", path:.artifact_paths.queue_policy_expiry_supersession_plan_json},
-      {label:"Queue policy expiry/supersession ledger", path:.artifact_paths.queue_policy_expiry_supersession_ledger_json}
+      {label:"Queue policy expiry/supersession ledger", path:.artifact_paths.queue_policy_expiry_supersession_ledger_json},
+      {label:"Causal trace graph", path:.artifact_paths.swarm_agent_causal_trace_graph_json},
+      {label:"Causal trace anomalies", path:.artifact_paths.swarm_agent_causal_trace_anomaly_report_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

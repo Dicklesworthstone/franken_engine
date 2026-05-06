@@ -21,8 +21,8 @@ use frankenengine_engine::react_module_graph_verifier::{
     ALL_SURFACES, COMPONENT, GraphNodeId, GraphVerificationReceipt, GraphVerificationVerdict,
     ModuleGraph, ModuleGraphNode, ModuleRole, REACT_MODULE_GRAPH_BEAD_ID,
     REACT_MODULE_GRAPH_POLICY_ID, REACT_MODULE_GRAPH_SCHEMA_VERSION, RenderSurface,
-    SurfaceCoverageReport, build_coverage_report, build_module_edge, build_module_graph,
-    build_module_node, detect_cycles, detect_format_mismatches, detect_orphans,
+    SurfaceCoverageReport, build_client_entry_graph, build_coverage_report, build_module_edge,
+    build_module_graph, build_module_node, detect_cycles, detect_format_mismatches, detect_orphans,
     franken_engine_react_module_graph_manifest, surface_coverage_millionths, verify_module_graph,
 };
 use frankenengine_engine::react_package_cohort::{ExportCondition, ModuleFormat, ReactPackage};

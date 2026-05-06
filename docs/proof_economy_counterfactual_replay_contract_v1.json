@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.proof-economy-counterfactual-replay-contract.v1",
+  "output_schema": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+  "required_inputs": [
+    "--replay-trace-json"
+  ],
+  "optional_inputs": [
+    "--policy-matrix-json",
+    "--output-dir"
+  ],
+  "required_artifacts": [
+    "counterfactual_replay_report.json",
+    "policy_scorecards.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.proof-economy-replay-trace.v1",
+    "franken-engine.proof-economy-policy-scorecard.v1"
+  ],
+  "default_policies": [
+    "baseline",
+    "fair_share",
+    "high_pressure"
+  ],
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "policy_ordering": "policies are sorted by policy_index and policy_name before reporting",
+    "hash": "counterfactual_id is sha256 over canonical counterfactual report core JSON"
+  },
+  "required_assertions": {
+    "baseline_reproduces_fixture_order": true,
+    "fair_share_reduces_starvation": true,
+    "high_pressure_defers_broad_p3": true,
+    "all_p1_slo_preserved": true
+  },
+  "failure_policy": {
+    "policy_fail_closed": "runner emits a report and exits 42",
+    "p1_slo": "any counterfactual policy that puts P1 SLO at risk fails closed"
+  }
+}

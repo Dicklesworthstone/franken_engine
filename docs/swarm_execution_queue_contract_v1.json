@@ -33,6 +33,12 @@
       "missing_decision": "fail_closed"
     },
     {
+      "source_id": "br_sync_status_json",
+      "capture_command": "br sync --status --json",
+      "required": false,
+      "missing_decision": "unknown"
+    },
+    {
       "source_id": "agent_mail_activity_json",
       "capture_command": "Agent Mail profile/message snapshot fixture",
       "required": false,
@@ -82,6 +88,11 @@
     "first_action"
   ],
   "required_signal_fields": [
+    "tracker_freshness.source_snapshot_status",
+    "tracker_freshness.consistency_state",
+    "tracker_freshness.db_newer",
+    "tracker_freshness.jsonl_newer",
+    "tracker_freshness.dirty_count",
     "cross_cutting_signals.observability_quality_millionths",
     "cross_cutting_signals.catastrophic_tail_score_millionths",
     "cross_cutting_signals.bifurcation_distance_millionths",
@@ -160,6 +171,7 @@
     "missing required artifact paths fail closed",
     "queue entries without first_action fail closed",
     "local-rch fallback cannot be promoted as successful proof health",
+    "supplied br sync status with db_newer or jsonl_newer set true fails closed",
     "advisory output must not claim it mutates live br state",
     "advisory output must not claim it releases file reservations",
     "advisory output must not claim it sends Agent Mail",

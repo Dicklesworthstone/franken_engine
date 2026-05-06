@@ -6,6 +6,7 @@ normalizer="${root_dir}/scripts/swarm_execution_queue_input_normalizer.sh"
 docs_path="${root_dir}/docs/SWARM_EXECUTION_QUEUE_INPUT_NORMALIZER.md"
 contract_path="${root_dir}/docs/swarm_execution_queue_input_contract_v1.json"
 parent_contract_path="${root_dir}/docs/swarm_execution_queue_contract_v1.json"
+parent_docs_path="${root_dir}/docs/SWARM_EXECUTION_QUEUE_CONTRACT.md"
 seed_fixture_dir="${root_dir}/scripts/testdata/swarm_execution_queue"
 
 record_pass() {
@@ -36,6 +37,9 @@ write_fixture_set() {
   local remaining=720000
   local consumed=280000
   local deps='[]'
+  local sync_db_newer=false
+  local sync_jsonl_newer=false
+  local sync_dirty_count=0
 
   case "$scenario" in
     healthy)
@@ -59,6 +63,11 @@ write_fixture_set() {
     bv_br_divergence)
       deps='["bd-child-contract"]'
       ;;
+    tracker_freshness_divergence)
+      priority=1
+      sync_db_newer=true
+      sync_dirty_count=1
+      ;;
     bad_shape)
       ;;
     local_fallback)
@@ -77,6 +86,7 @@ write_fixture_set() {
     write_json "${dir}/br_ready.json" '{"issues":{}}'
     write_json "${dir}/br_list.json" '{"issues":{}}'
     write_json "${dir}/bv_plan.json" '{"plan":{"tracks":[]}}'
+    write_json "${dir}/sync_status.json" '{"schema_version":"beads.sync-status-json","db_newer":false,"jsonl_newer":false,"dirty_count":0}'
     write_json "${dir}/agent_mail.json" '{"agents":[],"messages":[]}'
     write_json "${dir}/reservations.json" '{"reservations":[]}'
     write_json "${dir}/stale.json" '{"stale_lock_recommendations":[]}'
@@ -238,6 +248,17 @@ write_fixture_set() {
       contact_first:[]
     }')"
 
+  write_json "${dir}/sync_status.json" "$(jq -n \
+    --argjson db_newer "$sync_db_newer" \
+    --argjson jsonl_newer "$sync_jsonl_newer" \
+    --argjson dirty_count "$sync_dirty_count" \
+    '{
+      schema_version:"beads.sync-status-json",
+      db_newer:$db_newer,
+      jsonl_newer:$jsonl_newer,
+      dirty_count:$dirty_count
+    }')"
+
   write_json "${dir}/proof.json" "$(jq -n \
     --arg id "$primary_id" \
     --arg state "$proof_state" \
@@ -271,6 +292,7 @@ run_normalizer() {
     --br-ready-json "${fixture_dir}/br_ready.json" \
     --br-list-json "${fixture_dir}/br_list.json" \
     --bv-actionable-plan-json "${fixture_dir}/bv_plan.json" \
+    --br-sync-status-json "${fixture_dir}/sync_status.json" \
     --agent-mail-activity-json "${fixture_dir}/agent_mail.json" \
     --file-reservations-json "${fixture_dir}/reservations.json" \
     --stale-lock-recommendations-json "${fixture_dir}/stale.json" \
@@ -321,11 +343,14 @@ run_check() {
     .schema_version == "franken-engine.swarm-execution-queue-input-normalizer-contract.v1"
     and .bead_id == "bd-lb6j0"
     and .input_schema_version == "franken-engine.swarm-execution-queue-input.v1"
+    and any(.optional_inputs[]?; .source_id == "br_sync_status_json" and .missing_decision == "unknown")
     and .mutation_policy.mutates_br == false
     and .mutation_policy.sends_agent_mail == false
     and .mutation_policy.mutates_remote_workers == false
   ' "$contract_path" >/dev/null
   grep -q 'advisory-only' "$docs_path"
+  grep -q -- '--br-sync-status-json FILE' "$docs_path"
+  grep -q 'db_newer=true' "$docs_path"
   grep -q 'normalized_input.json' "$docs_path"
   grep -q 'scripts/swarm_execution_queue_input_normalizer.sh' "$docs_path"
   check_no_mutation_claims "$docs_path"
@@ -338,7 +363,9 @@ run_check() {
     "scripts/swarm_execution_queue_input_normalizer.sh" \
     "scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh" \
     "docs/SWARM_EXECUTION_QUEUE_INPUT_NORMALIZER.md" \
-    "docs/swarm_execution_queue_input_contract_v1.json" >"$scope_file"
+    "docs/swarm_execution_queue_input_contract_v1.json" \
+    "docs/SWARM_EXECUTION_QUEUE_CONTRACT.md" \
+    "docs/swarm_execution_queue_contract_v1.json" >"$scope_file"
   "${root_dir}/scripts/rch_policy_compliance_gate.sh" \
     --output-dir "${TMPDIR:-/tmp}/swarm-execution-queue-input-rch-policy" \
     --scope-file "$scope_file" >/dev/null
@@ -347,7 +374,7 @@ run_check() {
 }
 
 run_selftest() {
-  local tmp_parent tmp_root healthy_dir stale_dir brownout_dir blocked_dir bad_shape_dir fallback_dir cycle_dir run_a run_b
+  local tmp_parent tmp_root healthy_dir stale_dir brownout_dir blocked_dir divergence_dir freshness_dir bad_shape_dir fallback_dir cycle_dir run_a run_b
   tmp_parent="${SWARM_EXECUTION_QUEUE_INPUT_SMOKE_ARTIFACT_ROOT:-${TMPDIR:-/tmp}}"
   mkdir -p "$tmp_parent"
   tmp_root="$(mktemp -d "${tmp_parent%/}/swarm-execution-queue-input.XXXXXX")"
@@ -359,16 +386,18 @@ run_selftest() {
   brownout_dir="${tmp_root}/proof_brownout"
   blocked_dir="${tmp_root}/blocked_parent"
   divergence_dir="${tmp_root}/bv_br_divergence"
+  freshness_dir="${tmp_root}/tracker_freshness_divergence"
   bad_shape_dir="${tmp_root}/bad_shape"
   fallback_dir="${tmp_root}/local_fallback"
   cycle_dir="${tmp_root}/cycle"
-  mkdir -p "$healthy_dir" "$stale_dir" "$brownout_dir" "$blocked_dir" "$divergence_dir" "$bad_shape_dir" "$fallback_dir" "$cycle_dir"
+  mkdir -p "$healthy_dir" "$stale_dir" "$brownout_dir" "$blocked_dir" "$divergence_dir" "$freshness_dir" "$bad_shape_dir" "$fallback_dir" "$cycle_dir"
 
   write_fixture_set "$healthy_dir" healthy
   write_fixture_set "$stale_dir" stale_owner
   write_fixture_set "$brownout_dir" proof_brownout
   write_fixture_set "$blocked_dir" blocked_parent
   write_fixture_set "$divergence_dir" bv_br_divergence
+  write_fixture_set "$freshness_dir" tracker_freshness_divergence
   write_fixture_set "$bad_shape_dir" bad_shape
   write_fixture_set "$fallback_dir" local_fallback
   write_fixture_set "$cycle_dir" cycle
@@ -427,6 +456,16 @@ run_selftest() {
     and any(.fail_closed_reasons[]?; .kind == "bv_ready_snapshot_divergence" and .label == "bd-parent")
   ' "${divergence_dir}/out/normalized_input.json" >/dev/null
   record_pass "bv plan divergence against br ready fails closed"
+
+  mkdir -p "${freshness_dir}/out"
+  expect_fail_closed "$freshness_dir" "${freshness_dir}/out"
+  jq -e '
+    .decision == "fail_closed"
+    and .tracker_freshness.consistency_state == "divergent"
+    and .tracker_freshness.db_newer == true
+    and any(.fail_closed_reasons[]?; .kind == "tracker_freshness_divergence" and .source == "br_sync_status_json")
+  ' "${freshness_dir}/out/normalized_input.json" >/dev/null
+  record_pass "tracker freshness divergence fails closed"
 
   mkdir -p "${bad_shape_dir}/out"
   expect_fail_closed "$bad_shape_dir" "${bad_shape_dir}/out"

@@ -10,6 +10,7 @@ original_args=("$@")
 br_ready_json=""
 br_list_json=""
 bv_actionable_plan_json=""
+br_sync_status_json=""
 agent_mail_activity_json=""
 file_reservations_json=""
 stale_lock_recommendations_json=""
@@ -38,6 +39,7 @@ Required:
   --bv-actionable-plan-json FILE
 
 Optional:
+  --br-sync-status-json FILE
   --agent-mail-activity-json FILE
   --file-reservations-json FILE
   --stale-lock-recommendations-json FILE
@@ -56,7 +58,8 @@ Artifacts:
 Exit codes:
   0  normalized input is replayable; decision may be pass or degraded
   42 fail-closed due to malformed required shapes, empty graph, unknown deps,
-     cycles, missing first actions, or local-rch fallback promoted as health
+     cycles, missing first actions, local-rch fallback promoted as health, or
+     supplied br sync freshness showing db/jsonl divergence
   64 invalid or missing input path / malformed JSON
 EOF
 }
@@ -77,6 +80,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --bv-actionable-plan-json)
       bv_actionable_plan_json="${2:-}"
+      shift 2
+      ;;
+    --br-sync-status-json)
+      br_sync_status_json="${2:-}"
       shift 2
       ;;
     --agent-mail-activity-json)
@@ -159,6 +166,7 @@ fail_closed_reasons_jsonl="${run_dir}/fail_closed_reasons.jsonl"
 br_ready_normalized="${run_dir}/br_ready.normalized.json"
 br_list_normalized="${run_dir}/br_list.normalized.json"
 bv_plan_normalized="${run_dir}/bv_actionable_plan.normalized.json"
+br_sync_status_normalized="${run_dir}/br_sync_status.normalized.json"
 agent_mail_normalized="${run_dir}/agent_mail_activity.normalized.json"
 reservations_normalized="${run_dir}/file_reservations.normalized.json"
 stale_lock_normalized="${run_dir}/stale_lock_recommendations.normalized.json"
@@ -236,6 +244,7 @@ check_shape() {
 br_ready_status="$(json_input "$br_ready_json" '[]' "$br_ready_normalized" 'br ready' true)"
 br_list_status="$(json_input "$br_list_json" '{"issues":[]}' "$br_list_normalized" 'br list' true)"
 bv_plan_status="$(json_input "$bv_actionable_plan_json" '{"plan":{"tracks":[]}}' "$bv_plan_normalized" 'bv actionable plan' true)"
+br_sync_status_status="$(json_input "$br_sync_status_json" '{"state":"unknown_missing_optional","db_newer":false,"jsonl_newer":false,"dirty_count":0}' "$br_sync_status_normalized" 'br sync status' false)"
 agent_mail_status="$(json_input "$agent_mail_activity_json" '{"agents":[],"messages":[]}' "$agent_mail_normalized" 'Agent Mail activity' false)"
 reservations_status="$(json_input "$file_reservations_json" '{"reservations":[]}' "$reservations_normalized" 'file reservations' false)"
 stale_lock_status="$(json_input "$stale_lock_recommendations_json" '{"stale_lock_recommendations":[],"safe_to_reopen":[],"contact_first":[]}' "$stale_lock_normalized" 'stale lock recommendations' false)"
@@ -255,6 +264,7 @@ jq -n \
   --arg br_ready_status "$br_ready_status" \
   --arg br_list_status "$br_list_status" \
   --arg bv_plan_status "$bv_plan_status" \
+  --arg br_sync_status_status "$br_sync_status_status" \
   --arg agent_mail_status "$agent_mail_status" \
   --arg reservations_status "$reservations_status" \
   --arg stale_lock_status "$stale_lock_status" \
@@ -266,6 +276,7 @@ jq -n \
   --slurpfile br_ready "$br_ready_normalized" \
   --slurpfile br_list "$br_list_normalized" \
   --slurpfile bv_plan "$bv_plan_normalized" \
+  --slurpfile br_sync_status "$br_sync_status_normalized" \
   --slurpfile agent_mail "$agent_mail_normalized" \
   --slurpfile reservations "$reservations_normalized" \
   --slurpfile stale_lock "$stale_lock_normalized" \
@@ -374,6 +385,7 @@ jq -n \
     ($br_ready[0]) as $ready_doc
     | ($br_list[0]) as $list_doc
     | ($bv_plan[0]) as $bv_doc
+    | ($br_sync_status[0]) as $sync_doc
     | ($agent_mail[0]) as $agent_doc
     | ($reservations[0]) as $reservations_doc
     | ($stale_lock[0]) as $stale_doc
@@ -393,6 +405,9 @@ jq -n \
        ] | unique_by(.id) | sort_by(.id)) as $task_base
     | ([$ready_rows[]? | .id // empty] | unique) as $ready_ids
     | ([$bv_items[]? | .id // empty] | unique) as $bv_ids
+    | (($sync_doc.db_newer // false) == true) as $tracker_db_newer
+    | (($sync_doc.jsonl_newer // false) == true) as $tracker_jsonl_newer
+    | (($sync_doc.dirty_count // 0) | tonumber? // 0) as $tracker_dirty_count
     | ($proof_doc.state // $proof_doc.proof_transport.state // $proof_doc.summary.state // "unknown_missing_optional") as $global_proof_state
     | (($proof_doc.local_fallback_detected // $proof_doc.proof_transport.local_fallback_detected // false) == true) as $global_local_fallback
     | {
@@ -400,6 +415,15 @@ jq -n \
         known_issue_ids: $known_issue_ids,
         ready_ids: $ready_ids,
         bv_ids: $bv_ids,
+        tracker_db_newer: $tracker_db_newer,
+        tracker_jsonl_newer: $tracker_jsonl_newer,
+        tracker_dirty_count: $tracker_dirty_count,
+        tracker_consistency_state: (
+          if $br_sync_status_status == "missing" then "unknown_missing_optional"
+          elif $tracker_db_newer or $tracker_jsonl_newer then "divergent"
+          else "synced"
+          end
+        ),
         edge_rows: [
           $task_base[]? as $issue
           | id_list($issue; "dependencies")[]? as $dep
@@ -438,6 +462,7 @@ jq -n \
           {input:"br_ready_json", status:$br_ready_status, schema_version:"beads.ready-json"},
           {input:"br_list_json", status:$br_list_status, schema_version:"beads.list-json"},
           {input:"bv_actionable_plan_json", status:$bv_plan_status, schema_version:"bv.actionable-plan"},
+          {input:"br_sync_status_json", status:$br_sync_status_status, schema_version:($sync_doc.schema_version // "beads.sync-status-json")},
           {input:"agent_mail_activity_json", status:$agent_mail_status, schema_version:($agent_doc.schema_version // "agent-mail.activity-fixture")},
           {input:"file_reservations_json", status:$reservations_status, schema_version:($reservations_doc.schema_version // "agent-mail.reservation-fixture")},
           {input:"stale_lock_recommendations_json", status:$stale_lock_status, schema_version:($stale_doc.schema_version // "franken-engine.stale-lock-recommendations.v1")},
@@ -545,6 +570,16 @@ jq -n \
         + (if $cycle_detected then [{kind:"dependency_cycle",source:"br_list_json",label:"dependencies",detail:"dependency cycle detected in normalized task graph"}] else [] end)
         + ([$tasks[]? | select(.proof_transport.local_fallback_detected == true) | {kind:"local_rch_fallback_detected",source:"proof_transport_health_json",label:.task_id,detail:"local fallback cannot be promoted as successful proof health"}])
         + ([$tasks[]? | select((.first_action // "") == "") | {kind:"missing_first_action",source:"normalizer",label:.task_id,detail:"normalized task lacks operator first_action"}])
+        + (if $br_sync_status_status == "provided" and ($ctx.tracker_db_newer or $ctx.tracker_jsonl_newer) then
+             [{
+               kind:"tracker_freshness_divergence",
+               source:"br_sync_status_json",
+               label:"tracker_sync_state",
+               detail:"br sync status reported db_newer/jsonl_newer divergence; br and bv snapshots may refer to different tracker states"
+             }]
+           else
+             []
+           end)
         + ([$tasks[]?
             | .task_id as $task_id
             | select(($ctx.bv_ids | index($task_id)) != null)
@@ -579,10 +614,18 @@ jq -n \
           br_ready_json: $br_ready_status,
           br_list_json: $br_list_status,
           bv_actionable_plan_json: $bv_plan_status,
+          br_sync_status_json: $br_sync_status_status,
           agent_mail_activity_json: $agent_mail_status,
           file_reservations_json: $reservations_status,
           stale_lock_recommendations_json: $stale_lock_status,
           proof_transport_health_json: $proof_transport_status
+        },
+        tracker_freshness: {
+          source_snapshot_status: $br_sync_status_status,
+          consistency_state: $ctx.tracker_consistency_state,
+          db_newer: $ctx.tracker_db_newer,
+          jsonl_newer: $ctx.tracker_jsonl_newer,
+          dirty_count: $ctx.tracker_dirty_count
         },
         summary: {
           task_count: ($tasks | length),
@@ -636,6 +679,7 @@ write_event "normalized_input.written" "$(jq -r '.decision + " / tasks=" + (.sum
 {
   printf '# Swarm Execution Queue Input Normalization\n\n'
   printf -- "- Decision: \`%s\`\n" "$(jq -r '.decision' "$normalized_input_path")"
+  printf -- "- Tracker freshness: \`%s\`\n" "$(jq -r '.tracker_freshness.consistency_state' "$normalized_input_path")"
   printf -- "- Tasks: \`%s\`\n" "$(jq '.summary.task_count' "$normalized_input_path")"
   printf -- "- Ready tasks: \`%s\`\n" "$(jq '.summary.ready_task_count' "$normalized_input_path")"
   printf -- "- Stale owners: \`%s\`\n" "$(jq '.summary.stale_owner_count' "$normalized_input_path")"

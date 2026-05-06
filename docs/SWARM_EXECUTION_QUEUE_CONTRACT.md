@@ -30,13 +30,16 @@ The input normalizer must accept fixture or captured snapshots equivalent to:
 - `br ready --json`
 - `br list --json`
 - `bv --recipe actionable --robot-plan`
+- `br sync --status --json` when proving DB/export freshness alignment
 - Agent Mail agent profiles and recent message timestamps
 - file reservation summaries
 - stale-lock recommender output
 - proof-transport or brownout/admission evidence
 
 Missing optional evidence is degraded evidence, not success. Malformed required
-`br` or `bv` shapes fail closed.
+`br` or `bv` shapes fail closed. A supplied `br sync --status --json` snapshot
+that reports `db_newer=true` or `jsonl_newer=true` also fails closed because
+the queue inputs may be mixing different tracker states.
 
 ## Normalized Task Fields
 
@@ -90,6 +93,8 @@ rationale deltas, and bottleneck severity.
 - Missing required artifact paths fail closed.
 - Queue entries without `first_action` fail closed.
 - Any local-rch fallback promoted as successful proof health fails closed.
+- Any supplied tracker freshness snapshot with `db_newer=true` or
+  `jsonl_newer=true` fails closed.
 - Any contract, fixture, docs, or runbook claim that this lane mutates live
   beads, reservations, Agent Mail, or workers fails closed.
 

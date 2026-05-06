@@ -45,6 +45,11 @@
   ],
   "optional_inputs": [
     {
+      "source_id": "br_sync_status_json",
+      "argument": "--br-sync-status-json",
+      "missing_decision": "unknown"
+    },
+    {
       "source_id": "agent_mail_activity_json",
       "argument": "--agent-mail-activity-json",
       "missing_decision": "degraded"
@@ -102,6 +107,7 @@
     "malformed required br or bv shapes fail closed",
     "queue inputs without first_action fail closed",
     "local-rch fallback cannot be promoted as successful proof health",
+    "supplied br sync status with db_newer or jsonl_newer set true fails closed",
     "bv actionable items that remain blocked and absent from br ready fail closed"
   ],
   "degraded_rules": [
@@ -126,6 +132,7 @@
     "proof_brownout",
     "blocked_parent",
     "bv_br_divergence",
+    "tracker_freshness_divergence",
     "bad_shape",
     "local_fallback",
     "cycle"

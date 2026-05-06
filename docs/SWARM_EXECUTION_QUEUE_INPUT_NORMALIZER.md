@@ -19,13 +19,17 @@ Required snapshots:
 
 Optional snapshots:
 
+- `--br-sync-status-json FILE`
 - `--agent-mail-activity-json FILE`
 - `--file-reservations-json FILE`
 - `--stale-lock-recommendations-json FILE`
 - `--proof-transport-health-json FILE`
 
 Missing optional snapshots are recorded as degraded evidence. Malformed required
-`br` or `bv` shapes produce a fail-closed artifact.
+`br` or `bv` shapes produce a fail-closed artifact. A supplied
+`--br-sync-status-json` snapshot remains optional, but if it reports
+`db_newer=true` or `jsonl_newer=true` the normalizer fails closed because the
+`br` and `bv` snapshots may be describing different tracker states.
 
 ## Artifacts
 
@@ -39,7 +43,9 @@ Each run emits:
 The normalized input includes every task field required by
 `franken-engine.swarm-execution-queue-input.v1`: dependency lists, owner
 freshness, reservation pressure, proof transport state, millionth-scale scores,
-`fallback_trigger`, and a non-empty `first_action`.
+`fallback_trigger`, and a non-empty `first_action`. It also publishes a
+`tracker_freshness` object that records the supplied sync-status snapshot state,
+its `db_newer` / `jsonl_newer` booleans, and the observed `dirty_count`.
 
 ## Decisions
 
@@ -51,7 +57,9 @@ freshness, reservation pressure, proof transport state, millionth-scale scores,
 - `fail_closed`: the graph is empty, malformed, cyclic, references unknown
   dependencies, lacks first actions, attempts to treat local-rch fallback as
   successful proof health, or contains a contradictory `bv` actionable item
-  that is still blocked and absent from `br ready`.
+  that is still blocked and absent from `br ready`. A supplied tracker
+  freshness snapshot that reports `db_newer=true` or `jsonl_newer=true` also
+  fails closed.
 
 ## Validation
 
@@ -59,7 +67,8 @@ freshness, reservation pressure, proof transport state, millionth-scale scores,
 bash -n scripts/swarm_execution_queue_input_normalizer.sh
 bash -n scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh
 jq empty docs/swarm_execution_queue_input_contract_v1.json
+jq empty docs/swarm_execution_queue_contract_v1.json
 bash scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh check
 bash scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh selftest
-git diff --check -- scripts/swarm_execution_queue_input_normalizer.sh scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh docs/SWARM_EXECUTION_QUEUE_INPUT_NORMALIZER.md docs/swarm_execution_queue_input_contract_v1.json
+git diff --check -- scripts/swarm_execution_queue_input_normalizer.sh scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh docs/SWARM_EXECUTION_QUEUE_INPUT_NORMALIZER.md docs/swarm_execution_queue_input_contract_v1.json docs/SWARM_EXECUTION_QUEUE_CONTRACT.md docs/swarm_execution_queue_contract_v1.json
 ```

@@ -32,6 +32,8 @@ capacity_forecast_json=""
 admission_budget_plan_json=""
 lease_exchange_salvage_simulation_json=""
 warm_target_prefetch_roi_advisory_json=""
+starvation_rescue_plan_json=""
+starvation_rescue_conformance_report_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -71,6 +73,8 @@ Options:
   --admission-budget-plan-json FILE
   --lease-exchange-salvage-simulation-json FILE
   --warm-target-prefetch-roi-advisory-json FILE
+  --starvation-rescue-plan-json FILE
+  --starvation-rescue-conformance-report-json FILE
 EOF
 }
 
@@ -200,6 +204,14 @@ while [[ "$#" -gt 0 ]]; do
       warm_target_prefetch_roi_advisory_json="$2"
       shift 2
       ;;
+    --starvation-rescue-plan-json)
+      starvation_rescue_plan_json="$2"
+      shift 2
+      ;;
+    --starvation-rescue-conformance-report-json)
+      starvation_rescue_conformance_report_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -263,6 +275,8 @@ capacity_forecast_status="missing"
 admission_budget_plan_status="missing"
 lease_exchange_salvage_simulation_status="missing"
 warm_target_prefetch_roi_advisory_status="missing"
+starvation_rescue_plan_status="missing"
+starvation_rescue_conformance_report_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -272,6 +286,8 @@ if [[ -n "$capacity_forecast_json" ]]; then capacity_forecast_status="provided";
 if [[ -n "$admission_budget_plan_json" ]]; then admission_budget_plan_status="provided"; fi
 if [[ -n "$lease_exchange_salvage_simulation_json" ]]; then lease_exchange_salvage_simulation_status="provided"; fi
 if [[ -n "$warm_target_prefetch_roi_advisory_json" ]]; then warm_target_prefetch_roi_advisory_status="provided"; fi
+if [[ -n "$starvation_rescue_plan_json" ]]; then starvation_rescue_plan_status="provided"; fi
+if [[ -n "$starvation_rescue_conformance_report_json" ]]; then starvation_rescue_conformance_report_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -281,6 +297,8 @@ capacity_forecast_data="$(json_or_default "$capacity_forecast_json" '{"schema_ve
 admission_budget_plan_data="$(json_or_default "$admission_budget_plan_json" '{"schema_version":"franken-engine.swarm-admission-budget-plan.v1","decision":"missing","budget_profile":"unknown","summary":{"admitted_count":0,"deferred_count":0},"recommendations":[],"artifact_paths":{}}' 'admission-budget-plan')"
 lease_exchange_salvage_simulation_data="$(json_or_default "$lease_exchange_salvage_simulation_json" '{"schema_version":"franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1","decision":"missing","summary":{"manual_review_count":0,"lease_exchange_candidate_count":0,"salvage_promotion_candidate_count":0},"upstream_summary":{"archive_pressure_advisory":"unknown","salvage_workflow_state":"unknown"},"recommendations":[],"artifact_paths":{}}' 'lease-exchange-salvage-simulation')"
 warm_target_prefetch_roi_advisory_data="$(json_or_default "$warm_target_prefetch_roi_advisory_json" '{"schema_version":"franken-engine.swarm-warm-target-prefetch-roi-advisory.v1","advisory":"missing","recommended_action":"Provide a warm-target prefetch ROI advisory before claiming prefetch value.","reason":"No warm-target prefetch ROI advisory was provided.","budget_summary":{"budget_profile":"unknown"},"warm_target_summary":{"target_dir":null},"proof_cache_summary":{"proof_cache_decision":"unknown"},"archive_pressure_summary":{"advisory":"unknown"},"validation_cost_summary":{"estimated_cpu_slots_total":0},"roi_summary":{"expected_reuse_score":0,"realized_reuse_score":0,"reuse_delta":0},"artifact_paths":{}}' 'warm-target-prefetch-roi-advisory')"
+starvation_rescue_plan_data="$(json_or_default "$starvation_rescue_plan_json" '{"schema_version":"franken-engine.swarm-starvation-rescue-plan.v1","decision":"missing","scenario_class":"unknown","summary":{"recommendation_count":0,"top_recommendation_action":null,"readiness":"unknown","brownout_finding_count":0,"starvation_finding_count":0,"safe_to_reopen_count":0,"contact_first_count":0,"lease_exchange_candidate_count":0,"manual_review_count":0,"ownership_fail_closed_count":0},"policy_basis":{"matched_case_ids":[],"matched_case_count":0,"required_scenario_classes":[]},"recommendations":[],"fail_closed_reasons":[],"artifact_paths":{}}' 'starvation-rescue-plan')"
+starvation_rescue_conformance_report_data="$(json_or_default "$starvation_rescue_conformance_report_json" '{"schema_version":"franken-engine.swarm-starvation-rescue-conformance-report.v1","decision":"missing","summary":{"plan_decision":"missing","scenario_class":"unknown","gate_failure_count":0},"verified_invariants":[],"gate_failures":[],"artifact_paths":{}}' 'starvation-rescue-conformance-report')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -299,6 +317,8 @@ jq -n \
   --arg admission_budget_plan_status "$admission_budget_plan_status" \
   --arg lease_exchange_salvage_simulation_status "$lease_exchange_salvage_simulation_status" \
   --arg warm_target_prefetch_roi_advisory_status "$warm_target_prefetch_roi_advisory_status" \
+  --arg starvation_rescue_plan_status "$starvation_rescue_plan_status" \
+  --arg starvation_rescue_conformance_report_status "$starvation_rescue_conformance_report_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -324,6 +344,8 @@ jq -n \
   --argjson admission_budget_plan "$admission_budget_plan_data" \
   --argjson lease_exchange_salvage_simulation "$lease_exchange_salvage_simulation_data" \
   --argjson warm_target_prefetch_roi_advisory "$warm_target_prefetch_roi_advisory_data" \
+  --argjson starvation_rescue_plan "$starvation_rescue_plan_data" \
+  --argjson starvation_rescue_conformance_report "$starvation_rescue_conformance_report_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -660,6 +682,65 @@ jq -n \
       reuse_delta: ($warm_target_prefetch_roi_advisory.roi_summary.reuse_delta // 0),
       artifact_path: ($warm_target_prefetch_roi_advisory.artifact_paths.swarm_warm_target_prefetch_roi_advisory_json // null)
     }) as $prefetch_roi_summary
+  | ({
+      artifact_status: $starvation_rescue_plan_status,
+      conformance_artifact_status: $starvation_rescue_conformance_report_status,
+      severity: (
+        if $starvation_rescue_plan_status == "missing"
+          or $starvation_rescue_conformance_report_status == "missing" then "warning"
+        elif (($starvation_rescue_conformance_report.decision // "") == "fail_closed")
+          or (($starvation_rescue_plan.decision // "") == "fail_closed") then "critical"
+        elif (($starvation_rescue_plan.decision // "") == "manual_review_required")
+          or (($starvation_rescue_plan.scenario_class // "") == "brownout") then "warning"
+        else "ok"
+        end
+      ),
+      plan_decision: ($starvation_rescue_plan.decision // "missing"),
+      conformance_decision: ($starvation_rescue_conformance_report.decision // "missing"),
+      scenario_class: ($starvation_rescue_plan.scenario_class // "unknown"),
+      top_recommendation_action: ($starvation_rescue_plan.summary.top_recommendation_action // null),
+      recommendation_count: ($starvation_rescue_plan.summary.recommendation_count // 0),
+      escalation_band: (
+        if $starvation_rescue_plan_status == "missing"
+          or $starvation_rescue_conformance_report_status == "missing" then "unknown"
+        elif (($starvation_rescue_conformance_report.decision // "") == "fail_closed")
+          or (($starvation_rescue_plan.decision // "") == "fail_closed") then "fail_closed"
+        elif (($starvation_rescue_plan.decision // "") == "manual_review_required") then "manual_review"
+        elif (($starvation_rescue_plan.scenario_class // "") == "brownout") then "degraded"
+        else "ready"
+        end
+      ),
+      recommended_ordering: bounded(
+        ($starvation_rescue_plan.recommendations // [])
+        | map({
+            rank: (.rank // null),
+            action: (.action // null),
+            fairness_reason: (.fairness_reason // null),
+            required_next_actions: (.required_next_actions // [])
+          })
+      ),
+      unresolved_risks: bounded(
+        if (($starvation_rescue_conformance_report.gate_failures // []) | length) > 0 then
+          ($starvation_rescue_conformance_report.gate_failures // [])
+        elif (($starvation_rescue_plan.fail_closed_reasons // []) | length) > 0 then
+          ($starvation_rescue_plan.fail_closed_reasons // [])
+        else
+          [
+            (if (($starvation_rescue_plan.summary.contact_first_count // 0) > 0) then
+              {code:"contact_first_uncertainty", detail:"stale-lock uncertainty still requires owner contact before rescue"}
+            else empty end),
+            (if (($starvation_rescue_plan.summary.manual_review_count // 0) > 0) then
+              {code:"salvage_manual_review", detail:"salvage-pinned evidence still requires manual review before rescue"}
+            else empty end),
+            (if (($starvation_rescue_plan.summary.brownout_finding_count // 0) > 0) then
+              {code:"brownout_pressure", detail:"brownout or starvation pressure remains active while the rescue handoff is advisory only"}
+            else empty end)
+          ]
+        end
+      ),
+      artifact_path: ($starvation_rescue_plan.artifact_paths.swarm_starvation_rescue_plan_json // null),
+      conformance_artifact_path: ($starvation_rescue_conformance_report.artifact_paths.swarm_starvation_rescue_conformance_report_json // null)
+    }) as $starvation_rescue_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -721,6 +802,12 @@ jq -n \
       elif $prefetch_roi_summary.severity != "ok" then
         [{component: "prefetch_roi", status: $prefetch_roi_summary.advisory, impact: "prefetch ROI is degraded, blocked, or not worth taking", remediation: ($prefetch_roi_summary.recommended_action // "Respect the prefetch ROI advisory before warming targets.")}]
       else [] end)
+    + (if $starvation_rescue_plan_status == "missing"
+          or $starvation_rescue_conformance_report_status == "missing" then
+        [{component: "starvation_rescue_handoff", status: "missing", impact: "starvation rescue handoff artifacts are incomplete", remediation: "Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness."}]
+      elif $starvation_rescue_summary.severity != "ok" then
+        [{component: "starvation_rescue_handoff", status: $starvation_rescue_summary.escalation_band, impact: "starvation rescue handoff still has unresolved risks or manual review pressure", remediation: "Respect the rescue escalation band and recommended ordering before reopening or reassigning work."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -779,6 +866,10 @@ jq -n \
         salvage_promotion_candidate_count: $lease_exchange_salvage_summary.salvage_promotion_candidate_count,
         prefetch_advisory: $prefetch_roi_summary.advisory,
         prefetch_target_dir: $prefetch_roi_summary.target_dir,
+        starvation_rescue_plan_decision: $starvation_rescue_summary.plan_decision,
+        starvation_rescue_escalation_band: $starvation_rescue_summary.escalation_band,
+        starvation_rescue_top_action: $starvation_rescue_summary.top_recommendation_action,
+        starvation_rescue_unresolved_risk_count: (($starvation_rescue_summary.unresolved_risks // []) | length),
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -839,6 +930,7 @@ jq -n \
         admission_budgets: $admission_budget_summary,
         lease_exchange_salvage: $lease_exchange_salvage_summary,
         prefetch_roi: $prefetch_roi_summary,
+        starvation_rescue: $starvation_rescue_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
           golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence"],
@@ -850,6 +942,10 @@ jq -n \
       recommendations: (
         if $staged_contamination_summary.severity == "critical" then
           [recommendation("reject_staged_contamination"; null; "staged ownership guard reports contamination")]
+        elif $starvation_rescue_summary.severity == "critical" then
+          [recommendation("respect_starvation_rescue_fail_closed"; null; "starvation rescue handoff is fail-closed or contradicted by conformance evidence")]
+        elif $starvation_rescue_summary.severity == "warning" then
+          [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
           [recommendation("refresh_capacity_forecast"; null; "predictive capacity forecast is fail-closed or low-confidence")]
         elif $resource_leases_summary.severity == "critical" then
@@ -904,7 +1000,9 @@ jq -n \
         capacity_forecast_json: $capacity_forecast_summary.artifact_path,
         admission_budget_plan_json: $admission_budget_summary.artifact_path,
         lease_exchange_salvage_simulation_json: $lease_exchange_salvage_summary.artifact_path,
-        warm_target_prefetch_roi_advisory_json: $prefetch_roi_summary.artifact_path
+        warm_target_prefetch_roi_advisory_json: $prefetch_roi_summary.artifact_path,
+        starvation_rescue_plan_json: $starvation_rescue_summary.artifact_path,
+        starvation_rescue_conformance_report_json: $starvation_rescue_summary.conformance_artifact_path
       }
     }
   ' >"$status_path"
@@ -920,6 +1018,7 @@ jq -n \
   printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
   printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
   printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"
+  printf -- "- Starvation rescue escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.starvation_rescue_escalation_band' "$status_path")" "$(jq -r '.summary.starvation_rescue_top_action' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -929,7 +1028,9 @@ jq -n \
       {label:"Capacity forecast", path:.artifact_paths.capacity_forecast_json},
       {label:"Admission budget plan", path:.artifact_paths.admission_budget_plan_json},
       {label:"Lease exchange salvage simulation", path:.artifact_paths.lease_exchange_salvage_simulation_json},
-      {label:"Warm target prefetch ROI advisory", path:.artifact_paths.warm_target_prefetch_roi_advisory_json}
+      {label:"Warm target prefetch ROI advisory", path:.artifact_paths.warm_target_prefetch_roi_advisory_json},
+      {label:"Starvation rescue plan", path:.artifact_paths.starvation_rescue_plan_json},
+      {label:"Starvation rescue conformance report", path:.artifact_paths.starvation_rescue_conformance_report_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

@@ -3,13 +3,14 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `19`
+- Degraded fields: `20`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
 - Admission budget: `unknown` with `0` deferred
 - Lease exchange posture: `missing`
 - Prefetch advisory: `missing`
+- Starvation rescue escalation: `unknown` via `null`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `1`
@@ -20,8 +21,10 @@
 - Admission budget plan: `missing`
 - Lease exchange salvage simulation: `missing`
 - Warm target prefetch ROI advisory: `missing`
+- Starvation rescue plan: `missing`
+- Starvation rescue conformance report: `missing`
 
-- `avoid_dirty_reserved_files`: dirty or reserved files overlap active work
+- `review_starvation_rescue_handoff`: starvation rescue handoff requires manual review or degraded coordination
 
 ## Degraded
 
@@ -43,4 +46,5 @@
 - `admission_budgets` `missing`: admission budget plan artifact is missing. Provide --admission-budget-plan-json before summarizing budget posture.
 - `lease_exchange_salvage` `missing`: lease-exchange salvage simulation artifact is missing. Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles.
 - `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
+- `starvation_rescue_handoff` `missing`: starvation rescue handoff artifacts are incomplete. Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness.
 - `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

@@ -139,6 +139,137 @@ write_predictive_extension_fixtures() {
     roi_summary:{expected_reuse_score:800000, realized_reuse_score:910000, reuse_delta:110000},
     artifact_paths:{swarm_warm_target_prefetch_roi_advisory_json:$artifact_path}
   }' >"${fixture_dir}/warm_target_prefetch_roi_advisory.json"
+
+  write_starvation_rescue_fixtures "$fixture_dir" "advisory"
+}
+
+write_starvation_rescue_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+
+  case "$mode" in
+    advisory)
+      jq -n \
+        --arg artifact_path "${fixture_dir}/starvation_rescue_plan.json" \
+        '{
+          schema_version:"franken-engine.swarm-starvation-rescue-plan.v1",
+          decision:"advisory",
+          scenario_class:"healthy",
+          summary:{
+            recommendation_count:2,
+            top_recommendation_action:"reopen_stale_claim_then_rebalance",
+            readiness:"ready",
+            brownout_finding_count:0,
+            starvation_finding_count:0,
+            safe_to_reopen_count:2,
+            contact_first_count:0,
+            lease_exchange_candidate_count:1,
+            manual_review_count:0,
+            ownership_fail_closed_count:0
+          },
+          policy_basis:{
+            matched_case_ids:["healthy_advisory_ready"],
+            matched_case_count:1,
+            required_scenario_classes:["healthy","brownout","ownership_contradiction","salvage_pinned","stale_telemetry","local_fallback"]
+          },
+          recommendations:[
+            {
+              rank:1,
+              action:"reopen_stale_claim_then_rebalance",
+              fairness_reason:"Safe stale reopen is available and no ownership drift is active.",
+              required_next_actions:["Reopen only evidence-supported stale claims.","Rebalance deferred work after the reopen lands."]
+            },
+            {
+              rank:2,
+              action:"monitor_queue_and_keep_fair_share",
+              fairness_reason:"No brownout or manual-review pressure is active, so queue hygiene remains sufficient.",
+              required_next_actions:["Keep the next proof batch narrow and fairness-bounded."]
+            }
+          ],
+          fail_closed_reasons:[],
+          artifact_paths:{swarm_starvation_rescue_plan_json:$artifact_path}
+        }' >"${fixture_dir}/starvation_rescue_plan.json"
+      jq -n \
+        --arg artifact_path "${fixture_dir}/starvation_rescue_conformance_report.json" \
+        '{
+          schema_version:"franken-engine.swarm-starvation-rescue-conformance-report.v1",
+          decision:"pass",
+          summary:{
+            plan_decision:"advisory",
+            scenario_class:"healthy",
+            gate_failure_count:0
+          },
+          verified_invariants:[
+            {name:"artifact_lineage_is_real", outcome:"pass"},
+            {name:"fresh_rescue_input_evidence", outcome:"pass"}
+          ],
+          gate_failures:[],
+          artifact_paths:{swarm_starvation_rescue_conformance_report_json:$artifact_path}
+        }' >"${fixture_dir}/starvation_rescue_conformance_report.json"
+      ;;
+    manual)
+      jq -n \
+        --arg artifact_path "${fixture_dir}/starvation_rescue_plan.json" \
+        '{
+          schema_version:"franken-engine.swarm-starvation-rescue-plan.v1",
+          decision:"manual_review_required",
+          scenario_class:"salvage_pinned",
+          summary:{
+            recommendation_count:2,
+            top_recommendation_action:"preserve_pinned_evidence",
+            readiness:"degraded",
+            brownout_finding_count:1,
+            starvation_finding_count:1,
+            safe_to_reopen_count:0,
+            contact_first_count:1,
+            lease_exchange_candidate_count:0,
+            manual_review_count:1,
+            ownership_fail_closed_count:0
+          },
+          policy_basis:{
+            matched_case_ids:["salvage_pinned_manual_review"],
+            matched_case_count:1,
+            required_scenario_classes:["healthy","brownout","ownership_contradiction","salvage_pinned","stale_telemetry","local_fallback"]
+          },
+          recommendations:[
+            {
+              rank:1,
+              action:"preserve_pinned_evidence",
+              fairness_reason:"Pinned evidence and manual review outrank any automated rescue throughput.",
+              required_next_actions:["Keep proof artifacts pinned until manual review clears.","Contact the owner before attempting lease exchange or reopen."]
+            },
+            {
+              rank:2,
+              action:"contact_owner_before_exchange",
+              fairness_reason:"Fairness cannot override explicit owner-contact requirements.",
+              required_next_actions:["Contact the current owner before attempting lease exchange or reopen."]
+            }
+          ],
+          fail_closed_reasons:[],
+          artifact_paths:{swarm_starvation_rescue_plan_json:$artifact_path}
+        }' >"${fixture_dir}/starvation_rescue_plan.json"
+      jq -n \
+        --arg artifact_path "${fixture_dir}/starvation_rescue_conformance_report.json" \
+        '{
+          schema_version:"franken-engine.swarm-starvation-rescue-conformance-report.v1",
+          decision:"pass",
+          summary:{
+            plan_decision:"manual_review_required",
+            scenario_class:"salvage_pinned",
+            gate_failure_count:0
+          },
+          verified_invariants:[
+            {name:"contact_first_blocks_advisory", outcome:"pass"},
+            {name:"salvage_pinned_blocks_advisory", outcome:"pass"}
+          ],
+          gate_failures:[],
+          artifact_paths:{swarm_starvation_rescue_conformance_report_json:$artifact_path}
+        }' >"${fixture_dir}/starvation_rescue_conformance_report.json"
+      ;;
+    *)
+      record_failure "unknown starvation rescue fixture mode ${mode}"
+      ;;
+  esac
 }
 
 write_healthy_fixtures() {
@@ -487,6 +618,7 @@ write_overloaded_fixtures() {
     roi_summary:{expected_reuse_score:900000, realized_reuse_score:300000, reuse_delta:-600000},
     artifact_paths:{swarm_warm_target_prefetch_roi_advisory_json:$artifact_path}
   }' >"${fixture_dir}/warm_target_prefetch_roi_advisory.json"
+  write_starvation_rescue_fixtures "$fixture_dir" "manual"
 }
 
 run_case() {
@@ -542,6 +674,8 @@ run_case() {
   [[ -f "${fixture_dir}/admission_budget_plan.json" ]] && extra_args+=(--admission-budget-plan-json "${fixture_dir}/admission_budget_plan.json")
   [[ -f "${fixture_dir}/lease_exchange_salvage_simulation.json" ]] && extra_args+=(--lease-exchange-salvage-simulation-json "${fixture_dir}/lease_exchange_salvage_simulation.json")
   [[ -f "${fixture_dir}/warm_target_prefetch_roi_advisory.json" ]] && extra_args+=(--warm-target-prefetch-roi-advisory-json "${fixture_dir}/warm_target_prefetch_roi_advisory.json")
+  [[ -f "${fixture_dir}/starvation_rescue_plan.json" ]] && extra_args+=(--starvation-rescue-plan-json "${fixture_dir}/starvation_rescue_plan.json")
+  [[ -f "${fixture_dir}/starvation_rescue_conformance_report.json" ]] && extra_args+=(--starvation-rescue-conformance-report-json "${fixture_dir}/starvation_rescue_conformance_report.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -590,11 +724,17 @@ run_case() {
     and (.predictive_dashboard.admission_budgets.budget_profile | type == "string")
     and (.predictive_dashboard.lease_exchange_salvage.decision | type == "string")
     and (.predictive_dashboard.prefetch_roi.advisory | type == "string")
+    and (.predictive_dashboard.starvation_rescue.plan_decision | type == "string")
+    and (.predictive_dashboard.starvation_rescue.escalation_band | type == "string")
+    and (.predictive_dashboard.starvation_rescue.recommended_ordering | type == "array")
+    and (.predictive_dashboard.starvation_rescue.unresolved_risks | type == "array")
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
     and ((.artifact_paths.lease_exchange_salvage_simulation_json == null) or (.artifact_paths.lease_exchange_salvage_simulation_json | type == "string"))
     and ((.artifact_paths.warm_target_prefetch_roi_advisory_json == null) or (.artifact_paths.warm_target_prefetch_roi_advisory_json | type == "string"))
+    and ((.artifact_paths.starvation_rescue_plan_json == null) or (.artifact_paths.starvation_rescue_plan_json | type == "string"))
+    and ((.artifact_paths.starvation_rescue_conformance_report_json == null) or (.artifact_paths.starvation_rescue_conformance_report_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -615,6 +755,9 @@ run_case() {
         and .predictive_dashboard.admission_budgets.deferred_count == 0
         and .predictive_dashboard.lease_exchange_salvage.decision == "retain_current_assignments"
         and .predictive_dashboard.prefetch_roi.advisory == "prefetch_recommended"
+        and .predictive_dashboard.starvation_rescue.plan_decision == "advisory"
+        and .predictive_dashboard.starvation_rescue.escalation_band == "ready"
+        and (.predictive_dashboard.starvation_rescue.unresolved_risks | length) == 0
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -630,6 +773,7 @@ run_case() {
         and .predictive_dashboard.admission_budgets.artifact_status == "missing"
         and .predictive_dashboard.lease_exchange_salvage.artifact_status == "missing"
         and .predictive_dashboard.prefetch_roi.artifact_status == "missing"
+        and .predictive_dashboard.starvation_rescue.artifact_status == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -664,6 +808,9 @@ run_case() {
         and .predictive_dashboard.admission_budgets.budget_profile == "brownout"
         and .predictive_dashboard.lease_exchange_salvage.decision == "manual_confirmation_required"
         and .predictive_dashboard.prefetch_roi.advisory == "manual_review_required"
+        and .predictive_dashboard.starvation_rescue.plan_decision == "manual_review_required"
+        and .predictive_dashboard.starvation_rescue.escalation_band == "manual_review"
+        and (.predictive_dashboard.starvation_rescue.unresolved_risks | map(.code) | index("contact_first_uncertainty"))
         and .predictive_dashboard.staged_contamination.decision == "pass"
         and any(.degraded[]; .component == "qos_batches")
       ' "${output_dir}/status.json" >/dev/null
@@ -713,6 +860,9 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
     and (.required_dashboard_fields | index("predictive_dashboard.lease_exchange_salvage.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.prefetch_roi.advisory"))
+    and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.plan_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.escalation_band"))
+    and (.required_dashboard_fields | index("predictive_dashboard.starvation_rescue.unresolved_risks"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -726,6 +876,10 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_lease_exchange_cancellation_salvage_simulator_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_warm_target_prefetch_roi_advisory.sh' "$contract_doc"
   grep -Fq 'docs/swarm_warm_target_prefetch_roi_advisory_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_starvation_rescue_planner.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_starvation_rescue_planner_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_starvation_rescue_conformance_gate.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_starvation_rescue_conformance_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then

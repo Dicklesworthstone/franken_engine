@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 9,
+    "degraded_count": 10,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -45,6 +45,10 @@
     "salvage_promotion_candidate_count": 0,
     "prefetch_advisory": "manual_review_required",
     "prefetch_target_dir": "/tmp/rch_target_franken_engine_overloaded",
+    "starvation_rescue_plan_decision": "manual_review_required",
+    "starvation_rescue_escalation_band": "manual_review",
+    "starvation_rescue_top_action": "preserve_pinned_evidence",
+    "starvation_rescue_unresolved_risk_count": 3,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -460,6 +464,52 @@
       "reuse_delta": -600000,
       "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/warm_target_prefetch_roi_advisory.json"
     },
+    "starvation_rescue": {
+      "artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "warning",
+      "plan_decision": "manual_review_required",
+      "conformance_decision": "pass",
+      "scenario_class": "salvage_pinned",
+      "top_recommendation_action": "preserve_pinned_evidence",
+      "recommendation_count": 2,
+      "escalation_band": "manual_review",
+      "recommended_ordering": [
+        {
+          "rank": 1,
+          "action": "preserve_pinned_evidence",
+          "fairness_reason": "Pinned evidence and manual review outrank any automated rescue throughput.",
+          "required_next_actions": [
+            "Keep proof artifacts pinned until manual review clears.",
+            "Contact the owner before attempting lease exchange or reopen."
+          ]
+        },
+        {
+          "rank": 2,
+          "action": "contact_owner_before_exchange",
+          "fairness_reason": "Fairness cannot override explicit owner-contact requirements.",
+          "required_next_actions": [
+            "Contact the current owner before attempting lease exchange or reopen."
+          ]
+        }
+      ],
+      "unresolved_risks": [
+        {
+          "code": "contact_first_uncertainty",
+          "detail": "stale-lock uncertainty still requires owner contact before rescue"
+        },
+        {
+          "code": "salvage_manual_review",
+          "detail": "salvage-pinned evidence still requires manual review before rescue"
+        },
+        {
+          "code": "brownout_pressure",
+          "detail": "brownout or starvation pressure remains active while the rescue handoff is advisory only"
+        }
+      ],
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/starvation_rescue_conformance_report.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -541,13 +591,19 @@
       "status": "manual_review_required",
       "impact": "prefetch ROI is degraded, blocked, or not worth taking",
       "remediation": "Do not warm a fresh target until brownout pressure and cache refresh obligations clear."
+    },
+    {
+      "component": "starvation_rescue_handoff",
+      "status": "manual_review",
+      "impact": "starvation rescue handoff still has unresolved risks or manual review pressure",
+      "remediation": "Respect the rescue escalation band and recommended ordering before reopening or reassigning work."
     }
   ],
   "recommendations": [
     {
-      "action": "contact_stalled_owner",
-      "bead_id": "bd-high-priority-stalled",
-      "reason": "stale-lock recommender requires contact before reopening"
+      "action": "review_starvation_rescue_handoff",
+      "bead_id": null,
+      "reason": "starvation rescue handoff requires manual review or degraded coordination"
     }
   ]
 }

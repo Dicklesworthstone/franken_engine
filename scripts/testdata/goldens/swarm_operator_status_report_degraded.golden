@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 19,
+    "degraded_count": 20,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -45,6 +45,10 @@
     "salvage_promotion_candidate_count": 0,
     "prefetch_advisory": "missing",
     "prefetch_target_dir": null,
+    "starvation_rescue_plan_decision": "missing",
+    "starvation_rescue_escalation_band": "unknown",
+    "starvation_rescue_top_action": null,
+    "starvation_rescue_unresolved_risk_count": 0,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -333,6 +337,21 @@
       "reuse_delta": 0,
       "artifact_path": null
     },
+    "starvation_rescue": {
+      "artifact_status": "missing",
+      "conformance_artifact_status": "missing",
+      "severity": "warning",
+      "plan_decision": "missing",
+      "conformance_decision": "missing",
+      "scenario_class": "unknown",
+      "top_recommendation_action": null,
+      "recommendation_count": 0,
+      "escalation_band": "unknown",
+      "recommended_ordering": [],
+      "unresolved_risks": [],
+      "artifact_path": null,
+      "conformance_artifact_path": null
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -470,6 +489,12 @@
       "remediation": "Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch."
     },
     {
+      "component": "starvation_rescue_handoff",
+      "status": "missing",
+      "impact": "starvation rescue handoff artifacts are incomplete",
+      "remediation": "Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness."
+    },
+    {
       "component": "rch_incident_packet",
       "status": "worker_timeout",
       "impact": "rch proof execution has an incident packet",
@@ -478,9 +503,9 @@
   ],
   "recommendations": [
     {
-      "action": "avoid_dirty_reserved_files",
+      "action": "review_starvation_rescue_handoff",
       "bead_id": null,
-      "reason": "dirty or reserved files overlap active work"
+      "reason": "starvation rescue handoff requires manual review or degraded coordination"
     }
   ]
 }

@@ -113,6 +113,22 @@ The same operator report now integrates two more advisory-only child producers:
 Those sections remain report-only. They must not be described as automatic
 ownership transfer, cancellation, target warming, or archive mutation.
 
+The same operator report now also integrates a starvation-rescue handoff:
+
+- Script: `scripts/swarm_starvation_rescue_planner.sh`
+- Plan schema: `franken-engine.swarm-starvation-rescue-plan.v1`
+- Static contract: `docs/swarm_starvation_rescue_planner_contract_v1.json`
+
+- Script: `scripts/swarm_starvation_rescue_conformance_gate.sh`
+- Report schema: `franken-engine.swarm-starvation-rescue-conformance-report.v1`
+- Static contract: `docs/swarm_starvation_rescue_conformance_gate_contract_v1.json`
+
+That handoff carries ordered rescue recommendations, escalation bands, and
+unresolved-risk rows into the existing `scripts/swarm_operator_status_report.sh`
+producer. It is advisory-only. It must not be described as live bead reopen
+automation, automatic ownership transfer, or a second predictive dashboard
+producer.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -146,6 +162,7 @@ consumption:
 | `slo_tuning_advisory` | `swarm-operator-slo-tuning-advisory.v1` (handoff only) | Carry reviewed evidence quality, claim support, and bounded admit/narrow/defer/prewarm/archive/salvage/coordination recommendations for a future renderer. |
 | `lease_exchange_salvage` | `swarm-lease-exchange-cancellation-salvage-simulation.v1` | Show whether lease exchange, salvage promotion, or manual review is appropriate before reassigning work. |
 | `prefetch_roi` | `swarm-warm-target-prefetch-roi-advisory.v1` | Show whether warm-target or archive prefetch has enough bounded ROI to recommend, plus target-dir and proof-cache posture. |
+| `starvation_rescue` | `swarm-starvation-rescue-plan.v1` plus `swarm-starvation-rescue-conformance-report.v1` | Show ordered rescue actions, escalation band, and unresolved rescue risks without creating a second dashboard producer. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -199,6 +216,11 @@ The standalone operator SLO tuning advisory is another downstream handoff
 payload. It is not evidence that the current predictive dashboard producer
 already renders or consumes the advisory directly.
 
+The starvation rescue planner and conformance gate are different: the current
+predictive dashboard producer does integrate their handoff directly, but only
+as advisory snapshot evidence. That does not make the dashboard a live reopen
+controller or an automatic ownership-transfer surface.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -214,6 +236,9 @@ already renders or consumes the advisory directly.
   resource-governor mutation.
 - The docs must describe the operator SLO tuning advisory as a future handoff
   only, not as a second predictive dashboard producer or a shipped local TUI.
+- The docs must describe the starvation rescue handoff as integrated advisory
+  snapshot evidence, not as live bead reopen automation, automatic ownership
+  transfer, or a second predictive dashboard producer.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a

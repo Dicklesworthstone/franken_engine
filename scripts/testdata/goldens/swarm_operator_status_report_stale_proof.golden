@@ -45,6 +45,10 @@
     "salvage_promotion_candidate_count": 0,
     "prefetch_advisory": "prefetch_recommended",
     "prefetch_target_dir": "/tmp/rch_target_franken_engine_operator_status",
+    "starvation_rescue_plan_decision": "advisory",
+    "starvation_rescue_escalation_band": "ready",
+    "starvation_rescue_top_action": "reopen_stale_claim_then_rebalance",
+    "starvation_rescue_unresolved_risk_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -397,6 +401,39 @@
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
       "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/warm_target_prefetch_roi_advisory.json"
+    },
+    "starvation_rescue": {
+      "artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "ok",
+      "plan_decision": "advisory",
+      "conformance_decision": "pass",
+      "scenario_class": "healthy",
+      "top_recommendation_action": "reopen_stale_claim_then_rebalance",
+      "recommendation_count": 2,
+      "escalation_band": "ready",
+      "recommended_ordering": [
+        {
+          "rank": 1,
+          "action": "reopen_stale_claim_then_rebalance",
+          "fairness_reason": "Safe stale reopen is available and no ownership drift is active.",
+          "required_next_actions": [
+            "Reopen only evidence-supported stale claims.",
+            "Rebalance deferred work after the reopen lands."
+          ]
+        },
+        {
+          "rank": 2,
+          "action": "monitor_queue_and_keep_fair_share",
+          "fairness_reason": "No brownout or manual-review pressure is active, so queue hygiene remains sufficient.",
+          "required_next_actions": [
+            "Keep the next proof batch narrow and fairness-bounded."
+          ]
+        }
+      ],
+      "unresolved_risks": [],
+      "artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/starvation_rescue_conformance_report.json"
     },
     "staged_contamination": {
       "artifact_status": "provided",

@@ -10,6 +10,7 @@
 - Admission budget: `balanced` with `0` deferred
 - Lease exchange posture: `retain_current_assignments`
 - Prefetch advisory: `prefetch_recommended`
+- Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -20,5 +21,7 @@
 - Admission budget plan: `[SMOKE_ROOT]/healthy-fixtures/admission_budget_plan.json`
 - Lease exchange salvage simulation: `[SMOKE_ROOT]/healthy-fixtures/lease_exchange_salvage_simulation.json`
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/healthy-fixtures/warm_target_prefetch_roi_advisory.json`
+- Starvation rescue plan: `[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_plan.json`
+- Starvation rescue conformance report: `[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_conformance_report.json`
 
 - `pick_next_ready_bead` for `bd-p03vs`: resource governor admits validation and bead is ready

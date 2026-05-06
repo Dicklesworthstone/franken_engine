@@ -206,6 +206,66 @@ write_operator_status_fixtures() {
   jq -n '[{artifact_id:"proof-cost-stale-bd-ad31e", stale:true, freshness_state:"stale_by_source_revision"}]' >"${fixture_dir}/stale_evidence.json"
   jq -n '[]' >"${fixture_dir}/dirty_files.json"
   jq -n '{queries:[{name:"predictive_orchestration_drill", row_count:3}]}' >"${fixture_dir}/proof_index.json"
+  jq -n --arg artifact_path "${fixture_dir}/capacity_forecast.json" '{
+    schema_version:"franken-engine.swarm-capacity-forecast.v1",
+    decision:"fail_closed",
+    confidence_band:"low",
+    summary:{overall_state:"blocked", blocked_categories:["compile_pressure","proof_availability"], degraded_categories:["coordination_pressure"]},
+    telemetry_summary:{snapshot_decision:"stale_required_telemetry"},
+    inputs:[
+      {input:"telemetry_snapshot_json", status:"provided", schema_version:"franken-engine.swarm-capacity-snapshot.v1"},
+      {input:"predictive_wrapper_report_json", status:"missing", schema_version:null},
+      {input:"archive_lifecycle_report_json", status:"missing", schema_version:null}
+    ],
+    failures:[{kind:"low_confidence", label:"confidence_band", detail:"required telemetry missing or incomplete for forecast category"}],
+    notes:["predictive orchestration drill keeps forecast fail-closed"],
+    forecasts:{
+      compile_pressure:{state:"blocked", recommended_action:"Refresh missing predictive wrapper inputs before trusting compile-pressure advice."},
+      disk_memory_pressure:{state:"degraded", recommended_action:"Treat disk and memory pressure as degraded until lease evidence is refreshed."},
+      rch_degradation:{state:"degraded", recommended_action:"Treat rch posture as degraded until incident inputs are complete."},
+      target_dir_heat:{state:"degraded", recommended_action:"Do not trust warm target reuse claims until forecast inputs are complete."},
+      proof_availability:{state:"blocked", recommended_action:"Refresh proof availability evidence before relying on archived proofs."},
+      coordination_pressure:{state:"degraded", recommended_action:"Use direct coordination before acting on auto-reopen suggestions."}
+    },
+    artifact_paths:{swarm_capacity_forecast_json:$artifact_path}
+  }' >"${fixture_dir}/capacity_forecast.json"
+  jq -n --arg artifact_path "${fixture_dir}/admission_budget_plan.json" '{
+    schema_version:"franken-engine.swarm-admission-budget-plan.v1",
+    decision:"defer",
+    budget_profile:"brownout",
+    summary:{admitted_count:0, deferred_count:1},
+    recommendations:[{
+      request_id:"predictive-heavy-proof",
+      bead_id:"bd-ad31e",
+      agent_id:"ScarletOwl",
+      decision:"defer",
+      budget_class:"protected",
+      proof_obligation:true
+    }],
+    artifact_paths:{swarm_admission_budget_plan_json:$artifact_path}
+  }' >"${fixture_dir}/admission_budget_plan.json"
+  jq -n --arg artifact_path "${fixture_dir}/lease_exchange_salvage_simulation.json" '{
+    schema_version:"franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+    decision:"manual_confirmation_required",
+    summary:{manual_review_count:1, lease_exchange_candidate_count:1, salvage_promotion_candidate_count:0},
+    upstream_summary:{archive_pressure_advisory:"compaction_first", salvage_workflow_state:"salvage_pinned"},
+    recommendations:[{bead_id:"bd-ad31e", simulated_action:"manual_confirmation_required", lease_exchange_candidate:true, salvage_promotion_candidate:false}],
+    artifact_paths:{lease_exchange_cancellation_salvage_simulation_json:$artifact_path}
+  }' >"${fixture_dir}/lease_exchange_salvage_simulation.json"
+  jq -n --arg artifact_path "${fixture_dir}/warm_target_prefetch_roi_advisory.json" '{
+    schema_version:"franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+    advisory:"manual_review_required",
+    recommended_action:"Do not warm a fresh target until brownout pressure and cache refresh obligations clear.",
+    reason:"forecast and proof-cache posture make prefetch advisory-only and negative",
+    exit_code:75,
+    budget_summary:{budget_profile:"brownout"},
+    warm_target_summary:{target_dir:"/tmp/rch_target_franken_engine_bd_ad31e"},
+    proof_cache_summary:{proof_cache_decision:"refresh_required"},
+    archive_pressure_summary:{advisory:"compaction_first"},
+    validation_cost_summary:{estimated_cpu_slots_total:8},
+    roi_summary:{expected_reuse_score:900000, realized_reuse_score:200000, reuse_delta:-700000},
+    artifact_paths:{swarm_warm_target_prefetch_roi_advisory_json:$artifact_path}
+  }' >"${fixture_dir}/warm_target_prefetch_roi_advisory.json"
 }
 
 run_check() {
@@ -217,6 +277,10 @@ run_check() {
   bash -n "${root_dir}/scripts/proof_freshness_decay_gate.sh"
   bash -n "${root_dir}/scripts/rch_incident_packet_gate.sh"
   bash -n "${root_dir}/scripts/swarm_operator_status_report.sh"
+  bash -n "${root_dir}/scripts/swarm_capacity_forecaster.sh"
+  bash -n "${root_dir}/scripts/swarm_admission_budget_planner.sh"
+  bash -n "${root_dir}/scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh"
+  bash -n "${root_dir}/scripts/swarm_warm_target_prefetch_roi_advisory.sh"
   record_pass "bash syntax"
 
   jq empty "${root_dir}/docs/swarm_predictive_dashboard_contract_v1.json"
@@ -346,7 +410,11 @@ run_selftest() {
     --dirty-files-json "${fixture_dir}/dirty_files.json" \
     --collision-receipt-json "${planner_dir}/collision_receipt.json" \
     --proof-freshness-json "${freshness_dir}/proof_freshness_report.json" \
-    --rch-incident-packet-json "${incident_dir}/incident_packet.json"
+    --rch-incident-packet-json "${incident_dir}/incident_packet.json" \
+    --capacity-forecast-json "${fixture_dir}/capacity_forecast.json" \
+    --admission-budget-plan-json "${fixture_dir}/admission_budget_plan.json" \
+    --lease-exchange-salvage-simulation-json "${fixture_dir}/lease_exchange_salvage_simulation.json" \
+    --warm-target-prefetch-roi-advisory-json "${fixture_dir}/warm_target_prefetch_roi_advisory.json"
 
   status_path="${status_dir}/status.json"
   jq -e '
@@ -357,9 +425,15 @@ run_selftest() {
     and .predictive_dashboard.proof_freshness.state == "stale_by_source_revision"
     and .predictive_dashboard.proof_freshness.reusable == false
     and .predictive_dashboard.rch_incidents.status == "degraded"
+    and .predictive_dashboard.telemetry_quality.confidence_band == "low"
+    and .predictive_dashboard.capacity_forecast.overall_state == "blocked"
+    and .predictive_dashboard.admission_budgets.budget_profile == "brownout"
+    and .predictive_dashboard.lease_exchange_salvage.decision == "manual_confirmation_required"
+    and .predictive_dashboard.prefetch_roi.advisory == "manual_review_required"
     and any(.degraded[]; .component == "collision_risk")
     and any(.degraded[]; .component == "proof_freshness")
     and any(.degraded[]; .component == "rch_incident_packet")
+    and any(.degraded[]; .component == "capacity_forecast")
   ' "$status_path" >/dev/null
   record_pass "operator status propagated predictive degradations"
 
@@ -397,7 +471,9 @@ run_selftest() {
         "planner_reserved_overlap",
         "proof_stale_by_source_revision",
         "rch_worker_timeout",
-        "operator_status_predictive_degraded"
+        "operator_status_predictive_degraded",
+        "operator_status_forecast_low_confidence",
+        "operator_status_prefetch_roi_warning"
       ]
     }' >"$report_path"
 

@@ -1,0 +1,28 @@
+# Swarm Operator Status
+
+- Status: `degraded`
+- Ready beads: `1`
+- In progress: `1`
+- Degraded fields: `1`
+
+- Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
+- Forecast confidence: `low` / `blocked`
+- Admission budget: `balanced` with `0` deferred
+- Lease exchange posture: `retain_current_assignments`
+- Prefetch advisory: `prefetch_recommended`
+- High-cost commands: `0`
+- Collision risk: `none`
+- RCH incidents: `0`
+
+## Artifact Sources
+
+- Capacity forecast: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/capacity_forecast.json`
+- Admission budget plan: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/admission_budget_plan.json`
+- Lease exchange salvage simulation: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/lease_exchange_salvage_simulation.json`
+- Warm target prefetch ROI advisory: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/warm_target_prefetch_roi_advisory.json`
+
+- `refresh_capacity_forecast`: predictive capacity forecast is fail-closed or low-confidence
+
+## Degraded
+
+- `capacity_forecast` `blocked`: predictive capacity forecast is low-confidence or degraded. Refresh missing predictive wrapper inputs before relying on compile-pressure advice.

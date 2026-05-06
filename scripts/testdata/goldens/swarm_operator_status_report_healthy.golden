@@ -35,6 +35,16 @@
     "qos_deferred_count": 0,
     "stale_lock_safe_to_reopen_count": 0,
     "stale_lock_contact_first_count": 0,
+    "forecast_overall_state": "nominal",
+    "forecast_confidence_band": "high",
+    "telemetry_missing_input_count": 0,
+    "admission_budget_profile": "balanced",
+    "admission_deferred_count": 0,
+    "lease_exchange_decision": "retain_current_assignments",
+    "lease_exchange_candidate_count": 0,
+    "salvage_promotion_candidate_count": 0,
+    "prefetch_advisory": "prefetch_recommended",
+    "prefetch_target_dir": "/tmp/rch_target_franken_engine_operator_status",
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -281,6 +291,113 @@
       "recommendations": [],
       "actionable_commands": []
     },
+    "telemetry_quality": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "current_and_complete",
+      "confidence_band": "high",
+      "input_count": 3,
+      "provided_input_count": 3,
+      "missing_input_count": 0,
+      "failure_count": 0,
+      "inputs": [
+        {
+          "input": "telemetry_snapshot_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-capacity-snapshot.v1"
+        },
+        {
+          "input": "validation_plan_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-validation-plan.v1"
+        },
+        {
+          "input": "build_storm_batch_plan_json",
+          "status": "provided",
+          "schema_version": "franken-engine.build-storm-batch-plan.v1"
+        }
+      ],
+      "notes": [
+        "deterministic advisory-only forecast fixture"
+      ],
+      "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
+      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+    },
+    "capacity_forecast": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "admit",
+      "confidence_band": "high",
+      "overall_state": "nominal",
+      "blocked_categories": [],
+      "degraded_categories": [],
+      "category_states": {
+        "compile_pressure": "nominal",
+        "disk_memory_pressure": "nominal",
+        "rch_degradation": "nominal",
+        "target_dir_heat": "nominal",
+        "proof_availability": "nominal",
+        "coordination_pressure": "nominal"
+      },
+      "recommended_actions": {
+        "compile_pressure": "No compile-pressure mitigation is required.",
+        "disk_memory_pressure": "No disk or memory mitigation is required.",
+        "rch_degradation": "rch is healthy enough for advisory use.",
+        "target_dir_heat": "Warm target reuse remains bounded.",
+        "proof_availability": "Proof availability is healthy enough for advisory reuse.",
+        "coordination_pressure": "Coordination pressure is nominal."
+      },
+      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+    },
+    "admission_budgets": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "admit",
+      "budget_profile": "balanced",
+      "admitted_count": 1,
+      "deferred_count": 0,
+      "protected_request_count": 1,
+      "proof_obligation_count": 1,
+      "recommendations": [
+        {
+          "request_id": "status-shell",
+          "bead_id": "bd-h95kz",
+          "agent_id": "CyanOak",
+          "decision": "admit",
+          "budget_class": "protected",
+          "proof_obligation": true
+        }
+      ],
+      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/admission_budget_plan.json"
+    },
+    "lease_exchange_salvage": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "retain_current_assignments",
+      "manual_review_count": 0,
+      "lease_exchange_candidate_count": 0,
+      "salvage_promotion_candidate_count": 0,
+      "archive_pressure_advisory": "retain",
+      "salvage_workflow_state": "clean_finished",
+      "recommendations": [],
+      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/lease_exchange_salvage_simulation.json"
+    },
+    "prefetch_roi": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "advisory": "prefetch_recommended",
+      "recommended_action": "Warm the preserved target before the next protected proof.",
+      "reason": "bounded replay cost and positive reuse delta justify a dry-run prefetch recommendation",
+      "budget_profile": "balanced",
+      "target_dir": "/tmp/rch_target_franken_engine_operator_status",
+      "proof_cache_decision": "cache_hit",
+      "archive_pressure_advisory": "retain",
+      "estimated_cpu_slots_total": 4,
+      "expected_reuse_score": 800000,
+      "realized_reuse_score": 910000,
+      "reuse_delta": 110000,
+      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/warm_target_prefetch_roi_advisory.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -301,7 +418,8 @@
         "stale_proof",
         "high_cost",
         "collision_risk",
-        "overloaded"
+        "overloaded",
+        "forecast_low_confidence"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

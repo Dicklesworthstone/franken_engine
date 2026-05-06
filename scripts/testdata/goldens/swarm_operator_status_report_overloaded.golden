@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 5,
+    "degraded_count": 9,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -35,6 +35,16 @@
     "qos_deferred_count": 2,
     "stale_lock_safe_to_reopen_count": 0,
     "stale_lock_contact_first_count": 1,
+    "forecast_overall_state": "brownout",
+    "forecast_confidence_band": "medium",
+    "telemetry_missing_input_count": 0,
+    "admission_budget_profile": "brownout",
+    "admission_deferred_count": 2,
+    "lease_exchange_decision": "manual_confirmation_required",
+    "lease_exchange_candidate_count": 1,
+    "salvage_promotion_candidate_count": 0,
+    "prefetch_advisory": "manual_review_required",
+    "prefetch_target_dir": "/tmp/rch_target_franken_engine_overloaded",
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -323,6 +333,133 @@
         "send Agent Mail contact-first message to AgentTau"
       ]
     },
+    "telemetry_quality": {
+      "artifact_status": "provided",
+      "severity": "warning",
+      "decision": "current_and_complete",
+      "confidence_band": "medium",
+      "input_count": 3,
+      "provided_input_count": 3,
+      "missing_input_count": 0,
+      "failure_count": 0,
+      "inputs": [
+        {
+          "input": "telemetry_snapshot_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-capacity-snapshot.v1"
+        },
+        {
+          "input": "admission_drill_report_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-admission-drill.v1"
+        },
+        {
+          "input": "proof_economy_drill_report_json",
+          "status": "provided",
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1"
+        }
+      ],
+      "notes": [
+        "bounded brownout forecast fixture"
+      ],
+      "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/capacity_forecast.json"
+    },
+    "capacity_forecast": {
+      "artifact_status": "provided",
+      "severity": "warning",
+      "decision": "defer",
+      "confidence_band": "medium",
+      "overall_state": "brownout",
+      "blocked_categories": [
+        "compile_pressure"
+      ],
+      "degraded_categories": [
+        "disk_memory_pressure",
+        "coordination_pressure"
+      ],
+      "category_states": {
+        "compile_pressure": "blocked",
+        "disk_memory_pressure": "degraded",
+        "rch_degradation": "degraded",
+        "target_dir_heat": "degraded",
+        "proof_availability": "degraded",
+        "coordination_pressure": "degraded"
+      },
+      "recommended_actions": {
+        "compile_pressure": "Defer heavy proof work until the brownout clears.",
+        "disk_memory_pressure": "Reuse existing target dirs and avoid broad rebuilds.",
+        "rch_degradation": "Narrow remote proofs and preserve incident receipts.",
+        "target_dir_heat": "Avoid new target-dir fan-out while workers are saturated.",
+        "proof_availability": "Refresh proof artifacts before reusing them.",
+        "coordination_pressure": "Use contact-first reopen flows while the queue is saturated."
+      },
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/capacity_forecast.json"
+    },
+    "admission_budgets": {
+      "artifact_status": "provided",
+      "severity": "warning",
+      "decision": "defer",
+      "budget_profile": "brownout",
+      "admitted_count": 0,
+      "deferred_count": 2,
+      "protected_request_count": 1,
+      "proof_obligation_count": 1,
+      "recommendations": [
+        {
+          "request_id": "heavy-proof-a",
+          "bead_id": "bd-h3hrc",
+          "agent_id": "ScarletOwl",
+          "decision": "defer",
+          "budget_class": "protected",
+          "proof_obligation": true
+        },
+        {
+          "request_id": "heavy-proof-b",
+          "bead_id": "bd-vnkan",
+          "agent_id": "CyanOak",
+          "decision": "defer",
+          "budget_class": "best_effort",
+          "proof_obligation": false
+        }
+      ],
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/admission_budget_plan.json"
+    },
+    "lease_exchange_salvage": {
+      "artifact_status": "provided",
+      "severity": "warning",
+      "decision": "manual_confirmation_required",
+      "manual_review_count": 1,
+      "lease_exchange_candidate_count": 1,
+      "salvage_promotion_candidate_count": 0,
+      "archive_pressure_advisory": "compaction_first",
+      "salvage_workflow_state": "salvage_pinned",
+      "recommendations": [
+        {
+          "bead_id": "bd-high-priority-stalled",
+          "simulated_action": "manual_confirmation_required",
+          "lease_exchange_candidate": true,
+          "salvage_promotion_candidate": false
+        }
+      ],
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/lease_exchange_salvage_simulation.json"
+    },
+    "prefetch_roi": {
+      "artifact_status": "provided",
+      "severity": "warning",
+      "advisory": "manual_review_required",
+      "recommended_action": "Do not warm a fresh target until brownout pressure and cache refresh obligations clear.",
+      "reason": "brownout pressure, refresh-required proof cache, and compaction-first archive posture block safe prefetch",
+      "budget_profile": "brownout",
+      "target_dir": "/tmp/rch_target_franken_engine_overloaded",
+      "proof_cache_decision": "refresh_required",
+      "archive_pressure_advisory": "compaction_first",
+      "estimated_cpu_slots_total": 8,
+      "expected_reuse_score": 900000,
+      "realized_reuse_score": 300000,
+      "reuse_delta": -600000,
+      "artifact_path": "[SMOKE_ROOT]/overloaded-fixtures/warm_target_prefetch_roi_advisory.json"
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -343,7 +480,8 @@
         "stale_proof",
         "high_cost",
         "collision_risk",
-        "overloaded"
+        "overloaded",
+        "forecast_low_confidence"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -379,6 +517,30 @@
       "status": "attention",
       "impact": "stalled beads require reopen or contact-first action",
       "remediation": "Follow the stale-lock recommendation commands before changing assignees."
+    },
+    {
+      "component": "capacity_forecast",
+      "status": "brownout",
+      "impact": "predictive capacity forecast is low-confidence or degraded",
+      "remediation": "Defer heavy proof work until the brownout clears."
+    },
+    {
+      "component": "admission_budgets",
+      "status": "defer",
+      "impact": "admission budget planning is constrained or deferred",
+      "remediation": "Follow the budget recommendations before admitting more work."
+    },
+    {
+      "component": "lease_exchange_salvage",
+      "status": "manual_confirmation_required",
+      "impact": "lease-exchange or salvage promotion requires review",
+      "remediation": "Use the simulation recommendations instead of changing ownership blindly."
+    },
+    {
+      "component": "prefetch_roi",
+      "status": "manual_review_required",
+      "impact": "prefetch ROI is degraded, blocked, or not worth taking",
+      "remediation": "Do not warm a fresh target until brownout pressure and cache refresh obligations clear."
     }
   ],
   "recommendations": [

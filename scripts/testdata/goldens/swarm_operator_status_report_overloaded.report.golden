@@ -1,0 +1,36 @@
+# Swarm Operator Status
+
+- Status: `degraded`
+- Ready beads: `1`
+- In progress: `1`
+- Degraded fields: `9`
+
+- Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
+- Forecast confidence: `medium` / `brownout`
+- Admission budget: `brownout` with `2` deferred
+- Lease exchange posture: `manual_confirmation_required`
+- Prefetch advisory: `manual_review_required`
+- High-cost commands: `0`
+- Collision risk: `none`
+- RCH incidents: `0`
+
+## Artifact Sources
+
+- Capacity forecast: `[SMOKE_ROOT]/overloaded-fixtures/capacity_forecast.json`
+- Admission budget plan: `[SMOKE_ROOT]/overloaded-fixtures/admission_budget_plan.json`
+- Lease exchange salvage simulation: `[SMOKE_ROOT]/overloaded-fixtures/lease_exchange_salvage_simulation.json`
+- Warm target prefetch ROI advisory: `[SMOKE_ROOT]/overloaded-fixtures/warm_target_prefetch_roi_advisory.json`
+
+- `contact_stalled_owner` for `bd-high-priority-stalled`: stale-lock recommender requires contact before reopening
+
+## Degraded
+
+- `rch` `degraded`: remote proof routing may be unavailable. Defer heavy validation until rch status is ok or use script-only proof.
+- `resource_leases` `defer`: resource lease admission is not fully green. no rch worker has the requested CPU and memory lease available
+- `proof_cache` `refresh_required`: proof cache does not report a clean cache hit. all matching proof artifacts require refresh before reuse
+- `qos_batches` `all_deferred`: one or more validation requests are deferred or the batch is unavailable. all requests deferred by worker capacity, resource leases, or fairness gates
+- `stale_lock_recommendations` `attention`: stalled beads require reopen or contact-first action. Follow the stale-lock recommendation commands before changing assignees.
+- `capacity_forecast` `brownout`: predictive capacity forecast is low-confidence or degraded. Defer heavy proof work until the brownout clears.
+- `admission_budgets` `defer`: admission budget planning is constrained or deferred. Follow the budget recommendations before admitting more work.
+- `lease_exchange_salvage` `manual_confirmation_required`: lease-exchange or salvage promotion requires review. Use the simulation recommendations instead of changing ownership blindly.
+- `prefetch_roi` `manual_review_required`: prefetch ROI is degraded, blocked, or not worth taking. Do not warm a fresh target until brownout pressure and cache refresh obligations clear.

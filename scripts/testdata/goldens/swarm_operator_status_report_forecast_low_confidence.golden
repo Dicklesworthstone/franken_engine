@@ -21,8 +21,8 @@
     "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
-    "high_cost_command_count": 1,
-    "proof_cost_budget_count": 1,
+    "high_cost_command_count": 0,
+    "proof_cost_budget_count": 0,
     "stale_evidence_count": 0,
     "dirty_reserved_count": 0,
     "blocked_bead_count": 0,
@@ -35,9 +35,9 @@
     "qos_deferred_count": 0,
     "stale_lock_safe_to_reopen_count": 0,
     "stale_lock_contact_first_count": 0,
-    "forecast_overall_state": "nominal",
-    "forecast_confidence_band": "high",
-    "telemetry_missing_input_count": 0,
+    "forecast_overall_state": "blocked",
+    "forecast_confidence_band": "low",
+    "telemetry_missing_input_count": 2,
     "admission_budget_profile": "balanced",
     "admission_deferred_count": 0,
     "lease_exchange_decision": "retain_current_assignments",
@@ -98,51 +98,36 @@
   "validation_plan": {
     "decision": "admit",
     "collision_risk": "none",
-    "risk_flags": [
-      "high_cost_history"
-    ],
+    "risk_flags": [],
     "commands": [
       {
-        "command_id": "cargo-test-proof_manifest_golden_artifacts",
-        "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-        "command_kind": "rch_cargo_test",
+        "command_id": "script-check",
+        "display": "bash -n scripts/swarm_operator_status_report.sh",
+        "command_kind": "shell_syntax",
         "predicted_cost": {
           "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
-          "state": "matched",
-          "cost_class": "high",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2
+          "state": "static",
+          "cost_class": "low",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0
         },
-        "risk_flags": [
-          "high_cost_history"
-        ],
+        "risk_flags": [],
         "cost_evidence": {
-          "status": "matched",
-          "matched_rows": 3,
-          "fresh_rows": 3,
-          "stale_rows": 0,
-          "source_revisions": [
-            "smoke-rev"
-          ]
+          "status": "not_required",
+          "matched_rows": 0,
+          "fresh_rows": 0,
+          "stale_rows": 0
         }
       }
     ],
     "omitted_commands": [],
-    "proof_cost_budgets": [
-      {
-        "schema_version": "franken-engine.focused-proof-cost-budget.v1",
-        "suite": "proof_manifest_golden_artifacts",
-        "package": "frankenengine-engine",
-        "max_total_compiled_targets": 2,
-        "max_total_linked_targets": 1
-      }
-    ],
+    "proof_cost_budgets": [],
     "conflicting_agents": [],
     "safe_alternatives": [
-      "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+      "scripts/swarm_operator_status_report.sh"
     ]
   },
   "proof_evidence_index": {
@@ -174,74 +159,36 @@
       "local_renderer": false
     },
     "predictive_cost": {
-      "status": "elevated",
+      "status": "nominal",
       "commands": [
         {
-          "command_id": "cargo-test-proof_manifest_golden_artifacts",
-          "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-          "command_kind": "rch_cargo_test",
-          "cost_class": "high",
-          "cost_state": "matched",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2,
-          "risk_flags": [
-            "high_cost_history"
-          ],
+          "command_id": "script-check",
+          "display": "bash -n scripts/swarm_operator_status_report.sh",
+          "command_kind": "shell_syntax",
+          "cost_class": "low",
+          "cost_state": "static",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0,
+          "risk_flags": [],
           "cost_evidence": {
-            "status": "matched",
-            "matched_rows": 3,
-            "fresh_rows": 3,
-            "stale_rows": 0,
-            "source_revisions": [
-              "smoke-rev"
-            ]
+            "status": "not_required",
+            "matched_rows": 0,
+            "fresh_rows": 0,
+            "stale_rows": 0
           }
         }
       ],
-      "high_risk_commands": [
-        {
-          "command_id": "cargo-test-proof_manifest_golden_artifacts",
-          "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_high_cost cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts",
-          "command_kind": "rch_cargo_test",
-          "cost_class": "high",
-          "cost_state": "matched",
-          "sample_count": 3,
-          "elapsed_ms_p50": 450000,
-          "elapsed_ms_max": 900000,
-          "compiled_target_count_max": 12,
-          "linked_target_count_max": 2,
-          "risk_flags": [
-            "high_cost_history"
-          ],
-          "cost_evidence": {
-            "status": "matched",
-            "matched_rows": 3,
-            "fresh_rows": 3,
-            "stale_rows": 0,
-            "source_revisions": [
-              "smoke-rev"
-            ]
-          }
-        }
-      ],
-      "proof_cost_budgets": [
-        {
-          "schema_version": "franken-engine.focused-proof-cost-budget.v1",
-          "suite": "proof_manifest_golden_artifacts",
-          "package": "frankenengine-engine",
-          "max_total_compiled_targets": 2,
-          "max_total_linked_targets": 1
-        }
-      ]
+      "high_risk_commands": [],
+      "proof_cost_budgets": []
     },
     "collision_risk": {
       "risk": "none",
       "conflicting_agents": [],
       "safe_alternatives": [
-        "crates/franken-engine/tests/proof_manifest_golden_artifacts.rs"
+        "scripts/swarm_operator_status_report.sh"
       ],
       "reservation_recommendations": [],
       "conflicts": {
@@ -346,13 +293,13 @@
     },
     "telemetry_quality": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "decision": "current_and_complete",
-      "confidence_band": "high",
+      "severity": "critical",
+      "decision": "stale_required_telemetry",
+      "confidence_band": "low",
       "input_count": 3,
-      "provided_input_count": 3,
-      "missing_input_count": 0,
-      "failure_count": 0,
+      "provided_input_count": 1,
+      "missing_input_count": 2,
+      "failure_count": 1,
       "inputs": [
         {
           "input": "telemetry_snapshot_json",
@@ -360,47 +307,52 @@
           "schema_version": "franken-engine.swarm-capacity-snapshot.v1"
         },
         {
-          "input": "validation_plan_json",
-          "status": "provided",
-          "schema_version": "franken-engine.swarm-validation-plan.v1"
+          "input": "predictive_wrapper_report_json",
+          "status": "missing",
+          "schema_version": null
         },
         {
-          "input": "build_storm_batch_plan_json",
-          "status": "provided",
-          "schema_version": "franken-engine.build-storm-batch-plan.v1"
+          "input": "archive_lifecycle_report_json",
+          "status": "missing",
+          "schema_version": null
         }
       ],
       "notes": [
-        "deterministic advisory-only forecast fixture"
+        "missing predictive wrapper and archive lifecycle reports force a fail-closed forecast"
       ],
-      "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/capacity_forecast.json"
+      "recommended_action": "Refresh stale or missing telemetry artifacts before trusting the predictive dashboard.",
+      "artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
-      "severity": "ok",
-      "decision": "admit",
-      "confidence_band": "high",
-      "overall_state": "nominal",
-      "blocked_categories": [],
-      "degraded_categories": [],
+      "severity": "critical",
+      "decision": "fail_closed",
+      "confidence_band": "low",
+      "overall_state": "blocked",
+      "blocked_categories": [
+        "compile_pressure",
+        "proof_availability"
+      ],
+      "degraded_categories": [
+        "coordination_pressure"
+      ],
       "category_states": {
-        "compile_pressure": "nominal",
-        "disk_memory_pressure": "nominal",
-        "rch_degradation": "nominal",
-        "target_dir_heat": "nominal",
-        "proof_availability": "nominal",
-        "coordination_pressure": "nominal"
+        "compile_pressure": "blocked",
+        "disk_memory_pressure": "degraded",
+        "rch_degradation": "degraded",
+        "target_dir_heat": "degraded",
+        "proof_availability": "blocked",
+        "coordination_pressure": "degraded"
       },
       "recommended_actions": {
-        "compile_pressure": "No compile-pressure mitigation is required.",
-        "disk_memory_pressure": "No disk or memory mitigation is required.",
-        "rch_degradation": "rch is healthy enough for advisory use.",
-        "target_dir_heat": "Warm target reuse remains bounded.",
-        "proof_availability": "Proof availability is healthy enough for advisory reuse.",
-        "coordination_pressure": "Coordination pressure is nominal."
+        "compile_pressure": "Refresh missing predictive wrapper inputs before relying on compile-pressure advice.",
+        "disk_memory_pressure": "Treat disk and memory pressure as degraded until lease evidence is refreshed.",
+        "rch_degradation": "Treat rch posture as degraded until incident inputs are complete.",
+        "target_dir_heat": "Do not trust warm target reuse claims until forecast inputs are complete.",
+        "proof_availability": "Refresh proof availability evidence before relying on archived proofs.",
+        "coordination_pressure": "Use direct coordination before acting on auto-reopen suggestions."
       },
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -421,7 +373,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/admission_budget_plan.json"
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -433,7 +385,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -449,7 +401,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/high_cost-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/forecast_low_confidence-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "staged_contamination": {
       "artifact_status": "provided",
@@ -480,17 +432,17 @@
   },
   "degraded": [
     {
-      "component": "predictive_cost",
-      "status": "high",
-      "impact": "cargo-test-proof_manifest_golden_artifacts has elevated predicted validation cost",
-      "remediation": "Narrow the command, defer until resource pressure clears, or preserve the high-cost receipt."
+      "component": "capacity_forecast",
+      "status": "blocked",
+      "impact": "predictive capacity forecast is low-confidence or degraded",
+      "remediation": "Refresh missing predictive wrapper inputs before relying on compile-pressure advice."
     }
   ],
   "recommendations": [
     {
-      "action": "narrow_high_cost_validation",
+      "action": "refresh_capacity_forecast",
       "bead_id": null,
-      "reason": "predicted validation cost is elevated"
+      "reason": "predictive capacity forecast is fail-closed or low-confidence"
     }
   ]
 }

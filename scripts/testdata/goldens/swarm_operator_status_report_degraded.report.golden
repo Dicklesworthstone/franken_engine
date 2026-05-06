@@ -1,0 +1,46 @@
+# Swarm Operator Status
+
+- Status: `degraded`
+- Ready beads: `1`
+- In progress: `1`
+- Degraded fields: `19`
+
+- Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
+- Forecast confidence: `low` / `unknown`
+- Admission budget: `unknown` with `0` deferred
+- Lease exchange posture: `missing`
+- Prefetch advisory: `missing`
+- High-cost commands: `0`
+- Collision risk: `none`
+- RCH incidents: `1`
+
+## Artifact Sources
+
+- Capacity forecast: `missing`
+- Admission budget plan: `missing`
+- Lease exchange salvage simulation: `missing`
+- Warm target prefetch ROI advisory: `missing`
+
+- `avoid_dirty_reserved_files`: dirty or reserved files overlap active work
+
+## Degraded
+
+- `agent_mail` `missing`: reservation and inbox data may be incomplete. Use bead assignee and dirty paths as degraded fallback evidence.
+- `rch` `missing`: remote proof routing may be unavailable. Defer heavy validation until rch status is ok or use script-only proof.
+- `proof_evidence_index` `missing`: proof queries may be incomplete. Use explicit proof outcome snapshots until bd-p03vs lands.
+- `validation_plan` `fail_closed`: planned validation cannot run safely. Fix unknown path mappings or ownership before running validation.
+- `resource_governor` `defer`: resource admission is not green. Follow resource-governor remediation before starting heavy validation.
+- `dirty_reserved_file` `degraded`: crates/franken-engine/src/semantic_dark_matter_engine.rs is dirty or reserved. Avoid this file or coordinate with the holder.
+- `stale_proof_artifact` `degraded`: old-proof is stale. Refresh or mark the proof stale before relying on it.
+- `proof_outcome` `blocked`: bd-0ub12 proof is not passing. Inspect the proof outcome before recommending dependent work.
+- `blocked_bead_chain` `blocked`: bd-blocked is blocked in the bv track. Inspect dependencies before recommending this bead.
+- `resource_leases` `missing`: resource lease admission artifact is missing. Provide --resource-lease-plan-json before publishing the operator status feed.
+- `proof_cache` `missing`: proof reuse cache artifact is missing. Provide --proof-cache-plan-json before reusing prior proof artifacts.
+- `qos_batches` `missing`: build-storm QoS batch artifact is missing. Provide --qos-batch-plan-json before publishing admission state.
+- `stale_lock_recommendations` `missing`: stale-lock recommendation artifact is missing. Provide --stale-lock-recommendations-json before reopening stalled beads.
+- `staged_contamination` `missing`: staged ownership guard artifact is missing. Provide --staged-ownership-report-json before commit or closeout.
+- `capacity_forecast` `missing`: predictive capacity forecast artifact is missing. Provide --capacity-forecast-json before publishing forecast confidence.
+- `admission_budgets` `missing`: admission budget plan artifact is missing. Provide --admission-budget-plan-json before summarizing budget posture.
+- `lease_exchange_salvage` `missing`: lease-exchange salvage simulation artifact is missing. Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles.
+- `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
+- `rch_incident_packet` `worker_timeout`: rch proof execution has an incident packet. Retry only after narrowing the command.

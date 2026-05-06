@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 15,
+    "degraded_count": 19,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -35,6 +35,16 @@
     "qos_deferred_count": 0,
     "stale_lock_safe_to_reopen_count": 0,
     "stale_lock_contact_first_count": 0,
+    "forecast_overall_state": "unknown",
+    "forecast_confidence_band": "low",
+    "telemetry_missing_input_count": 0,
+    "admission_budget_profile": "unknown",
+    "admission_deferred_count": 0,
+    "lease_exchange_decision": "missing",
+    "lease_exchange_candidate_count": 0,
+    "salvage_promotion_candidate_count": 0,
+    "prefetch_advisory": "missing",
+    "prefetch_target_dir": null,
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -243,6 +253,86 @@
         "./scripts/stale_lock_stalled_bead_recommender.sh --in-progress-json <in-progress.json>"
       ]
     },
+    "telemetry_quality": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "decision": "unknown",
+      "confidence_band": "low",
+      "input_count": 0,
+      "provided_input_count": 0,
+      "missing_input_count": 0,
+      "failure_count": 0,
+      "inputs": [],
+      "notes": [],
+      "recommended_action": "Refresh stale or missing telemetry artifacts before trusting the predictive dashboard.",
+      "artifact_path": null
+    },
+    "capacity_forecast": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "decision": "missing",
+      "confidence_band": "low",
+      "overall_state": "unknown",
+      "blocked_categories": [],
+      "degraded_categories": [],
+      "category_states": {
+        "compile_pressure": "unknown",
+        "disk_memory_pressure": "unknown",
+        "rch_degradation": "unknown",
+        "target_dir_heat": "unknown",
+        "proof_availability": "unknown",
+        "coordination_pressure": "unknown"
+      },
+      "recommended_actions": {
+        "compile_pressure": null,
+        "disk_memory_pressure": null,
+        "rch_degradation": null,
+        "target_dir_heat": null,
+        "proof_availability": null,
+        "coordination_pressure": null
+      },
+      "artifact_path": null
+    },
+    "admission_budgets": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "decision": "missing",
+      "budget_profile": "unknown",
+      "admitted_count": 0,
+      "deferred_count": 0,
+      "protected_request_count": 0,
+      "proof_obligation_count": 0,
+      "recommendations": [],
+      "artifact_path": null
+    },
+    "lease_exchange_salvage": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "decision": "missing",
+      "manual_review_count": 0,
+      "lease_exchange_candidate_count": 0,
+      "salvage_promotion_candidate_count": 0,
+      "archive_pressure_advisory": "unknown",
+      "salvage_workflow_state": "unknown",
+      "recommendations": [],
+      "artifact_path": null
+    },
+    "prefetch_roi": {
+      "artifact_status": "missing",
+      "severity": "warning",
+      "advisory": "missing",
+      "recommended_action": "Provide a warm-target prefetch ROI advisory before claiming prefetch value.",
+      "reason": "No warm-target prefetch ROI advisory was provided.",
+      "budget_profile": "unknown",
+      "target_dir": null,
+      "proof_cache_decision": "unknown",
+      "archive_pressure_advisory": "unknown",
+      "estimated_cpu_slots_total": 0,
+      "expected_reuse_score": 0,
+      "realized_reuse_score": 0,
+      "reuse_delta": 0,
+      "artifact_path": null
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -263,7 +353,8 @@
         "stale_proof",
         "high_cost",
         "collision_risk",
-        "overloaded"
+        "overloaded",
+        "forecast_low_confidence"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -353,6 +444,30 @@
       "status": "missing",
       "impact": "staged ownership guard artifact is missing",
       "remediation": "Provide --staged-ownership-report-json before commit or closeout."
+    },
+    {
+      "component": "capacity_forecast",
+      "status": "missing",
+      "impact": "predictive capacity forecast artifact is missing",
+      "remediation": "Provide --capacity-forecast-json before publishing forecast confidence."
+    },
+    {
+      "component": "admission_budgets",
+      "status": "missing",
+      "impact": "admission budget plan artifact is missing",
+      "remediation": "Provide --admission-budget-plan-json before summarizing budget posture."
+    },
+    {
+      "component": "lease_exchange_salvage",
+      "status": "missing",
+      "impact": "lease-exchange salvage simulation artifact is missing",
+      "remediation": "Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles."
+    },
+    {
+      "component": "prefetch_roi",
+      "status": "missing",
+      "impact": "warm-target prefetch ROI advisory artifact is missing",
+      "remediation": "Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch."
     },
     {
       "component": "rch_incident_packet",

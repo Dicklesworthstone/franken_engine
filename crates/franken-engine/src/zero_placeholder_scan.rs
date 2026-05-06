@@ -28,12 +28,15 @@ pub const ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.zero-placeholder-scan.event.v1";
 pub const ZERO_PLACEHOLDER_SCAN_COMPONENT: &str = "zero_placeholder_scan";
 pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placeholder-scan.policy.v1";
-pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 16;
+pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 17;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
 const CLI_DOCS_HELP_POLICY_ID: &str = "policy-rgc-docs-help-surface-audit-v1";
 const CLI_DOCS_HELP_BEAD_ID: &str = "bd-1lsy.10.11.1";
+const SCRIPT_MEASUREMENT_TRUTH_BEAD_ID: &str = "bd-gxsdx";
+const THROUGHPUT_BASELINES_SCRIPT: &str = "scripts/benchmarks/throughput_baselines.sh";
+const RED_TEAM_COMPROMISE_RATE_SCRIPT: &str = "scripts/run_red_team_compromise_rate_metric_gate.sh";
 const JSON_RUNTIME_BEAD_ID: &str = "bd-2muur.1.4";
 const ITERATOR_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.8";
 
@@ -291,6 +294,7 @@ pub fn zero_placeholder_scan_inventory() -> ZeroPlaceholderInventory {
     findings.extend(lowering_findings(&lowering_inventory));
     findings.extend(runtime_findings());
     findings.push(cli_docs_truth_guard_finding());
+    findings.push(script_measurement_truth_guard_finding());
 
     ZeroPlaceholderInventory {
         schema_version: ZERO_PLACEHOLDER_SCAN_SCHEMA_VERSION.to_string(),
@@ -586,6 +590,305 @@ fn cli_docs_truth_guard_finding() -> ZeroPlaceholderFinding {
         required_behavior,
         diagnostic_code: None,
     }
+}
+
+fn script_measurement_truth_guard_finding() -> ZeroPlaceholderFinding {
+    let required_behavior =
+        "Measurement scripts must reject placeholder metric rows and bare heavy Cargo commands; \
+         missing runtimes must produce blocked artifacts, not synthetic measurements."
+            .to_string();
+    let source_reference =
+        format!("{THROUGHPUT_BASELINES_SCRIPT}; {RED_TEAM_COMPROMISE_RATE_SCRIPT}");
+
+    let repo_root = repo_root();
+    let throughput_path = repo_root.join(THROUGHPUT_BASELINES_SCRIPT);
+    let red_team_path = repo_root.join(RED_TEAM_COMPROMISE_RATE_SCRIPT);
+    let throughput = match fs::read_to_string(&throughput_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return ZeroPlaceholderFinding {
+                finding_id: "cli_docs::script_measurement_placeholder_truth_guard".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "mock_code_finder".to_string(),
+                owner_bead_id: SCRIPT_MEASUREMENT_TRUTH_BEAD_ID.to_string(),
+                subject_area: "measurement_scripts.placeholder_rows".to_string(),
+                source_reference,
+                observed_behavior: format!(
+                    "script measurement truth guard could not read {}: {error}",
+                    throughput_path.display()
+                ),
+                required_behavior,
+                diagnostic_code: None,
+            };
+        }
+    };
+    let red_team = match fs::read_to_string(&red_team_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return ZeroPlaceholderFinding {
+                finding_id: "cli_docs::script_measurement_placeholder_truth_guard".to_string(),
+                subsystem: ZeroPlaceholderSubsystem::CliDocs,
+                status: ZeroPlaceholderStatus::FailClosed,
+                severity: ZeroPlaceholderSeverity::Medium,
+                owner: "mock_code_finder".to_string(),
+                owner_bead_id: SCRIPT_MEASUREMENT_TRUTH_BEAD_ID.to_string(),
+                subject_area: "measurement_scripts.placeholder_rows".to_string(),
+                source_reference,
+                observed_behavior: format!(
+                    "script measurement truth guard could not read {}: {error}",
+                    red_team_path.display()
+                ),
+                required_behavior,
+                diagnostic_code: None,
+            };
+        }
+    };
+
+    let scripts = [
+        (THROUGHPUT_BASELINES_SCRIPT, throughput.as_str()),
+        (RED_TEAM_COMPROMISE_RATE_SCRIPT, red_team.as_str()),
+    ];
+    let (status, severity, observed_behavior) = evaluate_script_measurement_truth_guard(&scripts);
+
+    ZeroPlaceholderFinding {
+        finding_id: "cli_docs::script_measurement_placeholder_truth_guard".to_string(),
+        subsystem: ZeroPlaceholderSubsystem::CliDocs,
+        status,
+        severity,
+        owner: "mock_code_finder".to_string(),
+        owner_bead_id: SCRIPT_MEASUREMENT_TRUTH_BEAD_ID.to_string(),
+        subject_area: "measurement_scripts.placeholder_rows".to_string(),
+        source_reference,
+        observed_behavior,
+        required_behavior,
+        diagnostic_code: None,
+    }
+}
+
+fn evaluate_script_measurement_truth_guard(
+    scripts: &[(&str, &str)],
+) -> (ZeroPlaceholderStatus, ZeroPlaceholderSeverity, String) {
+    let mut mismatches = Vec::new();
+
+    for (script_name, script) in scripts {
+        reject_positive_numeric_field(
+            &mut mismatches,
+            script_name,
+            script,
+            "baseline_ops_per_second",
+        );
+        reject_literal_placeholder_metric_rows(&mut mismatches, script_name, script);
+        reject_bare_heavy_cargo(&mut mismatches, script_name, script);
+
+        match *script_name {
+            THROUGHPUT_BASELINES_SCRIPT => {
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "placeholder ops/sec rows are forbidden",
+                );
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "measurement_status: \"blocked\"",
+                );
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "baseline_ops_per_second: 0",
+                );
+            }
+            RED_TEAM_COMPROMISE_RATE_SCRIPT => {
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "write_blocker_bundle",
+                );
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "measurement_status: \"blocked\"",
+                );
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "placeholder_scenario_count: 0",
+                );
+                require_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "placeholder_scenario_rows_rejected",
+                );
+                reject_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "falling back to placeholder data",
+                );
+                reject_script_fragment(&mut mismatches, script_name, script, "LEGACY STUBS");
+                reject_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "ambient-token-exfiltration",
+                );
+                reject_script_fragment(
+                    &mut mismatches,
+                    script_name,
+                    script,
+                    "awaiting_real_scenario_measurements",
+                );
+            }
+            _ => {}
+        }
+    }
+
+    if mismatches.is_empty() {
+        (
+            ZeroPlaceholderStatus::Resolved,
+            ZeroPlaceholderSeverity::Low,
+            format!(
+                "script measurement truth guard scanned {} scripts and found no placeholder measurement rows or bare heavy Cargo commands.",
+                scripts.len(),
+            ),
+        )
+    } else {
+        (
+            ZeroPlaceholderStatus::FailClosed,
+            ZeroPlaceholderSeverity::Medium,
+            format!(
+                "script measurement placeholder truth guard drift detected: {}",
+                mismatches.join("; "),
+            ),
+        )
+    }
+}
+
+fn require_script_fragment(
+    mismatches: &mut Vec<String>,
+    script_name: &str,
+    script: &str,
+    fragment: &str,
+) {
+    if !script.contains(fragment) {
+        mismatches.push(format!(
+            "{script_name} missing required fragment `{fragment}`"
+        ));
+    }
+}
+
+fn reject_script_fragment(
+    mismatches: &mut Vec<String>,
+    script_name: &str,
+    script: &str,
+    fragment: &str,
+) {
+    if script.contains(fragment) {
+        mismatches.push(format!(
+            "{script_name} contains banned fragment `{fragment}`"
+        ));
+    }
+}
+
+fn reject_positive_numeric_field(
+    mismatches: &mut Vec<String>,
+    script_name: &str,
+    script: &str,
+    field_name: &str,
+) {
+    for (line_index, line) in script.lines().enumerate() {
+        let trimmed = line.trim();
+        let normalized = trimmed.replace(['"', '\''], "");
+        let Some(rest) = normalized
+            .strip_prefix(&format!("{field_name}:"))
+            .or_else(|| normalized.strip_prefix(&format!("{field_name}=")))
+        else {
+            continue;
+        };
+        let value = rest.trim().trim_end_matches([',', ';']);
+        if value.chars().all(|ch| ch.is_ascii_digit()) && value != "0" {
+            mismatches.push(format!(
+                "{script_name}:{} contains fixed positive {field_name} placeholder `{value}`",
+                line_index + 1,
+            ));
+        }
+    }
+}
+
+fn reject_literal_placeholder_metric_rows(
+    mismatches: &mut Vec<String>,
+    script_name: &str,
+    script: &str,
+) {
+    for (line_index, line) in script.lines().enumerate() {
+        let compact = line
+            .trim()
+            .replace(['"', '\'', ' ', '\t'], "")
+            .to_ascii_lowercase();
+        if compact.contains("is_placeholder_data:true")
+            || compact.contains("is_placeholder_data=true")
+        {
+            mismatches.push(format!(
+                "{script_name}:{} contains literal placeholder metric row marker",
+                line_index + 1,
+            ));
+        }
+    }
+}
+
+fn reject_bare_heavy_cargo(mismatches: &mut Vec<String>, script_name: &str, script: &str) {
+    for (line_index, line) in script.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.contains("rch exec") {
+            continue;
+        }
+        for banned in [
+            "cargo build",
+            "cargo check",
+            "cargo clippy",
+            "cargo test",
+            "cargo run",
+        ] {
+            if contains_shell_command(trimmed, banned) {
+                mismatches.push(format!(
+                    "{script_name}:{} contains bare heavy Cargo command `{banned}`",
+                    line_index + 1,
+                ));
+            }
+        }
+    }
+}
+
+fn contains_shell_command(line: &str, command: &str) -> bool {
+    let mut search_start = 0;
+    while let Some(relative_index) = line[search_start..].find(command) {
+        let index = search_start + relative_index;
+        let before_ok = index == 0
+            || line[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_whitespace() || matches!(ch, ';' | '&' | '|' | '('));
+        let after_index = index + command.len();
+        let after_ok = after_index == line.len()
+            || line[after_index..]
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_whitespace());
+        if before_ok && after_ok {
+            return true;
+        }
+        search_start = after_index;
+    }
+    false
 }
 
 fn evaluate_cli_docs_truth_guard(
@@ -1539,8 +1842,65 @@ mod tests {
     }
 
     #[test]
-    fn finding_count_sixteen() {
-        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 16);
+    fn script_measurement_truth_guard_resolves_clean_scripts() {
+        let scripts = [
+            (
+                THROUGHPUT_BASELINES_SCRIPT,
+                r#"
+                baseline_ops_per_second: 0,
+                measurement_status: "blocked",
+                placeholder ops/sec rows are forbidden
+                "#,
+            ),
+            (
+                RED_TEAM_COMPROMISE_RATE_SCRIPT,
+                r#"
+                write_blocker_bundle
+                measurement_status: "blocked"
+                placeholder_scenario_count: 0
+                placeholder_scenario_rows_rejected
+                "#,
+            ),
+        ];
+        let (status, severity, detail) = evaluate_script_measurement_truth_guard(&scripts);
+        assert_eq!(status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Low);
+        assert!(detail.contains("scanned 2 scripts"));
+    }
+
+    #[test]
+    fn script_measurement_truth_guard_detects_placeholder_measurements() {
+        let scripts = [
+            (
+                THROUGHPUT_BASELINES_SCRIPT,
+                r#"
+                baseline_ops_per_second: 1800,
+                cargo build --bin frankenctl
+                "#,
+            ),
+            (
+                RED_TEAM_COMPROMISE_RATE_SCRIPT,
+                r#"
+                falling back to placeholder data
+                LEGACY STUBS
+                ambient-token-exfiltration
+                is_placeholder_data: true
+                awaiting_real_scenario_measurements
+                "#,
+            ),
+        ];
+        let (status, severity, detail) = evaluate_script_measurement_truth_guard(&scripts);
+        assert_eq!(status, ZeroPlaceholderStatus::FailClosed);
+        assert_eq!(severity, ZeroPlaceholderSeverity::Medium);
+        assert!(detail.contains("fixed positive baseline_ops_per_second"));
+        assert!(detail.contains("bare heavy Cargo command"));
+        assert!(detail.contains("literal placeholder metric row marker"));
+        assert!(detail.contains("ambient-token-exfiltration"));
+    }
+
+    #[test]
+    fn finding_count_seventeen() {
+        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 17);
     }
 
     // --- Deep enrichment tests (PearlTower 2026-03-18) ---

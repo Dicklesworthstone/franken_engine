@@ -322,18 +322,27 @@ fn zero_placeholder_inventory_counts_match_expectations() {
 }
 
 #[test]
-fn zero_placeholder_inventory_contains_one_cli_docs_guard() {
+fn zero_placeholder_inventory_contains_cli_docs_truth_guards() {
     let inventory = zscan::zero_placeholder_scan_inventory();
     let cli_docs_findings: Vec<_> = inventory
         .findings
         .iter()
         .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::CliDocs)
         .collect();
-    assert_eq!(cli_docs_findings.len(), 1);
-    assert_ne!(
-        cli_docs_findings[0].status,
-        ZeroPlaceholderStatus::OpenPlaceholder
+    assert_eq!(cli_docs_findings.len(), 2);
+    assert!(
+        cli_docs_findings
+            .iter()
+            .all(|finding| finding.status != ZeroPlaceholderStatus::OpenPlaceholder)
     );
+    assert!(
+        cli_docs_findings
+            .iter()
+            .any(|finding| finding.finding_id == "cli_docs::help_surface_truth_guard")
+    );
+    assert!(cli_docs_findings.iter().any(|finding| {
+        finding.finding_id == "cli_docs::script_measurement_placeholder_truth_guard"
+    }));
 }
 
 #[test]
@@ -632,10 +641,109 @@ fn cli_docs_finding_references_readme_and_frankenctl() {
     let cli_finding = inventory
         .findings
         .iter()
-        .find(|f| f.subsystem == ZeroPlaceholderSubsystem::CliDocs)
-        .expect("cli_docs finding");
+        .find(|f| f.finding_id == "cli_docs::help_surface_truth_guard")
+        .expect("cli docs help truth finding");
     assert!(cli_finding.source_reference.contains("README.md"));
     assert!(cli_finding.source_reference.contains("frankenctl"));
+}
+
+#[test]
+fn script_measurement_truth_guard_references_measurement_scripts() {
+    let inventory = zscan::zero_placeholder_scan_inventory();
+    let finding = inventory
+        .findings
+        .iter()
+        .find(|f| f.finding_id == "cli_docs::script_measurement_placeholder_truth_guard")
+        .expect("script measurement truth finding");
+    assert_eq!(finding.status, ZeroPlaceholderStatus::Resolved);
+    assert_eq!(finding.owner_bead_id, "bd-gxsdx");
+    assert!(
+        finding
+            .source_reference
+            .contains("scripts/benchmarks/throughput_baselines.sh")
+    );
+    assert!(
+        finding
+            .source_reference
+            .contains("scripts/run_red_team_compromise_rate_metric_gate.sh")
+    );
+    assert!(
+        finding
+            .observed_behavior
+            .contains("no placeholder measurement rows"),
+        "{}",
+        finding.observed_behavior
+    );
+}
+
+#[test]
+fn measurement_scripts_reject_placeholders_and_bare_cargo() {
+    let throughput = read_repo_text("scripts/benchmarks/throughput_baselines.sh");
+    let red_team = read_repo_text("scripts/run_red_team_compromise_rate_metric_gate.sh");
+
+    assert!(
+        throughput.contains("placeholder ops/sec rows are forbidden"),
+        "throughput script should explicitly reject placeholder ops/sec rows"
+    );
+    assert!(
+        throughput.contains("measurement_status: \"blocked\""),
+        "throughput script should emit blocked runtime rows for missing measurements"
+    );
+    assert!(
+        throughput.contains("baseline_ops_per_second: 0"),
+        "blocked throughput rows should use zero, not positive placeholder baselines"
+    );
+    for line in throughput.lines().chain(red_team.lines()) {
+        let trimmed = line.trim();
+        if trimmed.contains("rch exec") {
+            continue;
+        }
+        for banned in [
+            "cargo build",
+            "cargo check",
+            "cargo clippy",
+            "cargo test",
+            "cargo run",
+        ] {
+            let contains_bare_command =
+                trimmed == banned || trimmed.contains(&format!("{banned} "));
+            assert!(
+                !contains_bare_command,
+                "measurement scripts must not run bare heavy Cargo commands: {trimmed}"
+            );
+        }
+        let compact = trimmed
+            .replace(['"', '\'', ' ', '\t'], "")
+            .to_ascii_lowercase();
+        assert!(
+            !compact.contains("is_placeholder_data:true")
+                && !compact.contains("is_placeholder_data=true"),
+            "measurement scripts must not contain literal placeholder metric rows: {trimmed}"
+        );
+    }
+
+    for banned in [
+        "falling back to placeholder data",
+        "LEGACY STUBS",
+        "ambient-token-exfiltration",
+        "awaiting_real_scenario_measurements",
+    ] {
+        assert!(
+            !red_team.contains(banned),
+            "red-team metric script should reject legacy placeholder marker: {banned}"
+        );
+    }
+    for required in [
+        "write_blocker_bundle",
+        "measurement_status: \"blocked\"",
+        "placeholder_scenario_count: 0",
+        "placeholder_scenario_rows_rejected",
+    ] {
+        assert!(
+            red_team.contains(required),
+            "red-team metric script missing fail-closed marker: {required}"
+        );
+    }
 }
 
 #[test]

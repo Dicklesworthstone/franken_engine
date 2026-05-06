@@ -491,7 +491,7 @@ jq \
 mv "$report_tmp" "$report_path"
 
 write_event "swarm_starvation_rescue_input_normalizer.completed" \
-  "$(jq -r '.decision + \" / readiness=\" + .summary.readiness' "$report_path")"
+  "$(jq -r '.decision + " / readiness=" + .summary.readiness' "$report_path")"
 
 {
   printf '# Swarm Starvation Rescue Input\n\n'

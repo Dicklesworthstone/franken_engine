@@ -1,0 +1,1491 @@
+{
+  "schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1",
+  "source_revision": "[SOURCE_REVISION]",
+  "matrix_schema_version": "franken-engine.swarm-starvation-rescue-scenario-matrix.v1",
+  "contract_json": "docs/swarm_starvation_rescue_scenario_matrix_contract_v1.json",
+  "matrix_fixture_json": "scripts/testdata/swarm_starvation_rescue/scenario_matrix.json",
+  "golden_policy": {
+    "scrub_report_id": true,
+    "scrub_hash_basis": true,
+    "scrub_artifact_paths": true,
+    "scrub_source_revision": true,
+    "rewrite_resolved_input_paths_to_placeholders": true
+  },
+  "required_scenario_classes": [
+    "healthy",
+    "brownout",
+    "ownership_contradiction",
+    "salvage_pinned",
+    "stale_telemetry",
+    "local_fallback"
+  ],
+  "scenario_count": 6,
+  "failure_count": 0,
+  "summary": {
+    "pass_case_count": 3,
+    "fail_closed_case_count": 3,
+    "mismatch_case_ids": [],
+    "scenario_classes": [
+      "brownout",
+      "healthy",
+      "local_fallback",
+      "ownership_contradiction",
+      "salvage_pinned",
+      "stale_telemetry"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "brownout_low_priority_starvation",
+      "scenario_class": "brownout",
+      "description": "Brownout plus low-priority starvation stays publishable but degrades rescue readiness.",
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "degraded",
+        "local_rch_fallback_detected": "false"
+      },
+      "actual": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "degraded",
+        "local_rch_fallback_detected": "false"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/brownout_low_priority_starvation/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "pass",
+        "summary": {
+          "readiness": "degraded",
+          "brownout_finding_count": 2,
+          "starvation_finding_count": 1,
+          "queue_brownout_finding_count": 1,
+          "safe_to_reopen_count": 1,
+          "contact_first_count": 0,
+          "lease_exchange_candidate_count": 1,
+          "salvage_promotion_candidate_count": 0,
+          "manual_review_count": 0,
+          "ownership_fail_closed_count": 0,
+          "capacity_overall_state": "degraded",
+          "capacity_confidence_band": "medium",
+          "admission_decision": "admit_narrow",
+          "budget_profile": "brownout_guardrail",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "fail_closed"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": false,
+          "contradictory_ownership_detected": false,
+          "lease_decision": "advisory",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-degraded",
+            "findings": [
+              {
+                "code": "queue_brownout_all_workers_busy",
+                "finding_id": "finding-queue-brownout",
+                "message": "All replayed commands were deferred.",
+                "severity": "error"
+              },
+              {
+                "code": "low_priority_starvation",
+                "finding_id": "finding-low-priority-starvation",
+                "message": "Low-priority work is starving behind focused heavy proofs.",
+                "severity": "warning"
+              }
+            ],
+            "policy_decision": "fail_closed",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 1,
+              "warning": 1
+            },
+            "summary": {
+              "command_count": 4,
+              "finding_count": 2
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [],
+            "generated_epoch_seconds": 2000,
+            "safe_to_reopen": [
+              "bd-stale"
+            ],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": false,
+                "evidence": [
+                  "no recent owner activity"
+                ],
+                "recommendation": "safe_to_reopen",
+                "safe_to_reopen": true
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "advisory",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 910000,
+                "ownership_status": "stale_reclaimable",
+                "request_id": "req-1",
+                "simulated_action": "simulate_lease_exchange"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 1,
+              "manual_review_count": 0,
+              "ownership_fail_closed_count": 0,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 0
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "brownout_guardrail",
+            "decision": "admit_narrow",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 1,
+              "admitted_narrow_count": 1,
+              "deferred_count": 1,
+              "focused_heavy_admissions": 1,
+              "requested_count": 2
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "medium",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "medium",
+                "risk_level": "high",
+                "state": "degraded",
+                "supporting_signals": {
+                  "failure_kind": "ssh_timeout_no_final_verdict",
+                  "recommended_next_action": "Keep proof remote-only and narrow scope."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "brownout",
+              "contact_first_count": 0,
+              "deferred_command_count": 1,
+              "degraded_categories": [
+                "rch_transport",
+                "coordination"
+              ],
+              "high_cost_command_count": 2,
+              "overall_state": "degraded",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case_id": "contradictory_ownership_fail_closed",
+      "scenario_class": "ownership_contradiction",
+      "description": "Contradictory ownership from the lease-exchange simulation must fail closed.",
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "false"
+      },
+      "actual": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "false"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/contradictory_ownership_fail_closed/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "fail_closed",
+        "summary": {
+          "readiness": "fail_closed",
+          "brownout_finding_count": 0,
+          "starvation_finding_count": 0,
+          "queue_brownout_finding_count": 0,
+          "safe_to_reopen_count": 0,
+          "contact_first_count": 1,
+          "lease_exchange_candidate_count": 0,
+          "salvage_promotion_candidate_count": 0,
+          "manual_review_count": 0,
+          "ownership_fail_closed_count": 1,
+          "capacity_overall_state": "normal",
+          "capacity_confidence_band": "high",
+          "admission_decision": "admit",
+          "budget_profile": "steady_state",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "pass"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": false,
+          "contradictory_ownership_detected": true,
+          "lease_decision": "fail_closed",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [
+          {
+            "kind": "contradictory_ownership",
+            "source": "lease_exchange_salvage_simulation_json",
+            "detail": "lease simulation reports ownership fail-closed state"
+          }
+        ],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-ownership",
+            "findings": [],
+            "policy_decision": "pass",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 0,
+              "warning": 0
+            },
+            "summary": {
+              "command_count": 2,
+              "finding_count": 0
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [
+              "bd-stale"
+            ],
+            "generated_epoch_seconds": 2000,
+            "safe_to_reopen": [],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": true,
+                "evidence": [
+                  "recent owner thread"
+                ],
+                "recommendation": "contact_first",
+                "safe_to_reopen": false
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "fail_closed",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 0,
+                "ownership_status": "contradictory",
+                "request_id": "req-1",
+                "simulated_action": "fail_closed_missing_ownership"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 0,
+              "manual_review_count": 0,
+              "ownership_fail_closed_count": 1,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 0
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "steady_state",
+            "decision": "admit",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 1,
+              "admitted_narrow_count": 0,
+              "deferred_count": 0,
+              "focused_heavy_admissions": 1,
+              "requested_count": 1
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "high",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "high",
+                "risk_level": "low",
+                "state": "normal",
+                "supporting_signals": {
+                  "failure_kind": "none",
+                  "recommended_next_action": "Keep proof remote-only and narrow scope."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "normal",
+              "contact_first_count": 1,
+              "deferred_command_count": 0,
+              "degraded_categories": [],
+              "high_cost_command_count": 0,
+              "overall_state": "normal",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case_id": "healthy_advisory_ready",
+      "scenario_class": "healthy",
+      "description": "All required rescue inputs are fresh and advisory-only, so the normalized input surface stays ready.",
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "ready",
+        "local_rch_fallback_detected": "false"
+      },
+      "actual": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "ready",
+        "local_rch_fallback_detected": "false"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/healthy_advisory_ready/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "pass",
+        "summary": {
+          "readiness": "ready",
+          "brownout_finding_count": 0,
+          "starvation_finding_count": 0,
+          "queue_brownout_finding_count": 0,
+          "safe_to_reopen_count": 1,
+          "contact_first_count": 0,
+          "lease_exchange_candidate_count": 1,
+          "salvage_promotion_candidate_count": 0,
+          "manual_review_count": 0,
+          "ownership_fail_closed_count": 0,
+          "capacity_overall_state": "normal",
+          "capacity_confidence_band": "high",
+          "admission_decision": "admit",
+          "budget_profile": "steady_state",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "pass"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": false,
+          "contradictory_ownership_detected": false,
+          "lease_decision": "advisory",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-healthy",
+            "findings": [],
+            "policy_decision": "pass",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 0,
+              "warning": 0
+            },
+            "summary": {
+              "command_count": 4,
+              "finding_count": 0
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [],
+            "generated_epoch_seconds": 2000,
+            "safe_to_reopen": [
+              "bd-stale"
+            ],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": false,
+                "evidence": [
+                  "no recent owner activity"
+                ],
+                "recommendation": "safe_to_reopen",
+                "safe_to_reopen": true
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "advisory",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 910000,
+                "ownership_status": "stale_reclaimable",
+                "request_id": "req-1",
+                "simulated_action": "simulate_lease_exchange"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 1,
+              "manual_review_count": 0,
+              "ownership_fail_closed_count": 0,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 0
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "steady_state",
+            "decision": "admit",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 2,
+              "admitted_narrow_count": 0,
+              "deferred_count": 0,
+              "focused_heavy_admissions": 1,
+              "requested_count": 2
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "high",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "high",
+                "risk_level": "low",
+                "state": "normal",
+                "supporting_signals": {
+                  "failure_kind": "none",
+                  "recommended_next_action": "Keep proof remote-only and narrow scope."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "normal",
+              "contact_first_count": 0,
+              "deferred_command_count": 0,
+              "degraded_categories": [],
+              "high_cost_command_count": 0,
+              "overall_state": "normal",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_rejected",
+      "scenario_class": "local_fallback",
+      "description": "Capacity forecasts that still pass while admitting local fallback must fail closed.",
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "true"
+      },
+      "actual": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "true"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/local_fallback_rejected/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "fail_closed",
+        "summary": {
+          "readiness": "fail_closed",
+          "brownout_finding_count": 0,
+          "starvation_finding_count": 0,
+          "queue_brownout_finding_count": 0,
+          "safe_to_reopen_count": 1,
+          "contact_first_count": 0,
+          "lease_exchange_candidate_count": 1,
+          "salvage_promotion_candidate_count": 0,
+          "manual_review_count": 0,
+          "ownership_fail_closed_count": 0,
+          "capacity_overall_state": "degraded",
+          "capacity_confidence_band": "high",
+          "admission_decision": "admit",
+          "budget_profile": "steady_state",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "pass"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": true,
+          "contradictory_ownership_detected": false,
+          "lease_decision": "advisory",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [
+          {
+            "kind": "local_rch_fallback_admitted",
+            "source": "capacity_forecast_json",
+            "detail": "capacity forecast passed while rch transport signals still mention local fallback"
+          }
+        ],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-fallback",
+            "findings": [],
+            "policy_decision": "pass",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 0,
+              "warning": 0
+            },
+            "summary": {
+              "command_count": 2,
+              "finding_count": 0
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [],
+            "generated_epoch_seconds": 2000,
+            "safe_to_reopen": [
+              "bd-stale"
+            ],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": false,
+                "evidence": [
+                  "no recent owner activity"
+                ],
+                "recommendation": "safe_to_reopen",
+                "safe_to_reopen": true
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "advisory",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 910000,
+                "ownership_status": "stale_reclaimable",
+                "request_id": "req-1",
+                "simulated_action": "simulate_lease_exchange"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 1,
+              "manual_review_count": 0,
+              "ownership_fail_closed_count": 0,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 0
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "steady_state",
+            "decision": "admit",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 1,
+              "admitted_narrow_count": 0,
+              "deferred_count": 0,
+              "focused_heavy_admissions": 1,
+              "requested_count": 1
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "high",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "high",
+                "risk_level": "high",
+                "state": "degraded",
+                "supporting_signals": {
+                  "failure_kind": "local_fallback_admitted",
+                  "recommended_next_action": "Do not accept local fallback as remote proof truth."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "normal",
+              "contact_first_count": 0,
+              "deferred_command_count": 0,
+              "degraded_categories": [
+                "rch_transport"
+              ],
+              "high_cost_command_count": 0,
+              "overall_state": "degraded",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case_id": "salvage_pinned_manual_review",
+      "scenario_class": "salvage_pinned",
+      "description": "Salvage-pinned manual review remains publishable but degraded so downstream rescue planning preserves evidence.",
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "degraded",
+        "local_rch_fallback_detected": "false"
+      },
+      "actual": {
+        "exit_code": 0,
+        "decision": "pass",
+        "readiness": "degraded",
+        "local_rch_fallback_detected": "false"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/salvage_pinned_manual_review/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "pass",
+        "summary": {
+          "readiness": "degraded",
+          "brownout_finding_count": 0,
+          "starvation_finding_count": 0,
+          "queue_brownout_finding_count": 0,
+          "safe_to_reopen_count": 0,
+          "contact_first_count": 1,
+          "lease_exchange_candidate_count": 0,
+          "salvage_promotion_candidate_count": 1,
+          "manual_review_count": 1,
+          "ownership_fail_closed_count": 0,
+          "capacity_overall_state": "normal",
+          "capacity_confidence_band": "high",
+          "admission_decision": "admit",
+          "budget_profile": "steady_state",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "pass"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": false,
+          "contradictory_ownership_detected": false,
+          "lease_decision": "manual_review_required",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-salvage",
+            "findings": [],
+            "policy_decision": "pass",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 0,
+              "warning": 0
+            },
+            "summary": {
+              "command_count": 2,
+              "finding_count": 0
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [
+              "bd-stale"
+            ],
+            "generated_epoch_seconds": 2000,
+            "safe_to_reopen": [],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": true,
+                "evidence": [
+                  "salvage pin still active"
+                ],
+                "recommendation": "contact_first",
+                "safe_to_reopen": false
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "manual_review_required",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 800000,
+                "ownership_status": "stale_reclaimable",
+                "request_id": "req-1",
+                "simulated_action": "preserve_pinned_evidence"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 0,
+              "manual_review_count": 1,
+              "ownership_fail_closed_count": 0,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 1
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "steady_state",
+            "decision": "admit",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 1,
+              "admitted_narrow_count": 0,
+              "deferred_count": 0,
+              "focused_heavy_admissions": 1,
+              "requested_count": 1
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "high",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "high",
+                "risk_level": "low",
+                "state": "normal",
+                "supporting_signals": {
+                  "failure_kind": "none",
+                  "recommended_next_action": "Keep proof remote-only and narrow scope."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "normal",
+              "contact_first_count": 1,
+              "deferred_command_count": 0,
+              "degraded_categories": [],
+              "high_cost_command_count": 0,
+              "overall_state": "normal",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stale_telemetry_fail_closed",
+      "scenario_class": "stale_telemetry",
+      "description": "Stale timestamped rescue inputs must fail closed.",
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "false"
+      },
+      "actual": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "readiness": "fail_closed",
+        "local_rch_fallback_detected": "false"
+      },
+      "matched_expected": true,
+      "artifact_paths": {
+        "swarm_starvation_rescue_input_json": "cases/stale_telemetry_fail_closed/swarm_starvation_rescue_input.json"
+      },
+      "starvation_rescue_input": {
+        "schema_version": "franken-engine.swarm-starvation-rescue-input.v1",
+        "source_revision": "[SOURCE_REVISION]",
+        "generated_epoch_seconds": 2000,
+        "stale_after_seconds": 300,
+        "decision": "fail_closed",
+        "summary": {
+          "readiness": "fail_closed",
+          "brownout_finding_count": 0,
+          "starvation_finding_count": 0,
+          "queue_brownout_finding_count": 0,
+          "safe_to_reopen_count": 1,
+          "contact_first_count": 0,
+          "lease_exchange_candidate_count": 1,
+          "salvage_promotion_candidate_count": 0,
+          "manual_review_count": 0,
+          "ownership_fail_closed_count": 0,
+          "capacity_overall_state": "normal",
+          "capacity_confidence_band": "high",
+          "admission_decision": "admit",
+          "budget_profile": "steady_state",
+          "slo_confidence_class": "high",
+          "brownout_policy_decision": "pass"
+        },
+        "assumptions": [
+          "This normalizer is replay-only and does not mutate beads, reservations, or worker state.",
+          "Brownout and admission-plan decisions are preserved as rescue signals rather than treated as automatic blockers by themselves.",
+          "Inputs without replayable timestamps are normalized but cannot be age-validated until their upstream surfaces publish epochs."
+        ],
+        "derived_truth": {
+          "local_rch_fallback_detected": false,
+          "contradictory_ownership_detected": false,
+          "lease_decision": "advisory",
+          "capacity_decision": "pass",
+          "slo_decision": "pass",
+          "timestampless_inputs": [
+            "brownout_report_json",
+            "lease_exchange_salvage_simulation_json",
+            "admission_budget_plan_json"
+          ]
+        },
+        "fail_closed_reasons": [
+          {
+            "kind": "stale_required_input",
+            "source": "stale_lock_recommendations_json",
+            "detail": "stale lock recommendations age 1900s exceeds 300s"
+          }
+        ],
+        "resolved_inputs": [
+          {
+            "input": "brownout_report_json",
+            "path": "[INPUT:brownout_report_json]",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "stale_lock_recommendations_json",
+            "path": "[INPUT:stale_lock_recommendations_json]",
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "generated_epoch_seconds": 100
+          },
+          {
+            "input": "lease_exchange_salvage_simulation_json",
+            "path": "[INPUT:lease_exchange_salvage_simulation_json]",
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "admission_budget_plan_json",
+            "path": "[INPUT:admission_budget_plan_json]",
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "generated_epoch_seconds": null
+          },
+          {
+            "input": "capacity_forecast_json",
+            "path": "[INPUT:capacity_forecast_json]",
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "generated_epoch_seconds": 2000
+          },
+          {
+            "input": "slo_threshold_receipt_json",
+            "path": "[INPUT:slo_threshold_receipt_json]",
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "generated_epoch_seconds": 2000
+          }
+        ],
+        "normalized_inputs": {
+          "brownout_report": {
+            "artifact_paths": {
+              "brownout_report_json": "/fixture/brownout.json"
+            },
+            "brownout_id": "brownout-stale",
+            "findings": [],
+            "policy_decision": "pass",
+            "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+            "severity_counts": {
+              "error": 0,
+              "warning": 0
+            },
+            "summary": {
+              "command_count": 2,
+              "finding_count": 0
+            }
+          },
+          "stale_lock_recommendations": {
+            "artifact_paths": {
+              "stale_lock_recommendations_json": "/fixture/stale.json"
+            },
+            "contact_first": [],
+            "generated_epoch_seconds": 100,
+            "safe_to_reopen": [
+              "bd-stale"
+            ],
+            "schema_version": "franken-engine.stale-lock-recommendations.v1",
+            "stale_lock_recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "contact_first": false,
+                "evidence": [
+                  "no recent owner activity"
+                ],
+                "recommendation": "safe_to_reopen",
+                "safe_to_reopen": true
+              }
+            ]
+          },
+          "lease_exchange_salvage_simulation": {
+            "artifact_paths": {
+              "lease_exchange_cancellation_salvage_simulation_json": "/fixture/lease.json"
+            },
+            "decision": "advisory",
+            "recommendations": [
+              {
+                "bead_id": "bd-stale",
+                "overall_score_millionths": 910000,
+                "ownership_status": "stale_reclaimable",
+                "request_id": "req-1",
+                "simulated_action": "simulate_lease_exchange"
+              }
+            ],
+            "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+            "summary": {
+              "lease_exchange_candidate_count": 1,
+              "manual_review_count": 0,
+              "ownership_fail_closed_count": 0,
+              "request_count": 1,
+              "salvage_promotion_candidate_count": 0
+            }
+          },
+          "admission_budget_plan": {
+            "artifact_paths": {
+              "swarm_admission_budget_plan_json": "/fixture/admission.json"
+            },
+            "budget_profile": "steady_state",
+            "decision": "admit",
+            "recommendations": [],
+            "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+            "summary": {
+              "admitted_count": 1,
+              "admitted_narrow_count": 0,
+              "deferred_count": 0,
+              "focused_heavy_admissions": 1,
+              "requested_count": 1
+            }
+          },
+          "capacity_forecast": {
+            "artifact_paths": {
+              "swarm_capacity_forecast_json": "/fixture/capacity.json"
+            },
+            "confidence_band": "high",
+            "decision": "pass",
+            "fail_closed_reasons": [],
+            "forecasts": {
+              "rch_transport": {
+                "confidence_band": "high",
+                "risk_level": "low",
+                "state": "normal",
+                "supporting_signals": {
+                  "failure_kind": "none",
+                  "recommended_next_action": "Keep proof remote-only and narrow scope."
+                }
+              }
+            },
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-capacity-forecast.v1",
+            "stale_after_seconds": 1800,
+            "summary": {
+              "blocked_categories": [],
+              "brownout_state": "normal",
+              "contact_first_count": 0,
+              "deferred_command_count": 0,
+              "degraded_categories": [],
+              "high_cost_command_count": 0,
+              "overall_state": "normal",
+              "snapshot_age_seconds": 0
+            }
+          },
+          "slo_threshold_receipt": {
+            "artifact_paths": {
+              "swarm_slo_threshold_receipt_json": "/fixture/slo.json"
+            },
+            "confidence_class": "high",
+            "decision": "pass",
+            "generated_epoch_seconds": 2000,
+            "schema_version": "franken-engine.swarm-slo-threshold-receipt.v1",
+            "summary": {
+              "accepted_threshold_count": 3,
+              "downgraded_threshold_count": 0,
+              "missing_scenario_classes": [],
+              "rejected_threshold_count": 0,
+              "reviewed_scenario_count": 5
+            },
+            "thresholds": {
+              "starvation_brownout_guardrails": {
+                "reason": "fixture",
+                "status": "accepted"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

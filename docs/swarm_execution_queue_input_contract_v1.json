@@ -1,0 +1,138 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-input-normalizer-contract.v1",
+  "bead_id": "bd-lb6j0",
+  "parent_bead_id": "bd-g347f",
+  "depends_on": [
+    "bd-1wrlq"
+  ],
+  "script": "scripts/swarm_execution_queue_input_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_INPUT_NORMALIZER.md",
+  "parent_contract": "docs/swarm_execution_queue_contract_v1.json",
+  "input_schema_version": "franken-engine.swarm-execution-queue-input.v1",
+  "normalizer_schema_version": "franken-engine.swarm-execution-queue-input-normalizer.v1",
+  "event_schema_version": "franken-engine.swarm-execution-queue-input.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "br_ready_json",
+      "argument": "--br-ready-json",
+      "required": true,
+      "accepted_shapes": [
+        "array",
+        "object.issues_array"
+      ],
+      "malformed_decision": "fail_closed"
+    },
+    {
+      "source_id": "br_list_json",
+      "argument": "--br-list-json",
+      "required": true,
+      "accepted_shapes": [
+        "array",
+        "object.issues_array"
+      ],
+      "malformed_decision": "fail_closed"
+    },
+    {
+      "source_id": "bv_actionable_plan_json",
+      "argument": "--bv-actionable-plan-json",
+      "required": true,
+      "accepted_shapes": [
+        "object.plan.tracks_array"
+      ],
+      "malformed_decision": "fail_closed"
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "agent_mail_activity_json",
+      "argument": "--agent-mail-activity-json",
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "file_reservations_json",
+      "argument": "--file-reservations-json",
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "stale_lock_recommendations_json",
+      "argument": "--stale-lock-recommendations-json",
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "proof_transport_health_json",
+      "argument": "--proof-transport-health-json",
+      "missing_decision": "degraded"
+    }
+  ],
+  "artifact_paths": {
+    "normalized_input_json": "normalized_input.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_task_fields": [
+    "task_id",
+    "title",
+    "status",
+    "priority",
+    "assignee",
+    "depends_on",
+    "dependents",
+    "completed",
+    "open_blocker_count",
+    "owner_freshness.state",
+    "owner_freshness.last_active_age_seconds",
+    "reservation_pressure.state",
+    "reservation_pressure.active_reservation_count",
+    "proof_transport.state",
+    "proof_transport.local_fallback_detected",
+    "scores.impact_millionths",
+    "scores.confidence_millionths",
+    "scores.reuse_millionths",
+    "scores.effort_millionths",
+    "scores.friction_millionths",
+    "fallback_trigger",
+    "first_action"
+  ],
+  "fail_closed_rules": [
+    "empty task graphs fail closed",
+    "unknown dependencies fail closed",
+    "dependency cycles fail closed",
+    "malformed required br or bv shapes fail closed",
+    "queue inputs without first_action fail closed",
+    "local-rch fallback cannot be promoted as successful proof health"
+  ],
+  "degraded_rules": [
+    "missing optional Agent Mail activity degrades owner freshness evidence",
+    "missing optional reservation snapshots degrade reservation pressure evidence",
+    "missing optional stale-lock recommendations degrade stale-owner handling",
+    "missing optional proof-transport health degrades proof state evidence",
+    "stale owners require contact_or_reopen_required first actions",
+    "proof brownout requires conservative-mode fallback actions"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "operator_wording_required": "advisory-only"
+  },
+  "selftest_scenarios": [
+    "healthy",
+    "stale_owner",
+    "proof_brownout",
+    "blocked_parent",
+    "bad_shape",
+    "local_fallback",
+    "cycle"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_input_normalizer.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh",
+    "jq empty docs/swarm_execution_queue_input_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_input_normalizer_smoke.sh selftest"
+  ]
+}

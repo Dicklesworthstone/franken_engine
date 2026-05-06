@@ -525,7 +525,10 @@
         "checked_paths",
         "required_runbook_topics",
         "contract_surface",
-        "heavy_cargo_command_shape"
+        "heavy_cargo_command_shape",
+        "admission_artifact_inputs",
+        "br_db_degraded_fallback",
+        "staged_ownership_guard"
       ]
     }
   ]

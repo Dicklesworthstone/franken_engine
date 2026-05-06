@@ -18,15 +18,26 @@ required_paths=(
   "docs/swarm_predictive_dashboard_contract_v1.json"
   "docs/swarm_validation_control_plane_contract_v1.json"
   "scripts/e2e/proof_freshness_decay_gate_smoke.sh"
+  "scripts/e2e/proof_reuse_cache_planner_smoke.sh"
   "scripts/e2e/rch_incident_packet_gate_smoke.sh"
+  "scripts/e2e/build_storm_qos_batch_planner_smoke.sh"
+  "scripts/e2e/staged_ownership_contamination_guard_smoke.sh"
+  "scripts/e2e/stale_lock_stalled_bead_recommender_smoke.sh"
+  "scripts/e2e/swarm_admission_drill.sh"
   "scripts/e2e/swarm_operator_status_report_smoke.sh"
   "scripts/e2e/swarm_predictive_orchestration_e2e.sh"
+  "scripts/e2e/swarm_resource_lease_planner_smoke.sh"
   "scripts/e2e/swarm_validation_control_plane_contract_smoke.sh"
   "scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
   "scripts/e2e/swarm_validation_control_plane_e2e.sh"
+  "scripts/build_storm_qos_batch_planner.sh"
   "scripts/proof_freshness_decay_gate.sh"
+  "scripts/proof_reuse_cache_planner.sh"
   "scripts/rch_incident_packet_gate.sh"
+  "scripts/staged_ownership_contamination_guard.sh"
+  "scripts/stale_lock_stalled_bead_recommender.sh"
   "scripts/swarm_validation_planner.sh"
+  "scripts/swarm_resource_lease_planner.sh"
   "scripts/swarm_resource_governor.sh"
   "scripts/swarm_operator_status_report.sh"
 )
@@ -38,12 +49,23 @@ required_runbook_patterns=(
   "file_reservation_paths"
   "fetch_inbox"
   "./scripts/swarm_validation_planner.sh"
+  "./scripts/swarm_resource_lease_planner.sh"
   "./scripts/swarm_resource_governor.sh"
+  "./scripts/proof_reuse_cache_planner.sh"
+  "./scripts/build_storm_qos_batch_planner.sh"
+  "./scripts/stale_lock_stalled_bead_recommender.sh"
+  "./scripts/staged_ownership_contamination_guard.sh"
   "./scripts/swarm_operator_status_report.sh"
   "./scripts/e2e/proof_freshness_decay_gate_smoke.sh"
+  "./scripts/e2e/proof_reuse_cache_planner_smoke.sh"
   "./scripts/e2e/rch_incident_packet_gate_smoke.sh"
+  "./scripts/e2e/build_storm_qos_batch_planner_smoke.sh"
+  "./scripts/e2e/staged_ownership_contamination_guard_smoke.sh"
+  "./scripts/e2e/stale_lock_stalled_bead_recommender_smoke.sh"
+  "./scripts/e2e/swarm_admission_drill.sh"
   "./scripts/e2e/swarm_operator_status_report_smoke.sh"
   "./scripts/e2e/swarm_predictive_orchestration_e2e.sh"
+  "./scripts/e2e/swarm_resource_lease_planner_smoke.sh"
   "./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh"
   "./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh"
   "./scripts/e2e/swarm_validation_control_plane_e2e.sh"
@@ -51,6 +73,22 @@ required_runbook_patterns=(
   "--collision-receipt-json"
   "--proof-freshness-json"
   "--rch-incident-packet-json"
+  "--resource-lease-plan-json"
+  "--proof-cache-plan-json"
+  "--qos-batch-plan-json"
+  "--stale-lock-recommendations-json"
+  "--staged-ownership-report-json"
+  "proof_cache_plan.json"
+  "build_storm_batch_plan.json"
+  "stale_lock_recommendations.json"
+  "staged_ownership_report.json"
+  "safe_to_reopen"
+  "contact_first"
+  "br doctor"
+  "br sync --flush-only"
+  "staged ownership"
+  "send_message"
+  "release_file_reservations"
   "franken-engine.swarm-predictive-dashboard.v1"
   "docs/swarm_predictive_dashboard_contract_v1.json"
   "/dp/frankentui"
@@ -150,6 +188,9 @@ validate_contract_surface() {
       and .schema_version == "franken-engine.swarm-validation-docs-truth-gate.v1"
       and (.required_fields | index("checked_paths") != null)
       and (.required_fields | index("heavy_cargo_command_shape") != null)
+      and (.required_fields | index("admission_artifact_inputs") != null)
+      and (.required_fields | index("br_db_degraded_fallback") != null)
+      and (.required_fields | index("staged_ownership_guard") != null)
     )
   ' "$contract_path" >/dev/null; then
     record_failure "contract missing docs truth gate output artifact"
@@ -197,13 +238,24 @@ validate_predictive_contract_surface() {
     and (.input_snapshot_contracts | index("franken-engine.swarm-validation-collision-receipt.v1") != null)
     and (.input_snapshot_contracts | index("franken-engine.proof-freshness-decay-report.v1") != null)
     and (.input_snapshot_contracts | index("franken-engine.rch-incident-packet.v1") != null)
+    and (.input_snapshot_contracts | index("franken-engine.swarm-resource-lease-plan.v1") != null)
+    and (.input_snapshot_contracts | index("franken-engine.proof-reuse-cache-plan.v1") != null)
+    and (.input_snapshot_contracts | index("franken-engine.build-storm-batch-plan.v1") != null)
+    and (.input_snapshot_contracts | index("franken-engine.stale-lock-recommendations.v1") != null)
+    and (.input_snapshot_contracts | index("franken-engine.staged-ownership-report.v1") != null)
     and (.required_dashboard_fields | index("predictive_dashboard.predictive_cost.high_risk_commands") != null)
     and (.required_dashboard_fields | index("predictive_dashboard.collision_risk.conflicting_agents") != null)
     and (.required_dashboard_fields | index("predictive_dashboard.proof_freshness.reusable") != null)
     and (.required_dashboard_fields | index("predictive_dashboard.rch_incidents.incidents") != null)
+    and (.required_dashboard_fields | index("predictive_dashboard.resource_leases.lease_decision") != null)
+    and (.required_dashboard_fields | index("predictive_dashboard.proof_cache.proof_cache_decision") != null)
+    and (.required_dashboard_fields | index("predictive_dashboard.qos_batches.batch_decision") != null)
+    and (.required_dashboard_fields | index("predictive_dashboard.stale_lock_recommendations.actionable_commands") != null)
+    and (.required_dashboard_fields | index("predictive_dashboard.staged_contamination.decision") != null)
     and (.golden_fixture_cases | index("high_cost") != null)
     and (.golden_fixture_cases | index("collision_risk") != null)
     and (.golden_fixture_cases | index("stale_proof") != null)
+    and (.golden_fixture_cases | index("overloaded") != null)
   ' "$predictive_contract_path" >/dev/null; then
     record_failure "predictive dashboard contract omits predictive inputs, fields, or fixture cases"
   else
@@ -273,11 +325,15 @@ run_selftest() {
   local bad_runbook
   local bad_contract
   local bad_predictive_contract
+  local bad_predictive_sections
+  local current_predictive_contract
 
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/swarm-validation-docs-truth.XXXXXX")"
   bad_runbook="${tmp_dir}/bad-runbook.md"
   bad_contract="${tmp_dir}/bad-contract.json"
   bad_predictive_contract="${tmp_dir}/bad-predictive-contract.json"
+  bad_predictive_sections="${tmp_dir}/bad-predictive-sections.json"
+  current_predictive_contract="$predictive_contract_path"
 
   cp "$runbook_path" "$bad_runbook"
   printf "\n%s\n%s\n%s\n" '```bash' 'cargo test -p frankenengine-engine --lib' '```' >>"$bad_runbook"
@@ -299,6 +355,14 @@ run_selftest() {
     record_failure "selftest expected shipped predictive renderer rejection"
   else
     record_pass "selftest rejects shipped predictive renderer claim"
+  fi
+
+  jq '(.input_snapshot_contracts |= map(select(. != "franken-engine.swarm-resource-lease-plan.v1"))) | (.required_dashboard_fields |= map(select(. != "predictive_dashboard.resource_leases.lease_decision")))' \
+    "$current_predictive_contract" >"$bad_predictive_sections"
+  if (predictive_contract_path="$bad_predictive_sections"; validate_all) >/dev/null 2>&1; then
+    record_failure "selftest expected missing admission dashboard section rejection"
+  else
+    record_pass "selftest rejects missing admission dashboard section"
   fi
 }
 

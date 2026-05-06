@@ -22,10 +22,21 @@ Implementation surfaces:
 - `scripts/e2e/swarm_validation_control_plane_contract_smoke.sh`
 - `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh`
 - `scripts/e2e/swarm_validation_control_plane_e2e.sh`
+- `scripts/e2e/build_storm_qos_batch_planner_smoke.sh`
 - `scripts/e2e/swarm_operator_status_report_smoke.sh`
 - `scripts/e2e/swarm_predictive_orchestration_e2e.sh`
+- `scripts/e2e/swarm_admission_drill.sh`
+- `scripts/e2e/swarm_resource_lease_planner_smoke.sh`
+- `scripts/e2e/proof_reuse_cache_planner_smoke.sh`
+- `scripts/e2e/staged_ownership_contamination_guard_smoke.sh`
+- `scripts/e2e/stale_lock_stalled_bead_recommender_smoke.sh`
+- `scripts/build_storm_qos_batch_planner.sh`
 - `scripts/proof_freshness_decay_gate.sh`
+- `scripts/proof_reuse_cache_planner.sh`
 - `scripts/rch_incident_packet_gate.sh`
+- `scripts/staged_ownership_contamination_guard.sh`
+- `scripts/stale_lock_stalled_bead_recommender.sh`
+- `scripts/swarm_resource_lease_planner.sh`
 - `scripts/swarm_validation_planner.sh`
 - `scripts/swarm_resource_governor.sh`
 - `scripts/swarm_operator_status_report.sh`
@@ -41,9 +52,16 @@ remote execution routing, or artifact freshness. Heavy Rust validation uses
 ```bash
 br ready --json --no-auto-import --no-auto-flush
 br list --status=in_progress --json --no-auto-import --no-auto-flush
+br doctor
 bv --recipe actionable --robot-plan
 git status --short
 ```
+
+If `br doctor` reports DB degradation, do not infer that the queue is empty.
+Use `.beads/issues.jsonl`, the current bead assignee, and Agent Mail messages as
+degraded fallback evidence, then report the exact `br doctor` failure in the
+operator status update. Resume normal closeout only after `br sync --flush-only`
+or an explicit tracker repair succeeds.
 
 2. Capture coordination snapshots before editing:
 
@@ -111,15 +129,43 @@ cat /tmp/franken-engine-swarm-resource-decision/decision.json
 If the decision is `defer` or `fail_closed`, do not start a heavy proof. Follow
 the remediation in the decision artifact and publish the blocker.
 
-6. Execute only admitted proof commands. Shell and docs gates can run directly:
+6. Produce the SWARM-CTRL-III admission artifacts that feed operator status:
+
+```bash
+./scripts/swarm_resource_lease_planner.sh --agent-id ScarletOwl --bead-id bd-mkz2h --requested-command "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_mkz2h cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e" --target-dir /tmp/rch_target_franken_engine_bd_mkz2h --reservation-snapshot-json /tmp/swarm-reservations.json --br-snapshot-json /tmp/swarm-in-progress.json --rch-workers-json /tmp/swarm-rch-workers.json --dirty-files-json /tmp/swarm-dirty-files.json --output-dir /tmp/franken-engine-swarm-resource-lease
+./scripts/proof_reuse_cache_planner.sh --proof-index-json /tmp/franken-engine-proof-index/proof_index.json --freshness-report /tmp/franken-engine-proof-freshness/proof_freshness_report.json --expected-source-revision smoke-rev --changed-path docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md --output-dir /tmp/franken-engine-proof-reuse-cache
+./scripts/build_storm_qos_batch_planner.sh --pending-requests-json /tmp/swarm-pending-validation-requests.json --resource-lease-plans-json /tmp/swarm-resource-lease-plans.json --proof-cost-history-json /tmp/swarm-proof-cost-history.json --rch-workers-json /tmp/swarm-rch-workers.json --output-dir /tmp/franken-engine-build-storm-qos
+./scripts/stale_lock_stalled_bead_recommender.sh --in-progress-json /tmp/swarm-in-progress.json --agent-profiles-json /tmp/swarm-agent-profiles.json --thread-timestamps-json /tmp/swarm-thread-timestamps.json --file-reservations-json /tmp/swarm-reservations.json --git-activity-json /tmp/swarm-git-activity.json --output-dir /tmp/franken-engine-stale-lock
+```
+
+Inspect these outputs before admitting more work:
+
+```bash
+cat /tmp/franken-engine-swarm-resource-lease/resource_lease_plan.json
+cat /tmp/franken-engine-proof-reuse-cache/proof_cache_plan.json
+cat /tmp/franken-engine-build-storm-qos/build_storm_batch_plan.json
+cat /tmp/franken-engine-stale-lock/stale_lock_recommendations.json
+```
+
+If `safe_to_reopen` is non-empty, reopen only the listed bead IDs with the
+suggested commands. If `contact_first` is non-empty, send Agent Mail to the
+listed owner before changing tracker ownership.
+
+7. Execute only admitted proof commands. Shell and docs gates can run directly:
 
 ```bash
 ./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check
 ./scripts/e2e/swarm_validation_control_plane_e2e.sh check
 ./scripts/e2e/proof_freshness_decay_gate_smoke.sh check
+./scripts/e2e/proof_reuse_cache_planner_smoke.sh check
 ./scripts/e2e/rch_incident_packet_gate_smoke.sh check
+./scripts/e2e/build_storm_qos_batch_planner_smoke.sh check
+./scripts/e2e/swarm_resource_lease_planner_smoke.sh check
+./scripts/e2e/stale_lock_stalled_bead_recommender_smoke.sh check
+./scripts/e2e/staged_ownership_contamination_guard_smoke.sh check
 ./scripts/e2e/swarm_operator_status_report_smoke.sh check
+./scripts/e2e/swarm_admission_drill.sh check
 ```
 
 Heavy Rust proof commands must keep this shape:
@@ -128,7 +174,7 @@ Heavy Rust proof commands must keep this shape:
 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_swarm_validation PROOF_ARTIFACT_SOURCE_REVISION=smoke-rev cargo test -p frankenengine-engine --test swarm_validation_control_plane_e2e -- --nocapture
 ```
 
-7. Inspect proof artifacts before reporting success:
+8. Inspect proof artifacts before reporting success:
 
 ```bash
 cat artifacts/swarm_validation_control_plane_e2e/<run-id>/wrapper/commands.txt
@@ -139,12 +185,35 @@ cat artifacts/swarm_validation_control_plane_e2e/<run-id>/wrapper/report.json
 If the newest artifact bundle is stale, incomplete, or from another source
 revision, mark the proof stale and refresh it before relying on it.
 
-8. Publish operator status from explicit snapshots:
+9. Guard the staged index before committing or closing the bead:
+
+```bash
+git diff --cached --name-status
+./scripts/staged_ownership_contamination_guard.sh --agent-id ScarletOwl --bead-id bd-mkz2h --reservation-snapshot-json /tmp/swarm-reservations.json --allowed-path docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md --allowed-path scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh --allowed-path docs/swarm_validation_control_plane_contract_v1.json --output-dir /tmp/franken-engine-staged-ownership
+cat /tmp/franken-engine-staged-ownership/staged_ownership_report.json
+```
+
+If the staged ownership report is not `pass`, unstage the offending paths or
+coordinate with the listed reservation holder. Do not commit a `pass_degraded`
+closeout unless the degraded evidence is explicitly called out in Agent Mail.
+
+10. Publish operator status from explicit snapshots:
 
 ```bash
 ./scripts/swarm_operator_status_report.sh --output-dir /tmp/franken-engine-swarm-operator-status --source-revision smoke-rev --agent-mail-status ok --rch-status ok --proof-index-status ok --validation-plan-json /tmp/franken-engine-swarm-validation-plan/plan.json --collision-receipt-json /tmp/franken-engine-swarm-validation-plan/collision_receipt.json --proof-freshness-json /tmp/franken-engine-proof-freshness/proof_freshness_report.json --rch-incident-packet-json /tmp/franken-engine-rch-incident/incident_packet.json --resource-lease-plan-json /tmp/franken-engine-swarm-resource-lease/resource_lease_plan.json --proof-cache-plan-json /tmp/franken-engine-proof-reuse-cache/proof_cache_plan.json --qos-batch-plan-json /tmp/franken-engine-build-storm-qos/build_storm_batch_plan.json --stale-lock-recommendations-json /tmp/franken-engine-stale-lock/stale_lock_recommendations.json --staged-ownership-report-json /tmp/franken-engine-staged-ownership/staged_ownership_report.json
 cat /tmp/franken-engine-swarm-operator-status/status.json
 cat /tmp/franken-engine-swarm-operator-status/report.md
+```
+
+11. Commit, close, sync, and notify:
+
+```bash
+git diff --cached --check
+git commit -m "docs(swarm): publish admission-control runbook"
+br close bd-mkz2h --reason "Published admission-control runbook and docs truth gate"
+br sync --flush-only
+send_message(thread_id=bd-mkz2h, subject="[bd-mkz2h] closed", body=validation_summary)
+release_file_reservations(project=/data/projects/franken_engine, agent=ScarletOwl)
 ```
 
 The predictive dashboard contract is a JSON feed contract only:
@@ -211,6 +280,10 @@ the e2e wrapper changes:
 bash -n scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh selftest
+./scripts/e2e/build_storm_qos_batch_planner_smoke.sh check
+./scripts/e2e/staged_ownership_contamination_guard_smoke.sh check
+./scripts/e2e/stale_lock_stalled_bead_recommender_smoke.sh check
+./scripts/e2e/swarm_resource_lease_planner_smoke.sh check
 jq empty docs/swarm_predictive_dashboard_contract_v1.json
 ```
 

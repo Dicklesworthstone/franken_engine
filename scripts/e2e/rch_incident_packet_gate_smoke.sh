@@ -106,6 +106,39 @@ run_selftest() {
 
   run_case \
     "$tmp_root" \
+    "timed-out-transport-live-remote-compile" \
+    "timed_out_transport_live_remote_compile" \
+    "fail" \
+    42 \
+    "[RCH] remote vmi1264463 started; fresh heartbeats with stale progress; hot rustc compiling frankenengine_engine" \
+    "[RCH-E104] SSH command timed out after 1800s" \
+    124 \
+    "missing"
+
+  run_case \
+    "$tmp_root" \
+    "canceled-build-live-orphaned-rustc" \
+    "canceled_build_live_orphaned_rustc" \
+    "fail" \
+    42 \
+    "[RCH] remote worker=ts2; cancel requested; live orphaned rustc still alive after cancel" \
+    "build canceled cleanly; exit_code 130" \
+    130 \
+    "missing"
+
+  run_case \
+    "$tmp_root" \
+    "worker-unreachable-degraded" \
+    "worker_unreachable_degraded" \
+    "fail" \
+    42 \
+    "" \
+    "ssh: connect to host vmi1293453 port 22: No route to host" \
+    255 \
+    "unknown"
+
+  run_case \
+    "$tmp_root" \
     "worker-timeout" \
     "worker_timeout" \
     "fail" \

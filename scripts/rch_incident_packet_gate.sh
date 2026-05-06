@@ -226,10 +226,28 @@ infer_worker
 status="fail"
 failure_kind="unknown_failure_text"
 classification_confidence="low"
+has_live_remote_compile=false
+has_cancel_with_orphaned_rustc=false
+
+if has_pattern '(live remote compile|live remote cargo|hot rustc|rustc still alive|cargo still alive|fresh heartbeats|stale progress)'; then
+  has_live_remote_compile=true
+fi
+if has_pattern '(cancel(ed|led)|exit_code[=: ]130)' && has_pattern '(orphaned rustc|rustc still alive|live orphaned rustc)'; then
+  has_cancel_with_orphaned_rustc=true
+fi
 
 # rch-policy-waive: local_fallback_not_rejected reason=intentional classifier rejects rch local fallback markers
 if has_pattern '(\[RCH\] local|falling back to local|fallback to local|local fallback|running locally|Dependency preflight blocked remote execution|RCH-E326)'; then
   failure_kind="local_fallback"
+  classification_confidence="high"
+elif has_pattern '(worker unreachable|ssh: connect to host .* (No route to host|Connection refused)|Permission denied \(publickey,password\)|could not resolve hostname|kex_exchange_identification: read: Connection reset by peer)'; then
+  failure_kind="worker_unreachable_degraded"
+  classification_confidence="high"
+elif has_pattern '(timed out|timeout|RCH-E104)' && [[ "$has_live_remote_compile" == true ]]; then
+  failure_kind="timed_out_transport_live_remote_compile"
+  classification_confidence="high"
+elif [[ "$has_cancel_with_orphaned_rustc" == true ]]; then
+  failure_kind="canceled_build_live_orphaned_rustc"
   classification_confidence="high"
 elif has_pattern '(artifact retrieval failed|failed to retrieve artifacts|rsync[^[:cntrl:]]*(code 23|failed)|sync[^[:cntrl:]]*failed|retrieval failure)'; then
   failure_kind="artifact_retrieval_failure"
@@ -257,6 +275,18 @@ case "$failure_kind" in
   local_fallback)
     retry_safety="unsafe_until_remote_routing_is_fixed"
     recommended_next_action="Do not accept local Cargo output; fix rch routing or narrow to non-heavy shell checks before retrying."
+    ;;
+  worker_unreachable_degraded)
+    retry_safety="safe_after_worker_recovery_or_reroute"
+    recommended_next_action="Mark the worker degraded, reroute to a reachable worker, and keep the incident packet with the failing transport details."
+    ;;
+  timed_out_transport_live_remote_compile)
+    retry_safety="safe_to_salvage_or_wait_before_rerun"
+    recommended_next_action="Do not treat the timeout as a clean failure; preserve evidence that the remote compile stayed alive and salvage artifacts or wait before rerunning."
+    ;;
+  canceled_build_live_orphaned_rustc)
+    retry_safety="unsafe_until_orphaned_processes_are_cleared"
+    recommended_next_action="Treat the cancellation as incomplete; capture the live orphaned rustc evidence and clear or isolate the worker before retrying."
     ;;
   worker_timeout)
     retry_safety="safe_after_narrowing_or_timeout_adjustment"

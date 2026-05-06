@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.swarm-telemetry-snapshot-contract.v1",
+  "output_schema": "franken-engine.swarm-capacity-snapshot.v1",
+  "required_inputs": [
+    "--ready-json",
+    "--in-progress-json",
+    "--validation-plan-json",
+    "--resource-decision-json"
+  ],
+  "optional_inputs": [
+    "--agent-mail-reservations-json",
+    "--stale-lock-recommendations-json",
+    "--proof-freshness-json",
+    "--admission-drill-report-json",
+    "--predictive-wrapper-report-json",
+    "--archive-lifecycle-report-json",
+    "--proof-economy-drill-report-json",
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "required_artifacts": [
+    "swarm_capacity_snapshot.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.swarm-validation-plan.v1",
+    "franken-engine.swarm-resource-governor-decision.v1"
+  ],
+  "optional_upstream_schemas": [
+    "franken-engine.stale-lock-recommendations.v1",
+    "franken-engine.proof-freshness-decay-report.v1",
+    "franken-engine.swarm-admission-drill-report.v1",
+    "franken-engine.swarm-predictive-orchestration-e2e-wrapper.v1",
+    "franken-engine.remote-proof-archive-lifecycle-no-mock-drill-report.v1",
+    "franken-engine.proof-economy-scheduler-replay-drill-report.v1"
+  ],
+  "fail_closed_rejections": [
+    "missing_required_field",
+    "stale_timestamp",
+    "contradictory_active_agent_ownership",
+    "non_replayable_artifact_reference"
+  ],
+  "determinism": {
+    "execution_mode": "fixture_only",
+    "sorting": "ready beads, in-progress beads, commands, and reservation rows are sorted before hashing",
+    "hash": "snapshot_id is sha256 over canonical core JSON"
+  },
+  "dashboard_extension": {
+    "contract_json": "docs/swarm_predictive_dashboard_contract_v1.json",
+    "renderer_provider": "/dp/frankentui",
+    "shipped_in_franken_engine": false
+  }
+}

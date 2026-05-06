@@ -18,6 +18,17 @@ Rich interactive rendering belongs in `/dp/frankentui`, following
 The producer only reads explicit JSON snapshots. It does not claim beads, query
 Agent Mail, run `rch`, execute Cargo, or mutate tracker state.
 
+The predictive dashboard contract also has a pre-dashboard telemetry snapshot
+extension:
+
+- Script: `scripts/swarm_telemetry_snapshot_normalizer.sh`
+- Snapshot schema: `franken-engine.swarm-capacity-snapshot.v1`
+- Static contract: `docs/swarm_telemetry_snapshot_contract_v1.json`
+
+That normalizer reuses admission, archive, and proof-economy artifacts directly
+and stays fixture-only. It does not replace `scripts/swarm_operator_status_report.sh`
+and must not be described as a live scheduling control surface.
+
 ## Dashboard Sections
 
 The `predictive_dashboard` object contains bounded sections for renderer

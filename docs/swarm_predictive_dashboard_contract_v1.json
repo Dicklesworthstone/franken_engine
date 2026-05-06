@@ -13,6 +13,14 @@
     "local_renderer": false,
     "handoff_note": "franken_engine produces JSON fixtures; /dp/frankentui owns rich interactive rendering."
   },
+  "telemetry_snapshot_normalizer": {
+    "script": "scripts/swarm_telemetry_snapshot_normalizer.sh",
+    "snapshot_schema_version": "franken-engine.swarm-capacity-snapshot.v1",
+    "contract_json": "docs/swarm_telemetry_snapshot_contract_v1.json",
+    "status": "fixture_only_extension",
+    "producer_integration": false,
+    "handoff_note": "The standalone snapshot normalizer reuses admission, archive, and proof-economy artifacts directly. The current swarm_operator_status_report producer does not emit this snapshot yet."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -57,6 +65,7 @@
   "truth_constraints": [
     "No rich interactive renderer is implemented in franken_engine by this contract.",
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
-    "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands."
+    "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
+    "The telemetry snapshot normalizer is a fixture-only extension point; it must not be described as live scheduling or worker mutation."
   ]
 }

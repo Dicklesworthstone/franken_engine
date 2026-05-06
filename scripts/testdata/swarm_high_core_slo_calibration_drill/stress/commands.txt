@@ -1,2 +1,1 @@
 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_ix_stress cargo test -p frankenengine-engine --test synthetic_contention_publication_bundle_captures_queue_and_shed_mix -- --nocapture
-

@@ -99,4 +99,3 @@ The truth gate rejects:
 - missing references to `swarm_operator_slo_tuning_advisory.json`
 - claims that the drill mutates live worker state or executes live high-core stress
 - stale claims that checked-in high-core traceability failures are already safe to ignore
-

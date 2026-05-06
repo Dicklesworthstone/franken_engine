@@ -59,6 +59,11 @@
     "execution_queue_top_start_count": 1,
     "execution_queue_deferred_count": 0,
     "execution_queue_bottleneck_count": 1,
+    "queue_fidelity_trust_level": "trustworthy",
+    "queue_fidelity_drift_class": "none",
+    "queue_fidelity_highest_mismatch": "none",
+    "queue_tuning_plan_class": "no_improvement",
+    "queue_tuning_top_recommendation": "none",
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -517,6 +522,50 @@
       "bottleneck_report_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_bottleneck_report.json",
       "run_manifest_artifact_path": "[SMOKE_ROOT]/stale_proof-fixtures/execution_queue_run_manifest.json"
     },
+    "queue_fidelity": {
+      "artifact_status": "provided",
+      "drift_ledger_artifact_status": "provided",
+      "counterfactual_backtest_artifact_status": "provided",
+      "tuning_plan_artifact_status": "provided",
+      "frontier_artifact_status": "provided",
+      "severity": "ok",
+      "trust_level": "trustworthy",
+      "decision": "pass",
+      "overall_fidelity_millionths": 1000000,
+      "confidence_band": "high",
+      "drift_class": "none",
+      "highest_severity_mismatch": null,
+      "mismatch_count": 0,
+      "row_count": 1,
+      "fail_closed_reason_count": 0,
+      "tuning_plan_decision": "pass",
+      "tuning_plan_class": "no_improvement",
+      "top_tuning_recommendation": null,
+      "frontier": [
+        {
+          "candidate_id": "baseline_current",
+          "expected_fidelity_delta_millionths": 0,
+          "confidence_band": "low",
+          "safety_status": "no_change",
+          "manual_review_required": false
+        }
+      ],
+      "operator_notes": [
+        "current weights remain best for this fixture set"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/stale_proof-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/stale_proof-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/stale_proof-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/stale_proof-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/stale_proof-fixtures/frontier.json"
+      }
+    },
     "staged_contamination": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -540,7 +589,9 @@
         "overloaded",
         "forecast_low_confidence",
         "execution_queue_conservative",
-        "execution_queue_restore_blocked"
+        "execution_queue_restore_blocked",
+        "queue_fidelity_high_drift",
+        "queue_fidelity_insufficient_evidence"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

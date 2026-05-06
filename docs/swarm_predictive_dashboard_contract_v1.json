@@ -97,6 +97,20 @@
     "producer_integration": true,
     "handoff_note": "The operator status report integrates execution queue runner artifacts as advisory-only queue evidence. It must not be described as live bead mutation, automatic reopen, reassignment, or a second dashboard producer. If checkpoint restore evidence is blocked or manual-review, the queue advisory must surface that dependency instead of overriding it."
   },
+  "queue_fidelity_handoff": {
+    "fidelity_scorer_script": "scripts/swarm_execution_queue_fidelity_scorer.sh",
+    "fidelity_score_receipt_schema_version": "franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+    "drift_ledger_schema_version": "franken-engine.swarm-execution-queue-drift-ledger.v1",
+    "fidelity_contract_json": "docs/swarm_execution_queue_fidelity_scorer_contract_v1.json",
+    "counterfactual_planner_script": "scripts/swarm_execution_queue_counterfactual_planner.sh",
+    "counterfactual_backtest_schema_version": "franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1",
+    "tuning_plan_schema_version": "franken-engine.swarm-execution-queue-tuning-plan.v1",
+    "frontier_schema_version": "franken-engine.swarm-execution-queue-counterfactual-frontier.v1",
+    "counterfactual_contract_json": "docs/swarm_execution_queue_counterfactual_planner_contract_v1.json",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "handoff_note": "The operator status report integrates queue fidelity, drift, and counterfactual tuning artifacts as advisory-only hindsight evidence. It must not be described as live queue retuning, automatic scheduler mutation, automatic bead changes, or a second dashboard producer."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -153,6 +167,12 @@
     "predictive_dashboard.execution_queue_advisory.conservative_mode",
     "predictive_dashboard.execution_queue_advisory.restore_dependency_state",
     "predictive_dashboard.execution_queue_advisory.proof_lane_rationale",
+    "predictive_dashboard.queue_fidelity.trust_level",
+    "predictive_dashboard.queue_fidelity.drift_class",
+    "predictive_dashboard.queue_fidelity.highest_severity_mismatch",
+    "predictive_dashboard.queue_fidelity.top_tuning_recommendation",
+    "predictive_dashboard.queue_fidelity.frontier",
+    "predictive_dashboard.queue_fidelity.mutation_policy",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -174,6 +194,11 @@
     "franken-engine.swarm-execution-risk-budget-receipt.v1",
     "franken-engine.swarm-execution-bottleneck-report.v1",
     "franken-engine.swarm-execution-queue-runner.v1",
+    "franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+    "franken-engine.swarm-execution-queue-drift-ledger.v1",
+    "franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1",
+    "franken-engine.swarm-execution-queue-tuning-plan.v1",
+    "franken-engine.swarm-execution-queue-counterfactual-frontier.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -192,7 +217,9 @@
     "overloaded",
     "forecast_low_confidence",
     "execution_queue_conservative",
-    "execution_queue_restore_blocked"
+    "execution_queue_restore_blocked",
+    "queue_fidelity_high_drift",
+    "queue_fidelity_insufficient_evidence"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -228,6 +255,7 @@
     "The starvation rescue section is advisory snapshot evidence backed by scripts/swarm_starvation_rescue_planner.sh and scripts/swarm_starvation_rescue_conformance_gate.sh; it must not be described as live bead reopening, automatic ownership transfer, or automatic queue mutation.",
     "The checkpoint restore section is advisory snapshot evidence backed by docs/SWARM_CHECKPOINT_BUNDLE_CONTRACT.md, scripts/swarm_checkpoint_restore_planner.sh, and scripts/swarm_checkpoint_restore_conformance_gate.sh; it must not be described as live checkpoint replay, automatic worker mutation, or automatic ownership transfer.",
     "The execution queue advisory section is advisory snapshot evidence backed by docs/swarm_execution_queue_runner_contract_v1.json and docs/swarm_execution_queue_conformance_contract_v1.json; it must not be described as live bead mutation, automatic reopen, reassignment, or an override for blocked checkpoint restore evidence.",
+    "The queue fidelity section is advisory hindsight evidence backed by docs/swarm_execution_queue_fidelity_scorer_contract_v1.json and docs/swarm_execution_queue_counterfactual_planner_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, or automatic bead changes.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

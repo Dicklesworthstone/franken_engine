@@ -84,6 +84,12 @@ If checkpoint restore evidence is blocked or manual-review, the
 `status.json` must remain visible and queue advice must stay secondary to
 restore remediation.
 
+After the queue outcome is known, run the hindsight normalizer, fidelity scorer,
+and counterfactual planner. Treat `fidelity_score_receipt.json` and
+`drift_ledger.json` as hindsight trust evidence. Treat `tuning_plan.json` and
+`frontier.json` as advisory review inputs only; they do not change the active
+queue and they do not apply retuning automatically.
+
 ## Publish Status
 
 Compose runner artifacts into the operator report:
@@ -94,12 +100,19 @@ Compose runner artifacts into the operator report:
   --execution-queue-risk-budget-json artifacts/swarm_execution_queue/run/risk_budget_receipt.json \
   --execution-queue-bottleneck-report-json artifacts/swarm_execution_queue/run/bottleneck_report.json \
   --execution-queue-run-manifest-json artifacts/swarm_execution_queue/run/run_manifest.json \
+  --queue-fidelity-score-receipt-json artifacts/swarm_execution_queue/fidelity/fidelity_score_receipt.json \
+  --queue-drift-ledger-json artifacts/swarm_execution_queue/fidelity/drift_ledger.json \
+  --queue-counterfactual-backtest-report-json artifacts/swarm_execution_queue/counterfactual/counterfactual_backtest_report.json \
+  --queue-tuning-plan-json artifacts/swarm_execution_queue/counterfactual/tuning_plan.json \
+  --queue-tuning-frontier-json artifacts/swarm_execution_queue/counterfactual/frontier.json \
   --output-dir artifacts/swarm_execution_queue/status
 ```
 
 Quote `status.json`, `report.md`, `normalized_input.json`,
 `execution_queue_artifact.json`, `risk_budget_receipt.json`,
-`bottleneck_report.json`, and `run_manifest.json` in parent closeouts.
+`bottleneck_report.json`, `run_manifest.json`, `fidelity_score_receipt.json`,
+`drift_ledger.json`, `counterfactual_backtest_report.json`,
+`tuning_plan.json`, and `frontier.json` in parent closeouts.
 
 ## Local Fallback
 

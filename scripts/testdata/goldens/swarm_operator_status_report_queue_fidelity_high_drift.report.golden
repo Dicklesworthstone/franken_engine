@@ -1,0 +1,46 @@
+# Swarm Operator Status
+
+- Status: `degraded`
+- Ready beads: `1`
+- In progress: `1`
+- Degraded fields: `1`
+
+- Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
+- Forecast confidence: `high` / `nominal`
+- Admission budget: `balanced` with `0` deferred
+- Lease exchange posture: `retain_current_assignments`
+- Prefetch advisory: `prefetch_recommended`
+- Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
+- Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
+- Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
+- Queue fidelity: trust=`degraded` drift=`proof_brownout_miss` top-mismatch=`proof_brownout_miss` tuning=`raise_proof_health_penalty`
+- High-cost commands: `0`
+- Collision risk: `none`
+- RCH incidents: `0`
+
+## Artifact Sources
+
+- Capacity forecast: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/capacity_forecast.json`
+- Admission budget plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/admission_budget_plan.json`
+- Lease exchange salvage simulation: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/lease_exchange_salvage_simulation.json`
+- Warm target prefetch ROI advisory: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/warm_target_prefetch_roi_advisory.json`
+- Starvation rescue plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/starvation_rescue_plan.json`
+- Starvation rescue conformance report: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/starvation_rescue_conformance_report.json`
+- Checkpoint bundle: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/checkpoint_bundle.json`
+- Checkpoint restore plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/checkpoint_restore_plan.json`
+- Checkpoint restore conformance report: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/checkpoint_restore_conformance_report.json`
+- Execution queue artifact: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/execution_queue_artifact.json`
+- Execution queue risk budget: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/execution_queue_risk_budget_receipt.json`
+- Execution queue bottleneck report: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/execution_queue_bottleneck_report.json`
+- Execution queue run manifest: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/execution_queue_run_manifest.json`
+- Queue fidelity score receipt: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/fidelity_score_receipt.json`
+- Queue drift ledger: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/drift_ledger.json`
+- Queue counterfactual backtest report: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/counterfactual_backtest_report.json`
+- Queue tuning plan: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/tuning_plan.json`
+- Queue tuning frontier: `[SMOKE_ROOT]/queue_fidelity_high_drift-fixtures/frontier.json`
+
+- `review_queue_fidelity_drift`: queue hindsight fidelity or counterfactual tuning evidence is degraded
+
+## Degraded
+
+- `queue_fidelity` `degraded`: queue hindsight drift or counterfactual tuning evidence is degraded. Review the highest-severity mismatch and tuning frontier before changing queue policy.

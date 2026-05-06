@@ -41,6 +41,11 @@ execution_queue_artifact_json=""
 execution_queue_risk_budget_json=""
 execution_queue_bottleneck_report_json=""
 execution_queue_run_manifest_json=""
+queue_fidelity_score_receipt_json=""
+queue_drift_ledger_json=""
+queue_counterfactual_backtest_report_json=""
+queue_tuning_plan_json=""
+queue_tuning_frontier_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -89,6 +94,11 @@ Options:
   --execution-queue-risk-budget-json FILE
   --execution-queue-bottleneck-report-json FILE
   --execution-queue-run-manifest-json FILE
+  --queue-fidelity-score-receipt-json FILE
+  --queue-drift-ledger-json FILE
+  --queue-counterfactual-backtest-report-json FILE
+  --queue-tuning-plan-json FILE
+  --queue-tuning-frontier-json FILE
 EOF
 }
 
@@ -254,6 +264,26 @@ while [[ "$#" -gt 0 ]]; do
       execution_queue_run_manifest_json="$2"
       shift 2
       ;;
+    --queue-fidelity-score-receipt-json)
+      queue_fidelity_score_receipt_json="$2"
+      shift 2
+      ;;
+    --queue-drift-ledger-json)
+      queue_drift_ledger_json="$2"
+      shift 2
+      ;;
+    --queue-counterfactual-backtest-report-json)
+      queue_counterfactual_backtest_report_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-plan-json)
+      queue_tuning_plan_json="$2"
+      shift 2
+      ;;
+    --queue-tuning-frontier-json)
+      queue_tuning_frontier_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -326,6 +356,11 @@ execution_queue_artifact_status="missing"
 execution_queue_risk_budget_status="missing"
 execution_queue_bottleneck_report_status="missing"
 execution_queue_run_manifest_status="missing"
+queue_fidelity_score_receipt_status="missing"
+queue_drift_ledger_status="missing"
+queue_counterfactual_backtest_report_status="missing"
+queue_tuning_plan_status="missing"
+queue_tuning_frontier_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -344,6 +379,11 @@ if [[ -n "$execution_queue_artifact_json" ]]; then execution_queue_artifact_stat
 if [[ -n "$execution_queue_risk_budget_json" ]]; then execution_queue_risk_budget_status="provided"; fi
 if [[ -n "$execution_queue_bottleneck_report_json" ]]; then execution_queue_bottleneck_report_status="provided"; fi
 if [[ -n "$execution_queue_run_manifest_json" ]]; then execution_queue_run_manifest_status="provided"; fi
+if [[ -n "$queue_fidelity_score_receipt_json" ]]; then queue_fidelity_score_receipt_status="provided"; fi
+if [[ -n "$queue_drift_ledger_json" ]]; then queue_drift_ledger_status="provided"; fi
+if [[ -n "$queue_counterfactual_backtest_report_json" ]]; then queue_counterfactual_backtest_report_status="provided"; fi
+if [[ -n "$queue_tuning_plan_json" ]]; then queue_tuning_plan_status="provided"; fi
+if [[ -n "$queue_tuning_frontier_json" ]]; then queue_tuning_frontier_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -362,6 +402,11 @@ execution_queue_artifact_data="$(json_or_default "$execution_queue_artifact_json
 execution_queue_risk_budget_data="$(json_or_default "$execution_queue_risk_budget_json" '{"schema_version":"franken-engine.swarm-execution-risk-budget-receipt.v1","decision":"missing","risk_budget":{"remaining_millionths":0,"consumed_millionths":0,"conservative_mode":false,"conservative_threshold_millionths":200000},"conservative_mode":false,"queue_depth":0}' 'execution-queue-risk-budget')"
 execution_queue_bottleneck_report_data="$(json_or_default "$execution_queue_bottleneck_report_json" '{"schema_version":"franken-engine.swarm-execution-bottleneck-report.v1","bottleneck_count":0,"critical_bottleneck_count":0,"bottlenecks":[]}' 'execution-queue-bottleneck-report')"
 execution_queue_run_manifest_data="$(json_or_default "$execution_queue_run_manifest_json" '{"schema_version":"franken-engine.swarm-execution-queue-runner.v1","decision":"missing","task_count":0,"queue_depth":0,"artifact_hash_hex":null,"artifact_paths":{}}' 'execution-queue-run-manifest')"
+queue_fidelity_score_receipt_data="$(json_or_default "$queue_fidelity_score_receipt_json" '{"schema_version":"franken-engine.swarm-execution-queue-fidelity-score-receipt.v1","decision":"missing","overall_fidelity_millionths":0,"confidence_band":"unknown","component_scores":{},"summary":{"row_count":0,"fail_closed_reason_count":0,"degraded_input_count":0},"artifact_paths":{}}' 'queue-fidelity-score-receipt')"
+queue_drift_ledger_data="$(json_or_default "$queue_drift_ledger_json" '{"schema_version":"franken-engine.swarm-execution-queue-drift-ledger.v1","decision":"missing","rows":[],"fail_closed_reasons":[],"degraded_inputs":[]}' 'queue-drift-ledger')"
+queue_counterfactual_backtest_report_data="$(json_or_default "$queue_counterfactual_backtest_report_json" '{"schema_version":"franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1","decision":"missing","baseline_overall_fidelity_millionths":0,"evaluated_candidate_count":0,"positive_candidate_count":0,"fail_closed_reasons":[],"candidates":[],"artifact_paths":{}}' 'queue-counterfactual-backtest-report')"
+queue_tuning_plan_data="$(json_or_default "$queue_tuning_plan_json" '{"schema_version":"franken-engine.swarm-execution-queue-tuning-plan.v1","decision":"missing","plan_class":"missing","recommended_candidate":null,"ranked_candidates":[],"operator_notes":["No queue tuning plan was provided."],"mutation_policy":{"changes_active_queue":false,"applies_live_retuning":false,"advisory_only":true}}' 'queue-tuning-plan')"
+queue_tuning_frontier_data="$(json_or_default "$queue_tuning_frontier_json" '{"schema_version":"franken-engine.swarm-execution-queue-counterfactual-frontier.v1","frontier":[]}' 'queue-tuning-frontier')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -389,6 +434,11 @@ jq -n \
   --arg execution_queue_risk_budget_status "$execution_queue_risk_budget_status" \
   --arg execution_queue_bottleneck_report_status "$execution_queue_bottleneck_report_status" \
   --arg execution_queue_run_manifest_status "$execution_queue_run_manifest_status" \
+  --arg queue_fidelity_score_receipt_status "$queue_fidelity_score_receipt_status" \
+  --arg queue_drift_ledger_status "$queue_drift_ledger_status" \
+  --arg queue_counterfactual_backtest_report_status "$queue_counterfactual_backtest_report_status" \
+  --arg queue_tuning_plan_status "$queue_tuning_plan_status" \
+  --arg queue_tuning_frontier_status "$queue_tuning_frontier_status" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -423,6 +473,11 @@ jq -n \
   --argjson execution_queue_risk_budget "$execution_queue_risk_budget_data" \
   --argjson execution_queue_bottleneck_report "$execution_queue_bottleneck_report_data" \
   --argjson execution_queue_run_manifest "$execution_queue_run_manifest_data" \
+  --argjson queue_fidelity_score_receipt "$queue_fidelity_score_receipt_data" \
+  --argjson queue_drift_ledger "$queue_drift_ledger_data" \
+  --argjson queue_counterfactual_backtest_report "$queue_counterfactual_backtest_report_data" \
+  --argjson queue_tuning_plan "$queue_tuning_plan_data" \
+  --argjson queue_tuning_frontier "$queue_tuning_frontier_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -442,6 +497,14 @@ jq -n \
     if (($primary // []) | length) > 0 then $primary else ($fallback // []) end;
   def bounded($items): (($items // [])[0:8]);
   def strings($items): bounded(($items // []) | map(tostring));
+  def mismatch_severity_rank($class):
+    if ($class // "") | IN("contradictory_evidence", "missing_outcome") then 50
+    elif ($class // "") == "proof_brownout_miss" then 40
+    elif ($class // "") == "stale_owner_miss" then 30
+    elif ($class // "") | IN("over_conservative", "conservative_but_correct") then 20
+    elif ($class // "") == "exact_match" then 0
+    else 10
+    end;
 
   ($ready | map(bead_row) | sort_by(.priority // 999, .id)) as $ready_rows
   | ($in_progress | map(bead_row) | sort_by(.id)) as $in_progress_rows
@@ -972,6 +1035,103 @@ jq -n \
       bottleneck_report_artifact_path: ($execution_queue_run_manifest.artifact_paths.bottleneck_report_json // null),
       run_manifest_artifact_path: ($execution_queue_run_manifest.artifact_paths.run_manifest_json // null)
     }) as $execution_queue_summary
+  | (($queue_drift_ledger.rows // []) | if type == "array" then . else [] end) as $queue_drift_rows
+  | ($queue_drift_rows
+      | map(select((.mismatch_class // "exact_match") != "exact_match"))
+      | sort_by((0 - mismatch_severity_rank(.mismatch_class)), (.row_score_millionths // 1000000), (.task_id // ""))) as $queue_mismatches
+  | ($queue_tuning_plan.recommended_candidate // {}) as $queue_top_candidate
+  | ({
+      artifact_status: $queue_fidelity_score_receipt_status,
+      drift_ledger_artifact_status: $queue_drift_ledger_status,
+      counterfactual_backtest_artifact_status: $queue_counterfactual_backtest_report_status,
+      tuning_plan_artifact_status: $queue_tuning_plan_status,
+      frontier_artifact_status: $queue_tuning_frontier_status,
+      severity: (
+        if $queue_fidelity_score_receipt_status == "missing"
+          or $queue_drift_ledger_status == "missing"
+          or $queue_counterfactual_backtest_report_status == "missing"
+          or $queue_tuning_plan_status == "missing"
+          or $queue_tuning_frontier_status == "missing" then "warning"
+        elif (($queue_fidelity_score_receipt.decision // "") == "fail_closed")
+          or (($queue_drift_ledger.decision // "") == "fail_closed")
+          or (($queue_counterfactual_backtest_report.decision // "") == "fail_closed")
+          or (($queue_tuning_plan.decision // "") == "fail_closed") then "critical"
+        elif (($queue_fidelity_score_receipt.decision // "") == "degraded")
+          or (($queue_counterfactual_backtest_report.decision // "") == "degraded")
+          or (($queue_tuning_plan.decision // "") == "degraded")
+          or (($queue_fidelity_score_receipt.confidence_band // "") | IN("low", "insufficient_evidence", "unknown")) then "warning"
+        else "ok"
+        end
+      ),
+      trust_level: (
+        if $queue_fidelity_score_receipt_status == "missing"
+          or $queue_drift_ledger_status == "missing"
+          or $queue_counterfactual_backtest_report_status == "missing"
+          or $queue_tuning_plan_status == "missing"
+          or $queue_tuning_frontier_status == "missing" then "missing"
+        elif (($queue_fidelity_score_receipt.decision // "") == "fail_closed")
+          or (($queue_drift_ledger.decision // "") == "fail_closed")
+          or (($queue_counterfactual_backtest_report.decision // "") == "fail_closed")
+          or (($queue_tuning_plan.decision // "") == "fail_closed") then "rejected"
+        elif (($queue_fidelity_score_receipt.decision // "") == "degraded")
+          or (($queue_counterfactual_backtest_report.decision // "") == "degraded")
+          or (($queue_tuning_plan.decision // "") == "degraded")
+          or (($queue_fidelity_score_receipt.overall_fidelity_millionths // 0) < 650000) then "degraded"
+        elif (($queue_fidelity_score_receipt.confidence_band // "") == "high")
+          and (($queue_fidelity_score_receipt.overall_fidelity_millionths // 0) >= 800000) then "trustworthy"
+        else "advisory"
+        end
+      ),
+      decision: ($queue_fidelity_score_receipt.decision // "missing"),
+      overall_fidelity_millionths: ($queue_fidelity_score_receipt.overall_fidelity_millionths // 0),
+      confidence_band: ($queue_fidelity_score_receipt.confidence_band // "unknown"),
+      drift_class: (
+        if ($queue_mismatches | length) == 0 then "none"
+        else ($queue_mismatches[0].mismatch_class // "unknown")
+        end
+      ),
+      highest_severity_mismatch: (
+        if ($queue_mismatches | length) == 0 then null
+        else {
+          task_id: ($queue_mismatches[0].task_id // null),
+          mismatch_class: ($queue_mismatches[0].mismatch_class // "unknown"),
+          drift_class: ($queue_mismatches[0].drift_class // "unknown"),
+          row_score_millionths: ($queue_mismatches[0].row_score_millionths // null),
+          remediation: ($queue_mismatches[0].remediation // null)
+        }
+        end
+      ),
+      mismatch_count: ($queue_mismatches | length),
+      row_count: ($queue_fidelity_score_receipt.summary.row_count // ($queue_drift_rows | length)),
+      fail_closed_reason_count: (($queue_fidelity_score_receipt.summary.fail_closed_reason_count // 0) + (($queue_counterfactual_backtest_report.fail_closed_reasons // []) | length)),
+      tuning_plan_decision: ($queue_tuning_plan.decision // "missing"),
+      tuning_plan_class: ($queue_tuning_plan.plan_class // "missing"),
+      top_tuning_recommendation: (
+        if (($queue_top_candidate | type) == "object") and (($queue_top_candidate.candidate_id // "") | length) > 0 then {
+          candidate_id: ($queue_top_candidate.candidate_id // null),
+          expected_fidelity_delta_millionths: ($queue_top_candidate.expected_fidelity_delta_millionths // 0),
+          confidence_band: ($queue_top_candidate.confidence_band // "unknown"),
+          safety_status: ($queue_top_candidate.safety_status // "unknown"),
+          manual_review_required: (($queue_top_candidate.manual_review_required // false) == true)
+        }
+        else null
+        end
+      ),
+      frontier: bounded($queue_tuning_frontier.frontier),
+      operator_notes: bounded($queue_tuning_plan.operator_notes),
+      mutation_policy: {
+        advisory_only: (($queue_tuning_plan.mutation_policy.advisory_only // true) == true),
+        changes_active_queue: (($queue_tuning_plan.mutation_policy.changes_active_queue // false) == true),
+        applies_live_retuning: (($queue_tuning_plan.mutation_policy.applies_live_retuning // false) == true)
+      },
+      artifact_paths: {
+        fidelity_score_receipt_json: ($queue_fidelity_score_receipt.artifact_paths.fidelity_score_receipt_json // null),
+        drift_ledger_json: ($queue_fidelity_score_receipt.artifact_paths.drift_ledger_json // null),
+        counterfactual_backtest_report_json: ($queue_counterfactual_backtest_report.artifact_paths.counterfactual_backtest_report_json // null),
+        tuning_plan_json: ($queue_counterfactual_backtest_report.artifact_paths.tuning_plan_json // null),
+        frontier_json: ($queue_counterfactual_backtest_report.artifact_paths.frontier_json // null)
+      }
+    }) as $queue_fidelity_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -1054,6 +1214,19 @@ jq -n \
       elif $execution_queue_summary.severity != "ok" then
         [{component: "execution_queue_advisory", status: $execution_queue_summary.severity, impact: "execution queue advisory is conservative, blocked, or coupled to restore drift", remediation: $execution_queue_summary.proof_lane_rationale}]
       else [] end)
+    + (if $queue_fidelity_score_receipt_status == "missing"
+          or $queue_drift_ledger_status == "missing"
+          or $queue_counterfactual_backtest_report_status == "missing"
+          or $queue_tuning_plan_status == "missing"
+          or $queue_tuning_frontier_status == "missing" then
+        [{component: "queue_fidelity", status: "missing", impact: "queue fidelity and tuning artifacts are incomplete", remediation: "Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice."}]
+      elif ($queue_fidelity_summary.mutation_policy.changes_active_queue == true
+            or $queue_fidelity_summary.mutation_policy.applies_live_retuning == true
+            or $queue_fidelity_summary.mutation_policy.advisory_only != true) then
+        [{component: "queue_fidelity", status: "fail_closed", impact: "queue tuning input implies live mutation", remediation: "Reject tuning artifacts that claim automatic queue retuning or live mutation."}]
+      elif $queue_fidelity_summary.severity != "ok" then
+        [{component: "queue_fidelity", status: $queue_fidelity_summary.trust_level, impact: "queue hindsight drift or counterfactual tuning evidence is degraded", remediation: "Review the highest-severity mismatch and tuning frontier before changing queue policy."}]
+      else [] end)
     + (if ($collision_summary.risk != "none") then
         [{component: "collision_risk", status: $collision_summary.risk, impact: "planned work may collide with another agent or dirty surface", remediation: "Coordinate with listed agents or use safe alternatives before editing."}]
       else [] end)
@@ -1126,6 +1299,11 @@ jq -n \
         execution_queue_top_start_count: (($execution_queue_summary.top_recommended_starts // []) | length),
         execution_queue_deferred_count: (($execution_queue_summary.deferred_items // []) | length),
         execution_queue_bottleneck_count: $execution_queue_summary.bottleneck_count,
+        queue_fidelity_trust_level: $queue_fidelity_summary.trust_level,
+        queue_fidelity_drift_class: $queue_fidelity_summary.drift_class,
+        queue_fidelity_highest_mismatch: ($queue_fidelity_summary.highest_severity_mismatch.mismatch_class // "none"),
+        queue_tuning_plan_class: $queue_fidelity_summary.tuning_plan_class,
+        queue_tuning_top_recommendation: ($queue_fidelity_summary.top_tuning_recommendation.candidate_id // "none"),
         staged_contamination_decision: $staged_contamination_summary.decision,
         staged_contamination_offender_count: $staged_contamination_summary.offender_count
       },
@@ -1189,9 +1367,10 @@ jq -n \
         starvation_rescue: $starvation_rescue_summary,
         checkpoint_restore: $checkpoint_restore_summary,
         execution_queue_advisory: $execution_queue_summary,
+        queue_fidelity: $queue_fidelity_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1208,12 +1387,16 @@ jq -n \
           [recommendation("respect_restore_before_queue"; null; "execution queue advisory reports checkpoint restore is blocked")]
         elif $execution_queue_summary.severity == "critical" then
           [recommendation("respect_execution_queue_fail_closed"; null; "execution queue advisory failed closed or has critical bottlenecks")]
+        elif $queue_fidelity_summary.severity == "critical" then
+          [recommendation("respect_queue_fidelity_fail_closed"; null; "queue fidelity or counterfactual tuning evidence failed closed")]
         elif $checkpoint_restore_summary.severity == "warning" then
           [recommendation("review_checkpoint_restore_handoff"; null; "checkpoint restore handoff requires manual review before resume")]
         elif $execution_queue_summary.restore_dependency_state == "restore_manual_review" then
           [recommendation("review_restore_before_queue"; null; "execution queue advisory is secondary to checkpoint restore manual review")]
         elif $execution_queue_summary.severity == "warning" then
           [recommendation("use_execution_queue_conservatively"; null; "execution queue advisory reports conservative risk budget or degraded evidence")]
+        elif $queue_fidelity_summary.severity == "warning" then
+          [recommendation("review_queue_fidelity_drift"; null; "queue hindsight fidelity or counterfactual tuning evidence is degraded")]
         elif $starvation_rescue_summary.severity == "warning" then
           [recommendation("review_starvation_rescue_handoff"; null; "starvation rescue handoff requires manual review or degraded coordination")]
         elif $capacity_forecast_summary.severity == "critical" then
@@ -1279,7 +1462,12 @@ jq -n \
         execution_queue_artifact_json: $execution_queue_summary.queue_artifact_path,
         execution_queue_risk_budget_json: $execution_queue_summary.risk_budget_artifact_path,
         execution_queue_bottleneck_report_json: $execution_queue_summary.bottleneck_report_artifact_path,
-        execution_queue_run_manifest_json: $execution_queue_summary.run_manifest_artifact_path
+        execution_queue_run_manifest_json: $execution_queue_summary.run_manifest_artifact_path,
+        queue_fidelity_score_receipt_json: $queue_fidelity_summary.artifact_paths.fidelity_score_receipt_json,
+        queue_drift_ledger_json: $queue_fidelity_summary.artifact_paths.drift_ledger_json,
+        queue_counterfactual_backtest_report_json: $queue_fidelity_summary.artifact_paths.counterfactual_backtest_report_json,
+        queue_tuning_plan_json: $queue_fidelity_summary.artifact_paths.tuning_plan_json,
+        queue_tuning_frontier_json: $queue_fidelity_summary.artifact_paths.frontier_json
       }
     }
   ' >"$status_path"
@@ -1298,6 +1486,7 @@ jq -n \
   printf -- "- Starvation rescue escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.starvation_rescue_escalation_band' "$status_path")" "$(jq -r '.summary.starvation_rescue_top_action' "$status_path")"
   printf -- "- Checkpoint restore escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.checkpoint_restore_escalation_band' "$status_path")" "$(jq -r '.summary.checkpoint_restore_top_action' "$status_path")"
   printf -- "- Execution queue: \`%s\` top=\`%s\` deferred=\`%s\` restore=\`%s\`\n" "$(jq -r '.summary.execution_queue_decision' "$status_path")" "$(jq '.summary.execution_queue_top_start_count' "$status_path")" "$(jq '.summary.execution_queue_deferred_count' "$status_path")" "$(jq -r '.summary.execution_queue_restore_dependency_state' "$status_path")"
+  printf -- "- Queue fidelity: trust=\`%s\` drift=\`%s\` top-mismatch=\`%s\` tuning=\`%s\`\n" "$(jq -r '.summary.queue_fidelity_trust_level' "$status_path")" "$(jq -r '.summary.queue_fidelity_drift_class' "$status_path")" "$(jq -r '.summary.queue_fidelity_highest_mismatch' "$status_path")" "$(jq -r '.summary.queue_tuning_top_recommendation' "$status_path")"
   printf -- "- High-cost commands: \`%s\`\n" "$(jq '.summary.high_cost_command_count' "$status_path")"
   printf -- "- Collision risk: \`%s\`\n" "$(jq -r '.summary.collision_risk' "$status_path")"
   printf -- "- RCH incidents: \`%s\`\n\n" "$(jq '.summary.rch_incident_count' "$status_path")"
@@ -1316,7 +1505,12 @@ jq -n \
       {label:"Execution queue artifact", path:.artifact_paths.execution_queue_artifact_json},
       {label:"Execution queue risk budget", path:.artifact_paths.execution_queue_risk_budget_json},
       {label:"Execution queue bottleneck report", path:.artifact_paths.execution_queue_bottleneck_report_json},
-      {label:"Execution queue run manifest", path:.artifact_paths.execution_queue_run_manifest_json}
+      {label:"Execution queue run manifest", path:.artifact_paths.execution_queue_run_manifest_json},
+      {label:"Queue fidelity score receipt", path:.artifact_paths.queue_fidelity_score_receipt_json},
+      {label:"Queue drift ledger", path:.artifact_paths.queue_drift_ledger_json},
+      {label:"Queue counterfactual backtest report", path:.artifact_paths.queue_counterfactual_backtest_report_json},
+      {label:"Queue tuning plan", path:.artifact_paths.queue_tuning_plan_json},
+      {label:"Queue tuning frontier", path:.artifact_paths.queue_tuning_frontier_json}
     ][]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

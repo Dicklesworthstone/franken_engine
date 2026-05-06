@@ -13,6 +13,7 @@
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
 - Checkpoint restore escalation: `fail_closed` via `capture_fresh_checkpoint_bundle`
 - Execution queue: `pass` top=`1` deferred=`1` restore=`restore_blocked`
+- Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -32,6 +33,11 @@
 - Execution queue risk budget: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/execution_queue_risk_budget_receipt.json`
 - Execution queue bottleneck report: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/execution_queue_bottleneck_report.json`
 - Execution queue run manifest: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/execution_queue_run_manifest.json`
+- Queue fidelity score receipt: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/fidelity_score_receipt.json`
+- Queue drift ledger: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/drift_ledger.json`
+- Queue counterfactual backtest report: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/counterfactual_backtest_report.json`
+- Queue tuning plan: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/tuning_plan.json`
+- Queue tuning frontier: `[SMOKE_ROOT]/execution_queue_restore_blocked-fixtures/frontier.json`
 
 - `respect_checkpoint_restore_fail_closed`: checkpoint restore handoff is fail-closed or contradicted by conformance evidence
 

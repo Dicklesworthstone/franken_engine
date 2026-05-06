@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 22,
+    "degraded_count": 23,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -59,6 +59,11 @@
     "execution_queue_top_start_count": 0,
     "execution_queue_deferred_count": 0,
     "execution_queue_bottleneck_count": 0,
+    "queue_fidelity_trust_level": "missing",
+    "queue_fidelity_drift_class": "none",
+    "queue_fidelity_highest_mismatch": "none",
+    "queue_tuning_plan_class": "missing",
+    "queue_tuning_top_recommendation": "none",
     "staged_contamination_decision": "missing",
     "staged_contamination_offender_count": 0
   },
@@ -412,6 +417,42 @@
       "bottleneck_report_artifact_path": null,
       "run_manifest_artifact_path": null
     },
+    "queue_fidelity": {
+      "artifact_status": "missing",
+      "drift_ledger_artifact_status": "missing",
+      "counterfactual_backtest_artifact_status": "missing",
+      "tuning_plan_artifact_status": "missing",
+      "frontier_artifact_status": "missing",
+      "severity": "warning",
+      "trust_level": "missing",
+      "decision": "missing",
+      "overall_fidelity_millionths": 0,
+      "confidence_band": "unknown",
+      "drift_class": "none",
+      "highest_severity_mismatch": null,
+      "mismatch_count": 0,
+      "row_count": 0,
+      "fail_closed_reason_count": 0,
+      "tuning_plan_decision": "missing",
+      "tuning_plan_class": "missing",
+      "top_tuning_recommendation": null,
+      "frontier": [],
+      "operator_notes": [
+        "No queue tuning plan was provided."
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "fidelity_score_receipt_json": null,
+        "drift_ledger_json": null,
+        "counterfactual_backtest_report_json": null,
+        "tuning_plan_json": null,
+        "frontier_json": null
+      }
+    },
     "staged_contamination": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -435,7 +476,9 @@
         "overloaded",
         "forecast_low_confidence",
         "execution_queue_conservative",
-        "execution_queue_restore_blocked"
+        "execution_queue_restore_blocked",
+        "queue_fidelity_high_drift",
+        "queue_fidelity_insufficient_evidence"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -567,6 +610,12 @@
       "status": "missing",
       "impact": "execution queue runner artifacts are incomplete",
       "remediation": "Provide queue artifact, risk-budget receipt, bottleneck report, and run manifest before trusting queue advice."
+    },
+    {
+      "component": "queue_fidelity",
+      "status": "missing",
+      "impact": "queue fidelity and tuning artifacts are incomplete",
+      "remediation": "Provide fidelity receipt, drift ledger, counterfactual backtest, tuning plan, and frontier before trusting hindsight tuning advice."
     },
     {
       "component": "rch_incident_packet",

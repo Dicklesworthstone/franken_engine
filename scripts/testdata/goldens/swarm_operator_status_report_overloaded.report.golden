@@ -13,6 +13,7 @@
 - Starvation rescue escalation: `manual_review` via `preserve_pinned_evidence`
 - Checkpoint restore escalation: `manual_review` via `review_salvage_pressure_before_resume`
 - Execution queue: `pass` top=`1` deferred=`0` restore=`restore_manual_review`
+- Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -32,6 +33,11 @@
 - Execution queue risk budget: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_risk_budget_receipt.json`
 - Execution queue bottleneck report: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_bottleneck_report.json`
 - Execution queue run manifest: `[SMOKE_ROOT]/overloaded-fixtures/execution_queue_run_manifest.json`
+- Queue fidelity score receipt: `[SMOKE_ROOT]/overloaded-fixtures/fidelity_score_receipt.json`
+- Queue drift ledger: `[SMOKE_ROOT]/overloaded-fixtures/drift_ledger.json`
+- Queue counterfactual backtest report: `[SMOKE_ROOT]/overloaded-fixtures/counterfactual_backtest_report.json`
+- Queue tuning plan: `[SMOKE_ROOT]/overloaded-fixtures/tuning_plan.json`
+- Queue tuning frontier: `[SMOKE_ROOT]/overloaded-fixtures/frontier.json`
 
 - `review_checkpoint_restore_handoff`: checkpoint restore handoff requires manual review before resume
 

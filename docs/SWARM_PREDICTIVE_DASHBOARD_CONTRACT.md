@@ -164,6 +164,28 @@ reassignment, or a second dashboard producer. If checkpoint restore evidence is
 blocked or manual-review, the `execution_queue_advisory` section must state that
 dependency instead of letting queue advice override restore remediation.
 
+The same operator report now also integrates SWARM-CTRL-XIII queue hindsight,
+fidelity, and counterfactual tuning evidence:
+
+- Fidelity scorer: `scripts/swarm_execution_queue_fidelity_scorer.sh`
+- Fidelity contract: `docs/swarm_execution_queue_fidelity_scorer_contract_v1.json`
+- Fidelity receipt schema: `franken-engine.swarm-execution-queue-fidelity-score-receipt.v1`
+- Drift ledger schema: `franken-engine.swarm-execution-queue-drift-ledger.v1`
+
+- Counterfactual planner: `scripts/swarm_execution_queue_counterfactual_planner.sh`
+- Counterfactual contract: `docs/swarm_execution_queue_counterfactual_planner_contract_v1.json`
+- Backtest schema: `franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1`
+- Tuning plan schema: `franken-engine.swarm-execution-queue-tuning-plan.v1`
+- Frontier schema: `franken-engine.swarm-execution-queue-counterfactual-frontier.v1`
+
+That handoff carries queue trust level, drift class, the highest-severity
+mismatch row, and the top tuning recommendation into the existing
+`scripts/swarm_operator_status_report.sh` producer. It is advisory-only. It
+must not be described as live queue retuning, automatic scheduler mutation,
+automatic bead changes, or a second dashboard producer. If checkpoint restore
+or execution queue evidence is degraded, queue fidelity must compose with those
+sections instead of overriding their remediation.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -200,6 +222,7 @@ consumption:
 | `starvation_rescue` | `swarm-starvation-rescue-plan.v1` plus `swarm-starvation-rescue-conformance-report.v1` | Show ordered rescue actions, escalation band, and unresolved rescue risks without creating a second dashboard producer. |
 | `checkpoint_restore` | `swarm-checkpoint-bundle.v1` plus `swarm-checkpoint-restore-plan.v1` plus `swarm-checkpoint-restore-conformance-report.v1` | Show whether a saved checkpoint can be resumed, must fail closed, or needs manual review, plus the top restore action and unresolved restore drift. |
 | `execution_queue_advisory` | `swarm-execution-queue-artifact.v1` plus risk-budget and bottleneck runner artifacts | Show top starts, deferred queue items, conservative-mode state, bottlenecks, and restore dependency status without mutating live queue state. |
+| `queue_fidelity` | `swarm-execution-queue-fidelity-score-receipt.v1` plus drift ledger, counterfactual backtest, tuning plan, and frontier artifacts | Show hindsight trust level, highest-severity drift, and top tuning recommendation without live queue retuning. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
@@ -226,6 +249,8 @@ The smoke test publishes deterministic goldens for:
 - `forecast_low_confidence`
 - `execution_queue_conservative`
 - `execution_queue_restore_blocked`
+- `queue_fidelity_high_drift`
+- `queue_fidelity_insufficient_evidence`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -271,6 +296,14 @@ queue, `execution_queue_conservative` covers risk-budget conservative mode, and
 `execution_queue_restore_blocked` proves blocked checkpoint restore evidence
 remains visible inside queue advice.
 
+The queue hindsight fidelity scorer and counterfactual planner are integrated
+directly as advisory snapshot evidence. The `healthy` fixture covers trustworthy
+hindsight, `execution_queue_restore_blocked` proves restore blockers remain
+visible while fidelity is healthy, `queue_fidelity_high_drift` covers a
+highest-severity mismatch with a tuning recommendation, and
+`queue_fidelity_insufficient_evidence` proves low-evidence tuning stays manual
+review.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -295,6 +328,9 @@ remains visible inside queue advice.
 - The docs must describe the execution queue advisory as integrated advisory
   snapshot evidence, not as live bead mutation, automatic reopen,
   reassignment, or an override for checkpoint restore remediation.
+- The docs must describe the queue fidelity handoff as integrated advisory
+  hindsight evidence, not as live queue retuning, automatic scheduler mutation,
+  or automatic bead changes.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
@@ -361,6 +397,20 @@ bash -n scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh
 ./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh selftest
 ./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh check
 ./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh selftest
+```
+
+When changing the queue fidelity or counterfactual tuning handoff, also run:
+
+```bash
+bash -n scripts/swarm_execution_queue_fidelity_scorer.sh
+bash -n scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh
+./scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh check
+./scripts/e2e/swarm_execution_queue_fidelity_scorer_smoke.sh selftest
+bash -n scripts/swarm_execution_queue_counterfactual_planner.sh
+bash -n scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh
+./scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh check
+./scripts/e2e/swarm_execution_queue_counterfactual_planner_smoke.sh selftest
+jq empty docs/swarm_execution_queue_fidelity_scorer_contract_v1.json docs/swarm_execution_queue_counterfactual_planner_contract_v1.json
 ```
 
 When changing the SWARM-CTRL-IX high-core scenario matrix, also run:

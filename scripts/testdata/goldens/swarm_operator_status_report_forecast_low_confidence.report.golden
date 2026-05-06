@@ -13,6 +13,7 @@
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
 - Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
 - Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
+- Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
 - High-cost commands: `0`
 - Collision risk: `none`
 - RCH incidents: `0`
@@ -32,6 +33,11 @@
 - Execution queue risk budget: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_risk_budget_receipt.json`
 - Execution queue bottleneck report: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_bottleneck_report.json`
 - Execution queue run manifest: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/execution_queue_run_manifest.json`
+- Queue fidelity score receipt: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/fidelity_score_receipt.json`
+- Queue drift ledger: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/drift_ledger.json`
+- Queue counterfactual backtest report: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/counterfactual_backtest_report.json`
+- Queue tuning plan: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/tuning_plan.json`
+- Queue tuning frontier: `[SMOKE_ROOT]/forecast_low_confidence-fixtures/frontier.json`
 
 - `refresh_capacity_forecast`: predictive capacity forecast is fail-closed or low-confidence
 

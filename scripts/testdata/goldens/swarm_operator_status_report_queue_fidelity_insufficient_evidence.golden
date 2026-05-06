@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "healthy",
+  "status": "degraded",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 0,
+    "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -59,11 +59,11 @@
     "execution_queue_top_start_count": 1,
     "execution_queue_deferred_count": 0,
     "execution_queue_bottleneck_count": 1,
-    "queue_fidelity_trust_level": "trustworthy",
-    "queue_fidelity_drift_class": "none",
-    "queue_fidelity_highest_mismatch": "none",
-    "queue_tuning_plan_class": "no_improvement",
-    "queue_tuning_top_recommendation": "none",
+    "queue_fidelity_trust_level": "degraded",
+    "queue_fidelity_drift_class": "missing_outcome",
+    "queue_fidelity_highest_mismatch": "missing_outcome",
+    "queue_tuning_plan_class": "insufficient_evidence",
+    "queue_tuning_top_recommendation": "require_aftermath_evidence",
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0
   },
@@ -340,7 +340,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -366,7 +366,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -387,7 +387,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/admission_budget_plan.json"
     },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
@@ -399,7 +399,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -415,7 +415,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -447,8 +447,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -467,9 +467,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -512,10 +512,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -523,20 +523,39 @@
       "counterfactual_backtest_artifact_status": "provided",
       "tuning_plan_artifact_status": "provided",
       "frontier_artifact_status": "provided",
-      "severity": "ok",
-      "trust_level": "trustworthy",
-      "decision": "pass",
-      "overall_fidelity_millionths": 1000000,
-      "confidence_band": "high",
-      "drift_class": "none",
-      "highest_severity_mismatch": null,
-      "mismatch_count": 0,
+      "severity": "warning",
+      "trust_level": "degraded",
+      "decision": "degraded",
+      "overall_fidelity_millionths": 250000,
+      "confidence_band": "low",
+      "drift_class": "missing_outcome",
+      "highest_severity_mismatch": {
+        "task_id": "bd-ready-a",
+        "mismatch_class": "missing_outcome",
+        "drift_class": "missing_outcome",
+        "row_score_millionths": 100000,
+        "remediation": "capture aftermath evidence before interpreting queue fidelity"
+      },
+      "mismatch_count": 1,
       "row_count": 1,
       "fail_closed_reason_count": 0,
-      "tuning_plan_decision": "pass",
-      "tuning_plan_class": "no_improvement",
-      "top_tuning_recommendation": null,
+      "tuning_plan_decision": "degraded",
+      "tuning_plan_class": "insufficient_evidence",
+      "top_tuning_recommendation": {
+        "candidate_id": "require_aftermath_evidence",
+        "expected_fidelity_delta_millionths": 120000,
+        "confidence_band": "insufficient_evidence",
+        "safety_status": "manual_review",
+        "manual_review_required": true
+      },
       "frontier": [
+        {
+          "candidate_id": "require_aftermath_evidence",
+          "expected_fidelity_delta_millionths": 120000,
+          "confidence_band": "insufficient_evidence",
+          "safety_status": "manual_review",
+          "manual_review_required": true
+        },
         {
           "candidate_id": "baseline_current",
           "expected_fidelity_delta_millionths": 0,
@@ -546,7 +565,7 @@
         }
       ],
       "operator_notes": [
-        "current weights remain best for this fixture set"
+        "insufficient aftermath evidence blocks automatic tuning interpretation"
       ],
       "mutation_policy": {
         "advisory_only": true,
@@ -554,11 +573,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/healthy-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/healthy-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/healthy-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/queue_fidelity_insufficient_evidence-fixtures/frontier.json"
       }
     },
     "staged_contamination": {
@@ -592,12 +611,19 @@
       "local_tui_renderer": false
     }
   },
-  "degraded": [],
+  "degraded": [
+    {
+      "component": "queue_fidelity",
+      "status": "degraded",
+      "impact": "queue hindsight drift or counterfactual tuning evidence is degraded",
+      "remediation": "Review the highest-severity mismatch and tuning frontier before changing queue policy."
+    }
+  ],
   "recommendations": [
     {
-      "action": "pick_next_ready_bead",
-      "bead_id": "bd-p03vs",
-      "reason": "resource governor admits validation and bead is ready"
+      "action": "review_queue_fidelity_drift",
+      "bead_id": null,
+      "reason": "queue hindsight fidelity or counterfactual tuning evidence is degraded"
     }
   ]
 }

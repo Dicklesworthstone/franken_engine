@@ -548,6 +548,184 @@ write_execution_queue_advisory_fixtures() {
   printf 'execution queue advisory fixture\n' >"${fixture_dir}/execution_queue.summary.md"
 }
 
+write_queue_fidelity_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local decision="pass"
+  local overall_fidelity_millionths=1000000
+  local confidence_band="high"
+  local mismatch_class="exact_match"
+  local drift_class="none"
+  local row_score_millionths=1000000
+  local remediation="keep current queue weights for this evidence shape"
+  local task_id="bd-ready-a"
+  local tuning_decision="pass"
+  local plan_class="no_improvement"
+  local recommended_candidate_json="null"
+  local frontier_json='[{"candidate_id":"baseline_current","expected_fidelity_delta_millionths":0,"confidence_band":"low","safety_status":"no_change","manual_review_required":false}]'
+  local operator_notes_json='["current weights remain best for this fixture set"]'
+
+  case "$mode" in
+    healthy)
+      ;;
+    high_drift)
+      decision="degraded"
+      overall_fidelity_millionths=420000
+      confidence_band="low"
+      mismatch_class="proof_brownout_miss"
+      drift_class="proof_drift"
+      row_score_millionths=300000
+      remediation="raise proof-health penalties before trusting queue starts during brownout evidence"
+      tuning_decision="degraded"
+      plan_class="conflicting_improvements"
+      recommended_candidate_json='{"candidate_id":"raise_proof_health_penalty","description":"Replay with stronger proof-brownout and proof-health penalties","impact_weight_delta":-30000,"reuse_weight_delta":0,"friction_weight_delta":30000,"risk_weight_delta":140000,"expected_fidelity_delta_millionths":240000,"improves_scenarios":["proof_brownout_miss"],"worsens_scenarios":[],"manual_review_required":false,"confidence_band":"high","safety_status":"safe_to_replay"}'
+      frontier_json='[{"candidate_id":"raise_proof_health_penalty","expected_fidelity_delta_millionths":240000,"confidence_band":"high","safety_status":"safe_to_replay","manual_review_required":false},{"candidate_id":"raise_owner_friction_penalty","expected_fidelity_delta_millionths":200000,"confidence_band":"high","safety_status":"safe_to_replay","manual_review_required":false},{"candidate_id":"baseline_current","expected_fidelity_delta_millionths":0,"confidence_band":"low","safety_status":"no_change","manual_review_required":false}]'
+      operator_notes_json='["multiple candidates improve different scenarios; keep manual review"]'
+      ;;
+    insufficient_evidence)
+      decision="degraded"
+      overall_fidelity_millionths=250000
+      confidence_band="low"
+      mismatch_class="missing_outcome"
+      drift_class="missing_outcome"
+      row_score_millionths=100000
+      remediation="capture aftermath evidence before interpreting queue fidelity"
+      tuning_decision="degraded"
+      plan_class="insufficient_evidence"
+      recommended_candidate_json='{"candidate_id":"require_aftermath_evidence","description":"Require stronger aftermath capture before tuning low-evidence rows","impact_weight_delta":0,"reuse_weight_delta":0,"friction_weight_delta":60000,"risk_weight_delta":90000,"expected_fidelity_delta_millionths":120000,"improves_scenarios":["missing_outcome"],"worsens_scenarios":[],"manual_review_required":true,"confidence_band":"insufficient_evidence","safety_status":"manual_review"}'
+      frontier_json='[{"candidate_id":"require_aftermath_evidence","expected_fidelity_delta_millionths":120000,"confidence_band":"insufficient_evidence","safety_status":"manual_review","manual_review_required":true},{"candidate_id":"baseline_current","expected_fidelity_delta_millionths":0,"confidence_band":"low","safety_status":"no_change","manual_review_required":false}]'
+      operator_notes_json='["insufficient aftermath evidence blocks automatic tuning interpretation"]'
+      ;;
+    *)
+      record_failure "unknown queue fidelity fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/fidelity_score_receipt.json" \
+    --arg drift_ledger_path "${fixture_dir}/drift_ledger.json" \
+    --arg decision "$decision" \
+    --arg confidence_band "$confidence_band" \
+    --argjson overall_fidelity_millionths "$overall_fidelity_millionths" \
+    --argjson row_score_millionths "$row_score_millionths" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-fidelity-score-receipt.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      overall_fidelity_millionths:$overall_fidelity_millionths,
+      confidence_band:$confidence_band,
+      component_scores:{
+        start_order_agreement_millionths:$overall_fidelity_millionths,
+        defer_correctness_millionths:$overall_fidelity_millionths,
+        proof_health_prediction_millionths:$row_score_millionths,
+        owner_friction_prediction_millionths:$overall_fidelity_millionths,
+        conservative_mode_appropriateness_millionths:$overall_fidelity_millionths
+      },
+      summary:{
+        row_count:1,
+        exact_match_count:(if $decision == "pass" then 1 else 0 end),
+        conservative_but_correct_count:0,
+        over_conservative_count:0,
+        stale_owner_miss_count:0,
+        proof_brownout_miss_count:(if $decision == "degraded" then 1 else 0 end),
+        counterfactual_candidate_count:5,
+        fail_closed_reason_count:0,
+        degraded_input_count:(if $decision == "pass" then 0 else 1 end)
+      },
+      artifact_paths:{
+        fidelity_score_receipt_json:$artifact_path,
+        drift_ledger_json:$drift_ledger_path,
+        events_jsonl:null,
+        commands_txt:null,
+        report_md:null
+      }
+    }' >"${fixture_dir}/fidelity_score_receipt.json"
+
+  jq -n \
+    --arg decision "$decision" \
+    --arg task_id "$task_id" \
+    --arg mismatch_class "$mismatch_class" \
+    --arg drift_class "$drift_class" \
+    --arg remediation "$remediation" \
+    --argjson row_score_millionths "$row_score_millionths" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-drift-ledger.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      rows:[{
+        task_id:$task_id,
+        recommended_rank:1,
+        actual_outcome:(if $mismatch_class == "missing_outcome" then "unknown" else "closed" end),
+        fidelity_class:(if $mismatch_class == "exact_match" then "matched" else "drifted" end),
+        drift_class:$drift_class,
+        mismatch_class:$mismatch_class,
+        row_score_millionths:$row_score_millionths,
+        confidence_band:(if $row_score_millionths >= 800000 then "high" elif $row_score_millionths >= 650000 then "medium" else "low" end),
+        remediation:$remediation,
+        source_row:{task_id:$task_id, proof_outcome:(if $mismatch_class == "proof_brownout_miss" then "brownout" else "pass" end)}
+      }],
+      fail_closed_reasons:[],
+      degraded_inputs:(if $decision == "pass" then [] else [{kind:$mismatch_class, source:"drift_ledger", label:$task_id, detail:$remediation}] end)
+    }' >"${fixture_dir}/drift_ledger.json"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/counterfactual_backtest_report.json" \
+    --arg tuning_plan_path "${fixture_dir}/tuning_plan.json" \
+    --arg frontier_path "${fixture_dir}/frontier.json" \
+    --arg decision "$tuning_decision" \
+    --argjson overall_fidelity_millionths "$overall_fidelity_millionths" \
+    --argjson recommended_candidate "$recommended_candidate_json" \
+    --argjson frontier "$frontier_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-counterfactual-backtest-report.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      baseline_overall_fidelity_millionths:$overall_fidelity_millionths,
+      evaluated_candidate_count:5,
+      exact_match_count:(if $decision == "pass" then 1 else 0 end),
+      positive_candidate_count:($frontier | map(select(.expected_fidelity_delta_millionths > 0)) | length),
+      fail_closed_reasons:[],
+      candidates:($frontier | map(. + {description:(.candidate_id // "candidate")})),
+      artifact_paths:{
+        counterfactual_backtest_report_json:$artifact_path,
+        tuning_plan_json:$tuning_plan_path,
+        frontier_json:$frontier_path,
+        events_jsonl:null,
+        commands_txt:null,
+        report_md:null
+      }
+    }' >"${fixture_dir}/counterfactual_backtest_report.json"
+
+  jq -n \
+    --arg decision "$tuning_decision" \
+    --arg plan_class "$plan_class" \
+    --argjson recommended_candidate "$recommended_candidate_json" \
+    --argjson frontier "$frontier_json" \
+    --argjson operator_notes "$operator_notes_json" \
+    '{
+      schema_version:"franken-engine.swarm-execution-queue-tuning-plan.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      plan_class:$plan_class,
+      recommended_candidate:$recommended_candidate,
+      ranked_candidates:$frontier,
+      operator_notes:$operator_notes,
+      mutation_policy:{
+        changes_active_queue:false,
+        applies_live_retuning:false,
+        advisory_only:true
+      },
+      plan_id:"swarm-execution-queue-counterfactual-smoke"
+    }' >"${fixture_dir}/tuning_plan.json"
+
+  jq -n --argjson frontier "$frontier_json" '{
+    schema_version:"franken-engine.swarm-execution-queue-counterfactual-frontier.v1",
+    source_revision:"smoke-rev",
+    frontier:$frontier
+  }' >"${fixture_dir}/frontier.json"
+}
+
 write_healthy_fixtures() {
   local fixture_dir="$1"
 
@@ -642,6 +820,7 @@ write_healthy_fixtures() {
     findings:[]
   }' >"${fixture_dir}/staged_ownership_report.json"
   write_predictive_extension_fixtures "$fixture_dir"
+  write_queue_fidelity_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -946,6 +1125,14 @@ run_case() {
       write_checkpoint_restore_fixtures "$fixture_dir" "stale"
       write_execution_queue_advisory_fixtures "$fixture_dir" "blocked_parent"
       ;;
+    queue_fidelity_high_drift)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_fidelity_fixtures "$fixture_dir" "high_drift"
+      ;;
+    queue_fidelity_insufficient_evidence)
+      write_healthy_fixtures "$fixture_dir"
+      write_queue_fidelity_fixtures "$fixture_dir" "insufficient_evidence"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -971,6 +1158,11 @@ run_case() {
   [[ -f "${fixture_dir}/execution_queue_risk_budget_receipt.json" ]] && extra_args+=(--execution-queue-risk-budget-json "${fixture_dir}/execution_queue_risk_budget_receipt.json")
   [[ -f "${fixture_dir}/execution_queue_bottleneck_report.json" ]] && extra_args+=(--execution-queue-bottleneck-report-json "${fixture_dir}/execution_queue_bottleneck_report.json")
   [[ -f "${fixture_dir}/execution_queue_run_manifest.json" ]] && extra_args+=(--execution-queue-run-manifest-json "${fixture_dir}/execution_queue_run_manifest.json")
+  [[ -f "${fixture_dir}/fidelity_score_receipt.json" ]] && extra_args+=(--queue-fidelity-score-receipt-json "${fixture_dir}/fidelity_score_receipt.json")
+  [[ -f "${fixture_dir}/drift_ledger.json" ]] && extra_args+=(--queue-drift-ledger-json "${fixture_dir}/drift_ledger.json")
+  [[ -f "${fixture_dir}/counterfactual_backtest_report.json" ]] && extra_args+=(--queue-counterfactual-backtest-report-json "${fixture_dir}/counterfactual_backtest_report.json")
+  [[ -f "${fixture_dir}/tuning_plan.json" ]] && extra_args+=(--queue-tuning-plan-json "${fixture_dir}/tuning_plan.json")
+  [[ -f "${fixture_dir}/frontier.json" ]] && extra_args+=(--queue-tuning-frontier-json "${fixture_dir}/frontier.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1031,6 +1223,14 @@ run_case() {
     and (.predictive_dashboard.execution_queue_advisory.deferred_items | type == "array")
     and (.predictive_dashboard.execution_queue_advisory.bottlenecks | type == "array")
     and (.predictive_dashboard.execution_queue_advisory.restore_dependency_state | type == "string")
+    and (.predictive_dashboard.queue_fidelity.trust_level | type == "string")
+    and (.predictive_dashboard.queue_fidelity.drift_class | type == "string")
+    and ((.predictive_dashboard.queue_fidelity.highest_severity_mismatch == null) or (.predictive_dashboard.queue_fidelity.highest_severity_mismatch | type == "object"))
+    and ((.predictive_dashboard.queue_fidelity.top_tuning_recommendation == null) or (.predictive_dashboard.queue_fidelity.top_tuning_recommendation | type == "object"))
+    and (.predictive_dashboard.queue_fidelity.frontier | type == "array")
+    and (.predictive_dashboard.queue_fidelity.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.queue_fidelity.mutation_policy.changes_active_queue == false)
+    and (.predictive_dashboard.queue_fidelity.mutation_policy.applies_live_retuning == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1045,6 +1245,11 @@ run_case() {
     and ((.artifact_paths.execution_queue_risk_budget_json == null) or (.artifact_paths.execution_queue_risk_budget_json | type == "string"))
     and ((.artifact_paths.execution_queue_bottleneck_report_json == null) or (.artifact_paths.execution_queue_bottleneck_report_json | type == "string"))
     and ((.artifact_paths.execution_queue_run_manifest_json == null) or (.artifact_paths.execution_queue_run_manifest_json | type == "string"))
+    and ((.artifact_paths.queue_fidelity_score_receipt_json == null) or (.artifact_paths.queue_fidelity_score_receipt_json | type == "string"))
+    and ((.artifact_paths.queue_drift_ledger_json == null) or (.artifact_paths.queue_drift_ledger_json | type == "string"))
+    and ((.artifact_paths.queue_counterfactual_backtest_report_json == null) or (.artifact_paths.queue_counterfactual_backtest_report_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_plan_json == null) or (.artifact_paths.queue_tuning_plan_json | type == "string"))
+    and ((.artifact_paths.queue_tuning_frontier_json == null) or (.artifact_paths.queue_tuning_frontier_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1076,6 +1281,10 @@ run_case() {
         and .predictive_dashboard.execution_queue_advisory.restore_dependency_state == "clear"
         and (.predictive_dashboard.execution_queue_advisory.top_recommended_starts | length) == 1
         and (.predictive_dashboard.execution_queue_advisory.bottlenecks | length) == 1
+        and .predictive_dashboard.queue_fidelity.trust_level == "trustworthy"
+        and .predictive_dashboard.queue_fidelity.drift_class == "none"
+        and .predictive_dashboard.queue_fidelity.highest_severity_mismatch == null
+        and .predictive_dashboard.queue_fidelity.top_tuning_recommendation == null
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1094,6 +1303,7 @@ run_case() {
         and .predictive_dashboard.starvation_rescue.artifact_status == "missing"
         and .predictive_dashboard.checkpoint_restore.artifact_status == "missing"
         and .predictive_dashboard.execution_queue_advisory.artifact_status == "missing"
+        and .predictive_dashboard.queue_fidelity.artifact_status == "missing"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -1178,6 +1388,29 @@ run_case() {
         and any(.degraded[]; .component == "execution_queue_advisory")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    queue_fidelity_high_drift)
+      jq -e '
+        .predictive_dashboard.queue_fidelity.trust_level == "degraded"
+        and .predictive_dashboard.queue_fidelity.drift_class == "proof_brownout_miss"
+        and .predictive_dashboard.queue_fidelity.highest_severity_mismatch.mismatch_class == "proof_brownout_miss"
+        and .predictive_dashboard.queue_fidelity.highest_severity_mismatch.task_id == "bd-ready-a"
+        and .predictive_dashboard.queue_fidelity.tuning_plan_class == "conflicting_improvements"
+        and .predictive_dashboard.queue_fidelity.top_tuning_recommendation.candidate_id == "raise_proof_health_penalty"
+        and .summary.queue_tuning_top_recommendation == "raise_proof_health_penalty"
+        and any(.degraded[]; .component == "queue_fidelity")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    queue_fidelity_insufficient_evidence)
+      jq -e '
+        .predictive_dashboard.queue_fidelity.trust_level == "degraded"
+        and .predictive_dashboard.queue_fidelity.drift_class == "missing_outcome"
+        and .predictive_dashboard.queue_fidelity.highest_severity_mismatch.mismatch_class == "missing_outcome"
+        and .predictive_dashboard.queue_fidelity.tuning_plan_class == "insufficient_evidence"
+        and .predictive_dashboard.queue_fidelity.top_tuning_recommendation.candidate_id == "require_aftermath_evidence"
+        and .predictive_dashboard.queue_fidelity.top_tuning_recommendation.manual_review_required == true
+        and any(.degraded[]; .component == "queue_fidelity")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -1211,6 +1444,8 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("forecast_low_confidence"))
     and (.golden_fixture_cases | index("execution_queue_conservative"))
     and (.golden_fixture_cases | index("execution_queue_restore_blocked"))
+    and (.golden_fixture_cases | index("queue_fidelity_high_drift"))
+    and (.golden_fixture_cases | index("queue_fidelity_insufficient_evidence"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -1226,6 +1461,10 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.top_recommended_starts"))
     and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.deferred_items"))
     and (.required_dashboard_fields | index("predictive_dashboard.execution_queue_advisory.restore_dependency_state"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.trust_level"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.drift_class"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.highest_severity_mismatch"))
+    and (.required_dashboard_fields | index("predictive_dashboard.queue_fidelity.top_tuning_recommendation"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -1250,7 +1489,10 @@ assert_dashboard_contract_truth() {
   grep -Fq 'scripts/swarm_checkpoint_restore_conformance_gate.sh' "$contract_doc"
   grep -Fq 'docs/swarm_checkpoint_restore_conformance_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'docs/swarm_execution_queue_runner_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_fidelity_scorer_contract_v1.json' "$contract_doc"
+  grep -Fq 'docs/swarm_execution_queue_counterfactual_planner_contract_v1.json' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
+  grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -1278,6 +1520,8 @@ run_selftest() {
   run_case "forecast_low_confidence" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "execution_queue_conservative" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "execution_queue_restore_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_fidelity_high_drift" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "queue_fidelity_insufficient_evidence" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

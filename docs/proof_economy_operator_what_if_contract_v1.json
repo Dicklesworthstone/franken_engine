@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.proof-economy-operator-what-if-contract.v1",
+  "output_schema": "franken-engine.proof-economy-operator-what-if-report.v1",
+  "dashboard_schema": "franken-engine.proof-economy-operator-dashboard-contract.v1",
+  "required_inputs": [
+    "--replay-trace-json"
+  ],
+  "optional_inputs": [
+    "--counterfactual-report-json",
+    "--brownout-report-json",
+    "--output-dir"
+  ],
+  "required_artifacts": [
+    "what_if_report.json",
+    "dashboard_contract.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_dashboard_fields": [
+    "queue_depth",
+    "fair_share_score_millionths",
+    "p1_slo_risk",
+    "brownout_state",
+    "recommended_operator_action"
+  ],
+  "required_upstream_schemas": [
+    "franken-engine.proof-economy-replay-trace.v1",
+    "franken-engine.proof-economy-counterfactual-replay-report.v1",
+    "franken-engine.proof-queue-brownout-report.v1"
+  ],
+  "ui_reuse_policy": "Future interactive UI must reuse /dp/frankentui; this contract is JSON and Markdown only.",
+  "determinism": {
+    "execution_mode": "fixture-only",
+    "hash": "what_if_id is sha256 over canonical what-if report core JSON"
+  },
+  "failure_policy": {
+    "missing_counterfactual_report": "fail_closed with exit code 42 and actionable remediation",
+    "missing_brownout_report": "fail_closed with exit code 42 and actionable remediation",
+    "brownout_fail_closed": "fail_closed with exit code 42 and brownout remediation"
+  }
+}

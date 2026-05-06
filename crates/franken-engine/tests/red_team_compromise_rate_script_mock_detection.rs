@@ -6,7 +6,7 @@ use std::process::Command;
 use serde_json::Value;
 
 #[test]
-fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
+fn red_team_compromise_rate_script_refuses_placeholder_metric_rows() {
     // Use isolated CARGO_TARGET_DIR as required
     let test_target_dir = "/tmp/test_compromise_rate_mock_detection";
 
@@ -17,7 +17,7 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
     // Create a temporary test directory
     let test_artifact_dir = "/tmp/test_red_team_compromise_rate_bd_12vhs";
 
-    // Execute the script in pass mode (should use stubs since real scenarios will fall back)
+    // Force the prerequisite failure path so the script cannot discover a repo-local binary.
     let output = Command::new("bash")
         .arg(&script_path)
         .arg("pass")
@@ -28,6 +28,11 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
             test_artifact_dir,
         )
         .env("RED_TEAM_COMPROMISE_RATE_METRIC_RUN_ID", "test_bd_12vhs")
+        .env(
+            "RED_TEAM_COMPROMISE_RATE_DISABLE_FRANKENCTL_AUTO_DISCOVERY",
+            "true",
+        )
+        .env_remove("FRANKENENGINE_BIN")
         .output()
         .expect("Failed to execute compromise rate script");
 
@@ -37,10 +42,10 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
     println!("Script stdout: {}", stdout);
     println!("Script stderr: {}", stderr);
 
-    // Script should succeed but warn about stubs
+    // The script must fail closed instead of emitting placeholder scenario rows.
     assert!(
-        output.status.success() || output.status.code() == Some(0),
-        "Script should succeed even with stubs, exit code: {:?}, stderr: {}",
+        !output.status.success(),
+        "Script should fail closed when frankenctl is unavailable, exit code: {:?}, stderr: {}",
         output.status.code(),
         stderr
     );
@@ -53,50 +58,19 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
     let metric: Value =
         serde_json::from_str(&metric_content).expect("Failed to parse metric artifact JSON");
 
-    // Verify defensive pattern: TARGETED status when using stubs
-    if let Some(has_stubs) = metric.get("has_placeholder_data").and_then(|v| v.as_bool()) {
-        if has_stubs {
-            // When stubs are detected, measurement_status should be "targeted"
-            assert_eq!(
-                metric["measurement_status"].as_str().unwrap(),
-                "targeted",
-                "When using placeholder data, measurement_status must be 'targeted', not 'observed'"
-            );
-
-            // Confidence should be 0 when using stubs
-            assert_eq!(
-                metric["confidence_millionths"].as_u64().unwrap(),
-                0,
-                "Confidence must be 0 when using placeholder data"
-            );
-
-            // Should have remediation note
-            assert!(
-                metric["remediation_note"].is_string(),
-                "Should have remediation note when using stubs"
-            );
-
-            println!("✓ Defensive pattern working: TARGETED status with stubs detected");
-        } else {
-            // When real data is used, should have observed status
-            assert_eq!(
-                metric["measurement_status"].as_str().unwrap(),
-                "observed",
-                "When using real data, measurement_status should be 'observed'"
-            );
-
-            // Confidence should be 100% when using real data
-            assert_eq!(
-                metric["confidence_millionths"].as_u64().unwrap(),
-                1_000_000,
-                "Confidence should be 100% when using real data"
-            );
-
-            println!("✓ Real data detected: OBSERVED status with full confidence");
-        }
-    } else {
-        panic!("Metric artifact should include has_placeholder_data field");
-    }
+    assert_eq!(metric["has_placeholder_data"].as_bool(), Some(false));
+    assert_eq!(metric["placeholder_scenario_count"].as_u64(), Some(0));
+    assert_eq!(metric["measurement_status"].as_str(), Some("blocked"));
+    assert_eq!(metric["confidence_millionths"].as_u64(), Some(0));
+    assert_eq!(metric["coverage_millionths"].as_u64(), Some(0));
+    assert_eq!(
+        metric["blocker_reason"].as_str(),
+        Some("frankenctl_unavailable")
+    );
+    assert!(
+        metric["remediation_note"].is_string(),
+        "Blocked metric artifact should include remediation guidance"
+    );
 
     // Check that metric report exists and includes proper decision logic
     let report_path = format!("{}/test_bd_12vhs/metric_report.json", test_artifact_dir);
@@ -106,23 +80,26 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
     let report: Value =
         serde_json::from_str(&report_content).expect("Failed to parse metric report JSON");
 
-    // When using stubs, decision should be "targeted" not "pass"/"fail"
-    if metric["has_placeholder_data"].as_bool().unwrap_or(false) {
-        assert!(
-            report["decision"].as_str().unwrap() == "targeted"
-                || report["reason"]
-                    .as_str()
-                    .unwrap()
-                    .contains("awaiting_real_scenario_measurements"),
-            "Decision should reflect stub/placeholder status"
-        );
-    }
+    assert_eq!(report["decision"].as_str(), Some("fail_closed"));
+    assert_eq!(report["reason"].as_str(), Some("frankenctl_unavailable"));
+    assert_eq!(report["scenarios_total"].as_u64(), Some(0));
+    assert_eq!(
+        report["blocker"]["placeholder_rows_emitted"].as_bool(),
+        Some(false)
+    );
+
+    let scenarios_path = format!("{}/test_bd_12vhs/scenarios.jsonl", test_artifact_dir);
+    let scenarios_content = std::fs::read_to_string(&scenarios_path)
+        .unwrap_or_else(|e| panic!("Failed to read scenarios at {}: {}", scenarios_path, e));
+    assert!(
+        scenarios_content.trim().is_empty(),
+        "Blocked bundle must not emit placeholder scenarios: {}",
+        scenarios_content
+    );
 
     // Clean up test directory
     let _ = std::fs::remove_dir_all(test_artifact_dir);
     let _ = std::fs::remove_dir_all(test_target_dir);
 
-    println!(
-        "✓ Red team compromise rate script correctly detects stubs and applies defensive pattern"
-    );
+    println!("Red team compromise rate script refuses placeholder metric rows");
 }

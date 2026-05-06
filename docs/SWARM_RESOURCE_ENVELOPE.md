@@ -4,12 +4,12 @@ The swarm resource envelope is the SWARM-SCALE-I evidence contract for turning
 host, worker, proof-cache, RCH, bead, and reservation snapshots into one
 deterministic capacity record for massive agent swarms.
 
-The first surface is fixture-fed, proof-only, and advisory-only. It helps an
+The producer chain is fixture-fed, proof-only, and advisory-only. It helps an
 operator decide how many script, proof, and build lanes can safely run on a
-64+ core / 256GB+ host without confusing stale evidence, disk pressure, local
-RCH fallback, or worker-slot contradictions for safe capacity. It does not query
-live services or mutate `br`, Agent Mail, reservations, target directories, RCH,
-Cargo, queue policy, or workers.
+64+ core / 256GB+ host without confusing stale evidence, disk pressure,
+local RCH fallback fail-closed markers, or worker-slot contradictions for safe
+capacity. It does not query live services or mutate `br`, Agent Mail,
+reservations, target directories, RCH, Cargo, queue policy, or workers.
 
 Machine-readable contract:
 `docs/swarm_resource_envelope_contract_v1.json`.
@@ -41,9 +41,10 @@ workflows:
   heavy Cargo/RCH proof work.
 
 Missing optional snapshots must be visible degraded evidence. Contradictory slot
-counts, stale timestamps for critical capacity inputs, local RCH fallback in a
-remote proof path, unsafe mutation claims, or missing required host identity must
-fail closed or block admission rather than silently admit more work.
+counts, stale timestamps for critical capacity inputs, local RCH fallback
+fail-closed evidence in a remote proof path, unsafe mutation claims, or missing
+required host identity must fail closed or block admission rather than silently
+admit more work.
 
 ## Envelope Fields
 
@@ -171,8 +172,8 @@ artifacts:
   remains degraded, not complete.
 - `blocked_saturated_capacity`: CPU, memory, disk, or RCH slots are saturated
   with fresh evidence, producing defer guidance rather than fail-closed.
-- `contaminated_local_rch_fallback`: local fallback marker invalidates claimed
-  remote capacity proof.
+- `contaminated_local_rch_fallback`: local fallback marker fails closed and
+  invalidates claimed remote capacity proof.
 - `contradictory_slot_or_memory_evidence`: source snapshots disagree on worker
   slots, memory totals, or target-dir pressure and fail closed.
 - `unsafe_mutation_wording`: docs or generated runbook output claim live worker,
@@ -183,5 +184,11 @@ artifacts:
 ```bash
 jq empty docs/swarm_resource_envelope_contract_v1.json
 bash scripts/rch_policy_compliance_gate.sh docs/SWARM_RESOURCE_ENVELOPE.md docs/swarm_resource_envelope_contract_v1.json
-git diff --check -- docs/SWARM_RESOURCE_ENVELOPE.md docs/swarm_resource_envelope_contract_v1.json
+bash -n scripts/e2e/swarm_resource_envelope_no_mock_drill.sh scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh
+shellcheck -x scripts/e2e/swarm_resource_envelope_no_mock_drill.sh scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh
+bash scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh check
+bash scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh selftest
+bash scripts/e2e/swarm_resource_envelope_no_mock_drill.sh check
+bash scripts/e2e/swarm_resource_envelope_no_mock_drill.sh selftest
+git diff --check -- docs/SWARM_RESOURCE_ENVELOPE.md docs/swarm_resource_envelope_contract_v1.json scripts/e2e/swarm_resource_envelope_no_mock_drill.sh scripts/e2e/swarm_resource_envelope_runbook_truth_gate.sh
 ```

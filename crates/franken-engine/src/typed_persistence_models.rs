@@ -1907,6 +1907,13 @@ impl SpecializationIndexEntry {
             .order_by(Expr::col("specialization_id").asc())
     }
 
+    /// Build a deterministic typed lookup for all entries belonging to one specialized version.
+    pub fn select_by_specialized_version(specialized_version: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("specialized_version").eq(specialized_version.into()))
+            .order_by(Expr::col("specialization_id").asc())
+    }
+
     /// Build a deterministic typed lookup for all active specializations.
     pub fn select_active() -> Select<Self> {
         Select::<Self>::new()
@@ -1951,6 +1958,10 @@ impl TypedStoreRecord for SpecializationIndexEntry {
             (
                 "specialization_type".to_string(),
                 self.specialization_type.clone(),
+            ),
+            (
+                "specialized_version".to_string(),
+                self.specialized_version.clone(),
             ),
             ("status".to_string(), self.status.clone()),
         ]);

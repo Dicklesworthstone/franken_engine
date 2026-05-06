@@ -15,7 +15,9 @@ use crate::engine_object_id::EngineObjectId;
 use crate::proof_specialization_receipt::{OptimizationClass, ProofType};
 use crate::security_epoch::SecurityEpoch;
 use crate::storage_adapter::{EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery};
-use crate::typed_persistence_models::{SpecializationIndexEntry, TypedStorageAdapterExt};
+use crate::typed_persistence_models::{
+    SpecializationIndexEntry, TypedStorageAdapterExt, TypedStoreRecord, allocate_typed_record_id,
+};
 
 // ---------------------------------------------------------------------------
 // Record types stored in the index
@@ -181,6 +183,147 @@ const STORE: StoreKind = StoreKind::SpecializationIndex;
 const RECEIPT_PREFIX: &str = "receipt:";
 const BENCHMARK_PREFIX: &str = "benchmark:";
 const INVALIDATION_PREFIX: &str = "invalidation:";
+const TYPED_RECEIPT_SCHEMA_VERSION: &str = "specialization_receipt_typed_primary_v1";
+const TYPED_RECEIPT_RECORD_TYPE: &str = "specialization_receipt";
+
+fn typed_specialization_key_prefix() -> String {
+    format!("typed/{}/", STORE.as_str())
+}
+
+fn receipt_storage_error(detail: impl Into<String>) -> SpecializationIndexError {
+    SpecializationIndexError::Storage(detail.into())
+}
+
+fn parse_engine_object_id(
+    field_name: &str,
+    raw: &str,
+) -> Result<EngineObjectId, SpecializationIndexError> {
+    EngineObjectId::from_hex(raw).map_err(|err| {
+        receipt_storage_error(format!(
+            "typed specialization field `{field_name}` is not a valid EngineObjectId: {err}"
+        ))
+    })
+}
+
+fn parse_proof_type(raw: &str) -> Result<ProofType, SpecializationIndexError> {
+    match raw {
+        "capability_witness" => Ok(ProofType::CapabilityWitness),
+        "flow_proof" => Ok(ProofType::FlowProof),
+        "replay_motif" => Ok(ProofType::ReplayMotif),
+        other => Err(receipt_storage_error(format!(
+            "typed specialization proof_type `{other}` is unsupported"
+        ))),
+    }
+}
+
+fn parse_optimization_class(raw: &str) -> Result<OptimizationClass, SpecializationIndexError> {
+    match raw {
+        "hostcall_dispatch_specialization" => Ok(OptimizationClass::HostcallDispatchSpecialization),
+        "ifc_check_elision" => Ok(OptimizationClass::IfcCheckElision),
+        "superinstruction_fusion" => Ok(OptimizationClass::SuperinstructionFusion),
+        "path_elimination" => Ok(OptimizationClass::PathElimination),
+        other => Err(receipt_storage_error(format!(
+            "typed specialization optimization_class `{other}` is unsupported"
+        ))),
+    }
+}
+
+fn u64_to_i64(field_name: &str, value: u64) -> Result<i64, SpecializationIndexError> {
+    i64::try_from(value).map_err(|_| {
+        receipt_storage_error(format!(
+            "typed specialization field `{field_name}` value {value} does not fit in i64"
+        ))
+    })
+}
+
+fn i64_to_u64(field_name: &str, value: i64) -> Result<u64, SpecializationIndexError> {
+    u64::try_from(value).map_err(|_| {
+        receipt_storage_error(format!(
+            "typed specialization field `{field_name}` value {value} is negative"
+        ))
+    })
+}
+
+fn timestamp_ns_to_ms(timestamp_ns: u64) -> Result<i64, SpecializationIndexError> {
+    u64_to_i64("timestamp_ns", timestamp_ns / 1_000_000)
+}
+
+fn timestamp_ms_to_ns(timestamp_ms: i64) -> Result<u64, SpecializationIndexError> {
+    i64_to_u64("created_timestamp_ms", timestamp_ms)?
+        .checked_mul(1_000_000)
+        .ok_or_else(|| {
+            receipt_storage_error(format!(
+                "typed specialization created_timestamp_ms {timestamp_ms} overflows nanoseconds"
+            ))
+        })
+}
+
+fn parse_entry_metadata(
+    entry: &SpecializationIndexEntry,
+) -> Result<serde_json::Value, SpecializationIndexError> {
+    let metadata: serde_json::Value =
+        serde_json::from_str(&entry.metadata_json).map_err(|err| {
+            receipt_storage_error(format!(
+                "typed specialization metadata for id {} is not valid JSON: {err}",
+                entry.specialization_id
+            ))
+        })?;
+    if metadata.is_object() {
+        Ok(metadata)
+    } else {
+        Err(receipt_storage_error(format!(
+            "typed specialization metadata for id {} is not a JSON object",
+            entry.specialization_id
+        )))
+    }
+}
+
+fn metadata_string<'a>(metadata: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    metadata.get(key).and_then(serde_json::Value::as_str)
+}
+
+fn legacy_payload_string<'a>(metadata: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    metadata
+        .get("legacy_source")
+        .and_then(|legacy| legacy.get("legacy_payload"))
+        .and_then(|payload| payload.get(key))
+        .and_then(serde_json::Value::as_str)
+}
+
+fn legacy_payload_u64(metadata: &serde_json::Value, key: &str) -> Option<u64> {
+    metadata
+        .get("legacy_source")
+        .and_then(|legacy| legacy.get("legacy_payload"))
+        .and_then(|payload| payload.get(key))
+        .and_then(serde_json::Value::as_u64)
+}
+
+fn proof_types_from_metadata(
+    metadata: &serde_json::Value,
+) -> Result<Option<Vec<ProofType>>, SpecializationIndexError> {
+    let Some(values) = metadata.get("proof_types") else {
+        return Ok(None);
+    };
+    let Some(raw_types) = values.as_array() else {
+        return Err(receipt_storage_error(
+            "typed specialization metadata `proof_types` is not an array",
+        ));
+    };
+    raw_types
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    receipt_storage_error(
+                        "typed specialization metadata `proof_types` contains non-string value",
+                    )
+                })
+                .and_then(parse_proof_type)
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
 
 /// Frankensqlite-backed specialization index for audit queries.
 pub struct SpecializationIndex<S: StorageAdapter> {
@@ -222,6 +365,283 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         });
     }
 
+    fn legacy_receipt_key(receipt_id: &EngineObjectId) -> String {
+        format!("{RECEIPT_PREFIX}{}", receipt_id.to_hex())
+    }
+
+    fn legacy_receipt_error(key: &str) -> SpecializationIndexError {
+        receipt_storage_error(format!(
+            "legacy generic specialization receipt `{key}` requires explicit typed mapping before primary SpecializationIndex reads"
+        ))
+    }
+
+    fn fail_if_legacy_receipt_exists(
+        &mut self,
+        receipt_id: &EngineObjectId,
+        ctx: &EventContext,
+    ) -> Result<(), SpecializationIndexError> {
+        let key = Self::legacy_receipt_key(receipt_id);
+        if self.storage.get(STORE, &key, ctx)?.is_some() {
+            return Err(Self::legacy_receipt_error(&key));
+        }
+        Ok(())
+    }
+
+    fn fail_if_legacy_receipts_exist(
+        &mut self,
+        ctx: &EventContext,
+    ) -> Result<(), SpecializationIndexError> {
+        let records = self.storage.query(
+            STORE,
+            &StoreQuery {
+                key_prefix: Some(RECEIPT_PREFIX.to_string()),
+                metadata_filters: BTreeMap::new(),
+                limit: Some(1),
+            },
+            ctx,
+        )?;
+        if let Some(record) = records.first() {
+            return Err(Self::legacy_receipt_error(&record.key));
+        }
+        Ok(())
+    }
+
+    fn query_typed_receipt_entries(
+        &mut self,
+        metadata_filters: BTreeMap<String, String>,
+        ctx: &EventContext,
+    ) -> Result<Vec<SpecializationIndexEntry>, SpecializationIndexError> {
+        let mut entries = self.storage.query_typed::<SpecializationIndexEntry>(
+            &StoreQuery {
+                key_prefix: Some(typed_specialization_key_prefix()),
+                metadata_filters,
+                limit: None,
+            },
+            ctx,
+        )?;
+        entries.sort_by(|a, b| {
+            a.specialized_version
+                .cmp(&b.specialized_version)
+                .then(a.specialization_id.cmp(&b.specialization_id))
+        });
+        Ok(entries)
+    }
+
+    fn typed_entries_for_receipt(
+        &mut self,
+        receipt_id: &EngineObjectId,
+        ctx: &EventContext,
+    ) -> Result<Vec<SpecializationIndexEntry>, SpecializationIndexError> {
+        self.query_typed_receipt_entries(
+            BTreeMap::from([("specialized_version".to_string(), receipt_id.to_hex())]),
+            ctx,
+        )
+    }
+
+    fn typed_metadata_json(
+        record: &SpecializationRecord,
+        proof_ordinal: usize,
+        proof_type: ProofType,
+        empty_proof_inputs: bool,
+    ) -> Result<String, SpecializationIndexError> {
+        let proof_types = record
+            .proof_types
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        serde_json::to_string(&serde_json::json!({
+            "schema_version": TYPED_RECEIPT_SCHEMA_VERSION,
+            "record_type": TYPED_RECEIPT_RECORD_TYPE,
+            "receipt_id": record.receipt_id.to_hex(),
+            "extension_id": record.extension_id.clone(),
+            "timestamp_ns": record.timestamp_ns,
+            "proof_ordinal": proof_ordinal,
+            "proof_type": proof_type.to_string(),
+            "proof_types": proof_types,
+            "empty_proof_inputs": empty_proof_inputs,
+        }))
+        .map_err(|err| {
+            SpecializationIndexError::SerializationFailed(format!(
+                "failed to serialize typed specialization metadata: {err}"
+            ))
+        })
+    }
+
+    fn typed_entries_from_receipt(
+        &mut self,
+        record: &SpecializationRecord,
+        ctx: &EventContext,
+    ) -> Result<Vec<SpecializationIndexEntry>, SpecializationIndexError> {
+        let receipt_hex = record.receipt_id.to_hex();
+        let security_epoch = u64_to_i64("epoch", record.epoch.as_u64())?;
+        let created_timestamp_ms = timestamp_ns_to_ms(record.timestamp_ns)?;
+        let status = if record.active { "active" } else { "archived" }.to_string();
+
+        if record.proof_input_ids.is_empty() {
+            let natural_key = format!("{TYPED_RECEIPT_RECORD_TYPE}/{receipt_hex}/proof/empty");
+            let specialization_id = allocate_typed_record_id::<SpecializationIndexEntry, _>(
+                &mut self.storage,
+                &natural_key,
+                ctx,
+            )
+            .map_err(SpecializationIndexError::from)?;
+            return Ok(vec![SpecializationIndexEntry {
+                specialization_id,
+                proof_artifact_id: receipt_hex.clone(),
+                specialization_type: record.optimization_class.to_string(),
+                specialized_version: receipt_hex.clone(),
+                status,
+                invalidation_timestamp_ms: None,
+                invalidation_reason: None,
+                security_epoch,
+                created_timestamp_ms,
+                specialized_content_hash: receipt_hex,
+                metadata_json: Self::typed_metadata_json(
+                    record,
+                    0,
+                    ProofType::CapabilityWitness,
+                    true,
+                )?,
+            }]);
+        }
+
+        let mut entries = Vec::with_capacity(record.proof_input_ids.len());
+        for (idx, proof_id) in record.proof_input_ids.iter().enumerate() {
+            let proof_type = record
+                .proof_types
+                .get(idx)
+                .copied()
+                .unwrap_or(ProofType::CapabilityWitness);
+            let natural_key = format!("{TYPED_RECEIPT_RECORD_TYPE}/{receipt_hex}/proof/{idx}");
+            let specialization_id = allocate_typed_record_id::<SpecializationIndexEntry, _>(
+                &mut self.storage,
+                &natural_key,
+                ctx,
+            )
+            .map_err(SpecializationIndexError::from)?;
+            entries.push(SpecializationIndexEntry {
+                specialization_id,
+                proof_artifact_id: proof_id.to_hex(),
+                specialization_type: record.optimization_class.to_string(),
+                specialized_version: receipt_hex.clone(),
+                status: status.clone(),
+                invalidation_timestamp_ms: None,
+                invalidation_reason: None,
+                security_epoch,
+                created_timestamp_ms,
+                specialized_content_hash: receipt_hex.clone(),
+                metadata_json: Self::typed_metadata_json(record, idx, proof_type, false)?,
+            });
+        }
+        Ok(entries)
+    }
+
+    fn receipts_from_typed_entries(
+        entries: Vec<SpecializationIndexEntry>,
+    ) -> Result<Vec<SpecializationRecord>, SpecializationIndexError> {
+        let mut grouped: BTreeMap<String, Vec<SpecializationIndexEntry>> = BTreeMap::new();
+        for entry in entries {
+            grouped
+                .entry(entry.specialized_version.clone())
+                .or_default()
+                .push(entry);
+        }
+
+        let mut receipts = Vec::with_capacity(grouped.len());
+        for (_, mut group) in grouped {
+            group.sort_by_key(|entry| entry.specialization_id);
+            receipts.push(Self::receipt_from_typed_entries(&group)?);
+        }
+        receipts.sort_by(|a, b| a.receipt_id.cmp(&b.receipt_id));
+        Ok(receipts)
+    }
+
+    fn receipt_from_typed_entries(
+        entries: &[SpecializationIndexEntry],
+    ) -> Result<SpecializationRecord, SpecializationIndexError> {
+        let Some(first) = entries.first() else {
+            return Err(receipt_storage_error(
+                "typed specialization receipt group is empty",
+            ));
+        };
+        let receipt_id = parse_engine_object_id("specialized_version", &first.specialized_version)?;
+        let optimization_class = parse_optimization_class(&first.specialization_type)?;
+        let epoch = SecurityEpoch::from_raw(i64_to_u64("security_epoch", first.security_epoch)?);
+        let first_metadata = parse_entry_metadata(first)?;
+        let extension_id = metadata_string(&first_metadata, "extension_id")
+            .or_else(|| legacy_payload_string(&first_metadata, "extension_id"))
+            .ok_or_else(|| {
+                receipt_storage_error(format!(
+                    "typed specialization receipt `{}` is missing extension_id metadata",
+                    first.specialized_version
+                ))
+            })?
+            .to_string();
+        let timestamp_ns = first_metadata
+            .get("timestamp_ns")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| legacy_payload_u64(&first_metadata, "timestamp_ns"))
+            .map(Ok)
+            .unwrap_or_else(|| timestamp_ms_to_ns(first.created_timestamp_ms))?;
+        let mut proof_input_ids = Vec::new();
+        let mut proof_types_from_rows = Vec::new();
+        let proof_types_from_record = proof_types_from_metadata(&first_metadata)?;
+
+        for entry in entries {
+            if entry.specialized_version != first.specialized_version {
+                return Err(receipt_storage_error(
+                    "typed specialization receipt group contains mixed specialized_version values",
+                ));
+            }
+            if entry.specialization_type != first.specialization_type {
+                return Err(receipt_storage_error(format!(
+                    "typed specialization receipt `{}` contains mixed specialization_type values",
+                    first.specialized_version
+                )));
+            }
+            if entry.security_epoch != first.security_epoch {
+                return Err(receipt_storage_error(format!(
+                    "typed specialization receipt `{}` contains mixed security_epoch values",
+                    first.specialized_version
+                )));
+            }
+
+            let metadata = parse_entry_metadata(entry)?;
+            if metadata
+                .get("empty_proof_inputs")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            proof_input_ids.push(parse_engine_object_id(
+                "proof_artifact_id",
+                &entry.proof_artifact_id,
+            )?);
+            let proof_type_raw = metadata_string(&metadata, "proof_type")
+                .or_else(|| metadata_string(&metadata, "legacy_current_proof_type"))
+                .ok_or_else(|| {
+                    receipt_storage_error(format!(
+                        "typed specialization entry {} is missing proof_type metadata",
+                        entry.specialization_id
+                    ))
+                })?;
+            proof_types_from_rows.push(parse_proof_type(proof_type_raw)?);
+        }
+
+        Ok(SpecializationRecord {
+            receipt_id,
+            proof_input_ids,
+            proof_types: proof_types_from_record.unwrap_or(proof_types_from_rows),
+            optimization_class,
+            extension_id,
+            epoch,
+            timestamp_ns,
+            active: entries.iter().all(|entry| entry.status == "active"),
+        })
+    }
+
     // -----------------------------------------------------------------------
     // CRUD: Specialization Records
     // -----------------------------------------------------------------------
@@ -232,11 +652,11 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         record: &SpecializationRecord,
         trace_id: &str,
     ) -> Result<(), SpecializationIndexError> {
-        let key = format!("{RECEIPT_PREFIX}{}", record.receipt_id.to_hex());
         let ctx = self.make_ctx(trace_id);
 
-        // Check for duplicates
-        if self.storage.get(STORE, &key, &ctx)?.is_some() {
+        self.fail_if_legacy_receipt_exists(&record.receipt_id, &ctx)?;
+        let existing = self.typed_entries_for_receipt(&record.receipt_id, &ctx)?;
+        if !existing.is_empty() {
             self.emit_event(
                 trace_id,
                 "insert_receipt",
@@ -248,19 +668,8 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
             });
         }
 
-        let value = serde_json::to_vec(record)
-            .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-
-        let mut metadata = BTreeMap::new();
-        metadata.insert(
-            "optimization_class".to_string(),
-            record.optimization_class.to_string(),
-        );
-        metadata.insert("extension_id".to_string(), record.extension_id.clone());
-        metadata.insert("epoch".to_string(), record.epoch.as_u64().to_string());
-        metadata.insert("active".to_string(), record.active.to_string());
-
-        self.storage.put(STORE, key, value, metadata, &ctx)?;
+        let entries = self.typed_entries_from_receipt(record, &ctx)?;
+        self.storage.put_typed_batch(&entries, &ctx)?;
         self.emit_event(trace_id, "insert_receipt", "ok", None);
         Ok(())
     }
@@ -271,17 +680,13 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         receipt_id: &EngineObjectId,
         trace_id: &str,
     ) -> Result<Option<SpecializationRecord>, SpecializationIndexError> {
-        let key = format!("{RECEIPT_PREFIX}{}", receipt_id.to_hex());
         let ctx = self.make_ctx(trace_id);
-        let record = self.storage.get(STORE, &key, &ctx)?;
-        match record {
-            Some(r) => {
-                let spec: SpecializationRecord = serde_json::from_slice(&r.value)
-                    .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-                Ok(Some(spec))
-            }
-            None => Ok(None),
+        let entries = self.typed_entries_for_receipt(receipt_id, &ctx)?;
+        if entries.is_empty() {
+            self.fail_if_legacy_receipt_exists(receipt_id, &ctx)?;
+            return Ok(None);
         }
+        Ok(Some(Self::receipt_from_typed_entries(&entries)?))
     }
 
     /// Query all specialization records, optionally filtered by epoch.
@@ -291,23 +696,12 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         trace_id: &str,
     ) -> Result<Vec<SpecializationRecord>, SpecializationIndexError> {
         let ctx = self.make_ctx(trace_id);
+        self.fail_if_legacy_receipts_exist(&ctx)?;
         let mut metadata_filters = BTreeMap::new();
         if let Some(ep) = epoch {
-            metadata_filters.insert("epoch".to_string(), ep.as_u64().to_string());
+            metadata_filters.insert("security_epoch".to_string(), ep.as_u64().to_string());
         }
-        let query = StoreQuery {
-            key_prefix: Some(RECEIPT_PREFIX.to_string()),
-            metadata_filters,
-            limit: None,
-        };
-        let records = self.storage.query(STORE, &query, &ctx)?;
-        let mut results = Vec::new();
-        for r in &records {
-            let spec: SpecializationRecord = serde_json::from_slice(&r.value)
-                .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-            results.push(spec);
-        }
-        Ok(results)
+        Self::receipts_from_typed_entries(self.query_typed_receipt_entries(metadata_filters, &ctx)?)
     }
 
     /// Query active specialization records only.
@@ -315,22 +709,11 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         &mut self,
         trace_id: &str,
     ) -> Result<Vec<SpecializationRecord>, SpecializationIndexError> {
-        let ctx = self.make_ctx(trace_id);
-        let mut metadata_filters = BTreeMap::new();
-        metadata_filters.insert("active".to_string(), "true".to_string());
-        let query = StoreQuery {
-            key_prefix: Some(RECEIPT_PREFIX.to_string()),
-            metadata_filters,
-            limit: None,
-        };
-        let records = self.storage.query(STORE, &query, &ctx)?;
-        let mut results = Vec::new();
-        for r in &records {
-            let spec: SpecializationRecord = serde_json::from_slice(&r.value)
-                .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-            results.push(spec);
-        }
-        Ok(results)
+        Ok(self
+            .query_receipts(None, trace_id)?
+            .into_iter()
+            .filter(|record| record.active)
+            .collect())
     }
 
     // -----------------------------------------------------------------------
@@ -422,13 +805,18 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         entry: &InvalidationEntry,
         trace_id: &str,
     ) -> Result<(), SpecializationIndexError> {
+        let ctx = self.make_ctx(trace_id);
+        let mut typed_entries = self.typed_entries_for_receipt(&entry.receipt_id, &ctx)?;
+        if typed_entries.is_empty() {
+            self.fail_if_legacy_receipt_exists(&entry.receipt_id, &ctx)?;
+        }
+
         // Store the invalidation entry
         let inv_key = format!(
             "{INVALIDATION_PREFIX}{}:{}",
             entry.receipt_id.to_hex(),
             entry.timestamp_ns
         );
-        let ctx = self.make_ctx(trace_id);
         let value = serde_json::to_vec(entry)
             .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
 
@@ -437,20 +825,27 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
 
         self.storage.put(STORE, inv_key, value, metadata, &ctx)?;
 
-        // Mark the receipt as inactive
-        let receipt_key = format!("{RECEIPT_PREFIX}{}", entry.receipt_id.to_hex());
-        if let Some(existing) = self.storage.get(STORE, &receipt_key, &ctx)? {
-            let mut record: SpecializationRecord = serde_json::from_slice(&existing.value)
-                .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-            record.active = false;
-            let updated_value = serde_json::to_vec(&record)
-                .map_err(|e| SpecializationIndexError::SerializationFailed(e.to_string()))?;
-
-            let mut updated_metadata = existing.metadata.clone();
-            updated_metadata.insert("active".to_string(), "false".to_string());
-
-            self.storage
-                .put(STORE, receipt_key, updated_value, updated_metadata, &ctx)?;
+        if !typed_entries.is_empty() {
+            let reason = serde_json::to_string(&entry.reason).map_err(|err| {
+                SpecializationIndexError::SerializationFailed(format!(
+                    "failed to serialize invalidation reason: {err}"
+                ))
+            })?;
+            let invalidation_timestamp_ms = timestamp_ns_to_ms(entry.timestamp_ns)?;
+            for typed_entry in &mut typed_entries {
+                let mut metadata = parse_entry_metadata(typed_entry)?;
+                metadata["invalidation_timestamp_ns"] = serde_json::json!(entry.timestamp_ns);
+                metadata["fallback_confirmed"] = serde_json::json!(entry.fallback_confirmed);
+                typed_entry.status = "invalidated".to_string();
+                typed_entry.invalidation_timestamp_ms = Some(invalidation_timestamp_ms);
+                typed_entry.invalidation_reason = Some(reason.clone());
+                typed_entry.metadata_json = serde_json::to_string(&metadata).map_err(|err| {
+                    SpecializationIndexError::SerializationFailed(format!(
+                        "failed to serialize invalidated typed specialization metadata: {err}"
+                    ))
+                })?;
+            }
+            self.storage.put_typed_batch(&typed_entries, &ctx)?;
         }
 
         self.emit_event(trace_id, "record_invalidation", "ok", None);
@@ -606,9 +1001,20 @@ impl<S: StorageAdapter> SpecializationIndex<S> {
         receipt_id: &EngineObjectId,
         trace_id: &str,
     ) -> Result<bool, SpecializationIndexError> {
-        let key = format!("{RECEIPT_PREFIX}{}", receipt_id.to_hex());
         let ctx = self.make_ctx(trace_id);
-        let deleted = self.storage.delete(STORE, &key, &ctx)?;
+        let entries = self.typed_entries_for_receipt(receipt_id, &ctx)?;
+        let deleted = if entries.is_empty() {
+            self.fail_if_legacy_receipt_exists(receipt_id, &ctx)?;
+            false
+        } else {
+            let mut deleted_any = false;
+            for entry in entries {
+                let key =
+                    SpecializationIndexEntry::typed_record_key_for_id(entry.specialization_id)?;
+                deleted_any |= self.storage.delete(STORE, &key, &ctx)?;
+            }
+            deleted_any
+        };
         self.emit_event(
             trace_id,
             "delete_receipt",
@@ -775,6 +1181,79 @@ mod tests {
     }
 
     #[test]
+    fn insert_receipt_uses_typed_primary_rows() {
+        let mut index = make_index();
+        let rec = make_record("typed-primary", 7);
+        index
+            .insert_receipt(&rec, "t1")
+            .expect("typed primary insertion should succeed");
+
+        let ctx = index.make_ctx("inspect");
+        let legacy_key = format!("{RECEIPT_PREFIX}{}", rec.receipt_id.to_hex());
+        assert!(
+            index
+                .storage
+                .get(STORE, &legacy_key, &ctx)
+                .expect("legacy inspection should succeed")
+                .is_none()
+        );
+
+        let rows = index
+            .storage
+            .query(
+                STORE,
+                &StoreQuery {
+                    key_prefix: Some(typed_specialization_key_prefix()),
+                    metadata_filters: BTreeMap::from([(
+                        "specialized_version".to_string(),
+                        rec.receipt_id.to_hex(),
+                    )]),
+                    limit: None,
+                },
+                &ctx,
+            )
+            .expect("typed row query should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metadata.get("record_format").map(String::as_str),
+            Some("sqlmodel_rust_typed_v1")
+        );
+        assert_eq!(
+            rows[0].metadata.get("typed_model").map(String::as_str),
+            Some("SpecializationIndexEntry")
+        );
+        assert_eq!(
+            rows[0].metadata.get("specialized_version"),
+            Some(&rec.receipt_id.to_hex())
+        );
+    }
+
+    #[test]
+    fn legacy_generic_receipt_fails_closed_on_primary_read() {
+        let mut index = make_index();
+        let rec = make_record("legacy-generic", 1);
+        let ctx = index.make_ctx("legacy-seed");
+        index
+            .storage
+            .put(
+                STORE,
+                format!("{RECEIPT_PREFIX}{}", rec.receipt_id.to_hex()),
+                serde_json::to_vec(&rec).expect("legacy receipt should serialize"),
+                BTreeMap::from([("epoch".to_string(), rec.epoch.as_u64().to_string())]),
+                &ctx,
+            )
+            .expect("legacy seed should write");
+
+        let err = index.get_receipt(&rec.receipt_id, "t1").unwrap_err();
+        match err {
+            SpecializationIndexError::Storage(msg) => {
+                assert!(msg.contains("legacy generic specialization receipt"));
+            }
+            other => panic!("expected legacy fail-closed Storage error, got {other}"),
+        }
+    }
+
+    #[test]
     fn delete_receipt() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
@@ -878,6 +1357,55 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].receipt_id, active_rec.receipt_id);
+    }
+
+    #[test]
+    fn record_invalidation_updates_typed_primary_status() {
+        let mut index = make_index();
+        let rec = make_record("typed-invalidated", 1);
+        index
+            .insert_receipt(&rec, "t1")
+            .expect("typed primary insertion should succeed");
+        let entry = InvalidationEntry {
+            receipt_id: rec.receipt_id.clone(),
+            reason: InvalidationReason::ManualRevocation {
+                operator: "ops".to_string(),
+            },
+            timestamp_ns: 9_000_000,
+            fallback_confirmed: true,
+        };
+        index
+            .record_invalidation(&entry, "t2")
+            .expect("typed invalidation should succeed");
+
+        let fetched = index
+            .get_receipt(&rec.receipt_id, "t3")
+            .expect("typed primary read should succeed")
+            .expect("receipt should still exist");
+        assert!(!fetched.active);
+
+        let ctx = index.make_ctx("inspect-invalidated");
+        let rows = index
+            .storage
+            .query(
+                STORE,
+                &StoreQuery {
+                    key_prefix: Some(typed_specialization_key_prefix()),
+                    metadata_filters: BTreeMap::from([(
+                        "specialized_version".to_string(),
+                        rec.receipt_id.to_hex(),
+                    )]),
+                    limit: None,
+                },
+                &ctx,
+            )
+            .expect("typed row query should succeed");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].metadata.get("status").map(String::as_str),
+            Some("invalidated")
+        );
+        assert!(rows[0].metadata.contains_key("invalidation_reason"));
     }
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,10 @@
+{
+  "case_id": "focused-engine-test",
+  "final_verdict": "fresh_heartbeat_frozen_progress_stall",
+  "reason_code": "fresh_heartbeat_frozen_progress",
+  "source_evidence": false,
+  "expected_exit_code": 0,
+  "selected_worker": "ts2",
+  "capture_decision": "captured_degraded",
+  "truth_state": "degraded"
+}

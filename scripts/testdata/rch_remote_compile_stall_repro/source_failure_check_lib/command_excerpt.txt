@@ -1,0 +1,4 @@
+Selected worker: vmi1293453
+Executing command remotely:
+error[E0425]: cannot find function `missing_guard`
+Remote command finished: exit=101

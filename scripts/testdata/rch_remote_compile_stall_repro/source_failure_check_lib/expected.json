@@ -1,0 +1,10 @@
+{
+  "case_id": "cargo-check-lib",
+  "final_verdict": "source_failure",
+  "reason_code": "remote_source_diagnostic",
+  "source_evidence": true,
+  "expected_exit_code": 0,
+  "selected_worker": "vmi1293453",
+  "capture_decision": "captured_degraded",
+  "truth_state": "degraded"
+}

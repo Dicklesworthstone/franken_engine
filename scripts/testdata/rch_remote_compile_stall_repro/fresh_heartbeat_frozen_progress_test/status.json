@@ -1,0 +1,31 @@
+{
+  "success": true,
+  "command": "status",
+  "timestamp": "2026-05-06T20:14:10Z",
+  "api_version": "v1",
+  "data": {
+    "schema_version": "v1",
+    "daemon": {
+      "active_builds": [
+        {
+          "id": 29830575799926905,
+          "project_id": "franken_engine-stall",
+          "worker_id": "ts2",
+          "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly RUSTFLAGS='-Cdebuginfo=0' CARGO_TARGET_DIR=/data/tmp/rch_target_franken_engine_stall_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p frankenengine-engine replacement_lineage_log::tests:: --lib",
+          "last_progress_at": "2026-05-06T19:44:10Z",
+          "progress_age_secs": 1800,
+          "last_heartbeat_at": "2026-05-06T20:14:08Z",
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start"
+        }
+      ],
+      "workers": [
+        {
+          "id": "ts2",
+          "status": "healthy",
+          "pressure_state": "healthy"
+        }
+      ]
+    }
+  }
+}

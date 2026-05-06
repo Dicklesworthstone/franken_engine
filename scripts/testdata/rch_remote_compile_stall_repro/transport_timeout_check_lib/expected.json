@@ -1,0 +1,10 @@
+{
+  "case_id": "cargo-check-lib",
+  "final_verdict": "transport_timeout",
+  "reason_code": "ssh_timeout_no_final_verdict",
+  "source_evidence": false,
+  "expected_exit_code": 0,
+  "selected_worker": "vmi1149989",
+  "capture_decision": "captured_degraded",
+  "truth_state": "degraded"
+}

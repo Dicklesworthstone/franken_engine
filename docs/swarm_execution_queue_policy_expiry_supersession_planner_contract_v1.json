@@ -1,0 +1,123 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-policy-expiry-supersession-planner-contract.v1",
+  "bead_id": "bd-48ooe",
+  "parent_bead_id": "bd-6qnx9",
+  "depends_on": [
+    "bd-adgrb",
+    "bd-mj81s",
+    "bd-j2rny"
+  ],
+  "script": "scripts/swarm_execution_queue_policy_expiry_supersession_planner.sh",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_policy_expiry_supersession_planner_smoke.sh",
+  "docs": "docs/SWARM_EXECUTION_QUEUE_POLICY_EXPIRY_SUPERSESSION_PLANNER.md",
+  "plan_schema_version": "franken-engine.swarm-execution-queue-policy-expiry-supersession-plan.v1",
+  "ledger_schema_version": "franken-engine.swarm-execution-queue-policy-expiry-supersession-ledger.v1",
+  "evidence_hashes_schema_version": "franken-engine.swarm-execution-queue-policy-expiry-supersession-evidence-hashes.v1",
+  "required_inputs": [
+    {
+      "field": "adoption_receipt_json",
+      "argument": "--adoption-receipt-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-receipt.v1",
+      "hash_required": true
+    },
+    {
+      "field": "sustained_gain_receipt_json",
+      "argument": "--sustained-gain-receipt-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-sustained-gain-receipt.v1",
+      "hash_required": true
+    },
+    {
+      "field": "post_adoption_drift_ledger_json",
+      "argument": "--post-adoption-drift-ledger-json",
+      "schema_version": "franken-engine.swarm-execution-queue-post-adoption-drift-ledger.v1",
+      "hash_required": true
+    },
+    {
+      "field": "newer_candidate_bundle_json",
+      "argument": "--newer-candidate-bundle-json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+      "hash_required": true
+    },
+    {
+      "field": "evidence_ownership_json",
+      "argument": "--evidence-ownership-json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-evidence-ownership.v1",
+      "hash_required": true
+    }
+  ],
+  "artifact_paths": {
+    "expiry_supersession_plan_json": "expiry_supersession_plan.json",
+    "expiry_supersession_ledger_json": "expiry_supersession_ledger.json",
+    "evidence_hashes_json": "evidence_hashes.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "decision_policy": {
+    "retention_verdict": "retain_adopted_policy",
+    "expiry_verdict": "expire_adopted_policy",
+    "supersession_verdict": "supersede_adopted_policy",
+    "fail_closed_verdict": "fail_closed",
+    "regression_requires_expiry_or_supersession": true,
+    "newer_candidate_delta_must_exceed_adopted_delta": true,
+    "newer_candidate_must_reference_adopted_policy_as_prior": true,
+    "planner_execution_state": "advisory_not_executed"
+  },
+  "ownership_policy": {
+    "evidence_ownership_required": true,
+    "ambiguous_owner_fails_closed": true,
+    "stale_or_rejected_evidence_fails_closed": true,
+    "required_artifact_kinds": [
+      "adoption_receipt_json",
+      "sustained_gain_receipt_json",
+      "post_adoption_drift_ledger_json",
+      "newer_candidate_bundle_json"
+    ]
+  },
+  "mutation_policy": {
+    "planning_artifact_only": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "retirement_executed": false,
+    "supersession_executed": false
+  },
+  "decisions": [
+    "retain_adopted_policy",
+    "expire_adopted_policy",
+    "supersede_adopted_policy",
+    "fail_closed"
+  ],
+  "fail_closed_rules": [
+    "bad input schemas fail closed",
+    "adoption receipt not admitted fails closed",
+    "sustained gain receipt fail-closed verdict fails closed",
+    "conflicting adoption and sustained-gain identities fail closed",
+    "conflicting candidate prior-policy references fail closed",
+    "ambiguous evidence ownership fails closed",
+    "stale or rejected evidence ownership fails closed",
+    "automatic retuning claims fail closed",
+    "executed retirement claims fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "selftest_scenarios": [
+    "retain_sustained_no_newer_candidate",
+    "supersede_sustained_newer_candidate",
+    "expire_regression_no_newer_candidate",
+    "retain_inconclusive_no_newer_candidate",
+    "ambiguous_ownership_fails_closed",
+    "stale_ownership_fails_closed",
+    "candidate_prior_conflict_fails_closed"
+  ],
+  "verification_commands": [
+    "bash -n scripts/swarm_execution_queue_policy_expiry_supersession_planner.sh",
+    "bash -n scripts/e2e/swarm_execution_queue_policy_expiry_supersession_planner_smoke.sh",
+    "shellcheck -x scripts/swarm_execution_queue_policy_expiry_supersession_planner.sh scripts/e2e/swarm_execution_queue_policy_expiry_supersession_planner_smoke.sh",
+    "jq empty docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_policy_expiry_supersession_planner_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_policy_expiry_supersession_planner_smoke.sh selftest"
+  ]
+}

@@ -1,0 +1,175 @@
+{
+  "schema_version": "franken-engine.rch-remote-compile-stall-bundle-contract.v1",
+  "bead_id": "bd-m5jwi.1",
+  "parent_bead_id": "bd-m5jwi",
+  "bundle_schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+  "planned_producer_script": "scripts/rch_remote_compile_stall_bundle_capture.sh",
+  "future_surfaces": [
+    "scripts/rch_remote_compile_stall_bundle_capture.sh",
+    "scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
+    "scripts/e2e/rch_remote_compile_stall_truth_gate.sh"
+  ],
+  "required_snapshot_contracts": [
+    {
+      "name": "bead_metadata",
+      "capture_command": "br show <bead_id>",
+      "required": true,
+      "missing_decision": "blocked"
+    },
+    {
+      "name": "remote_command_receipt",
+      "capture_command": "captured rch exec command transcript",
+      "required": true,
+      "missing_decision": "blocked"
+    },
+    {
+      "name": "rch_queue_snapshot",
+      "capture_command": "rch queue --json",
+      "required": true,
+      "missing_decision": "blocked"
+    },
+    {
+      "name": "rch_status_workers_jobs_snapshot",
+      "capture_command": "rch status --workers --jobs --json",
+      "required": true,
+      "missing_decision": "blocked"
+    }
+  ],
+  "optional_snapshot_contracts": [
+    {
+      "name": "worker_inventory_snapshot",
+      "capture_command": "rch workers probe --all",
+      "missing_decision": "degraded"
+    },
+    {
+      "name": "command_log_excerpt",
+      "capture_command": "captured stderr/stdout excerpt",
+      "missing_decision": "degraded"
+    },
+    {
+      "name": "operator_note",
+      "capture_command": "manual note fixture",
+      "missing_decision": "degraded"
+    }
+  ],
+  "required_bundle_fields": [
+    "stall_bundle_id",
+    "bead_id",
+    "capture_decision",
+    "truth_state",
+    "captured_at_epoch_seconds",
+    "local_fallback_observed",
+    "stall_subject",
+    "snapshot_health",
+    "queue_snapshot",
+    "status_snapshot",
+    "blockers",
+    "artifact_paths.stall_bundle_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.summary_md"
+  ],
+  "required_stall_subject_fields": [
+    "stall_subject.command",
+    "stall_subject.worker_id",
+    "stall_subject.build_id",
+    "stall_subject.heartbeat.phase",
+    "stall_subject.heartbeat.detail",
+    "stall_subject.last_progress_epoch_seconds",
+    "stall_subject.progress_age_seconds"
+  ],
+  "required_snapshot_health_fields": [
+    "snapshot_health.required_snapshot_count",
+    "snapshot_health.required_present_count",
+    "snapshot_health.optional_snapshot_count",
+    "snapshot_health.optional_present_count",
+    "snapshot_health.optional_missing_count",
+    "snapshot_health.contradictory_snapshot_count"
+  ],
+  "required_artifact_paths": [
+    "artifact_paths.stall_bundle_json",
+    "artifact_paths.events_jsonl",
+    "artifact_paths.commands_txt",
+    "artifact_paths.summary_md"
+  ],
+  "capture_decisions": [
+    "captured",
+    "captured_degraded",
+    "fail_closed"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "degraded_semantics": [
+    "required stall tuple is present",
+    "local fallback was not observed",
+    "one or more optional snapshots are missing",
+    "capture decision stays captured_degraded"
+  ],
+  "blocked_semantics": [
+    "missing required remote snapshots",
+    "contradictory queue or worker snapshots",
+    "progress age contradictions",
+    "capture decision stays fail_closed"
+  ],
+  "contaminated_semantics": [
+    "local fallback observed",
+    "remote-only truth claim is invalidated",
+    "capture decision stays fail_closed",
+    "truth state stays contaminated"
+  ],
+  "fail_closed_rules": [
+    "missing required remote snapshots fail closed",
+    "contradictory queue or worker snapshots fail closed",
+    "local fallback observed forces contaminated fail closed truth",
+    "progress_age_seconds contradictions fail closed",
+    "automatic retry or resolved claims fail closed",
+    "bundle must not claim it mutates beads, reservations, Agent Mail, or workers"
+  ],
+  "mutation_policy": {
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "operator_wording_required": "evidence-only"
+  },
+  "required_doc_text": [
+    "It is evidence only.",
+    "Missing required remote snapshots fail closed.",
+    "contradictory queue or worker snapshots fail closed.",
+    "local fallback observed forces `truth_state=contaminated` and",
+    "The bundle must not claim it mutates beads, reservations, Agent Mail, or workers."
+  ],
+  "fixture_examples": [
+    {
+      "fixture_id": "confirmed",
+      "expected_truth_state": "confirmed",
+      "expected_capture_decision": "captured"
+    },
+    {
+      "fixture_id": "degraded_missing_optional",
+      "expected_truth_state": "degraded",
+      "expected_capture_decision": "captured_degraded"
+    },
+    {
+      "fixture_id": "blocked_contradictory_queue",
+      "expected_truth_state": "blocked",
+      "expected_capture_decision": "fail_closed"
+    },
+    {
+      "fixture_id": "contaminated_local_fallback",
+      "expected_truth_state": "contaminated",
+      "expected_capture_decision": "fail_closed"
+    }
+  ],
+  "verification_commands": [
+    "jq empty docs/rch_remote_compile_stall_bundle_contract_v1.json",
+    "bash -n scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh",
+    "bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh check",
+    "bash scripts/e2e/rch_remote_compile_stall_bundle_contract_smoke.sh selftest"
+  ]
+}

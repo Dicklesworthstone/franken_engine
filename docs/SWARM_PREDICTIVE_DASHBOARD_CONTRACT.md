@@ -66,6 +66,17 @@ The same operator report now integrates two more advisory-only child producers:
 Those sections remain report-only. They must not be described as automatic
 ownership transfer, cancellation, target warming, or archive mutation.
 
+The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
+
+- Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
+- Truth gate: `scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh`
+
+That composed drill reuses `scripts/e2e/swarm_admission_drill.sh`,
+`scripts/e2e/swarm_predictive_orchestration_e2e.sh`, and
+`scripts/e2e/remote_proof_archive_lifecycle_no_mock_drill.sh` directly. It is
+not another dashboard producer and must not be described as live worker, lease,
+queue, or archive mutation.
+
 ## Dashboard Sections
 
 The `predictive_dashboard` object contains bounded sections for renderer
@@ -125,6 +136,8 @@ and source-artifact references stay stable.
   predictive dashboard producer in `franken_engine`.
 - The docs must name the integrated advisory child producers and their contract
   JSON files.
+- The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
+  second predictive dashboard producer.
 - The docs must not describe any integrated section as a live control plane,
   automatic ownership transfer, or automatic target warming surface.
 - Documentation must not describe an interactive dashboard as available from
@@ -175,4 +188,16 @@ bash -n scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh
 ./scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh check
 ./scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh selftest
 jq empty docs/swarm_warm_target_prefetch_roi_advisory_contract_v1.json
+```
+
+When changing the SWARM-CTRL-VIII composed predictive-admission proof surface,
+also run:
+
+```bash
+bash -n scripts/e2e/swarm_predictive_admission_no_mock_drill.sh
+bash -n scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh
+./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh check
+./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh selftest
+./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh check
+./scripts/e2e/swarm_ctrl_viii_runbook_truth_gate.sh selftest
 ```

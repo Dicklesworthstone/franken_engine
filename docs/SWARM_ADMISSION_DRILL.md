@@ -42,12 +42,23 @@ Replay mode validates an existing artifact bundle without rerunning child gates:
   --artifact-dir /tmp/franken-engine-swarm-admission-drill/20260506T000000Z
 ```
 
+## Predictive Composition
+
+SWARM-CTRL-VIII reuses this drill through
+`scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`. That wrapper
+consumes `swarm_admission_drill_report.json` directly alongside the predictive
+orchestration and archive-pressure drill reports. It extends this admission
+surface as proof-only composition; it does not replace this drill or become a
+second predictive dashboard producer.
+
 ## Validation
 
 ```bash
 bash -n scripts/e2e/swarm_admission_drill.sh
 ./scripts/e2e/swarm_admission_drill.sh check
 ./scripts/e2e/swarm_admission_drill.sh selftest
+./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh check
+./scripts/e2e/swarm_predictive_admission_no_mock_drill.sh selftest
 ```
 
 The fixture suite intentionally includes rch-wrapped heavy examples such as:

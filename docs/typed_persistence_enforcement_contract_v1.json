@@ -1,0 +1,122 @@
+{
+  "schema_version": "franken-engine.typed-persistence-enforcement-contract.v1",
+  "bead_id": "bd-gvnex",
+  "parent_bead_id": "bd-xyku0",
+  "docs": "docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md",
+  "smoke_script": "scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+  "inventory_doc": "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md",
+  "scope_store_kinds": [
+    "ReplacementLineage",
+    "IfcProvenance",
+    "SpecializationIndex"
+  ],
+  "scope_inventory_rows": [
+    {
+      "store_label": "replacement lineage log",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "ReplacementLineage",
+      "typed_model": "ReplacementLineageEntry",
+      "integration_point": "sqlmodel_rust::ReplacementLineageEntry",
+      "primary_surface": "crates/franken-engine/src/replacement_lineage_log.rs"
+    },
+    {
+      "store_label": "IFC provenance index",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "IfcProvenance",
+      "typed_model": "IfcProvenanceEntry",
+      "integration_point": "sqlmodel_rust::IfcProvenanceEntry",
+      "primary_surface": "crates/franken-engine/src/ifc_provenance_index.rs"
+    },
+    {
+      "store_label": "specialization index",
+      "model_layer": "sqlmodel_rust on frankensqlite",
+      "store_kind": "SpecializationIndex",
+      "typed_model": "SpecializationIndexEntry",
+      "integration_point": "sqlmodel_rust::SpecializationIndexEntry",
+      "primary_surface": "crates/franken-engine/src/specialization_index.rs"
+    }
+  ],
+  "typed_boundary_requirements": {
+    "primary_authority_required": true,
+    "authoritative_helpers": [
+      "TypedStoreRecord",
+      "TypedStorageAdapterExt.put_typed",
+      "TypedStorageAdapterExt.get_typed_by_id",
+      "TypedStorageAdapterExt.query_typed"
+    ],
+    "legacy_planning_helpers": [
+      "plan_typed_store_backfill",
+      "map_legacy_replacement_lineage_record",
+      "map_legacy_ifc_provenance_record",
+      "map_legacy_specialization_index_record"
+    ],
+    "generic_authority_must_become_non_authoritative": true,
+    "legacy_inputs_allowed_only_for_explicit_lossless_backfill_planning": true,
+    "implicit_legacy_acceptance_forbidden": true,
+    "ambiguous_legacy_data_fails_closed": true
+  },
+  "code_evidence": [
+    {
+      "path": "crates/franken-engine/src/typed_persistence_models.rs",
+      "must_contain": [
+        "pub trait TypedStoreRecord",
+        "pub fn plan_typed_store_backfill",
+        "pub fn map_legacy_replacement_lineage_record",
+        "pub fn map_legacy_ifc_provenance_record",
+        "pub fn map_legacy_specialization_index_record",
+        "pub struct ReplacementLineageEntry",
+        "pub struct IfcProvenanceEntry",
+        "pub struct SpecializationIndexEntry"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/storage_adapter.rs",
+      "must_contain": [
+        "Self::ReplacementLineage => \"sqlmodel_rust::ReplacementLineageEntry\"",
+        "Self::IfcProvenance => \"sqlmodel_rust::IfcProvenanceEntry\"",
+        "Self::SpecializationIndex => \"sqlmodel_rust::SpecializationIndexEntry\""
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/replacement_lineage_log.rs",
+      "must_contain": [
+        "insert_typed_lineage_entry",
+        "get_typed_lineage_entry_by_id"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/ifc_provenance_index.rs",
+      "must_contain": [
+        "insert_typed_provenance_entry",
+        "get_typed_provenance_entry_by_id"
+      ]
+    },
+    {
+      "path": "crates/franken-engine/src/specialization_index.rs",
+      "must_contain": [
+        "insert_typed_entry",
+        "get_typed_entry_by_id"
+      ]
+    }
+  ],
+  "required_doc_text": [
+    "sqlmodel_rust on frankensqlite",
+    "Primary authoritative writes and reads",
+    "Generic `StorageAdapter` operations for these typed-heavy stores must become non-authoritative",
+    "Legacy `StoreRecord` inputs are allowed only for explicit lossless backfill planning",
+    "Ambiguous legacy data must fail closed",
+    "does not require rewriting unrelated `raw frankensqlite` stores"
+  ],
+  "selftest_scenarios": [
+    "missing_scope_store_fails",
+    "doc_missing_required_text_fails",
+    "code_evidence_symbol_missing_fails"
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/typed_persistence_enforcement_contract_smoke.sh",
+    "jq empty docs/typed_persistence_enforcement_contract_v1.json",
+    "bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh check",
+    "bash scripts/e2e/typed_persistence_enforcement_contract_smoke.sh selftest"
+  ]
+}

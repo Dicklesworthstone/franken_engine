@@ -1,0 +1,72 @@
+{
+  "schema_version": "franken-engine.rch-validation-run-artifacts-contract.v1",
+  "bead_id": "bd-wwfiw",
+  "parent_bead_id": "bd-zk8ji",
+  "contract_name": "RCH validation run artifact generator",
+  "generator": "scripts/rch_validation_run_artifacts.sh",
+  "smoke": "scripts/e2e/rch_validation_run_artifacts_smoke.sh",
+  "input_contracts": [
+    {
+      "path": "docs/rch_validation_preflight_contract_v1.json",
+      "schema_version": "franken-engine.rch-validation-preflight.v1",
+      "bead_id": "bd-xxi8i"
+    },
+    {
+      "path": "docs/rch_validation_remote_proof_classifier_v1.json",
+      "schema_version": "franken-engine.rch-validation-remote-proof-classifier.v1",
+      "bead_id": "bd-bpoi9"
+    }
+  ],
+  "output_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "summary.md"
+  ],
+  "required_manifest_fields": [
+    "schema_version",
+    "bead_id",
+    "parent_bead_id",
+    "thread_id",
+    "case_id",
+    "generated_at_utc",
+    "input_contracts",
+    "selected_worker",
+    "remote_command",
+    "safe_validation_command",
+    "cargo_target_dir_policy",
+    "required_components",
+    "remote_proof",
+    "verdict",
+    "reason_code",
+    "source_evidence",
+    "operator_category",
+    "remediation",
+    "suggested_next_command",
+    "trace_ids",
+    "artifact_paths"
+  ],
+  "required_verdict_categories": [
+    "source evidence",
+    "source failure",
+    "remote toolchain failure",
+    "remote timeout",
+    "local fallback refusal",
+    "missing proof"
+  ],
+  "command_policy": {
+    "heavy_cargo_commands_require_rch_exec": true,
+    "commands_txt_all_cargo_lines_must_start_with": "rch exec --",
+    "local_fallback_default": "refuse",
+    "overwrite_existing_artifacts": false
+  },
+  "fixture_case_ids": [
+    "remote-cargo-check-pass",
+    "remote-source-diagnostic",
+    "missing-cargo-clippy-before-lint",
+    "ssh-timeout-no-final-verdict",
+    "local-fallback-refused",
+    "missing-worker-or-command-evidence"
+  ]
+}

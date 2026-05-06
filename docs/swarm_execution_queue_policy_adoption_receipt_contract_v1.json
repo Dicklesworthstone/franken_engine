@@ -1,0 +1,184 @@
+{
+  "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-receipt-contract.v1",
+  "bead_id": "bd-my39p",
+  "parent_bead_id": "bd-6qnx9",
+  "depends_on": [
+    "bd-j2rny"
+  ],
+  "docs": "docs/SWARM_EXECUTION_QUEUE_POLICY_ADOPTION_RECEIPT_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_execution_queue_policy_adoption_receipt_contract_smoke.sh",
+  "receipt_schema_version": "franken-engine.swarm-execution-queue-policy-adoption-receipt.v1",
+  "upstream_artifacts": [
+    {
+      "field": "candidate_bundle_json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-policy-bundle.v1",
+      "producer": "scripts/swarm_execution_queue_tuning_policy_bundle_packer.sh"
+    },
+    {
+      "field": "promotion_guard_receipt_json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-promotion-guard-receipt.v1",
+      "producer": "scripts/swarm_execution_queue_tuning_promotion_guard.sh"
+    },
+    {
+      "field": "rollout_plan_json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-rollout-plan.v1",
+      "producer": "scripts/swarm_execution_queue_tuning_promotion_guard.sh"
+    },
+    {
+      "field": "rollback_comparator_receipt_json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-rollback-comparator-receipt.v1",
+      "producer": "scripts/swarm_execution_queue_tuning_rollback_comparator.sh"
+    },
+    {
+      "field": "canary_verdict_ledger_json",
+      "schema_version": "franken-engine.swarm-execution-queue-tuning-canary-verdict-ledger.v1",
+      "producer": "scripts/swarm_execution_queue_tuning_rollback_comparator.sh"
+    },
+    {
+      "field": "operator_decision_json",
+      "schema_version": "franken-engine.swarm-execution-queue-policy-adoption-operator-decision.v1",
+      "producer": "human_operator"
+    }
+  ],
+  "required_receipt_fields": [
+    "schema_version",
+    "adoption_receipt_id",
+    "adopted_policy_bundle_id",
+    "source_revision",
+    "generated_at",
+    "operator_decision",
+    "adopted_candidate",
+    "evidence_links",
+    "observation_window",
+    "supersession",
+    "mutation_policy",
+    "non_claim_boundaries",
+    "fail_closed_rules"
+  ],
+  "receipt_schema": {
+    "operator_decision_required": [
+      "decision",
+      "approved_by",
+      "approved_at",
+      "approval_artifact_path",
+      "decision_reason",
+      "adoption_state"
+    ],
+    "adopted_candidate_required": [
+      "candidate_id",
+      "expected_fidelity_delta_millionths",
+      "source_policy_bundle_id",
+      "source_promotion_guard_receipt_json",
+      "source_canary_verdict_ledger_json"
+    ],
+    "evidence_link_required": [
+      "artifact_kind",
+      "path",
+      "sha256"
+    ],
+    "observation_window_required": [
+      "starts_at",
+      "duration_seconds",
+      "minimum_sample_count",
+      "monitored_metrics",
+      "stop_on_missing_evidence"
+    ],
+    "supersession_required": [
+      "supersedes_adoption_receipt_id",
+      "supersedes_policy_bundle_id",
+      "supersession_reason",
+      "previous_policy_retention",
+      "expiry_policy"
+    ]
+  },
+  "operator_decision_policy": {
+    "manual_operator_approval_required": true,
+    "allowed_decisions": [
+      "adopt",
+      "reject",
+      "defer"
+    ],
+    "allowed_adoption_states": [
+      "recorded_pending_activation",
+      "recorded_active_policy"
+    ],
+    "approval_artifact_required": true,
+    "approval_does_not_apply_live_retuning": true
+  },
+  "observation_policy": {
+    "minimum_duration_seconds": 1800,
+    "minimum_sample_count": 3,
+    "required_monitored_metrics": [
+      "queue_fidelity_millionths",
+      "proof_drift_count",
+      "rollback_trigger_count"
+    ],
+    "stop_on_missing_evidence_required": true
+  },
+  "supersession_policy": {
+    "supersession_metadata_required": true,
+    "previous_policy_retention_required": true,
+    "expiry_policy_required": true,
+    "allowed_previous_policy_retention": [
+      "retain_for_rollback",
+      "archive_after_window"
+    ]
+  },
+  "mutation_policy": {
+    "receipt_artifact_only": true,
+    "records_operator_decision": true,
+    "changes_active_queue": false,
+    "applies_live_retuning": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "rewrites_historical_outcomes": false,
+    "operator_wording_required": "adoption receipt audit artifact"
+  },
+  "non_claim_boundaries": [
+    "does not prove sustained gain",
+    "does not prove canary success beyond linked evidence",
+    "does not authorize automatic live retuning",
+    "does not mutate scheduler behavior by itself",
+    "does not replace later drift-forensics scoring",
+    "does not imply active queue changed without this receipt"
+  ],
+  "fail_closed_rules": [
+    "missing operator approval fails closed",
+    "missing evidence links fail closed",
+    "missing evidence hashes fail closed",
+    "missing observation window fails closed",
+    "missing supersession metadata fails closed",
+    "automatic adoption claims fail closed",
+    "live retuning claims fail closed",
+    "sustained-gain claims fail closed",
+    "reject local fallback proof evidence"
+  ],
+  "required_doc_text": [
+    "adoption receipt audit artifact",
+    "manual operator approval",
+    "never changes active queue settings",
+    "never applies live retuning",
+    "never mutates `br`",
+    "never sends Agent Mail",
+    "does not prove sustained gain",
+    "missing supersession metadata",
+    "reject local fallback proof"
+  ],
+  "selftest_scenarios": [
+    "valid_receipt_passes",
+    "missing_operator_approval_fails_closed",
+    "missing_evidence_hash_fails_closed",
+    "missing_observation_window_fails_closed",
+    "missing_supersession_metadata_fails_closed",
+    "automatic_adoption_claim_fails_closed",
+    "sustained_gain_claim_fails_closed"
+  ],
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_execution_queue_policy_adoption_receipt_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_execution_queue_policy_adoption_receipt_contract_smoke.sh",
+    "jq empty docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json",
+    "bash scripts/e2e/swarm_execution_queue_policy_adoption_receipt_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_execution_queue_policy_adoption_receipt_contract_smoke.sh selftest"
+  ]
+}

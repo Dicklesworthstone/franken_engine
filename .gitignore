@@ -75,6 +75,10 @@ storage.sqlite3
 # Test-generated benchmark and gate artifacts (PID/timestamp-named)
 crates/franken-engine/tests/artifacts/benchmark_e2e/
 crates/franken-engine/tests/artifacts/test262_release_gate/
+/tests/artifacts/
+
+# Editor/script backup files
+*.backup
 
 # UBS (Ultimate Bug Scanner) output
 ubs_*.txt
@@ -107,6 +111,11 @@ __pycache__/
 # Beads issue tracker history backups and rebuild-failed recovery artifacts
 .beads/.br_history/
 .beads/.br_recovery/
+
+# Beads SQLite corruption/rebuild snapshots (agent-generated; not canonical state)
+.beads/*.corrupt_*
+.beads/*.rebuild_*
+.beads/recovery_*/
 
 # Stale beads snapshot dumps (agent-generated; not canonical state)
 .beads_snapshot_*/

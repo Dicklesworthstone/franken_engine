@@ -1,0 +1,492 @@
+{
+  "schema_version": "franken-engine.swarm-benchmark-responsiveness-scorer-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_observed_throughput",
+      "expected": {
+        "decision": "pass",
+        "truth_state": "confirmed",
+        "exit_code": 0,
+        "required_bottleneck": "",
+        "required_command": "",
+        "throughput_gap_band": "narrow",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "prefer_warm_reuse",
+        "remote_proof_confidence_state": "confirmed"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "benchmark_entrypoint": "scripts/run_benchmark_denominator_suite.sh",
+              "validation_commands": ["./scripts/run_benchmark_denominator_suite.sh check"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "pass",
+          "rows": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "row_state": "observed"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 12
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_hot_cache",
+          "warm_cache_residency_state": "hot"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "hot"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "blocked_runtime_measurement",
+      "expected": {
+        "decision": "degraded",
+        "truth_state": "degraded",
+        "exit_code": 0,
+        "required_bottleneck": "blocked_runtime_measurement",
+        "required_command": "./scripts/benchmarks/throughput_baselines.sh",
+        "throughput_gap_band": "blocked_measurement",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "prefer_warm_reuse",
+        "remote_proof_confidence_state": "degraded"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "frankenengine_throughput_baseline_status",
+              "benchmark_entrypoint": "scripts/benchmarks/throughput_baselines.sh",
+              "validation_commands": ["./scripts/benchmarks/throughput_baselines.sh"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "degraded",
+          "rows": [
+            {
+              "workload_id": "frankenengine_throughput_baseline_status",
+              "row_state": "blocked"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 8
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_hot_cache",
+          "warm_cache_residency_state": "hot"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "hot"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "truth_state": "contaminated",
+        "exit_code": 42,
+        "required_bottleneck": "remote_validation_contamination",
+        "required_command": "./scripts/e2e/rch_remote_compile_stall_bundle_capture_smoke.sh check",
+        "throughput_gap_band": "contaminated",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "prefer_warm_reuse",
+        "remote_proof_confidence_state": "contaminated"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "plas_benchmark_bundle",
+              "benchmark_entrypoint": "scripts/run_plas_benchmark_bundle_suite.sh",
+              "validation_commands": ["./scripts/run_plas_benchmark_bundle_suite.sh check"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "fail_closed",
+          "rows": [
+            {
+              "workload_id": "plas_benchmark_bundle",
+              "row_state": "fail_closed"
+            }
+          ],
+          "findings": [
+            {
+              "code": "FE-SWARM-BUNDLE-LOCAL-FALLBACK-CONTAMINATION"
+            }
+          ]
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 8
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_hot_cache",
+          "warm_cache_residency_state": "hot"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "hot"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "cold_cache_proof_rebuild_pressure",
+      "expected": {
+        "decision": "degraded",
+        "truth_state": "degraded",
+        "exit_code": 0,
+        "required_bottleneck": "proof_cache_rebuild_pressure",
+        "required_command": "./scripts/e2e/swarm_proof_cache_locality_optimizer_smoke.sh check",
+        "throughput_gap_band": "moderate",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "refresh_cold_target",
+        "remote_proof_confidence_state": "degraded"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "benchmark_entrypoint": "scripts/run_benchmark_denominator_suite.sh",
+              "validation_commands": ["./scripts/run_benchmark_denominator_suite.sh check"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "pass",
+          "rows": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "row_state": "observed"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 8
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_warm_cache",
+          "warm_cache_residency_state": "warm"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "degraded",
+          "proof_cache_summary": {
+            "proof_cache_decision": "partial_refresh"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "cold"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "topology_mismatch",
+      "expected": {
+        "decision": "degraded",
+        "truth_state": "degraded",
+        "exit_code": 0,
+        "required_bottleneck": "topology_locality_mismatch",
+        "required_command": "./scripts/e2e/swarm_topology_aware_queue_scorer_smoke.sh check",
+        "throughput_gap_band": "moderate",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "investigate_topology_locality",
+        "remote_proof_confidence_state": "degraded"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "extension_heavy_benchmark_spec",
+              "benchmark_entrypoint": "scripts/run_extension_heavy_benchmark_spec_suite.sh",
+              "validation_commands": ["./scripts/run_extension_heavy_benchmark_spec_suite.sh check"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "pass",
+          "rows": [
+            {
+              "workload_id": "extension_heavy_benchmark_spec",
+              "row_state": "observed"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 8
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "blocked",
+          "recommended_topology_class": "contradictory_locality",
+          "warm_cache_residency_state": "warm"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "warm"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "resource_saturation",
+      "expected": {
+        "decision": "degraded",
+        "truth_state": "degraded",
+        "exit_code": 0,
+        "required_bottleneck": "resource_saturation",
+        "required_command": "./scripts/e2e/swarm_resource_envelope_normalizer_smoke.sh check",
+        "throughput_gap_band": "moderate",
+        "utilization_pressure_band": "saturated",
+        "cold_warm_cache_recommendation": "prefer_warm_reuse",
+        "remote_proof_confidence_state": "degraded"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "benchmark_entrypoint": "scripts/run_benchmark_denominator_suite.sh",
+              "validation_commands": ["./scripts/run_benchmark_denominator_suite.sh check"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "pass",
+          "rows": [
+            {
+              "workload_id": "benchmark_denominator_suite",
+              "row_state": "observed"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "blocked",
+          "readiness": "saturated",
+          "memory_pressure": {
+            "available_bytes": 34359738368
+          },
+          "rch_slots": {
+            "available": 0
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_hot_cache",
+          "warm_cache_residency_state": "hot"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "hot"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "bare_cargo_recommendation_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "truth_state": "contaminated",
+        "exit_code": 42,
+        "required_bottleneck": "blocked_runtime_measurement",
+        "required_command": "cargo test -p frankenengine-engine",
+        "throughput_gap_band": "contaminated",
+        "utilization_pressure_band": "relaxed",
+        "cold_warm_cache_recommendation": "prefer_warm_reuse",
+        "remote_proof_confidence_state": "contaminated"
+      },
+      "inputs": {
+        "normalized_workload_catalog_json": {
+          "schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+          "decision": "pass",
+          "workloads": [
+            {
+              "workload_id": "frankenengine_throughput_baseline_status",
+              "benchmark_entrypoint": "scripts/benchmarks/throughput_baselines.sh",
+              "validation_commands": ["cargo test -p frankenengine-engine"],
+              "workload_state": "pass"
+            }
+          ]
+        },
+        "normalized_benchmark_bundle_json": {
+          "schema_version": "franken-engine.swarm-benchmark-bundle.v1",
+          "decision": "degraded",
+          "rows": [
+            {
+              "workload_id": "frankenengine_throughput_baseline_status",
+              "row_state": "blocked"
+            }
+          ],
+          "findings": []
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 8
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 8
+          }
+        },
+        "topology_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+          "decision": "pass",
+          "recommended_topology_class": "numa_local_hot_cache",
+          "warm_cache_residency_state": "hot"
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "topology_summary": {
+            "warm_cache_residency_state": "hot"
+          }
+        }
+      }
+    }
+  ]
+}

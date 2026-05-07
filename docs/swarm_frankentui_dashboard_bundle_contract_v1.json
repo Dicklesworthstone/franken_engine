@@ -1,0 +1,134 @@
+{
+  "schema_version": "franken-engine.swarm-frankentui-dashboard-bundle-contract.v1",
+  "bead_id": "bd-wql3k",
+  "track": "SWARM-OPS-P0",
+  "status": "contract_only_renderer_handoff",
+  "script": "scripts/swarm_frankentui_dashboard_bundle.sh",
+  "smoke_script": "scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh",
+  "operator_docs": "docs/SWARM_FRANKENTUI_DASHBOARD_BUNDLE.md",
+  "fixture_bundle": "scripts/testdata/swarm_frankentui_dashboard_bundle/cases.json",
+  "output_schema_version": "franken-engine.swarm-frankentui-dashboard-bundle.v1",
+  "dashboard_event_schema_version": "franken-engine.swarm-frankentui-dashboard-event.v1",
+  "renderer_contract": {
+    "provider": "/dp/frankentui",
+    "shipped_in_franken_engine": false,
+    "local_renderer": false,
+    "no_local_tui_runtime": true,
+    "handoff_note": "franken_engine emits deterministic JSON/NDJSON dashboard data only. Any rich interactive renderer belongs in /dp/frankentui."
+  },
+  "required_inputs": [
+    "resource_envelope_json",
+    "admission_budget_plan_json",
+    "stale_recovery_receipts_json",
+    "worker_truth_report_json",
+    "proof_cache_locality_plan_json",
+    "rch_rehabilitation_ledger_json"
+  ],
+  "required_outputs": [
+    "dashboard_bundle.json",
+    "dashboard_events.ndjson",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_panels": [
+    "capacity",
+    "admitted_lanes",
+    "stale_ownership",
+    "rch_workers",
+    "proof_cache_locality",
+    "recovery_receipts"
+  ],
+  "required_bundle_fields": [
+    "schema_version",
+    "bead_id",
+    "decision",
+    "renderer_contract.provider",
+    "renderer_contract.no_local_tui_runtime",
+    "frankentui_compatibility.semantic_theme_tokens",
+    "display_state_policy.allowed",
+    "status_bar.summary.panel_count",
+    "panels[].panel_id",
+    "panels[].display_state",
+    "panels[].semantic_theme_token",
+    "panels[].focus_order",
+    "panels[].aria_label",
+    "panels[].supports_tiny_layout",
+    "panels[].visible_reasons",
+    "mutation_policy.adapter_only"
+  ],
+  "display_states": [
+    "healthy",
+    "degraded",
+    "missing",
+    "stale",
+    "blocked",
+    "fail_closed"
+  ],
+  "degraded_mode_requirements": [
+    {
+      "class": "missing_capacity_telemetry",
+      "panel_id": "capacity",
+      "required_display_state": "missing"
+    },
+    {
+      "class": "stale_owner_needs_contact",
+      "panel_id": "stale_ownership",
+      "required_display_state": "stale"
+    },
+    {
+      "class": "rch_worker_drained",
+      "panel_id": "rch_workers",
+      "required_display_state": "degraded"
+    },
+    {
+      "class": "proof_cache_locality_degraded",
+      "panel_id": "proof_cache_locality",
+      "required_display_state": "degraded"
+    }
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "healthy",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "brownout",
+      "expected_decision": "degraded",
+      "required_reason_code": "missing_capacity_telemetry"
+    },
+    {
+      "case_id": "stale_owner",
+      "expected_decision": "degraded",
+      "required_reason_code": "stale_owner_needs_contact"
+    },
+    {
+      "case_id": "rch_drained",
+      "expected_decision": "degraded",
+      "required_reason_code": "rch_worker_drained"
+    }
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "adapter_only": true,
+    "advisory_only": true,
+    "renders_tui": false,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "bash -n scripts/swarm_frankentui_dashboard_bundle.sh scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh",
+    "shellcheck -x scripts/swarm_frankentui_dashboard_bundle.sh scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh",
+    "jq empty docs/swarm_frankentui_dashboard_bundle_contract_v1.json scripts/testdata/swarm_frankentui_dashboard_bundle/cases.json",
+    "bash scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh check",
+    "bash scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_FRANKENTUI_DASHBOARD_BUNDLE.md docs/swarm_frankentui_dashboard_bundle_contract_v1.json scripts/swarm_frankentui_dashboard_bundle.sh scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh scripts/testdata/swarm_frankentui_dashboard_bundle/cases.json"
+  ]
+}

@@ -1,0 +1,609 @@
+{
+  "schema_version": "franken-engine.swarm-frankentui-dashboard-bundle-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "panel_states": {
+          "capacity": "healthy",
+          "admitted_lanes": "healthy",
+          "stale_ownership": "healthy",
+          "rch_workers": "healthy",
+          "proof_cache_locality": "healthy",
+          "recovery_receipts": "healthy"
+        },
+        "required_reason_code": ""
+      },
+      "inputs": {
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "telemetry_status": "provided",
+          "memory_pressure": {
+            "available_bytes": 206158430208
+          },
+          "disk_pressure": {
+            "target_dir_available_bytes": 536870912000
+          },
+          "rch_slots": {
+            "available": 12,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "budget_profile": "large_host_protected",
+          "recommendations": [
+            {
+              "request_id": "bd-heavy-a",
+              "bead_id": "bd-heavy-a",
+              "lane_class": "heavy",
+              "decision": "admit",
+              "budget_class": "protected",
+              "requested_command": "heavy-proof-lane"
+            },
+            {
+              "request_id": "bd-light-a",
+              "bead_id": "bd-light-a",
+              "lane_class": "light",
+              "decision": "admit",
+              "budget_class": "normal",
+              "requested_command": "bash scripts/e2e/example_smoke.sh check"
+            }
+          ]
+        },
+        "stale_recovery_receipts_json": {
+          "schema_version": "franken-engine.swarm-ops-stale-recovery-receipts.v1",
+          "decision": "pass",
+          "snapshot_status": {
+            "agent_profiles": "provided",
+            "mail_activity": "provided",
+            "file_reservations": "provided",
+            "git_activity": "provided"
+          },
+          "summary": {
+            "total": 1,
+            "healthy": 1,
+            "needs_contact": 0,
+            "safe_to_reopen": 0,
+            "manual_review": 0,
+            "blocked_by_active_agent": 0
+          },
+          "recovery_receipts": [
+            {
+              "bead_id": "bd-active-a",
+              "assignee": "BrownCreek",
+              "classification": "healthy",
+              "reason_code": "owner_recently_active",
+              "suggested_operator_commands": []
+            }
+          ]
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-a",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true,
+              "drained": false
+            },
+            {
+              "worker_id": "rch-b",
+              "daemon_status": "available",
+              "probe_schedulable": true,
+              "queue_schedulable": true,
+              "drained": false
+            }
+          ],
+          "findings": []
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "target_dir": "/mnt/rch/target-a",
+          "worker_id": "rch-a",
+          "proof_cache_summary": {
+            "cache_hit_count": 1,
+            "refresh_count": 0
+          },
+          "recommendations": [
+            {
+              "recommendation_id": "reuse-warm-target",
+              "action": "reuse_warm_target",
+              "target_dir": "/mnt/rch/target-a",
+              "worker_id": "rch-a",
+              "confidence": "high",
+              "manual_confirmation_required": false
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 2,
+            "healthy_count": 2,
+            "drain_recommended_count": 0,
+            "drained_count": 0,
+            "rehab_candidate_count": 0
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "current_state": "idle",
+              "reason_codes": []
+            },
+            {
+              "worker_id": "rch-b",
+              "classification": "healthy",
+              "current_state": "available",
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "brownout",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "panel_states": {
+          "capacity": "missing",
+          "admitted_lanes": "degraded",
+          "stale_ownership": "healthy",
+          "rch_workers": "healthy",
+          "proof_cache_locality": "degraded",
+          "recovery_receipts": "healthy"
+        },
+        "required_reason_code": "missing_capacity_telemetry"
+      },
+      "inputs": {
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "degraded",
+          "readiness": "degraded",
+          "host_profile": "64c_256g",
+          "telemetry_status": "missing",
+          "memory_pressure": {
+            "available_bytes": 21474836480
+          },
+          "disk_pressure": {
+            "target_dir_available_bytes": 8589934592
+          },
+          "rch_slots": {
+            "available": 1,
+            "total": 16
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "degraded",
+          "budget_profile": "brownout",
+          "recommendations": [
+            {
+              "request_id": "bd-heavy-b",
+              "bead_id": "bd-heavy-b",
+              "lane_class": "heavy",
+              "decision": "defer",
+              "budget_class": "brownout_defer",
+              "requested_command": "brownout-heavy-proof-lane"
+            },
+            {
+              "request_id": "bd-light-b",
+              "bead_id": "bd-light-b",
+              "lane_class": "light",
+              "decision": "admit",
+              "budget_class": "narrow",
+              "requested_command": "bash scripts/e2e/light_smoke.sh check"
+            }
+          ]
+        },
+        "stale_recovery_receipts_json": {
+          "schema_version": "franken-engine.swarm-ops-stale-recovery-receipts.v1",
+          "decision": "pass",
+          "snapshot_status": {
+            "agent_profiles": "provided",
+            "mail_activity": "provided",
+            "file_reservations": "provided",
+            "git_activity": "provided"
+          },
+          "summary": {
+            "total": 0,
+            "healthy": 0,
+            "needs_contact": 0,
+            "safe_to_reopen": 0,
+            "manual_review": 0,
+            "blocked_by_active_agent": 0
+          },
+          "recovery_receipts": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-a",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true,
+              "drained": false
+            }
+          ],
+          "findings": []
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "degraded",
+          "target_dir": "/mnt/rch/target-b",
+          "worker_id": "rch-a",
+          "proof_cache_summary": {
+            "cache_hit_count": 1,
+            "refresh_count": 1
+          },
+          "recommendations": [
+            {
+              "recommendation_id": "cool-target",
+              "action": "cool_target",
+              "target_dir": "/mnt/rch/target-b",
+              "worker_id": "rch-a",
+              "confidence": "bounded",
+              "manual_confirmation_required": true
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 1,
+            "healthy_count": 1,
+            "drain_recommended_count": 0,
+            "drained_count": 0,
+            "rehab_candidate_count": 0
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "current_state": "idle",
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "stale_owner",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "panel_states": {
+          "capacity": "healthy",
+          "admitted_lanes": "healthy",
+          "stale_ownership": "stale",
+          "rch_workers": "healthy",
+          "proof_cache_locality": "healthy",
+          "recovery_receipts": "degraded"
+        },
+        "required_reason_code": "stale_owner_needs_contact"
+      },
+      "inputs": {
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "telemetry_status": "provided",
+          "memory_pressure": {
+            "available_bytes": 171798691840
+          },
+          "disk_pressure": {
+            "target_dir_available_bytes": 322122547200
+          },
+          "rch_slots": {
+            "available": 8,
+            "total": 12
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "bd-heavy-c",
+              "bead_id": "bd-heavy-c",
+              "lane_class": "heavy",
+              "decision": "admit",
+              "budget_class": "protected"
+            }
+          ]
+        },
+        "stale_recovery_receipts_json": {
+          "schema_version": "franken-engine.swarm-ops-stale-recovery-receipts.v1",
+          "decision": "degraded",
+          "snapshot_status": {
+            "agent_profiles": "provided",
+            "mail_activity": "provided",
+            "file_reservations": "provided",
+            "git_activity": "provided"
+          },
+          "summary": {
+            "total": 2,
+            "healthy": 1,
+            "needs_contact": 1,
+            "safe_to_reopen": 0,
+            "manual_review": 0,
+            "blocked_by_active_agent": 0
+          },
+          "recovery_receipts": [
+            {
+              "bead_id": "bd-stale-c",
+              "assignee": "LavenderElk",
+              "classification": "needs-contact",
+              "reason_code": "recent_activity_requires_ack",
+              "suggested_operator_commands": []
+            },
+            {
+              "bead_id": "bd-active-c",
+              "assignee": "BrownCreek",
+              "classification": "healthy",
+              "reason_code": "owner_recently_active",
+              "suggested_operator_commands": []
+            }
+          ]
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-a",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true,
+              "drained": false
+            }
+          ],
+          "findings": []
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "target_dir": "/mnt/rch/target-c",
+          "worker_id": "rch-a",
+          "proof_cache_summary": {
+            "cache_hit_count": 1,
+            "refresh_count": 0
+          },
+          "recommendations": [
+            {
+              "recommendation_id": "reuse-warm-target",
+              "action": "reuse_warm_target",
+              "target_dir": "/mnt/rch/target-c",
+              "worker_id": "rch-a",
+              "confidence": "high",
+              "manual_confirmation_required": false
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 1,
+            "healthy_count": 1,
+            "drain_recommended_count": 0,
+            "drained_count": 0,
+            "rehab_candidate_count": 0
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "current_state": "idle",
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "rch_drained",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "panel_states": {
+          "capacity": "healthy",
+          "admitted_lanes": "healthy",
+          "stale_ownership": "healthy",
+          "rch_workers": "degraded",
+          "proof_cache_locality": "healthy",
+          "recovery_receipts": "degraded"
+        },
+        "required_reason_code": "rch_worker_drained"
+      },
+      "inputs": {
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "telemetry_status": "provided",
+          "memory_pressure": {
+            "available_bytes": 171798691840
+          },
+          "disk_pressure": {
+            "target_dir_available_bytes": 322122547200
+          },
+          "rch_slots": {
+            "available": 4,
+            "total": 12
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "bd-light-d",
+              "bead_id": "bd-light-d",
+              "lane_class": "light",
+              "decision": "admit",
+              "budget_class": "normal"
+            }
+          ]
+        },
+        "stale_recovery_receipts_json": {
+          "schema_version": "franken-engine.swarm-ops-stale-recovery-receipts.v1",
+          "decision": "pass",
+          "snapshot_status": {
+            "agent_profiles": "provided",
+            "mail_activity": "provided",
+            "file_reservations": "provided",
+            "git_activity": "provided"
+          },
+          "summary": {
+            "total": 0,
+            "healthy": 0,
+            "needs_contact": 0,
+            "safe_to_reopen": 0,
+            "manual_review": 0,
+            "blocked_by_active_agent": 0
+          },
+          "recovery_receipts": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-drained",
+              "daemon_status": "drained",
+              "probe_schedulable": false,
+              "queue_schedulable": false,
+              "drained": true
+            },
+            {
+              "worker_id": "rch-ready",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true,
+              "drained": false
+            }
+          ],
+          "findings": []
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "target_dir": "/mnt/rch/target-d",
+          "worker_id": "rch-ready",
+          "proof_cache_summary": {
+            "cache_hit_count": 1,
+            "refresh_count": 0
+          },
+          "recommendations": [
+            {
+              "recommendation_id": "reuse-warm-target",
+              "action": "reuse_warm_target",
+              "target_dir": "/mnt/rch/target-d",
+              "worker_id": "rch-ready",
+              "confidence": "high",
+              "manual_confirmation_required": false
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false
+          }
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "degraded",
+          "summary": {
+            "total_workers": 2,
+            "healthy_count": 1,
+            "drain_recommended_count": 0,
+            "drained_count": 1,
+            "rehab_candidate_count": 1
+          },
+          "workers": [
+            {
+              "worker_id": "rch-drained",
+              "classification": "drained",
+              "current_state": "drained",
+              "reason_codes": [
+                "worker_drained_by_operator"
+              ]
+            },
+            {
+              "worker_id": "rch-ready",
+              "classification": "healthy",
+              "current_state": "idle",
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

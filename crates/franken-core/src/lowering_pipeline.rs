@@ -6285,20 +6285,14 @@ fn lower_expression_to_ir1(
                 quasi_count: quasis.len() as u32,
             });
         }
-        Expression::ClassExpression {
-            name,
-            super_class: _,
-            body: _,
-        } => {
-            // Lower class expression similar to class declaration
-            // but as an expression that returns a constructor function
-            let _class_name = name.as_ref().map(String::as_str).unwrap_or("anonymous");
-
-            // For now, treat class expressions like function expressions
-            // TODO: Implement full class expression lowering
-            ops.push(Ir1Op::LoadLiteral {
-                value: Ir1Literal::Undefined,
-            });
+        Expression::ClassExpression { .. } => {
+            return Err(unsupported_frontier_expression_error(
+                "class_expression",
+                "FE-LOWER-CLASS-EXPR-0001",
+                "lower_ir0_to_ir1.class_expression",
+                "class expression lowering is not implemented; fail-closed contract rejected placeholder constructor synthesis",
+                None,
+            ));
         }
     }
     Ok(())
@@ -6711,10 +6705,11 @@ mod tests {
         ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, BlockStatement,
         BreakStatement, CatchClause, ContinueStatement, DoWhileStatement, ExportDeclaration,
         ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
-        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, ObjectPatternProperty,
-        ObjectProperty, ParseGoal, ReturnStatement, SourceSpan, Statement, SwitchCase,
-        SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator,
-        VariableDeclaration, VariableDeclarationKind, VariableDeclarator, WhileStatement,
+        FunctionDeclaration, FunctionParam, IfStatement, ImportDeclaration, MethodDefinition,
+        MethodKind, ObjectPatternProperty, ObjectProperty, ParseGoal, ReturnStatement, SourceSpan,
+        Statement, SwitchCase, SwitchStatement, SyntaxTree, ThrowStatement, TryCatchStatement,
+        UnaryOperator, VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+        WhileStatement,
     };
     use crate::parser_gap_inventory::{ParserGapSiteId, UnsupportedSyntaxDiagnostic};
 
@@ -8880,6 +8875,75 @@ mod tests {
         Ir0Module::from_syntax_tree(tree, "stmt_fixture.js")
     }
 
+    fn basic_class_expression(name: Option<&str>) -> Expression {
+        Expression::ClassExpression {
+            name: name.map(str::to_string),
+            super_class: None,
+            body: vec![],
+        }
+    }
+
+    fn complex_class_expression() -> Expression {
+        Expression::ClassExpression {
+            name: Some("Derived".to_string()),
+            super_class: Some(Box::new(Expression::Identifier("Base".to_string()))),
+            body: vec![
+                MethodDefinition {
+                    key: Expression::Identifier("constructor".to_string()),
+                    kind: MethodKind::Constructor,
+                    params: vec![FunctionParam {
+                        pattern: BindingPattern::Identifier("value".to_string()),
+                        span: span(),
+                    }],
+                    body: BlockStatement {
+                        body: vec![Statement::Return(ReturnStatement {
+                            argument: Some(Expression::Identifier("value".to_string())),
+                            span: span(),
+                        })],
+                        span: span(),
+                    },
+                    is_static: false,
+                    computed: false,
+                    span: span(),
+                },
+                MethodDefinition {
+                    key: Expression::Identifier("method".to_string()),
+                    kind: MethodKind::Method,
+                    params: vec![],
+                    body: BlockStatement {
+                        body: vec![Statement::Return(ReturnStatement {
+                            argument: Some(Expression::NumericLiteral(7)),
+                            span: span(),
+                        })],
+                        span: span(),
+                    },
+                    is_static: false,
+                    computed: false,
+                    span: span(),
+                },
+            ],
+        }
+    }
+
+    fn assert_class_expression_fail_closed(expression: Expression) {
+        let err = lower_ir0_to_ir1(&expr_ir0(expression))
+            .expect_err("class expression lowering should fail closed");
+        let diagnostic = match err {
+            LoweringPipelineError::UnsupportedSyntax(diagnostic) => *diagnostic,
+            other => panic!("expected UnsupportedSyntax, got {other:?}"),
+        };
+        assert_eq!(diagnostic.feature_family, "class_expression");
+        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-CLASS-EXPR-0001");
+        assert_eq!(diagnostic.site_id, "lower_ir0_to_ir1.class_expression");
+        assert_eq!(diagnostic.api_surface, "lower_ir0_to_ir1");
+        assert_eq!(diagnostic.source_label, "ir0");
+        assert_eq!(diagnostic.owner, COMPONENT);
+        assert_eq!(
+            diagnostic.message_template,
+            "class expression lowering is not implemented; fail-closed contract rejected placeholder constructor synthesis"
+        );
+    }
+
     #[test]
     fn lower_binary_expression() {
         let ir0 = expr_ir0(Expression::Binary {
@@ -8894,6 +8958,38 @@ mod tests {
                 operator: BinaryOperator::Add
             }
         )));
+    }
+
+    #[test]
+    fn anonymous_class_expression_fails_closed() {
+        assert_class_expression_fail_closed(basic_class_expression(None));
+    }
+
+    #[test]
+    fn named_class_expression_fails_closed() {
+        assert_class_expression_fail_closed(basic_class_expression(Some("NamedClass")));
+    }
+
+    #[test]
+    fn class_expression_in_assignment_rhs_fails_closed() {
+        assert_class_expression_fail_closed(Expression::Assignment {
+            operator: AssignmentOperator::Assign,
+            left: Box::new(Expression::Identifier("target".to_string())),
+            right: Box::new(basic_class_expression(Some("AssignedClass"))),
+        });
+    }
+
+    #[test]
+    fn class_expression_in_call_argument_fails_closed() {
+        assert_class_expression_fail_closed(Expression::Call {
+            callee: Box::new(Expression::Identifier("consume".to_string())),
+            arguments: vec![basic_class_expression(None)],
+        });
+    }
+
+    #[test]
+    fn class_expression_with_extends_and_methods_fails_closed() {
+        assert_class_expression_fail_closed(complex_class_expression());
     }
 
     #[test]
@@ -10319,7 +10415,9 @@ mod tests {
             .expect("IR1 should retain the lowered function body");
         assert_eq!(param_names, &vec!["x".to_string()]);
         assert!(
-            body_ops.iter().any(|op| matches!(op, Ir1Op::LoadBinding { .. })),
+            body_ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::LoadBinding { .. })),
             "function body should load its parameter"
         );
         assert!(

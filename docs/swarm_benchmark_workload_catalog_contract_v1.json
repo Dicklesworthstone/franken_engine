@@ -1,0 +1,552 @@
+{
+  "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+  "bead_id": "bd-ep64o",
+  "parent_bead_id": "bd-kl5f5",
+  "track": "SWARM-BENCH-I",
+  "catalog_schema_version": "franken-engine.swarm-benchmark-workload-catalog.v1",
+  "docs": {
+    "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+    "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+  },
+  "required_workload_fields": [
+    "workload_id",
+    "benchmark_class",
+    "purpose",
+    "intent_tags",
+    "symptom_tags",
+    "required_inputs",
+    "artifact_paths",
+    "measurement_source",
+    "benchmark_entrypoint",
+    "replay_entrypoint",
+    "resource_profile",
+    "cold_warm_expectation",
+    "rch_policy",
+    "mutation_policy",
+    "result_schema",
+    "operator_questions",
+    "owning_bead_id",
+    "upstream_workload_ids",
+    "downstream_workload_ids",
+    "failure_reason_codes",
+    "validation_commands"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "failure_reason_codes": [
+    "FE-SWARM-BENCH-MISSING-BENCHMARK",
+    "FE-SWARM-BENCH-MISSING-DOC",
+    "FE-SWARM-BENCH-MISSING-CONTRACT",
+    "FE-SWARM-BENCH-MALFORMED-CONTRACT",
+    "FE-SWARM-BENCH-DUPLICATE-WORKLOAD",
+    "FE-SWARM-BENCH-UNSAFE-MUTATION",
+    "FE-SWARM-BENCH-BARE-HEAVY-CARGO",
+    "FE-SWARM-BENCH-BLOCKED-MEASUREMENT",
+    "FE-SWARM-BENCH-STALE-SOURCE"
+  ],
+  "field_contract": {
+    "workload_id": "stable snake_case id for the benchmark workload row",
+    "benchmark_class": "high-level workload family or benchmark surface class",
+    "purpose": "one sentence operator-facing reason this workload exists",
+    "intent_tags": "operator intents that should route to this workload",
+    "symptom_tags": "performance symptoms or claim-review states that should route to this workload",
+    "required_inputs": "named source artifacts or evidence types required to consume the workload truthfully",
+    "artifact_paths": "stable emitted artifact paths or canonical artifact naming patterns",
+    "measurement_source": "primary source of truth for the workload's observed, blocked, or replay evidence",
+    "benchmark_entrypoint": "repo-relative script or command wrapper that operators use to generate the workload evidence",
+    "replay_entrypoint": "repo-relative replay or smoke helper path, or null when no replay path exists yet",
+    "resource_profile": "summary of whether the workload is CPU-intensive, requires RCH, and whether warm/cold cache matters",
+    "cold_warm_expectation": "operator-facing note describing whether warm cache or cold start matters for this workload",
+    "rch_policy": "heavy validation command policy for examples and emitted command evidence",
+    "mutation_policy": "booleans proving advisory-only behavior and forbidden live mutations",
+    "result_schema": "schema version and result-state semantics for the benchmark artifacts",
+    "operator_questions": "plain-language questions this workload helps answer",
+    "owning_bead_id": "bead that introduced or truthfully governs the workload surface",
+    "upstream_workload_ids": "benchmark workloads or surfaces that must be understood before this row",
+    "downstream_workload_ids": "workloads or advisory surfaces expected to consume this row",
+    "failure_reason_codes": "stable reason codes downstream consumers must preserve",
+    "validation_commands": "commands that validate the workload or its source surface"
+  },
+  "global_mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reassigns_beads": false,
+    "closes_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "replaces_operator_status_report": false
+  },
+  "global_rch_policy": {
+    "catalog_producer_runs_rch": false,
+    "catalog_producer_runs_cargo": false,
+    "heavy_cargo_examples_must_start_with": "rch exec -- env CARGO_TARGET_DIR=",
+    "benchmark_suite_wrappers_are_allowed": true,
+    "bare_heavy_cargo_is_fail_closed": true,
+    "allowed_local_non_cargo_validation": [
+      "jq empty",
+      "jq -e",
+      "bash -n",
+      "shellcheck -x",
+      "git diff --check"
+    ]
+  },
+  "source_freshness_policy": {
+    "required_sources_missing_decision": "fail_closed",
+    "required_sources_stale_decision": "fail_closed",
+    "required_sources_malformed_decision": "fail_closed",
+    "optional_sources_missing_decision": "degraded",
+    "catalog_rows_must_name_optional_sources": true,
+    "blocked_measurements_must_remain_explicit": true
+  },
+  "source_inventory": [
+    {
+      "workload_id": "benchmark_denominator_suite",
+      "benchmark_class": "throughput_denominator",
+      "purpose": "Compute the weighted geometric mean denominator and preserve benchmark scoring evidence for throughput claim review.",
+      "intent_tags": [
+        "throughput-claim",
+        "baseline-comparison",
+        "denominator",
+        "publication"
+      ],
+      "symptom_tags": [
+        "need-weighted-score",
+        "missing-denominator-evidence",
+        "throughput-claim-review",
+        "baseline-publication"
+      ],
+      "required_inputs": [
+        "benchmark_run_manifest_json",
+        "benchmark_events_jsonl"
+      ],
+      "artifact_paths": [
+        "artifacts/benchmark_denominator/<timestamp>/run_manifest.json",
+        "artifacts/benchmark_denominator/<timestamp>/benchmark_denominator_events.jsonl",
+        "artifacts/benchmark_denominator/<timestamp>/commands.txt"
+      ],
+      "measurement_source": {
+        "kind": "rch_wrapped_suite",
+        "path": "scripts/run_benchmark_denominator_suite.sh"
+      },
+      "benchmark_entrypoint": "scripts/run_benchmark_denominator_suite.sh",
+      "replay_entrypoint": null,
+      "resource_profile": {
+        "cpu_intensive": true,
+        "expected_execution_mode": "rch_only",
+        "cache_temperature": "not_applicable"
+      },
+      "cold_warm_expectation": "This workload scores benchmark outputs rather than measuring warm or cold cache behavior directly.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": true,
+        "required_entrypoint_wrapper": "scripts/run_benchmark_denominator_suite.sh",
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.benchmark-denominator.run-manifest.v1",
+        "result_state": "observed_only"
+      },
+      "operator_questions": [
+        "Do we have a truthful weighted denominator for a throughput claim?",
+        "Did the benchmark suite preserve manifest and event evidence?"
+      ],
+      "owning_bead_id": "bd-2n9",
+      "upstream_workload_ids": [
+        "extension_heavy_benchmark_spec"
+      ],
+      "downstream_workload_ids": [
+        "frankenengine_throughput_baseline_status"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-MISSING-BENCHMARK",
+        "FE-SWARM-BENCH-BARE-HEAVY-CARGO"
+      ],
+      "validation_commands": [
+        "./scripts/run_benchmark_denominator_suite.sh check"
+      ]
+    },
+    {
+      "workload_id": "extension_heavy_benchmark_spec",
+      "benchmark_class": "extension_heavy_workload_matrix",
+      "purpose": "Measure extension-heavy benchmark families and preserve the canonical workload matrix behind throughput claims.",
+      "intent_tags": [
+        "extension-heavy",
+        "throughput",
+        "latency",
+        "fairness"
+      ],
+      "symptom_tags": [
+        "extension-startup-pressure",
+        "behavior-equivalence-review",
+        "latency-regression",
+        "benchmark-family-drift"
+      ],
+      "required_inputs": [
+        "benchmark_suite_doc",
+        "workload_matrix_json",
+        "golden_outputs_json"
+      ],
+      "artifact_paths": [
+        "artifacts/extension_heavy_benchmark_spec/<timestamp>/run_manifest.json",
+        "artifacts/extension_heavy_benchmark_spec/<timestamp>/extension_heavy_benchmark_spec_events.jsonl",
+        "artifacts/extension_heavy_benchmark_spec/<timestamp>/commands.txt"
+      ],
+      "measurement_source": {
+        "kind": "rch_wrapped_suite",
+        "path": "scripts/run_extension_heavy_benchmark_spec_suite.sh"
+      },
+      "benchmark_entrypoint": "scripts/run_extension_heavy_benchmark_spec_suite.sh",
+      "replay_entrypoint": null,
+      "resource_profile": {
+        "cpu_intensive": true,
+        "expected_execution_mode": "rch_only",
+        "cache_temperature": "cold_and_warm"
+      },
+      "cold_warm_expectation": "Operators should compare the suite's cold-start and steady-state results before drawing throughput conclusions.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": true,
+        "required_entrypoint_wrapper": "scripts/run_extension_heavy_benchmark_spec_suite.sh",
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.extension-heavy-benchmark-spec.run-manifest.v1",
+        "result_state": "observed_only"
+      },
+      "operator_questions": [
+        "Which extension-heavy family is regressing or winning?",
+        "Are the benchmark families and fairness pins still the canonical ones?"
+      ],
+      "owning_bead_id": "bd-2ql",
+      "upstream_workload_ids": [],
+      "downstream_workload_ids": [
+        "benchmark_denominator_suite"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-MISSING-DOC",
+        "FE-SWARM-BENCH-MISSING-CONTRACT",
+        "FE-SWARM-BENCH-BARE-HEAVY-CARGO"
+      ],
+      "validation_commands": [
+        "./scripts/run_extension_heavy_benchmark_spec_suite.sh check"
+      ]
+    },
+    {
+      "workload_id": "plas_benchmark_bundle",
+      "benchmark_class": "constrained_ambient_bundle",
+      "purpose": "Compare constrained-vs-ambient specialization uplift and preserve the bundle artifacts needed for proof-oriented performance review.",
+      "intent_tags": [
+        "plas",
+        "constrained-vs-ambient",
+        "specialization",
+        "uplift"
+      ],
+      "symptom_tags": [
+        "specialization-regression",
+        "artifact-retrieval-stall",
+        "uplift-claim-review",
+        "ambient-vs-constrained-drift"
+      ],
+      "required_inputs": [
+        "benchmark_run_manifest_json",
+        "benchmark_events_jsonl"
+      ],
+      "artifact_paths": [
+        "artifacts/plas_benchmark_bundle/<timestamp>/run_manifest.json",
+        "artifacts/plas_benchmark_bundle/<timestamp>/plas_benchmark_bundle_events.jsonl",
+        "artifacts/plas_benchmark_bundle/<timestamp>/commands.txt"
+      ],
+      "measurement_source": {
+        "kind": "rch_wrapped_suite",
+        "path": "scripts/run_plas_benchmark_bundle_suite.sh"
+      },
+      "benchmark_entrypoint": "scripts/run_plas_benchmark_bundle_suite.sh",
+      "replay_entrypoint": null,
+      "resource_profile": {
+        "cpu_intensive": true,
+        "expected_execution_mode": "rch_only",
+        "cache_temperature": "warm_preferred"
+      },
+      "cold_warm_expectation": "Warm target reuse matters because bundle retrieval and comparison can be dominated by cache and artifact locality.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": true,
+        "required_entrypoint_wrapper": "scripts/run_plas_benchmark_bundle_suite.sh",
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.plas-benchmark-bundle.run-manifest.v1",
+        "result_state": "observed_or_recovered"
+      },
+      "operator_questions": [
+        "Did constrained execution preserve the expected uplift over ambient execution?",
+        "Was a PLAS benchmark retrieval slowdown a real regression or only an artifact-retrieval stall?"
+      ],
+      "owning_bead_id": "bd-25b7",
+      "upstream_workload_ids": [],
+      "downstream_workload_ids": [
+        "benchmark_responsiveness_advisory"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-MISSING-BENCHMARK",
+        "FE-SWARM-BENCH-STALE-SOURCE",
+        "FE-SWARM-BENCH-BARE-HEAVY-CARGO"
+      ],
+      "validation_commands": [
+        "./scripts/run_plas_benchmark_bundle_suite.sh check"
+      ]
+    },
+    {
+      "workload_id": "parser_phase0_artifact_contract",
+      "benchmark_class": "parser_baseline_artifact",
+      "purpose": "Preserve truthful parser baseline artifact generation and degraded profiling receipts without treating placeholders as performance evidence.",
+      "intent_tags": [
+        "parser-baseline",
+        "artifact-contract",
+        "degraded-receipt",
+        "phase0"
+      ],
+      "symptom_tags": [
+        "placeholder-flamegraph-risk",
+        "parser-baseline-missing",
+        "profiling-unavailable",
+        "artifact-contract-review"
+      ],
+      "required_inputs": [
+        "contract_doc",
+        "contract_json",
+        "generator_script"
+      ],
+      "artifact_paths": [
+        "artifacts/parser_phase0_artifact_contract/<timestamp>/run_manifest.json",
+        "artifacts/parser_phase0_artifact_contract/<timestamp>/events.jsonl",
+        "artifacts/parser_phase0_artifact_contract/<timestamp>/parser_phase0_artifact_contract_validation_report.json"
+      ],
+      "measurement_source": {
+        "kind": "rch_wrapped_contract_gate",
+        "path": "scripts/run_parser_phase0_artifact_contract.sh"
+      },
+      "benchmark_entrypoint": "scripts/run_parser_phase0_artifact_contract.sh",
+      "replay_entrypoint": "scripts/e2e/parser_phase0_artifact_contract_replay.sh",
+      "resource_profile": {
+        "cpu_intensive": true,
+        "expected_execution_mode": "rch_only",
+        "cache_temperature": "cold_start_truth"
+      },
+      "cold_warm_expectation": "This workload is a cold-start correctness and degraded-artifact truth surface, not a steady-state throughput benchmark.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": true,
+        "required_entrypoint_wrapper": "scripts/run_parser_phase0_artifact_contract.sh",
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.parser-phase0-artifact-contract-validation.v1",
+        "result_state": "observed_or_degraded_receipt"
+      },
+      "operator_questions": [
+        "Is the parser baseline artifact truthful, degraded, or contaminated by placeholders?",
+        "Should downstream performance claims be blocked because parser profiling evidence is unsupported?"
+      ],
+      "owning_bead_id": "bd-2muur.6.1",
+      "upstream_workload_ids": [],
+      "downstream_workload_ids": [
+        "benchmark_responsiveness_advisory"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-MISSING-CONTRACT",
+        "FE-SWARM-BENCH-MALFORMED-CONTRACT",
+        "FE-SWARM-BENCH-BLOCKED-MEASUREMENT"
+      ],
+      "validation_commands": [
+        "./scripts/run_parser_phase0_artifact_contract.sh check"
+      ]
+    },
+    {
+      "workload_id": "sibling_integration_benchmark_gate",
+      "benchmark_class": "control_plane_slo_guard",
+      "purpose": "Protect critical control-plane p95 and p99 latency envelopes when sibling-repo integrations land.",
+      "intent_tags": [
+        "sibling-integration",
+        "control-plane-slo",
+        "latency-guard",
+        "regression-gate"
+      ],
+      "symptom_tags": [
+        "integration-overhead",
+        "p95-regression",
+        "p99-regression",
+        "control-plane-drift"
+      ],
+      "required_inputs": [
+        "benchmark_run_manifest_json",
+        "benchmark_commands_txt"
+      ],
+      "artifact_paths": [
+        "artifacts/sibling_integration_benchmark_gate/<timestamp>/run_manifest.json",
+        "artifacts/sibling_integration_benchmark_gate/<timestamp>/commands.txt"
+      ],
+      "measurement_source": {
+        "kind": "rch_wrapped_suite",
+        "path": "scripts/run_sibling_integration_benchmark_gate_suite.sh"
+      },
+      "benchmark_entrypoint": "scripts/run_sibling_integration_benchmark_gate_suite.sh",
+      "replay_entrypoint": null,
+      "resource_profile": {
+        "cpu_intensive": true,
+        "expected_execution_mode": "rch_only",
+        "cache_temperature": "steady_state"
+      },
+      "cold_warm_expectation": "This guard is primarily a steady-state control-plane latency benchmark rather than a cold-start throughput surface.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": true,
+        "required_entrypoint_wrapper": "scripts/run_sibling_integration_benchmark_gate_suite.sh",
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.sibling-integration-benchmark-gate.v1",
+        "result_state": "observed_only"
+      },
+      "operator_questions": [
+        "Did a sibling integration regress critical control-plane SLOs?",
+        "Is the regression in control-plane overhead rather than hot-loop throughput?"
+      ],
+      "owning_bead_id": "bd-1coe",
+      "upstream_workload_ids": [],
+      "downstream_workload_ids": [
+        "benchmark_responsiveness_advisory"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-MISSING-DOC",
+        "FE-SWARM-BENCH-BARE-HEAVY-CARGO",
+        "FE-SWARM-BENCH-STALE-SOURCE"
+      ],
+      "validation_commands": [
+        "./scripts/run_sibling_integration_benchmark_gate_suite.sh check"
+      ]
+    },
+    {
+      "workload_id": "frankenengine_throughput_baseline_status",
+      "benchmark_class": "blocked_runtime_baseline",
+      "purpose": "Preserve observed-or-blocked throughput baseline state without inventing FrankenEngine runtime throughput numbers.",
+      "intent_tags": [
+        "throughput-baseline",
+        "blocked-measurement",
+        "runtime-readiness",
+        "publication-truth"
+      ],
+      "symptom_tags": [
+        "frankenengine-not-measured",
+        "placeholder-risk",
+        "runner-not-configured",
+        "throughput-claim-blocked"
+      ],
+      "required_inputs": [
+        "throughput_baseline_measurements_json"
+      ],
+      "artifact_paths": [
+        "docs/throughput_baseline_measurements_v1.json"
+      ],
+      "measurement_source": {
+        "kind": "observed_or_blocked_baseline_document",
+        "path": "docs/throughput_baseline_measurements_v1.json"
+      },
+      "benchmark_entrypoint": "scripts/benchmarks/throughput_baselines.sh",
+      "replay_entrypoint": "scripts/e2e/throughput_baselines_placeholder_smoke.sh",
+      "resource_profile": {
+        "cpu_intensive": false,
+        "expected_execution_mode": "observed_or_prebuilt_only",
+        "cache_temperature": "not_applicable"
+      },
+      "cold_warm_expectation": "This row records baseline publication state and explicit blockers rather than a warm or cold benchmark workload.",
+      "rch_policy": {
+        "heavy_validation_examples_allowed": false,
+        "runs_rch": false,
+        "bare_heavy_cargo_is_fail_closed": true
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "result_schema": {
+        "schema_version": "franken-engine.throughput-baselines.v1",
+        "result_state": "observed_or_blocked"
+      },
+      "operator_questions": [
+        "Can FrankenEngine throughput be published yet, or is the runtime still blocked?",
+        "Is the baseline row truthful about observed runtimes versus blocked runtimes?"
+      ],
+      "owning_bead_id": "bd-cda2d",
+      "upstream_workload_ids": [
+        "benchmark_denominator_suite",
+        "extension_heavy_benchmark_spec"
+      ],
+      "downstream_workload_ids": [
+        "benchmark_responsiveness_advisory"
+      ],
+      "failure_reason_codes": [
+        "FE-SWARM-BENCH-BLOCKED-MEASUREMENT",
+        "FE-SWARM-BENCH-STALE-SOURCE"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/throughput_baselines_placeholder_smoke.sh check"
+      ]
+    }
+  ],
+  "example_workloads": [
+    "benchmark_denominator_suite",
+    "extension_heavy_benchmark_spec",
+    "plas_benchmark_bundle",
+    "parser_phase0_artifact_contract",
+    "sibling_integration_benchmark_gate",
+    "frankenengine_throughput_baseline_status"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_benchmark_workload_catalog_contract_v1.json",
+    "jq -e '.required_workload_fields | index(\"workload_id\") and index(\"validation_commands\")' docs/swarm_benchmark_workload_catalog_contract_v1.json",
+    "jq -e '.source_inventory | length >= 6' docs/swarm_benchmark_workload_catalog_contract_v1.json",
+    "bash scripts/e2e/swarm_benchmark_workload_catalog_contract_smoke.sh check",
+    "git diff --check -- docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md docs/swarm_benchmark_workload_catalog_contract_v1.json scripts/e2e/swarm_benchmark_workload_catalog_contract_smoke.sh"
+  ]
+}

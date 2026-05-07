@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test release_checklist_gate
-cargo test -p frankenengine-engine --test release_checklist_gate

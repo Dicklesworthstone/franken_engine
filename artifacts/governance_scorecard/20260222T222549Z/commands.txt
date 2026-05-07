@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test governance_scorecard
-cargo test -p frankenengine-engine --test governance_scorecard

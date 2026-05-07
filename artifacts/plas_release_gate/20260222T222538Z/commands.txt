@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test plas_release_gate_integration
-cargo test -p frankenengine-engine --test plas_release_gate_integration
-cargo clippy -p frankenengine-engine --test plas_release_gate_integration -- -D warnings

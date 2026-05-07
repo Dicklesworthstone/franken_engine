@@ -1,2 +1,0 @@
-./scripts/run_test262_es2020_gate.sh check
-./scripts/run_parser_oracle_gate.sh check

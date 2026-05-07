@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --bin franken_parser_multi_engine_harness --test parser_multi_engine_harness_integration
-cargo test -p frankenengine-engine --test parser_multi_engine_harness_integration
-cargo clippy -p frankenengine-engine --bin franken_parser_multi_engine_harness --test parser_multi_engine_harness_integration -- -D warnings
-cargo run -p frankenengine-engine --bin franken_parser_multi_engine_harness -- --fixture-catalog crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json --fixture-limit 8 --seed 7 --trace-id trace-parser-multi-engine-harness-20260224T233859Z --decision-id decision-parser-multi-engine-harness-20260224T233859Z --policy-id policy-parser-multi-engine-harness-v1 --locale C --timezone UTC --out artifacts/parser_multi_engine_harness/20260224T233859Z/report.json

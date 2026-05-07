@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_pilot_rollout_harness
-cargo test -p frankenengine-engine --test frx_pilot_rollout_harness
-cargo clippy -p frankenengine-engine --test frx_pilot_rollout_harness -- -D warnings

@@ -1,1 +1,0 @@
-native synthesis structure checks

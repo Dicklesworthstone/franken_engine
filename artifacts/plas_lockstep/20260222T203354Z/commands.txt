@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test plas_lockstep_integration
-cargo test -p frankenengine-engine --test plas_lockstep_integration
-cargo clippy -p frankenengine-engine --test plas_lockstep_integration -- -D warnings

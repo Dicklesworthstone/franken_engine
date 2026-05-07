@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_regression_bisector_scoreboard
-cargo test -p frankenengine-engine --test parser_regression_bisector_scoreboard
-cargo clippy -p frankenengine-engine --test parser_regression_bisector_scoreboard -- -D warnings

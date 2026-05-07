@@ -1,6 +1,0 @@
-cargo check -p frankenengine-engine --test parallel_parser_integration --test parallel_interference_gate_integration
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact schedule_transcript_replay_matches_execution_order
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact schedule_transcript_hash_deterministic_across_repeated_runs
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact schedule_transcript_hash_changes_with_seed
-cargo test -p frankenengine-engine --test parallel_interference_gate_integration -- --exact compare_transcripts_all_fields_differ
-cargo clippy -p frankenengine-engine --test parallel_parser_integration --test parallel_interference_gate_integration -- -D warnings

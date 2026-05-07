@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --bin runtime_diagnostics --test runtime_diagnostics_cli
-cargo test -p frankenengine-engine --test runtime_diagnostics_cli

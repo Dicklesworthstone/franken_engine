@@ -1,2 +1,0 @@
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_adversarial_logs_are_structured_and_replayable
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_adversarial_e2e_contract_doc_and_fixture_are_well_formed

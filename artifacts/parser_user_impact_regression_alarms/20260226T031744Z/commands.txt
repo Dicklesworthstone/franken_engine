@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_user_impact_regression_alarms
-cargo test -p frankenengine-engine --test parser_user_impact_regression_alarms
-cargo clippy -p frankenengine-engine --test parser_user_impact_regression_alarms -- -D warnings

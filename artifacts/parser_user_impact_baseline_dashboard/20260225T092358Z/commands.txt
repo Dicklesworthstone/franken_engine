@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_user_impact_baseline_dashboard
-cargo test -p frankenengine-engine --test parser_user_impact_baseline_dashboard
-cargo clippy -p frankenengine-engine --test parser_user_impact_baseline_dashboard -- -D warnings

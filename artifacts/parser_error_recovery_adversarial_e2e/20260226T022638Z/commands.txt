@@ -1,5 +1,0 @@
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_adversarial_e2e_cases_are_deterministic_and_success_rate_bounded
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_resync_guards_prevent_silent_semantic_corruption
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_adversarial_logs_are_structured_and_replayable
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_primitives_respect_resync_edit_bounds
-cargo test -p frankenengine-engine --test parser_error_recovery_integration -- --exact parser_error_recovery_adversarial_e2e_contract_doc_and_fixture_are_well_formed

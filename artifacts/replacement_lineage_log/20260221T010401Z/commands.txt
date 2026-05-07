@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test replacement_lineage_log
-cargo test -p frankenengine-engine --test replacement_lineage_log

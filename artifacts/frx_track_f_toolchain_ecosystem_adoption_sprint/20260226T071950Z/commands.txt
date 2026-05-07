@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_track_f_toolchain_ecosystem_adoption_sprint
-cargo test -p frankenengine-engine --test frx_track_f_toolchain_ecosystem_adoption_sprint
-cargo clippy -p frankenengine-engine --test frx_track_f_toolchain_ecosystem_adoption_sprint -- -D warnings

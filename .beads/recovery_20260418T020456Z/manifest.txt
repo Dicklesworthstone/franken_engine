@@ -1,3 +1,0 @@
-repo_path=/data/projects/franken_engine
-timestamp=20260418T020456Z
-issue_id=bd-1lsy.9.5.2

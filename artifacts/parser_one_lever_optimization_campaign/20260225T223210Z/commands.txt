@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test parser_one_lever_optimization_campaign

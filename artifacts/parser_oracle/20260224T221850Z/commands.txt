@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --lib --bin franken_parser_oracle_report

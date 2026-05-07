@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_test_logging_schema
-cargo test -p frankenengine-engine --test frx_test_logging_schema
-cargo clippy -p frankenengine-engine --test frx_test_logging_schema -- -D warnings

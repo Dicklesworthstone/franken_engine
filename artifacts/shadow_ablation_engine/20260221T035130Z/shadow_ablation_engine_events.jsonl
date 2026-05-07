@@ -1,1 +1,0 @@
-{"trace_id":"trace-shadow-ablation-suite-20260221T035130Z","decision_id":"decision-shadow-ablation-suite-20260221T035130Z","policy_id":"policy-shadow-ablation-suite-v1","component":"shadow_ablation_engine","event":"suite_completed","outcome":"fail","error_code":"FE-ABLATION-0001"}

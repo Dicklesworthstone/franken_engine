@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test sqlite_policy_guard
-cargo test -p frankenengine-engine --test sqlite_policy_guard
-cargo clippy -p frankenengine-engine --test sqlite_policy_guard -- -D warnings

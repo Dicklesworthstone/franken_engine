@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test parser_api_compatibility_contract

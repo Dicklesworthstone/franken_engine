@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --test frx_online_regret_change_point_demotion_controller

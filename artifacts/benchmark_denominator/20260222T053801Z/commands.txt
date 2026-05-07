@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test benchmark_denominator
-cargo test -p frankenengine-engine --test benchmark_denominator
-cargo clippy -p frankenengine-engine --test benchmark_denominator -- -D warnings

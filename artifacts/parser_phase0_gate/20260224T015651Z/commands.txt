@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --test parser_trait_ast --test parser_edge_cases --test parser_phase0_semantic_fixtures --test parser_phase0_metamorphic
-./scripts/generate_parser_phase0_artifacts.sh

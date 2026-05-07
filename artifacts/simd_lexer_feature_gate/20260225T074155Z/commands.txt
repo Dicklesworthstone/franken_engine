@@ -1,2 +1,0 @@
-cargo test -p frankenengine-engine --test simd_lexer_integration -- --exact token_witness_log_contains_replay_command
-cargo test -p frankenengine-engine --test simd_lexer_integration -- --exact token_witness_log_serde_roundtrip

@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_ecosystem_compatibility_matrix
-cargo test -p frankenengine-engine --test frx_ecosystem_compatibility_matrix
-cargo clippy -p frankenengine-engine --test frx_ecosystem_compatibility_matrix -- -D warnings

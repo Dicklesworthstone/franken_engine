@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_operator_developer_runbook
-cargo test -p frankenengine-engine --test parser_operator_developer_runbook
-cargo clippy -p frankenengine-engine --test parser_operator_developer_runbook -- -D warnings

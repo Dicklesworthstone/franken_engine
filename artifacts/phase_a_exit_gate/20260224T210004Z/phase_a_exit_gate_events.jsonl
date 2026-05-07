@@ -1,1 +1,0 @@
-{"trace_id":"trace-phase-a-gate-20260224T210004Z","decision_id":"decision-phase-a-gate-20260224T210004Z","policy_id":"policy-phase-a-exit-gate-v1","component":"phase_a_exit_gate","event":"phase_a_gate_completed","outcome":"fail","error_code":"FE-PHASE-A-GATE-1001"}

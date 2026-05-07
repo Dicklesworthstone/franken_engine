@@ -1,1 +1,0 @@
-env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test frx_track_d_wasm_lane_hybrid_router_sprint --no-run

@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test fuzz_adversarial
-cargo test -p frankenengine-engine --test fuzz_adversarial
-cargo fuzz build decode_dos

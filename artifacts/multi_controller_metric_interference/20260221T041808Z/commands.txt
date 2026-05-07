@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test multi_controller_metric_interference
-cargo test -p frankenengine-engine --test multi_controller_metric_interference
-cargo test -p frankenengine-engine --lib counterexample_synthesizer::tests::

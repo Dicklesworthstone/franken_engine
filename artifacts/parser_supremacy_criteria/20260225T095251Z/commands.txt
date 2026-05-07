@@ -1,1 +1,0 @@
-cargo clippy -p frankenengine-engine --test parser_supremacy_criteria_contract -- -D warnings

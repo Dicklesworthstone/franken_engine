@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test stress_concurrency -- --nocapture

@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --all-targets
-cargo test -p frankenengine-engine --test storage_adapter
-cargo test -p frankenengine-engine storage_adapter::
-cargo clippy -p frankenengine-engine --all-targets -- -D warnings

@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_performance_promotion_gate
-cargo test -p frankenengine-engine --test parser_performance_promotion_gate
-cargo clippy -p frankenengine-engine --test parser_performance_promotion_gate -- -D warnings

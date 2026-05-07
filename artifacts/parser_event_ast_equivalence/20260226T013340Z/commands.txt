@@ -1,2 +1,0 @@
-cargo test -p frankenengine-engine --test parser_event_ast_equivalence -- --exact parser_event_ast_equivalence_replay_scenarios_are_deterministic
-cargo test -p frankenengine-engine --test parser_event_ast_equivalence -- --exact parser_event_ast_equivalence_contract_doc_and_logs_are_well_formed

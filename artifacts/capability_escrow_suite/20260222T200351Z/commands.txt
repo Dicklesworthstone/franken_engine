@@ -1,3 +1,0 @@
-cargo check -p frankenengine-extension-host --test capability_escrow_and_emergency_grants
-cargo test -p frankenengine-extension-host --test capability_escrow_and_emergency_grants
-cargo clippy -p frankenengine-extension-host --test capability_escrow_and_emergency_grants -- -D warnings

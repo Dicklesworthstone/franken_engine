@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_differential_nightly_governance
-cargo test -p frankenengine-engine --test parser_differential_nightly_governance
-cargo clippy -p frankenengine-engine --test parser_differential_nightly_governance -- -D warnings

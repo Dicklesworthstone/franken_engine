@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_track_e_verification_fuzz_formal_coverage_sprint
-cargo test -p frankenengine-engine --test frx_track_e_verification_fuzz_formal_coverage_sprint
-cargo clippy -p frankenengine-engine --test frx_track_e_verification_fuzz_formal_coverage_sprint -- -D warnings

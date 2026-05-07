@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_benchmark_protocol
-cargo test -p frankenengine-engine --test parser_benchmark_protocol
-cargo clippy -p frankenengine-engine --test parser_benchmark_protocol -- -D warnings

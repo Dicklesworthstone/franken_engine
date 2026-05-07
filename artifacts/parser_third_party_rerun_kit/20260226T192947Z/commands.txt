@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test parser_third_party_rerun_kit -- --exact parser_third_party_rerun_kit_matrix_status_classifier_remains_stable

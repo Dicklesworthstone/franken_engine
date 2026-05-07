@@ -1,1 +1,0 @@
-{"trace_id":"trace-safe-mode-startup-20260221T042515Z","decision_id":"decision-safe-mode-startup-20260221T042515Z","policy_id":"policy-safe-mode-startup-v1","component":"safe_mode_startup_suite","event":"suite_completed","outcome":"fail","error_code":"FE-SAFE-MODE-STARTUP-SUITE-0001"}

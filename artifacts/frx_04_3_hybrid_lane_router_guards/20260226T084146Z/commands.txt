@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --lib --test frx_track_d_wasm_lane_hybrid_router_sprint

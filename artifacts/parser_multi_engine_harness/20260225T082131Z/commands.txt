@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --bin franken_parser_multi_engine_harness --test parser_multi_engine_harness_integration

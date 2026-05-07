@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test version_matrix_lane
-CONFORMANCE_ARTIFACT_ROOT=artifacts/version_matrix_lane/20260222T054133Z/conformance_suite ./scripts/run_conformance_suite.sh check

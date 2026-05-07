@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test constrained_ambient_benchmark_lane
-cargo test -p frankenengine-engine --test constrained_ambient_benchmark_lane
-cargo clippy -p frankenengine-engine --test constrained_ambient_benchmark_lane -- -D warnings

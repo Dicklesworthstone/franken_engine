@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test conformance_assets
-cargo check -p frankenengine-engine --test conformance_min_repro
-cargo check -p frankenengine-engine --lib conformance_vector_gen::tests::

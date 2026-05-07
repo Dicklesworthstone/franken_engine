@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test controller_interference
-cargo test -p frankenengine-engine --test controller_interference
-cargo clippy -p frankenengine-engine --test controller_interference -- -D warnings

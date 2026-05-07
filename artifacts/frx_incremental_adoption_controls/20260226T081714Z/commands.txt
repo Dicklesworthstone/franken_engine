@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_incremental_adoption_controls
-cargo test -p frankenengine-engine --test frx_incremental_adoption_controls
-cargo clippy -p frankenengine-engine --test frx_incremental_adoption_controls -- -D warnings

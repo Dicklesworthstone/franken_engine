@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --lib control_plane_invariants_dashboard_

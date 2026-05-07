@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test safe_mode_startup
-cargo test -p frankenengine-engine --test safe_mode_startup
-cargo test -p frankenengine-engine --lib fork_detection::tests::safe_mode_

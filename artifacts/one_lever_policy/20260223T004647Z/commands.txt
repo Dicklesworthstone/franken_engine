@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --test one_lever_policy
-cargo test -p frankenengine-engine --lib one_lever_policy
-cargo test -p frankenengine-engine --test one_lever_policy
-cargo clippy -p frankenengine-engine --test one_lever_policy -- -D warnings

@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --test sqlite_policy_guard

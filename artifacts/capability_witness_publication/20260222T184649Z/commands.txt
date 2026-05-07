@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --test capability_witness_publication

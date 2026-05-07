@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --test sibling_integration_benchmark_gate

@@ -1,5 +1,0 @@
-cargo check -p frankenengine-engine --test parallel_parser_integration
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact chunk_plan_prefers_low_depth_boundaries
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact parse_no_split_points_routes_serial
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact routing_digest_serial_no_newlines
-cargo clippy -p frankenengine-engine --test parallel_parser_integration -- -D warnings

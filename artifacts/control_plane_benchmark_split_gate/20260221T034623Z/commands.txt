@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --test control_plane_benchmark_split_gate

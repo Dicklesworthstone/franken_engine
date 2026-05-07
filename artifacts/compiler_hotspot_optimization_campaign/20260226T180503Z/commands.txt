@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test compiler_hotspot_optimization_campaign
-cargo test -p frankenengine-engine --test compiler_hotspot_optimization_campaign
-cargo clippy -p frankenengine-engine --test compiler_hotspot_optimization_campaign -- -D warnings

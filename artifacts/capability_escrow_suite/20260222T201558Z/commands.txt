@@ -1,2 +1,0 @@
-cargo check -p frankenengine-extension-host --test capability_escrow_and_emergency_grants
-cargo check -p frankenengine-extension-host --test capability_escrow_adversarial

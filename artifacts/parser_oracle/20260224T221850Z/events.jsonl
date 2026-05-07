@@ -1,1 +1,0 @@
-{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"trace-parser-oracle-20260224T221850Z","decision_id":"decision-parser-oracle-20260224T221850Z","policy_id":"policy-parser-oracle-v1","component":"parser_oracle_gate","event":"gate_completed","outcome":"pass","error_code":null}

@@ -1,1 +1,0 @@
-{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"trace-parser-phase0-gate-20260225T060815Z","decision_id":"decision-parser-phase0-gate-20260225T060815Z","policy_id":"policy-parser-phase0-gate-v1","component":"parser_phase0_gate","event":"gate_completed","outcome":"pass","error_code":null}

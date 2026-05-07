@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test test262_release_gate
-cargo test -p frankenengine-engine --test test262_release_gate
-cargo clippy -p frankenengine-engine --test test262_release_gate -- -D warnings

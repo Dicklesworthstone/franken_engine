@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test compiler_hotspot_optimization_campaign

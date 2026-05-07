@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test capability_witness_publication
-cargo test -p frankenengine-engine --test capability_witness_publication
-cargo test -p frankenengine-engine --test capability_witness_edge_cases pipeline_

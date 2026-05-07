@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test frx_track_f_toolchain_ecosystem_adoption_sprint

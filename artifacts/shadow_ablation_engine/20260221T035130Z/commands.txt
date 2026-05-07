@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test shadow_ablation_engine
-cargo test -p frankenengine-engine --test shadow_ablation_engine
-cargo clippy -p frankenengine-engine --test shadow_ablation_engine -- -D warnings

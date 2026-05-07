@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --test frx_track_b_compiler_frir_spine

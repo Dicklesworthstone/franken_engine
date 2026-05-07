@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test flamegraph_pipeline
-cargo test -p frankenengine-engine --test flamegraph_pipeline
-cargo clippy -p frankenengine-engine --test flamegraph_pipeline -- -D warnings

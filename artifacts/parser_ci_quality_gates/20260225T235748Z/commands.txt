@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_ci_quality_gates
-cargo test -p frankenengine-engine --test parser_ci_quality_gates
-cargo clippy -p frankenengine-engine --test parser_ci_quality_gates -- -D warnings

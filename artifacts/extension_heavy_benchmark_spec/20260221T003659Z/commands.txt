@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test extension_heavy_benchmark_spec
-cargo test -p frankenengine-engine --test extension_heavy_benchmark_spec
-cargo clippy -p frankenengine-engine --test extension_heavy_benchmark_spec -- -D warnings

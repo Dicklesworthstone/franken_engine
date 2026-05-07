@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_api_compatibility_contract
-cargo test -p frankenengine-engine --test parser_api_compatibility_contract
-cargo clippy -p frankenengine-engine --test parser_api_compatibility_contract -- -D warnings

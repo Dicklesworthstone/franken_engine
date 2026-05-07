@@ -1,1 +1,0 @@
-{"trace_id":"trace-stress-suite-20260222T071056Z","decision_id":"decision-stress-suite-20260222T071056Z","policy_id":"policy-stress-concurrency-v1","component":"stress_concurrency_suite","event":"suite_completed","outcome":"fail","error_code":"FE-STRESS-1001"}

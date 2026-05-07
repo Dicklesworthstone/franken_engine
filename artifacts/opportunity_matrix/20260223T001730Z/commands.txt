@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --test opportunity_matrix
-cargo test -p frankenengine-engine --lib opportunity_matrix
-cargo test -p frankenengine-engine --test opportunity_matrix
-cargo clippy -p frankenengine-engine --test opportunity_matrix -- -D warnings

@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_track_b_compiler_frir_spine
-cargo test -p frankenengine-engine --test frx_track_b_compiler_frir_spine
-cargo clippy -p frankenengine-engine --test frx_track_b_compiler_frir_spine -- -D warnings

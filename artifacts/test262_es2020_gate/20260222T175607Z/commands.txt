@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test test262_release_gate
-cargo check -p frankenengine-engine --bin franken_test262_runner

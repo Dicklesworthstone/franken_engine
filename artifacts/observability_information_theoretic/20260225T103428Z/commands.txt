@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test observability_channel_model
-cargo test -p frankenengine-engine --test observability_channel_model
-cargo clippy -p frankenengine-engine --test observability_channel_model -- -D warnings

@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test parser_performance_promotion_gate
-cargo test -p frankenengine-engine --test parser_performance_promotion_gate

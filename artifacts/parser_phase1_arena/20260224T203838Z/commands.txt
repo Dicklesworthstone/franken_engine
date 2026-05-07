@@ -1,2 +1,0 @@
-cargo test -p frankenengine-engine --test parser_arena_phase1 -- --exact handle_audit_entries_are_deterministic
-cargo test -p frankenengine-engine --test parser_arena_phase1 -- --exact handle_audit_jsonl_is_parseable_and_stable

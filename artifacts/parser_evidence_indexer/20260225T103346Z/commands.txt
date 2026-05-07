@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --lib --test parser_evidence_indexer
-cargo test -p frankenengine-engine --lib parser_evidence_indexer
-cargo test -p frankenengine-engine --test parser_evidence_indexer
-cargo clippy -p frankenengine-engine --lib --test parser_evidence_indexer -- -D warnings

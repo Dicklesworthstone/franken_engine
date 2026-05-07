@@ -1,2 +1,0 @@
-cargo clippy -p frankenengine-extension-host --test capability_escrow_and_emergency_grants -- -D warnings
-cargo clippy -p frankenengine-extension-host --test capability_escrow_adversarial -- -D warnings

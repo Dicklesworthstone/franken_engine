@@ -1,3 +1,0 @@
-run_dir=artifacts/third_party_verifier/20260223T013832Z
-status=pass
-completed_at=2026-02-23T01:45:22Z

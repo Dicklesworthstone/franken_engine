@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test parser_third_party_rerun_kit
-cargo test -p frankenengine-engine --test parser_third_party_rerun_kit
-cargo clippy -p frankenengine-engine --test parser_third_party_rerun_kit -- -D warnings

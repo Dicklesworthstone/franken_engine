@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test ts_normalization
-cargo test -p frankenengine-engine --test ts_normalization

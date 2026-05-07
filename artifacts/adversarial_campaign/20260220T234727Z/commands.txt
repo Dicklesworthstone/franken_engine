@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test adversarial_campaign_generator
-cargo test -p frankenengine-engine --test adversarial_campaign_generator

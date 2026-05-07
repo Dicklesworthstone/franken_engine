@@ -1,1 +1,0 @@
-{"trace_id":"trace-fuzz-adversarial-20260222T022635Z","decision_id":"decision-fuzz-adversarial-20260222T022635Z","policy_id":"policy-fuzz-adversarial-v1","component":"fuzz_adversarial_targets","event":"suite_completed","outcome":"fail","error_code":"FE-FUZZ-0001"}

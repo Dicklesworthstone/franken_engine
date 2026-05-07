@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_primitive_adoption_schema
-cargo test -p frankenengine-engine --test frx_primitive_adoption_schema
-cargo clippy -p frankenengine-engine --test frx_primitive_adoption_schema -- -D warnings

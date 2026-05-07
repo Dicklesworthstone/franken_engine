@@ -1,3 +1,0 @@
-cargo test -p frankenengine-engine --test test262_release_gate
-cargo test -p frankenengine-engine --bin franken_test262_runner
-cargo run -p frankenengine-engine --bin franken_test262_runner -- --pins crates/franken-engine/tests/test262_conformance_pins.toml --profile crates/franken-engine/tests/test262_es2020_profile.toml --waivers crates/franken-engine/tests/test262_conformance_waivers.toml --observed-results crates/franken-engine/tests/test262_observed_results.jsonl --output-root artifacts/test262_es2020_gate/20260222T182534Z/test262_runner --high-water-mark artifacts/test262_es2020_gate/20260222T182534Z/test262_hwm.json --run-date 2026-02-22

@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test governance_scorecard
-cargo test -p frankenengine-engine --test governance_scorecard
-cargo clippy -p frankenengine-engine --test governance_scorecard -- -D warnings

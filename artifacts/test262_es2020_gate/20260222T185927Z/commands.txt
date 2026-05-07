@@ -1,2 +1,0 @@
-cargo clippy -p frankenengine-engine --test test262_release_gate -- -D warnings
-cargo clippy -p frankenengine-engine --bin franken_test262_runner -- -D warnings

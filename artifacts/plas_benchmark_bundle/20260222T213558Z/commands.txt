@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test plas_benchmark_bundle
-cargo test -p frankenengine-engine --test plas_benchmark_bundle
-cargo clippy -p frankenengine-engine --test plas_benchmark_bundle -- -D warnings

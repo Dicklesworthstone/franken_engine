@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine
-cargo test -p frankenengine-engine --test shadow_evaluation_gate
-cargo clippy -p frankenengine-engine --test shadow_evaluation_gate -- -D warnings

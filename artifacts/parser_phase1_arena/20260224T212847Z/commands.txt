@@ -1,1 +1,0 @@
-cargo test -p frankenengine-engine --test parser_arena_phase1 -- --exact arena_alloc_order_is_deterministic

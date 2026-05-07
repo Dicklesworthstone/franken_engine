@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --test frx_track_c_js_runtime_lane_mvp_sprint
-cargo test -p frankenengine-engine --test frx_track_c_js_runtime_lane_mvp_sprint
-env RUSTC_WORKSPACE_WRAPPER=clippy-driver RUSTFLAGS=-Dwarnings cargo test -p frankenengine-engine --test frx_track_c_js_runtime_lane_mvp_sprint --no-run

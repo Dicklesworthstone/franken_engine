@@ -1,1 +1,0 @@
-{"trace_id":"trace-control-plane-invariants-dashboard-20260225T195955Z","decision_id":"decision-control-plane-invariants-dashboard-20260225T195955Z","policy_id":"policy-control-plane-invariants-dashboard-v1","component":"control_plane_invariants_dashboard_suite","event":"suite_completed","outcome":"fail","error_code":"FE-CP-INV-DASH-0001"}

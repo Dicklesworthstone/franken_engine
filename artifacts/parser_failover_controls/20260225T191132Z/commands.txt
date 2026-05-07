@@ -1,5 +1,0 @@
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact parse_merge_buffer_exceeded_falls_back_serial
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact log_entries_failover_include_trigger_transition_and_replay
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact replay_envelope_includes_failover_decision
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact failover_trigger_class_display
-cargo test -p frankenengine-engine --test parallel_parser_integration -- --exact failover_decision_serde_roundtrip

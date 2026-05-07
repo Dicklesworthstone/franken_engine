@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --test replacement_lineage_log
-cargo test -p frankenengine-engine --test replacement_lineage_log
-cargo test -p frankenengine-engine replacement_lineage_log::tests::
-cargo clippy -p frankenengine-engine --test replacement_lineage_log -- -D warnings

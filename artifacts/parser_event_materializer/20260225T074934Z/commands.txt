@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test parser_trait_ast
-cargo test -p frankenengine-engine --test parser_trait_ast -- --exact canonical_parse_event_to_ast_tamper_detection_is_deterministic

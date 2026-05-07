@@ -1,1 +1,0 @@
-cargo check -p frankenengine-engine --test frx_unit_test_taxonomy_contract

@@ -1,1 +1,0 @@
-{"trace_id":"trace-version-matrix-20260222T054549Z","decision_id":"decision-version-matrix-20260222T054549Z","policy_id":"policy-version-matrix-v1","component":"version_matrix_lane_runner","event":"matrix_run_completed","outcome":"skipped","error_code":null,"mode":"check","gate_required":false}

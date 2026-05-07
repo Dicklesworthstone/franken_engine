@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test parser_corpus_promotion_policy
-cargo test -p frankenengine-engine --test parser_corpus_promotion_policy

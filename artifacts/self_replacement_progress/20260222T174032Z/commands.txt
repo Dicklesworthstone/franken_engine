@@ -1,3 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --lib replacement_progress_snapshot_
-cargo test -p frankenengine-engine --lib slot_registry::tests::replacement_progress_snapshot_reports_weighted_metrics_and_ev_order -- --exact

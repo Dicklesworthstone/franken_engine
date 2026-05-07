@@ -1,1 +1,0 @@
-{"trace_id":"trace-cp-benchmark-split-20260221T035104Z","decision_id":"decision-cp-benchmark-split-20260221T035104Z","policy_id":"policy-cp-benchmark-split-v1","component":"control_plane_benchmark_split_gate_suite","event":"suite_completed","outcome":"fail","error_code":"FE-CP-BENCH-SPLIT-0001"}

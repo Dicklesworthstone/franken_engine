@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --test ga_release_delegate_guard
-cargo test -p frankenengine-engine --lib ga_guard
-cargo test -p frankenengine-engine --test ga_release_delegate_guard
-cargo clippy -p frankenengine-engine --test ga_release_delegate_guard -- -D warnings

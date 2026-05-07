@@ -1,5 +1,0 @@
-cargo check -p frankenengine-engine --lib
-cargo test -p frankenengine-engine --lib control_plane_invariants_dashboard_
-cargo test -p frankenengine-engine --test frankentui_adapter control_plane_invariants_dashboard_round_trips_with_alerts -- --exact
-SKIPPED optional: cargo test -p frankenengine-engine --lib frankentui_all_payload_variants_serialize -- --exact
-cargo clippy -p frankenengine-engine --lib --test frankentui_adapter -- -D warnings

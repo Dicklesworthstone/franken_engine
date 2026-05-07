@@ -1,4 +1,0 @@
-cargo check -p frankenengine-engine --test parser_event_ast_equivalence
-cargo test -p frankenengine-engine --test parser_event_ast_equivalence -- --exact parser_event_ast_equivalence_success_cases_have_hash_parity_and_stable_witnesses
-cargo test -p frankenengine-engine --test parser_event_ast_equivalence -- --exact parser_event_ast_equivalence_contract_doc_and_logs_are_well_formed
-cargo clippy -p frankenengine-engine --test parser_event_ast_equivalence -- -D warnings

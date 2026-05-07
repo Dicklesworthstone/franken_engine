@@ -1,2 +1,0 @@
-cargo check -p frankenengine-engine --test lowering_pipeline
-cargo test -p frankenengine-engine --test lowering_pipeline

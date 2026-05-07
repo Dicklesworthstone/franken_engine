@@ -1,0 +1,345 @@
+{
+  "schema_version": "franken-engine.swarm-slo-gate-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "green",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "fail_count": 0,
+        "warn_count": 0,
+        "required_error_code": ""
+      },
+      "inputs": {
+        "slo_input_json": {
+          "schema_version": "franken-engine.swarm-slo-gate-input.v1",
+          "tracker_age_seconds": 120,
+          "unknown_dirty_file_count": 0,
+          "proof_cache_pressure_level": "low",
+          "thresholds": {
+            "max_admitted_heavy_lanes": 8,
+            "min_free_rch_slots": 4,
+            "max_stale_progress_seconds": 900,
+            "max_stale_tracker_age_seconds": 600,
+            "max_unknown_dirty_files": 0,
+            "max_proof_cache_pressure_rank": 3
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "recommendations": []
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 4,
+            "healthy_count": 4
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "latest_progress_age_seconds": 60
+            },
+            {
+              "worker_id": "rch-b",
+              "classification": "healthy",
+              "latest_progress_age_seconds": 90
+            }
+          ]
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "archive_summary": {
+            "pressure_level": "low"
+          },
+          "recommendations": []
+        },
+        "saturation_replay_report_json": {
+          "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+          "decision": "pass",
+          "summary": {
+            "heavy_admitted_count": 4
+          },
+          "fanout_report": {
+            "remote_rch_slots": 16
+          },
+          "contamination_report": {
+            "local_fallback_observed": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "warning",
+      "expected": {
+        "decision": "warn",
+        "expected_exit_code": 0,
+        "fail_count": 0,
+        "warn_count": 4,
+        "required_error_code": "FE-SWARM-SLO-HEAVY-FANOUT-WARN"
+      },
+      "inputs": {
+        "slo_input_json": {
+          "schema_version": "franken-engine.swarm-slo-gate-input.v1",
+          "tracker_age_seconds": 480,
+          "unknown_dirty_file_count": 0,
+          "proof_cache_pressure_level": "high",
+          "thresholds": {
+            "max_admitted_heavy_lanes": 6,
+            "min_free_rch_slots": 2,
+            "max_stale_progress_seconds": 900,
+            "max_stale_tracker_age_seconds": 600,
+            "max_unknown_dirty_files": 0,
+            "max_proof_cache_pressure_rank": 3
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "recommendations": []
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "degraded",
+          "summary": {
+            "total_workers": 3,
+            "healthy_count": 2
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "watch",
+              "latest_progress_age_seconds": 720
+            }
+          ]
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "degraded",
+          "archive_summary": {
+            "pressure_level": "high"
+          },
+          "recommendations": []
+        },
+        "saturation_replay_report_json": {
+          "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+          "decision": "degraded",
+          "summary": {
+            "heavy_admitted_count": 6
+          },
+          "fanout_report": {
+            "remote_rch_slots": 9
+          },
+          "contamination_report": {
+            "local_fallback_observed": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "brownout_fail",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "fail_count": 2,
+        "warn_count": 1,
+        "required_error_code": "FE-SWARM-SLO-HEAVY-FANOUT"
+      },
+      "inputs": {
+        "slo_input_json": {
+          "schema_version": "franken-engine.swarm-slo-gate-input.v1",
+          "tracker_age_seconds": 180,
+          "unknown_dirty_file_count": 0,
+          "proof_cache_pressure_level": "critical",
+          "thresholds": {
+            "max_admitted_heavy_lanes": 4,
+            "min_free_rch_slots": 3,
+            "max_stale_progress_seconds": 900,
+            "max_stale_tracker_age_seconds": 600,
+            "max_unknown_dirty_files": 0,
+            "max_proof_cache_pressure_rank": 4
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "degraded",
+          "recommendations": []
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "degraded",
+          "summary": {
+            "total_workers": 2,
+            "healthy_count": 1
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "watch",
+              "latest_progress_age_seconds": 300
+            }
+          ]
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "degraded",
+          "archive_summary": {
+            "pressure_level": "critical"
+          },
+          "recommendations": []
+        },
+        "saturation_replay_report_json": {
+          "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+          "decision": "degraded",
+          "summary": {
+            "heavy_admitted_count": 6
+          },
+          "fanout_report": {
+            "remote_rch_slots": 7
+          },
+          "contamination_report": {
+            "local_fallback_observed": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stale_tracker_fail",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "fail_count": 2,
+        "warn_count": 0,
+        "required_error_code": "FE-SWARM-SLO-STALE-TRACKER"
+      },
+      "inputs": {
+        "slo_input_json": {
+          "schema_version": "franken-engine.swarm-slo-gate-input.v1",
+          "tracker_age_seconds": 1200,
+          "unknown_dirty_file_count": 3,
+          "proof_cache_pressure_level": "low",
+          "thresholds": {
+            "max_admitted_heavy_lanes": 8,
+            "min_free_rch_slots": 2,
+            "max_stale_progress_seconds": 900,
+            "max_stale_tracker_age_seconds": 600,
+            "max_unknown_dirty_files": 0,
+            "max_proof_cache_pressure_rank": 3
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "recommendations": []
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 4,
+            "healthy_count": 4
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "latest_progress_age_seconds": 60
+            }
+          ]
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "archive_summary": {
+            "pressure_level": "low"
+          },
+          "recommendations": []
+        },
+        "saturation_replay_report_json": {
+          "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+          "decision": "pass",
+          "summary": {
+            "heavy_admitted_count": 4
+          },
+          "fanout_report": {
+            "remote_rch_slots": 12
+          },
+          "contamination_report": {
+            "local_fallback_observed": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "fail_count": 0,
+        "warn_count": 0,
+        "required_error_code": "local_fallback_contamination"
+      },
+      "inputs": {
+        "slo_input_json": {
+          "schema_version": "franken-engine.swarm-slo-gate-input.v1",
+          "tracker_age_seconds": 100,
+          "unknown_dirty_file_count": 0,
+          "proof_cache_pressure_level": "low",
+          "thresholds": {
+            "max_admitted_heavy_lanes": 8,
+            "min_free_rch_slots": 2,
+            "max_stale_progress_seconds": 900,
+            "max_stale_tracker_age_seconds": 600,
+            "max_unknown_dirty_files": 0,
+            "max_proof_cache_pressure_rank": 3
+          }
+        },
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "pass",
+          "recommendations": []
+        },
+        "rch_rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "summary": {
+            "total_workers": 4,
+            "healthy_count": 4
+          },
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy",
+              "latest_progress_age_seconds": 60
+            }
+          ]
+        },
+        "proof_cache_locality_plan_json": {
+          "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+          "decision": "pass",
+          "archive_summary": {
+            "pressure_level": "low"
+          },
+          "recommendations": []
+        },
+        "saturation_replay_report_json": {
+          "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+          "decision": "fail_closed",
+          "summary": {
+            "heavy_admitted_count": 0
+          },
+          "fanout_report": {
+            "remote_rch_slots": 16
+          },
+          "contamination_report": {
+            "local_fallback_observed": true
+          }
+        }
+      }
+    }
+  ]
+}

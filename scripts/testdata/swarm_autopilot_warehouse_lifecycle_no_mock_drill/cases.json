@@ -1,0 +1,393 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-warehouse-lifecycle-no-mock-drill-fixtures.v1",
+  "primary_scenario_id": "healthy_lifecycle",
+  "base_evidence_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "source_revision": "fixture-warehouse-lifecycle",
+    "decision": "pass",
+    "source_freshness": "fresh",
+    "fail_closed_reasons": [],
+    "artifact_rows": [
+      {
+        "source_id": "run_manifest_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-run-manifest.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "provided": true,
+        "estimated_bytes": 36000,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/run_manifest.json"
+      },
+      {
+        "source_id": "trace_ids_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-trace-ids.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "provided": true,
+        "estimated_bytes": 28000,
+        "replay_preserve": true,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/trace_ids.json"
+      },
+      {
+        "source_id": "state_snapshot_json",
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "retention_class": "short_lived_raw_capture",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "provided": true,
+        "estimated_bytes": 14000,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/state_snapshot.json"
+      },
+      {
+        "source_id": "commands_txt",
+        "schema_version": "franken-engine.commands.txt.v1",
+        "retention_class": "audit_log",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "provided": true,
+        "estimated_bytes": 8000,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/commands.txt"
+      },
+      {
+        "source_id": "queue_locality_json",
+        "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "provided": true,
+        "estimated_bytes": 24000,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/queue_locality.json"
+      },
+      {
+        "source_id": "truth_gate_report_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-truth-gate.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "provided": true,
+        "estimated_bytes": 24000,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/truth_gate_report.json"
+      },
+      {
+      "source_id": "operator_intent_policy_json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+      "retention_class": "policy_snapshot",
+      "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "provided": true,
+        "estimated_bytes": 6000,
+        "cohort_group_id": "policy-snapshot-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference",
+        "artifact_path": "fixtures/warehouse/operator_intent_policy.json"
+      }
+    ],
+    "retention_classes": {
+      "short_lived_raw_capture": [
+        "state_snapshot_json"
+      ],
+      "long_lived_replay_evidence": [
+        "run_manifest_json",
+        "trace_ids_json",
+        "queue_locality_json",
+        "truth_gate_report_json"
+      ],
+      "audit_log": [
+        "commands_txt"
+      ],
+      "policy_snapshot": [
+        "operator_intent_policy_json"
+      ]
+    },
+    "hash_basis": {
+      "warehouse_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "artifact_paths": {
+      "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json",
+      "commands_txt": "fixtures/warehouse/commands.txt",
+      "events_jsonl": "fixtures/warehouse/events.jsonl"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_hindsight_chaos_scenarios_json": {
+    "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+    "source_revision": "fixture-warehouse-lifecycle",
+    "source_freshness": "fresh",
+    "decision": "pass",
+    "scenarios": [
+      {
+        "scenario_id": "hindsight-replay-a",
+        "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "perturbation_type": "minimal_perturbation",
+        "replay_ready": true,
+        "reason_codes": [
+          "deterministic_replay"
+        ],
+        "source_artifacts": {
+          "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+          "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+        }
+      },
+      {
+        "scenario_id": "hindsight-replay-b",
+        "scenario_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "perturbation_type": "brownout_chaos",
+        "replay_ready": true,
+        "reason_codes": [
+          "deterministic_replay"
+        ],
+        "source_artifacts": {
+          "recommendation_bundle_json": "fixtures/hindsight/recommendation-b.json",
+          "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+        }
+      }
+    ],
+    "artifact_paths": {
+      "hindsight_chaos_scenarios_json": "fixtures/hindsight/hindsight_chaos_scenarios.json",
+      "hindsight_replay_index_json": "fixtures/hindsight/replay_index.json"
+    },
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "scenario_id": "healthy_lifecycle",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_truth_state": "confirmed"
+      },
+      "overrides": {}
+    },
+    {
+      "scenario_id": "retention_pressure_degradation",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_truth_state": "degraded",
+        "required_component": "retention"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "artifact_rows": [
+            {
+              "source_id": "run_manifest_json",
+              "estimated_bytes": 90000
+            },
+            {
+              "source_id": "trace_ids_json",
+              "estimated_bytes": 80000,
+              "replay_preserve": true
+            },
+            {
+              "source_id": "state_snapshot_json",
+              "estimated_bytes": 40000
+            },
+            {
+              "source_id": "commands_txt",
+              "estimated_bytes": 30000
+            },
+            {
+              "source_id": "queue_locality_json",
+              "estimated_bytes": 70000
+            },
+            {
+              "source_id": "truth_gate_report_json",
+              "estimated_bytes": 60000
+            },
+            {
+              "source_id": "operator_intent_policy_json",
+              "estimated_bytes": 20000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "promotion_contradiction_block",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_truth_state": "blocked",
+        "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT"
+      },
+      "overrides": {
+        "hindsight_chaos_scenarios_json": {
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-replay-a",
+              "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "perturbation_type": "minimal_perturbation",
+              "replay_ready": true,
+              "reason_codes": [
+                "deterministic_replay"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            },
+            {
+              "scenario_id": "hindsight-contradictory-b",
+              "scenario_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "perturbation_type": "brownout_chaos",
+              "replay_ready": true,
+              "reason_codes": [
+                "contradictory_outcome"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-contradictory.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "anomaly_cohort_replay_success",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_truth_state": "confirmed",
+        "required_component": "cohort"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "artifact_rows": [
+            {
+              "source_id": "queue_locality_json",
+              "cohort_group_id": "replay-ready-a",
+              "worker_id": "rch-b",
+              "toolchain_target": "nightly-x86_64",
+              "topology_class": "numa_hot_cache",
+              "failure_mode": "healthy_reference",
+              "decision": "pass"
+            },
+            {
+              "source_id": "trace_ids_json",
+              "cohort_group_id": "replay-ready-a",
+              "worker_id": "rch-b",
+              "toolchain_target": "nightly-x86_64",
+              "topology_class": "numa_hot_cache",
+              "failure_mode": "healthy_reference",
+              "decision": "pass",
+              "replay_preserve": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_truth_state": "contaminated",
+        "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-LOCAL-FALLBACK"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "decision": "fail_closed",
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-WAREHOUSE-LOCAL-FALLBACK",
+              "source_id": "queue_locality_json",
+              "detail": "local fallback contamination observed"
+            }
+          ],
+          "artifact_rows": [
+            {
+              "source_id": "queue_locality_json",
+              "failure_mode": "local_fallback_contamination",
+              "local_fallback_observed": true,
+              "decision": "fail_closed"
+            }
+          ]
+        },
+        "hindsight_chaos_scenarios_json": {
+          "decision": "fail_closed",
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-local-fallback-b",
+              "scenario_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "perturbation_type": "local_fallback_contamination",
+              "replay_ready": false,
+              "reason_codes": [
+                "local_fallback_contamination"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-local-fallback.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-warehouse-lifecycle-no-mock-drill-contract.v1",
+  "bead_id": "bd-gra1z.6",
+  "parent_bead_id": "bd-gra1z",
+  "depends_on": [
+    "bd-khg2d",
+    "bd-gra1z.2",
+    "bd-gra1z.3",
+    "bd-gra1z.4",
+    "bd-gra1z.5"
+  ],
+  "drill_script": "scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_autopilot_warehouse_lifecycle_truth_gate.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh",
+  "operator_docs": "docs/SWARM_AUTOPILOT_WAREHOUSE_LIFECYCLE_NO_MOCK_DRILL.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_warehouse_lifecycle_no_mock_drill/cases.json",
+  "modes": [
+    "fixture",
+    "replay",
+    "live"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "warehouse.json",
+    "retention_plan.json",
+    "storage_budget_ledger.json",
+    "promotion_candidates.json",
+    "promotion_candidate_receipts.json",
+    "anomaly_cohorts.json",
+    "replay_index.json",
+    "operator_status_bundle.json",
+    "truth_gate_report.json"
+  ],
+  "producer_scripts": [
+    "scripts/swarm_autopilot_warehouse_retention_planner.sh",
+    "scripts/swarm_autopilot_promotion_candidate_miner.sh",
+    "scripts/swarm_autopilot_anomaly_cohort_packer.sh"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_lifecycle",
+      "expected_decision": "pass"
+    },
+    {
+      "scenario_id": "retention_pressure_degradation",
+      "expected_decision": "degraded",
+      "required_component": "retention"
+    },
+    {
+      "scenario_id": "promotion_contradiction_block",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT"
+    },
+    {
+      "scenario_id": "anomaly_cohort_replay_success",
+      "expected_decision": "pass",
+      "required_component": "cohort"
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-LOCAL-FALLBACK"
+    }
+  ],
+  "required_truth_gate_rejections": [
+    "missing_lifecycle_artifact",
+    "promotion_contradiction_not_fail_closed",
+    "local_fallback_non_fail_closed_claim",
+    "missing_replay_index",
+    "heavy_cargo_or_rch_claim",
+    "mutation_claim"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_mode_deterministic": true,
+    "replay_verification_only": true,
+    "runs_cargo": false,
+    "runs_rch_heavy_commands": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_warehouse_lifecycle_no_mock_drill_contract_v1.json scripts/testdata/swarm_autopilot_warehouse_lifecycle_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_truth_gate.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_truth_gate.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_WAREHOUSE_LIFECYCLE_NO_MOCK_DRILL.md docs/swarm_autopilot_warehouse_lifecycle_no_mock_drill_contract_v1.json scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_truth_gate.sh scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill_smoke.sh scripts/testdata/swarm_autopilot_warehouse_lifecycle_no_mock_drill/cases.json"
+  ]
+}

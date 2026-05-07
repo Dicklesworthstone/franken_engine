@@ -1,0 +1,182 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-scorer-fixtures.v1",
+  "base_cohort_diff_receipts_json": {
+    "schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+    "source_revision": "fixture-diff",
+    "decision": "degraded",
+    "cohort_diff_receipts": [
+      {
+        "receipt_id": "cohort-diff-healthy-to-blocked",
+        "reference_cohort_id": "healthy-host-a",
+        "comparison_cohort_id": "blocked-locality-a",
+        "classification_transition": "reference_to_blocked",
+        "changed_fingerprints": [
+          "queue_locality_json"
+        ],
+        "worker_deltas": [
+          "rch-b"
+        ],
+        "toolchain_deltas": [],
+        "topology_deltas": [
+          "cross_numa_cold_cache"
+        ],
+        "source_ids": [
+          "run_manifest_json",
+          "queue_locality_json"
+        ],
+        "remote_truth_valid": true,
+        "reason_codes": []
+      }
+    ],
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_evidence_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "source_revision": "fixture-warehouse",
+    "source_freshness": "fresh",
+    "decision": "pass",
+    "artifact_rows": [
+      {
+        "source_id": "run_manifest_json",
+        "decision": "pass",
+        "freshness": "fresh",
+        "failure_mode": "healthy_reference"
+      },
+      {
+        "source_id": "queue_locality_json",
+        "decision": "warn",
+        "freshness": "fresh",
+        "failure_mode": "topology_drift"
+      }
+    ],
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "topology_drift_explanation",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_pivot": "topology_drift"
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "contaminated_evidence_suppression",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTAMINATED-EVIDENCE"
+      },
+      "overrides": {
+        "cohort_diff_receipts_json": {
+          "cohort_diff_receipts": [
+            {
+              "receipt_id": "cohort-diff-healthy-to-contaminated",
+              "reference_cohort_id": "healthy-host-a",
+              "comparison_cohort_id": "contaminated-fallback-a",
+              "classification_transition": "reference_to_contaminated",
+              "changed_fingerprints": [
+                "run_manifest_json"
+              ],
+              "worker_deltas": [
+                "local-runner"
+              ],
+              "toolchain_deltas": [],
+              "topology_deltas": [
+                "unknown_topology"
+              ],
+              "source_ids": [
+                "run_manifest_json"
+              ],
+              "remote_truth_valid": false,
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "low_evidence_degradation",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_pivot": "insufficient_evidence"
+      },
+      "overrides": {
+        "cohort_diff_receipts_json": {
+          "decision": "pass",
+          "cohort_diff_receipts": [
+            {
+              "receipt_id": "cohort-diff-low-evidence",
+              "reference_cohort_id": "healthy-host-a",
+              "comparison_cohort_id": "healthy-host-b",
+              "classification_transition": "reference_to_reference",
+              "changed_fingerprints": [],
+              "worker_deltas": [],
+              "toolchain_deltas": [],
+              "topology_deltas": [],
+              "source_ids": [
+                "run_manifest_json"
+              ],
+              "remote_truth_valid": true,
+              "reason_codes": []
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "contradictory_hypothesis_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-CONTRADICTORY-EVIDENCE"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "artifact_rows": [
+            {
+              "source_id": "run_manifest_json",
+              "decision": "pass",
+              "freshness": "fresh",
+              "failure_mode": "healthy_reference"
+            },
+            {
+              "source_id": "queue_locality_json",
+              "decision": "contradictory",
+              "freshness": "fresh",
+              "failure_mode": "contradictory_locality"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

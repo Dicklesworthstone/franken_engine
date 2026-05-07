@@ -200,6 +200,18 @@ impl Signature {
         out
     }
 
+    /// Constant-time comparison across all signature bytes (no early exit).
+    pub fn constant_time_eq(&self, other: &Self) -> bool {
+        let mut diff = 0u8;
+        for (&left, &right) in self.lower.iter().zip(other.lower.iter()) {
+            diff |= left ^ right;
+        }
+        for (&left, &right) in self.upper.iter().zip(other.upper.iter()) {
+            diff |= left ^ right;
+        }
+        diff == 0
+    }
+
     /// Check if this is the zero sentinel.
     pub fn is_sentinel(&self) -> bool {
         self.lower == [0u8; 32] && self.upper == [0u8; 32]
@@ -1296,15 +1308,27 @@ mod tests {
     // -- Constant-time comparison --
 
     #[test]
-    #[ignore = "API drift: constant_time_eq_64 was removed/renamed"]
     fn constant_time_eq_same() {
-        unimplemented!("constant_time_eq_64 helper no longer exists");
+        let mut ctx = SignatureContext::new();
+        let sig = ctx
+            .sign(&test_object(), &test_signing_key(), "t-ct-same")
+            .unwrap();
+        let same = Signature::from_bytes(sig.to_bytes());
+
+        assert!(sig.constant_time_eq(&same));
     }
 
     #[test]
-    #[ignore = "API drift: constant_time_eq_64 was removed/renamed"]
     fn constant_time_eq_different() {
-        unimplemented!("constant_time_eq_64 helper no longer exists");
+        let mut ctx = SignatureContext::new();
+        let sig = ctx
+            .sign(&test_object(), &test_signing_key(), "t-ct-diff")
+            .unwrap();
+        let mut different_bytes = sig.to_bytes();
+        different_bytes[SIGNATURE_LEN - 1] ^= 0x01;
+        let different = Signature::from_bytes(different_bytes);
+
+        assert!(!sig.constant_time_eq(&different));
     }
 
     // -- Enrichment: std::error --

@@ -1,0 +1,140 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-anomaly-cohort-packer-contract.v1",
+  "bead_id": "bd-gra1z.4",
+  "parent_bead_id": "bd-gra1z",
+  "depends_on": [
+    "bd-gra1z.1",
+    "bd-4t4oi"
+  ],
+  "script": "scripts/swarm_autopilot_anomaly_cohort_packer.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_anomaly_cohort_packer_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_ANOMALY_COHORT_PACKER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_anomaly_cohort_packer/cases.json",
+  "cohort_bundle_schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+  "replay_index_schema_version": "franken-engine.swarm-autopilot-replay-index.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-anomaly-cohort.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "evidence_warehouse_json",
+      "argument": "--evidence-warehouse-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "anomaly_cohorts_json": "swarm_autopilot_anomaly_cohorts.json",
+    "replay_index_json": "swarm_autopilot_replay_index.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "cohort_classifications": [
+    "reference",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "required_bundle_fields": [
+    "warehouse_hash",
+    "decision",
+    "cohort_summary.total_cohort_count",
+    "cohort_summary.reference_count",
+    "cohort_summary.degraded_count",
+    "cohort_summary.blocked_count",
+    "cohort_summary.contaminated_count",
+    "cohorts",
+    "fail_closed_reasons",
+    "artifact_paths.anomaly_cohorts_json",
+    "artifact_paths.replay_index_json",
+    "artifact_paths.evidence_warehouse_json",
+    "artifact_paths.commands_txt",
+    "artifact_paths.events_jsonl"
+  ],
+  "required_cohort_fields": [
+    "cohort_id",
+    "classification",
+    "worker_ids",
+    "toolchain_targets",
+    "topology_classes",
+    "failure_modes",
+    "source_ids",
+    "fingerprints",
+    "raw_artifact_paths",
+    "remediation_commands"
+  ],
+  "required_replay_index_fields": [
+    "warehouse_hash",
+    "decision",
+    "entries",
+    "artifact_paths.replay_index_json",
+    "artifact_paths.anomaly_cohorts_json"
+  ],
+  "decision_policy": {
+    "pass": "all cohorts are healthy reference cohorts and raw replay material is intact",
+    "degraded": "one or more cohorts are degraded or blocked but warehouse evidence remains coherent enough to package replay material",
+    "fail_closed": "raw references are missing, stale evidence is present, local fallback contamination is present, or cohort membership is contradictory"
+  },
+  "fail_closed_rules": [
+    "missing raw artifact references fail closed",
+    "warehouse schema drift fails closed",
+    "stale warehouse timestamps or freshness markers fail closed",
+    "contradictory cohort membership fails closed",
+    "local fallback contamination fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-COHORT-MISSING-RAW-REFERENCE",
+    "FE-SWARM-AUTOPILOT-COHORT-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-COHORT-STALE-REFERENCE",
+    "FE-SWARM-AUTOPILOT-COHORT-CONTRADICTORY-MEMBERSHIP",
+    "FE-SWARM-AUTOPILOT-COHORT-CONTAMINATED"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "required_doc_text": [
+    "The packer is advisory only and proof only.",
+    "Healthy reference cohorts remain distinct from degraded, blocked, and contaminated cohorts.",
+    "Fallback-contaminated cohorts remain isolated from healthy reference cohorts.",
+    "Contradictory cohort membership fails closed.",
+    "Local fallback contamination must fail closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "healthy_reference_cohort_creation",
+      "expected_decision": "pass",
+      "expected_reference_count": 1,
+      "required_classification": "reference"
+    },
+    {
+      "case_id": "blocked_locality_contradiction",
+      "expected_decision": "degraded",
+      "expected_blocked_count": 1,
+      "required_classification": "blocked"
+    },
+    {
+      "case_id": "fallback_contaminated_isolation",
+      "expected_decision": "fail_closed",
+      "expected_contaminated_count": 1,
+      "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-CONTAMINATED",
+      "required_classification": "contaminated"
+    },
+    {
+      "case_id": "contradictory_cohort_rejection",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-CONTRADICTORY-MEMBERSHIP"
+    },
+    {
+      "case_id": "stale_reference_fail_closed",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-STALE-REFERENCE"
+    }
+  ]
+}

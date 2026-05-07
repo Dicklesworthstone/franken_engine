@@ -1,0 +1,205 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-anomaly-cohort-packer-fixtures.v1",
+  "base_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "source_revision": "fixture-revision",
+    "decision": "pass",
+    "fail_closed_reasons": [],
+    "artifact_rows": [
+      {
+        "source_id": "run_manifest_json",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "provided": true,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference"
+      },
+      {
+        "source_id": "trace_ids_json",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "provided": true,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference"
+      },
+      {
+        "source_id": "queue_locality_json",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "provided": true,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference"
+      },
+      {
+        "source_id": "commands_txt",
+        "retention_class": "audit_log",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "provided": true,
+        "cohort_group_id": "healthy-host-a",
+        "worker_id": "rch-a",
+        "toolchain_target": "nightly-x86_64",
+        "topology_class": "numa_hot_cache",
+        "failure_mode": "healthy_reference"
+      }
+    ],
+    "hash_basis": {
+      "warehouse_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "artifact_paths": {
+      "evidence_warehouse_json": "fixtures/evidence_warehouse.json",
+      "commands_txt": "fixtures/commands.txt",
+      "events_jsonl": "fixtures/events.jsonl"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_reference_cohort_creation",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "expected_reference_count": 1,
+        "required_classification": "reference"
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "blocked_locality_contradiction",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "expected_blocked_count": 1,
+        "required_classification": "blocked"
+      },
+      "overrides": {
+        "artifact_rows": [
+          {
+            "source_id": "queue_locality_json",
+            "cohort_group_id": "blocked-locality-a",
+            "worker_id": "rch-b",
+            "toolchain_target": "nightly-aarch64",
+            "topology_class": "cross_numa_cold_cache",
+            "failure_mode": "locality_contradiction",
+            "decision": "warn"
+          },
+          {
+            "source_id": "trace_ids_json",
+            "cohort_group_id": "blocked-locality-a",
+            "worker_id": "rch-b",
+            "toolchain_target": "nightly-aarch64",
+            "topology_class": "cross_numa_cold_cache",
+            "failure_mode": "locality_contradiction",
+            "decision": "warn"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fallback_contaminated_isolation",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "expected_contaminated_count": 1,
+        "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-CONTAMINATED",
+        "required_classification": "contaminated"
+      },
+      "overrides": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          {
+            "code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK",
+            "source_id": "queue_locality_json",
+            "detail": "local_fallback contamination observed"
+          }
+        ],
+        "artifact_rows": [
+          {
+            "source_id": "queue_locality_json",
+            "cohort_group_id": "contaminated-fallback-a",
+            "worker_id": "rch-c",
+            "toolchain_target": "nightly-x86_64",
+            "topology_class": "unknown-topology",
+            "failure_mode": "local_fallback_contamination",
+            "local_fallback_observed": true,
+            "decision": "fail_closed"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "contradictory_cohort_rejection",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-CONTRADICTORY-MEMBERSHIP"
+      },
+      "overrides": {
+        "artifact_rows": [
+          {
+            "source_id": "run_manifest_json",
+            "cohort_group_id": "contradictory-a",
+            "worker_id": "rch-d",
+            "toolchain_target": "nightly-x86_64",
+            "topology_class": "numa_hot_cache",
+            "failure_mode": "healthy_reference",
+            "decision": "pass"
+          },
+          {
+            "source_id": "trace_ids_json",
+            "cohort_group_id": "contradictory-a",
+            "worker_id": "rch-d",
+            "toolchain_target": "nightly-x86_64",
+            "topology_class": "numa_hot_cache",
+            "failure_mode": "locality_contradiction",
+            "decision": "warn"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "stale_reference_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-STALE-REFERENCE"
+      },
+      "overrides": {
+        "artifact_rows": [
+          {
+            "source_id": "run_manifest_json",
+            "freshness": "stale"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,362 @@
+{
+  "schema_version": "franken-engine.swarm-topology-placement-planner-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_balanced_host",
+      "placement_input": {
+        "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+        "source_revision": "fixture-revision",
+        "bead_id": "bd-3ynhq",
+        "placement_input_id": "placement-input-healthy-balanced",
+        "reference_time": "2026-05-06T20:10:00Z",
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "host_identity": {
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2
+        },
+        "numa_summary": {
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 965000,
+          "latency_penalty_millionths": 70000
+        },
+        "worker_inventory": {
+          "worker_count": 2,
+          "ready_worker_count": 2,
+          "claimed_hot_cache_workers": [
+            "rch-a"
+          ]
+        },
+        "warm_cache_residency": {
+          "state": "hot",
+          "hot_worker_ids": [
+            "rch-a"
+          ],
+          "hot_target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ]
+        },
+        "context": {
+          "resource_envelope_decision": "pass",
+          "execution_queue_decision": "pass",
+          "execution_queue_proof_transport_state": "remote_only_ok",
+          "tail_latency_decision": "pass",
+          "tail_latency_locality_domain": "numa_node"
+        },
+        "placement_hints": {
+          "recommended_topology_class": "numa_local_hot_cache",
+          "preferred_numa_nodes": [
+            0
+          ],
+          "preferred_worker_ids": [
+            "rch-a",
+            "rch-b"
+          ]
+        },
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "queries_live_agent_mail": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "readiness": "ready",
+        "recommended_topology_class": "numa_hot_cache_preferred",
+        "warm_cache_residency_state": "hot",
+        "required_opportunity": "reuse_hot_cache",
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "partial_topology_degraded",
+      "placement_input": {
+        "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+        "source_revision": "fixture-revision",
+        "bead_id": "bd-3ynhq",
+        "placement_input_id": "placement-input-partial-topology",
+        "reference_time": "2026-05-06T20:10:00Z",
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "host_identity": {
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2
+        },
+        "numa_summary": {
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 940000,
+          "latency_penalty_millionths": 90000
+        },
+        "worker_inventory": {
+          "worker_count": 2,
+          "ready_worker_count": 2,
+          "claimed_hot_cache_workers": []
+        },
+        "warm_cache_residency": {
+          "state": "missing_optional",
+          "hot_worker_ids": [],
+          "hot_target_dirs": []
+        },
+        "context": {
+          "resource_envelope_decision": "pass",
+          "execution_queue_decision": "pass",
+          "execution_queue_proof_transport_state": "remote_only_ok",
+          "tail_latency_decision": "pass",
+          "tail_latency_locality_domain": "numa_node"
+        },
+        "placement_hints": {
+          "recommended_topology_class": "numa_local",
+          "preferred_numa_nodes": [
+            0
+          ],
+          "preferred_worker_ids": [
+            "rch-a",
+            "rch-b"
+          ]
+        },
+        "degraded_reasons": [
+          {
+            "code": "missing_optional_source",
+            "source_id": "cache_residency_json",
+            "detail": "cache residency hints are missing"
+          }
+        ],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "queries_live_agent_mail": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "readiness": "partial",
+        "recommended_topology_class": "partial_topology_balanced_remote",
+        "warm_cache_residency_state": "missing_optional",
+        "required_opportunity": "cache_evidence_unavailable",
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "contradictory_locality_blocked",
+      "placement_input": {
+        "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+        "source_revision": "fixture-revision",
+        "bead_id": "bd-3ynhq",
+        "placement_input_id": "placement-input-contradictory-locality",
+        "reference_time": "2026-05-06T20:10:00Z",
+        "truth_state": "blocked",
+        "decision": "blocked",
+        "host_identity": {
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2
+        },
+        "numa_summary": {
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 910000,
+          "latency_penalty_millionths": 130000
+        },
+        "worker_inventory": {
+          "worker_count": 1,
+          "ready_worker_count": 1,
+          "claimed_hot_cache_workers": []
+        },
+        "warm_cache_residency": {
+          "state": "hot",
+          "hot_worker_ids": [
+            "rch-a"
+          ],
+          "hot_target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ]
+        },
+        "context": {
+          "resource_envelope_decision": "pass",
+          "execution_queue_decision": "pass",
+          "execution_queue_proof_transport_state": "remote_only_ok",
+          "tail_latency_decision": "pass",
+          "tail_latency_locality_domain": "socket"
+        },
+        "placement_hints": {
+          "recommended_topology_class": "contradictory_locality",
+          "preferred_numa_nodes": [
+            0
+          ],
+          "preferred_worker_ids": [
+            "rch-a"
+          ]
+        },
+        "degraded_reasons": [],
+        "blocked_reasons": [
+          {
+            "code": "contradictory_locality_evidence",
+            "source_id": "required_topology",
+            "detail": "required topology snapshots disagree on host identity"
+          }
+        ],
+        "fail_closed_reasons": [],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "queries_live_agent_mail": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "expected": {
+        "decision": "blocked",
+        "readiness": "blocked",
+        "recommended_topology_class": "blocked_contradictory_locality",
+        "warm_cache_residency_state": "hot",
+        "required_reason_code": "contradictory_locality_evidence",
+        "expected_exit_code": 75
+      }
+    },
+    {
+      "case_id": "cache_cold_fallback",
+      "placement_input": {
+        "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+        "source_revision": "fixture-revision",
+        "bead_id": "bd-3ynhq",
+        "placement_input_id": "placement-input-cache-cold",
+        "reference_time": "2026-05-06T20:10:00Z",
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "host_identity": {
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2
+        },
+        "numa_summary": {
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 955000,
+          "latency_penalty_millionths": 80000
+        },
+        "worker_inventory": {
+          "worker_count": 2,
+          "ready_worker_count": 2,
+          "claimed_hot_cache_workers": []
+        },
+        "warm_cache_residency": {
+          "state": "cold",
+          "hot_worker_ids": [],
+          "hot_target_dirs": []
+        },
+        "context": {
+          "resource_envelope_decision": "pass",
+          "execution_queue_decision": "pass",
+          "execution_queue_proof_transport_state": "remote_only_ok",
+          "tail_latency_decision": "pass",
+          "tail_latency_locality_domain": "numa_node"
+        },
+        "placement_hints": {
+          "recommended_topology_class": "numa_local",
+          "preferred_numa_nodes": [
+            0
+          ],
+          "preferred_worker_ids": [
+            "rch-a",
+            "rch-b"
+          ]
+        },
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "queries_live_agent_mail": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "readiness": "ready",
+        "recommended_topology_class": "numa_cache_cold_fallback",
+        "warm_cache_residency_state": "cold",
+        "required_opportunity": "cache_cold_fallback",
+        "expected_exit_code": 0
+      }
+    }
+  ]
+}

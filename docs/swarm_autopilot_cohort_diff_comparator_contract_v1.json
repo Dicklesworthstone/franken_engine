@@ -1,0 +1,148 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-cohort-diff-comparator-contract.v1",
+  "bead_id": "bd-00ofm.2",
+  "parent_bead_id": "bd-00ofm",
+  "depends_on": [
+    "bd-00ofm.1",
+    "bd-gra1z.4"
+  ],
+  "script": "scripts/swarm_autopilot_cohort_diff_comparator.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_cohort_diff_comparator_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_COHORT_DIFF_COMPARATOR.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_cohort_diff_comparator/cases.json",
+  "input_cohort_bundle_schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+  "input_replay_index_schema_version": "franken-engine.swarm-autopilot-replay-index.v1",
+  "receipt_schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+  "fingerprint_delta_plan_schema_version": "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1",
+  "event_schema_version": "franken-engine.swarm-autopilot-cohort-diff.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "reference_anomaly_cohorts_json",
+      "argument": "--reference-anomaly-cohorts-json",
+      "required": true
+    },
+    {
+      "source_id": "comparison_anomaly_cohorts_json",
+      "argument": "--comparison-anomaly-cohorts-json",
+      "required": true
+    },
+    {
+      "source_id": "reference_replay_index_json",
+      "argument": "--reference-replay-index-json",
+      "required": true
+    },
+    {
+      "source_id": "comparison_replay_index_json",
+      "argument": "--comparison-replay-index-json",
+      "required": true
+    }
+  ],
+  "artifacts": {
+    "cohort_diff_receipts_json": "swarm_autopilot_cohort_diff_receipts.json",
+    "fingerprint_delta_plan_json": "swarm_autopilot_fingerprint_delta_plan.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_receipt_fields": [
+    "schema_version",
+    "bead_id",
+    "source_revision",
+    "reference_warehouse_hash",
+    "comparison_warehouse_hash",
+    "decision",
+    "comparison_summary",
+    "cohort_diff_receipts",
+    "fail_closed_reasons",
+    "remediation_commands",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "required_diff_fields": [
+    "receipt_id",
+    "reference_cohort_id",
+    "comparison_cohort_id",
+    "classification_transition",
+    "added_fingerprints",
+    "removed_fingerprints",
+    "changed_fingerprints",
+    "worker_deltas",
+    "toolchain_deltas",
+    "topology_deltas",
+    "source_ids",
+    "raw_artifact_paths",
+    "remote_truth_valid"
+  ],
+  "decision_policy": {
+    "pass": "reference and comparison cohorts are both healthy reference material and no fail-closed rules fired",
+    "degraded": "comparison material is blocked, degraded, or contaminated but the healthy reference remains trustworthy enough to emit auditable deltas",
+    "fail_closed": "stale references, missing raw paths, contradictory cohort identities, contaminated reference material, or schema drift prevent truthful comparison"
+  },
+  "fail_closed_rules": [
+    "stale reference or comparison material fails closed",
+    "missing raw artifact paths fail closed",
+    "contradictory cohort identity fails closed",
+    "contaminated reference material fails closed",
+    "schema drift in cohort or replay-index material fails closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-COHORT-DIFF-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-COHORT-DIFF-CONTAMINATED-REFERENCE",
+    "FE-SWARM-AUTOPILOT-COHORT-DIFF-STALE-REFERENCE",
+    "FE-SWARM-AUTOPILOT-COHORT-DIFF-MISSING-RAW-PATH",
+    "FE-SWARM-AUTOPILOT-COHORT-DIFF-CONTRADICTORY-COHORT"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "approves_replay_automatically": false,
+    "promotes_evidence_automatically": false
+  },
+  "required_doc_text": [
+    "The comparator is advisory only and proof only.",
+    "Healthy reference cohorts remain distinct from blocked, degraded, and contaminated comparison cohorts.",
+    "Blocked locality drift must preserve worker, toolchain, topology, raw artifact, and fingerprint deltas.",
+    "Fallback-contaminated comparison cohorts remain isolated from healthy reference material and cannot become a reference baseline.",
+    "Contradictory cohort identity fails closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "healthy_vs_blocked_locality_drift",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0,
+      "required_transition": "reference_to_blocked",
+      "minimum_changed_fingerprint_count": 1,
+      "minimum_worker_delta_count": 1,
+      "minimum_toolchain_delta_count": 1,
+      "minimum_topology_delta_count": 1
+    },
+    {
+      "case_id": "healthy_vs_contaminated_fallback_separation",
+      "expected_decision": "degraded",
+      "expected_exit_code": 0,
+      "required_transition": "reference_to_contaminated",
+      "requires_remote_truth_invalid": true
+    },
+    {
+      "case_id": "stale_reference_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-DIFF-STALE-REFERENCE"
+    },
+    {
+      "case_id": "contradictory_cohort_identity_rejection",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-SWARM-AUTOPILOT-COHORT-DIFF-CONTRADICTORY-COHORT"
+    }
+  ]
+}

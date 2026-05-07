@@ -1,0 +1,118 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy-contract.v1",
+  "bead_id": "bd-7dr9z",
+  "parent_bead_id": "bd-8pzsu",
+  "depends_on": [
+    "bd-4t4oi"
+  ],
+  "script": "scripts/swarm_autopilot_operator_intent_policy.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh",
+  "operator_docs": "docs/SWARM_AUTOPILOT_OPERATOR_INTENT_POLICY.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_operator_intent_policy/cases.json",
+  "input_schema_versions": {
+    "operator_intents": "franken-engine.swarm-autopilot-operator-intents.v1",
+    "evidence_warehouse": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "brownout_forecaster": "franken-engine.swarm-autopilot-brownout-forecaster.v1"
+  },
+  "output_schema_versions": {
+    "compiled_policy": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+    "verification_report": "franken-engine.swarm-autopilot-operator-intent-policy-verification.v1",
+    "counterexamples": "franken-engine.swarm-autopilot-operator-intent-counterexamples.v1"
+  },
+  "required_inputs": [
+    "intent_json",
+    "evidence_warehouse_json",
+    "forecaster_json"
+  ],
+  "output_artifacts": [
+    "operator_intent_policy.json",
+    "verification_report.json",
+    "counterexamples.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "supported_intents": [
+    "reserve_urgent_rch_slack",
+    "cap_nonurgent_heavy_fanout",
+    "protect_p1_latency",
+    "prefer_warm_cache_reuse",
+    "avoid_drained_or_probe_workers",
+    "bound_per_agent_fairness_skew",
+    "safe_mode_on_degraded"
+  ],
+  "precedence_rules": [
+    "bound_per_agent_fairness_skew outranks warm-cache reuse when both are present",
+    "reserve_urgent_rch_slack outranks nonurgent heavy fanout",
+    "protect_p1_latency outranks nonurgent heavy fanout",
+    "safe_mode_on_degraded forces deterministic conservative fallback when forecast evidence is degraded"
+  ],
+  "fail_closed_rules": [
+    "Schema drift in intents, evidence warehouse, or forecaster fails closed.",
+    "Non-pass or stale evidence warehouse input fails closed.",
+    "Stale or fail-closed forecaster input fails closed.",
+    "Conflicting latency, utilization, or RCH slack intents fail closed with bounded counterexamples.",
+    "Fail-closed policies must not influence downstream recommendations."
+  ],
+  "safe_mode_rules": [
+    "Safe mode is deterministic and advisory-only.",
+    "Safe mode defers nonurgent heavy lanes, preserves urgent RCH slack, and requires remote-only evidence.",
+    "Safe mode exits successfully because the emitted policy is explicit fallback behavior, not hidden mutation."
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-POLICY-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-POLICY-STALE-EVIDENCE",
+    "FE-SWARM-AUTOPILOT-POLICY-CONFLICT",
+    "FE-SWARM-AUTOPILOT-POLICY-SAFE-MODE"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "valid_policy_compilation",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "conflicting_latency_vs_utilization",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-CONFLICT"
+    },
+    {
+      "case_id": "stale_evidence_rejection",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-STALE-EVIDENCE"
+    },
+    {
+      "case_id": "fairness_precedence",
+      "expected_decision": "pass",
+      "required_precedence_first": "bound_per_agent_fairness_skew"
+    },
+    {
+      "case_id": "safe_mode_fallback",
+      "expected_decision": "safe_mode",
+      "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-SAFE-MODE"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "writes_outside_output_dir": false
+  },
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_operator_intent_policy.sh scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_operator_intent_policy.sh scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh",
+    "jq empty docs/swarm_autopilot_operator_intent_policy_contract_v1.json scripts/testdata/swarm_autopilot_operator_intent_policy/cases.json",
+    "bash scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_OPERATOR_INTENT_POLICY.md docs/swarm_autopilot_operator_intent_policy_contract_v1.json scripts/swarm_autopilot_operator_intent_policy.sh scripts/e2e/swarm_autopilot_operator_intent_policy_smoke.sh scripts/testdata/swarm_autopilot_operator_intent_policy/cases.json"
+  ]
+}

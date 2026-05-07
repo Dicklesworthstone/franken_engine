@@ -1,0 +1,198 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy-fixtures.v1",
+  "base_intent_json": {
+    "schema_version": "franken-engine.swarm-autopilot-operator-intents.v1",
+    "source_revision": "fixture-revision",
+    "max_evidence_age_seconds": 900,
+    "intents": [
+      {
+        "intent_type": "reserve_urgent_rch_slack",
+        "min_free_rch_slots": 2
+      },
+      {
+        "intent_type": "cap_nonurgent_heavy_fanout",
+        "max_nonurgent_heavy_lanes": 3
+      },
+      {
+        "intent_type": "protect_p1_latency",
+        "max_p1_latency_ms": 250
+      },
+      {
+        "intent_type": "prefer_warm_cache_reuse",
+        "min_confidence_millionths": 800000
+      },
+      {
+        "intent_type": "avoid_drained_or_probe_workers",
+        "enabled": true
+      },
+      {
+        "intent_type": "bound_per_agent_fairness_skew",
+        "max_heavy_lanes_per_agent": 1
+      }
+    ]
+  },
+  "base_evidence_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "bead_id": "bd-4t4oi",
+    "decision": "pass",
+    "run_identity": {
+      "run_id": "warehouse-fixture",
+      "source_revision": "fixture-revision",
+      "age_seconds": 120
+    },
+    "fail_closed_reasons": [],
+    "artifact_rows": [
+      {
+        "source_id": "queue_locality_json",
+        "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provided": true
+      }
+    ],
+    "hash_basis": {
+      "warehouse_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "runs_cargo": false,
+      "runs_rch": false
+    }
+  },
+  "base_forecaster_json": {
+    "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+    "decision": "pass",
+    "forecast_age_seconds": 60,
+    "resource_limits": {
+      "remote_rch_slots": 8
+    },
+    "predictions": {
+      "p1_latency_ms": 180,
+      "brownout_probability_millionths": 150000
+    },
+    "worker_state": {
+      "drained_worker_ids": [],
+      "probe_required_worker_ids": []
+    }
+  },
+  "cases": [
+    {
+      "case_id": "valid_policy_compilation",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_error_code": "",
+        "required_precedence_first": "bound_per_agent_fairness_skew"
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "conflicting_latency_vs_utilization",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-CONFLICT",
+        "required_counterexample": "ce-p1-latency-vs-utilization"
+      },
+      "overrides": {
+        "intent_json": {
+          "intents": [
+            {
+              "intent_type": "reserve_urgent_rch_slack",
+              "min_free_rch_slots": 2
+            },
+            {
+              "intent_type": "cap_nonurgent_heavy_fanout",
+              "max_nonurgent_heavy_lanes": 7
+            },
+            {
+              "intent_type": "protect_p1_latency",
+              "max_p1_latency_ms": 100
+            },
+            {
+              "intent_type": "bound_per_agent_fairness_skew",
+              "max_heavy_lanes_per_agent": 1
+            }
+          ]
+        },
+        "forecaster_json": {
+          "predictions": {
+            "p1_latency_ms": 160,
+            "brownout_probability_millionths": 300000
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stale_evidence_rejection",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-STALE-EVIDENCE"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "run_identity": {
+            "age_seconds": 5000
+          }
+        }
+      }
+    },
+    {
+      "case_id": "fairness_precedence",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_error_code": "",
+        "required_precedence_first": "bound_per_agent_fairness_skew"
+      },
+      "overrides": {
+        "forecaster_json": {
+          "worker_state": {
+            "drained_worker_ids": [
+              "rch-b"
+            ],
+            "probe_required_worker_ids": [
+              "rch-c"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "case_id": "safe_mode_fallback",
+      "expected": {
+        "decision": "safe_mode",
+        "expected_exit_code": 0,
+        "required_error_code": "FE-SWARM-AUTOPILOT-POLICY-SAFE-MODE",
+        "required_fallback_action": "defer_nonurgent_heavy_lanes"
+      },
+      "overrides": {
+        "intent_json": {
+          "intents": [
+            {
+              "intent_type": "reserve_urgent_rch_slack",
+              "min_free_rch_slots": 2
+            },
+            {
+              "intent_type": "cap_nonurgent_heavy_fanout",
+              "max_nonurgent_heavy_lanes": 2
+            },
+            {
+              "intent_type": "safe_mode_on_degraded",
+              "brownout_probability_millionths": 750000
+            }
+          ]
+        },
+        "forecaster_json": {
+          "decision": "warn",
+          "predictions": {
+            "brownout_probability_millionths": 820000,
+            "p1_latency_ms": 260
+          }
+        }
+      }
+    }
+  ]
+}

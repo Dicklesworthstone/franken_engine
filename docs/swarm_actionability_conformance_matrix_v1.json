@@ -1,0 +1,163 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-conformance-matrix.v1",
+  "bead_id": "bd-l28cd",
+  "contract_bead_id": "bd-1tsvb",
+  "golden_bead_id": "bd-p02f6",
+  "specification_sources": [
+    "docs/swarm_actionability_truth_gate_contract_v1.json",
+    "scripts/testdata/swarm_actionability_truth_gate_contract/cases.json",
+    "scripts/testdata/swarm_actionability_golden_reports/reports.json"
+  ],
+  "known_boundaries": [
+    {
+      "boundary_id": "expected-output-only",
+      "description": "This matrix verifies committed contract fixtures and golden reports, not live guard execution."
+    },
+    {
+      "boundary_id": "no-active-drill-files",
+      "description": "This matrix does not modify or validate active bd-fi6kq no-mock drill files."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "ACT-MUST-001",
+      "level": "MUST",
+      "area": "case coverage",
+      "requirement": "Every V1 contract fixture case has exactly one golden report.",
+      "evidence": {
+        "contract_cases": [
+          "healthy_ready_safe_to_claim",
+          "bv_blocked_track_fail_closed",
+          "in_progress_owned_defer",
+          "stale_export_fail_closed",
+          "dirty_overlap_defer",
+          "missing_optional_mail_observe_only"
+        ],
+        "golden_reports": [
+          "healthy_ready_safe_to_claim",
+          "bv_blocked_track_fail_closed",
+          "in_progress_owned_defer",
+          "stale_export_fail_closed",
+          "dirty_overlap_defer",
+          "missing_optional_mail_observe_only"
+        ]
+      },
+      "status": "covered"
+    },
+    {
+      "id": "ACT-MUST-002",
+      "level": "MUST",
+      "area": "decision vocabulary",
+      "requirement": "Golden reports exercise all contract decisions.",
+      "evidence": {
+        "decisions": [
+          "safe_to_claim",
+          "defer",
+          "fail_closed",
+          "observe_only"
+        ]
+      },
+      "status": "covered"
+    },
+    {
+      "id": "ACT-MUST-003",
+      "level": "MUST",
+      "area": "fail-closed reasons",
+      "requirement": "Golden reports cover fail-closed reasons used by contract fixtures.",
+      "evidence": {
+        "reason_codes": [
+          "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE",
+          "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE",
+          "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE",
+          "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP",
+          "FE-SWARM-ACTIONABILITY-MISSING-SOURCE"
+        ]
+      },
+      "status": "covered"
+    },
+    {
+      "id": "ACT-MUST-004",
+      "level": "MUST",
+      "area": "source revision stability",
+      "requirement": "Golden reports scrub dynamic source revision fields.",
+      "evidence": {
+        "scrubbed_fields": [
+          "captured_at",
+          "br_state_hash",
+          "bv_plan_hash",
+          "git_status_hash",
+          "agent_mail_hash"
+        ],
+        "markers": [
+          "[SCRUBBED_TIMESTAMP]",
+          "[SCRUBBED_HASH]"
+        ]
+      },
+      "status": "covered"
+    },
+    {
+      "id": "ACT-MUST-005",
+      "level": "MUST",
+      "area": "mutation policy",
+      "requirement": "Golden reports preserve advisory-only and proof-only mutation policy.",
+      "evidence": {
+        "true_flags": [
+          "advisory_only",
+          "proof_only"
+        ],
+        "false_flags": [
+          "mutates_br",
+          "claims_beads",
+          "reopens_beads",
+          "closes_beads",
+          "reassigns_beads",
+          "releases_reservations",
+          "sends_agent_mail",
+          "mutates_git",
+          "runs_cargo",
+          "runs_rch",
+          "mutates_remote_workers",
+          "changes_live_queue_policy"
+        ]
+      },
+      "status": "covered"
+    },
+    {
+      "id": "ACT-MUST-006",
+      "level": "MUST",
+      "area": "required report fields",
+      "requirement": "Golden reports include fields corresponding to V1 required actionability_report output.",
+      "evidence": {
+        "required_report_fields": [
+          "schema_version",
+          "source_revision",
+          "decision",
+          "candidate_summary",
+          "candidate_reports",
+          "fail_closed_reasons",
+          "advisory_remediation_commands",
+          "source_freshness_summary",
+          "mutation_policy"
+        ]
+      },
+      "status": "covered"
+    }
+  ],
+  "coverage_summary": {
+    "must_total": 6,
+    "must_covered": 6,
+    "should_total": 0,
+    "should_covered": 0,
+    "known_divergences": 0,
+    "score": 1.0,
+    "conformance_claim": "fixture-and-golden-report-conformant"
+  },
+  "validation_commands": [
+    "jq empty docs/swarm_actionability_conformance_matrix_v1.json scripts/testdata/swarm_actionability_golden_reports/reports.json scripts/testdata/swarm_actionability_truth_gate_contract/cases.json",
+    "bash -n scripts/e2e/swarm_actionability_conformance_matrix_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_actionability_conformance_matrix_smoke.sh",
+    "bash scripts/e2e/swarm_actionability_conformance_matrix_smoke.sh check",
+    "bash scripts/e2e/swarm_actionability_conformance_matrix_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_ACTIONABILITY_CONFORMANCE_MATRIX.md docs/swarm_actionability_conformance_matrix_v1.json scripts/e2e/swarm_actionability_conformance_matrix_smoke.sh"
+  ]
+}

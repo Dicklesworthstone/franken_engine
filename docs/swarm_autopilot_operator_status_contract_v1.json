@@ -2,14 +2,18 @@
   "schema_version": "franken-engine.swarm-autopilot-operator-status-contract.v1",
   "bead_id": "bd-bhddc",
   "extension_beads": [
-    "bd-gra1z.5"
+    "bd-gra1z.5",
+    "bd-00ofm.5"
   ],
   "depends_on": [
     "bd-8e5cw",
     "bd-09g6k",
     "bd-gra1z.2",
     "bd-gra1z.3",
-    "bd-gra1z.4"
+    "bd-gra1z.4",
+    "bd-00ofm.2",
+    "bd-00ofm.3",
+    "bd-00ofm.4"
   ],
   "script": "scripts/swarm_autopilot_operator_status_bundle.sh",
   "smoke_script": "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
@@ -95,6 +99,42 @@
       "argument": "--anomaly-cohorts-json",
       "schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
       "required": true
+    },
+    {
+      "source_id": "cohort_diff_receipts_json",
+      "argument": "--cohort-diff-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "fingerprint_delta_plan_json",
+      "argument": "--fingerprint-delta-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "replay_recipe_bundle_json",
+      "argument": "--replay-recipe-bundle-json",
+      "schema_version": "franken-engine.swarm-autopilot-replay-recipe-bundle.v1",
+      "required": true
+    },
+    {
+      "source_id": "replay_recipe_index_json",
+      "argument": "--replay-recipe-index-json",
+      "schema_version": "franken-engine.swarm-autopilot-replay-recipe-index.v1",
+      "required": true
+    },
+    {
+      "source_id": "forensic_hypothesis_summary_json",
+      "argument": "--forensic-hypothesis-summary-json",
+      "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1",
+      "required": true
+    },
+    {
+      "source_id": "forensic_hypothesis_evidence_json",
+      "argument": "--forensic-hypothesis-evidence-json",
+      "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1",
+      "required": true
     }
   ],
   "optional_args": [
@@ -118,7 +158,8 @@
     "safe_mode_state",
     "required_operator_action",
     "chaos_replay_readiness",
-    "warehouse_lifecycle"
+    "warehouse_lifecycle",
+    "forensic_replay"
   ],
   "required_panels": [
     "forecast_state",
@@ -128,7 +169,8 @@
     "safe_mode_state",
     "required_operator_action",
     "chaos_replay_readiness",
-    "warehouse_lifecycle"
+    "warehouse_lifecycle",
+    "forensic_replay"
   ],
   "display_states": [
     "healthy",
@@ -155,6 +197,9 @@
     "summary.storage_pressure_state",
     "summary.top_promotion_candidate_type",
     "summary.anomaly_cohort_availability",
+    "summary.forensic_replay_state",
+    "summary.forensic_top_hypothesis_pivot",
+    "summary.replay_ready_count",
     "summary.degraded_panel_count",
     "summary.fail_closed_panel_count",
     "sections",
@@ -182,6 +227,8 @@
     "fail-closed upstream policy, forecast, lease plan, recommendation bundle, or chaos replay inputs fail closed",
     "fail-closed warehouse retention, promotion, or anomaly cohort inputs fail closed",
     "warehouse lifecycle artifact paths for retention plan, storage ledger, promotion receipts, and anomaly cohorts remain visible",
+    "fail-closed cohort diff, replay recipe, or forensic hypothesis inputs fail closed",
+    "forensic replay artifact paths for cohort diffs, replay recipes, and hypotheses remain visible",
     "unsafe mutation-policy claims fail closed"
   ],
   "fixture_cases": [
@@ -233,6 +280,28 @@
     },
     {
       "case_id": "contaminated_local_fallback_propagation",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "healthy_reference_comparison",
+      "expected_decision": "pass",
+      "required_panel_id": "forensic_replay",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "blocked_locality_contradiction_forensics",
+      "expected_decision": "degraded",
+      "required_panel_id": "forensic_replay",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "contaminated_replay_refusal",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "stale_forensic_evidence_propagation",
       "expected_decision": "fail_closed",
       "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
     }

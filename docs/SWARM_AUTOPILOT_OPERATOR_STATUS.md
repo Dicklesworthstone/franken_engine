@@ -30,6 +30,12 @@ Required inputs:
 - `promotion_candidates_json`
 - `promotion_candidate_receipts_json`
 - `anomaly_cohorts_json`
+- `cohort_diff_receipts_json`
+- `fingerprint_delta_plan_json`
+- `replay_recipe_bundle_json`
+- `replay_recipe_index_json`
+- `forensic_hypothesis_summary_json`
+- `forensic_hypothesis_evidence_json`
 
 ## Artifacts
 
@@ -53,6 +59,9 @@ The operator-status bundle preserves:
 - `summary.storage_pressure_state`
 - `summary.top_promotion_candidate_type`
 - `summary.anomaly_cohort_availability`
+- `summary.forensic_replay_state`
+- `summary.forensic_top_hypothesis_pivot`
+- `summary.replay_ready_count`
 - `summary.degraded_panel_count`
 - `summary.fail_closed_panel_count`
 - `sections`
@@ -85,6 +94,9 @@ The frankentui panel bundle preserves:
 - Warehouse lifecycle status preserves retention, storage, promotion, and anomaly cohort artifact paths.
 - Degraded storage pressure remains visible in the warehouse lifecycle panel without promoting to healthy.
 - Contradictory promotion evidence and contaminated anomaly cohorts propagate fail-closed into operator status.
+- Forensic replay status preserves cohort diff, replay recipe, and hypothesis artifact paths.
+- Blocked locality contradictions remain visible as degraded forensic replay guidance.
+- Contaminated replay refusals and stale forensic evidence propagate fail-closed into operator status.
 - The producer must not claim it changed live queue policy, worker state, bead ownership, reservations, Agent Mail, Cargo, or RCH.
 
 ## Proof Cases
@@ -100,6 +112,10 @@ The checked-in fixtures cover:
 - `degraded_storage_pressure`
 - `blocked_contradictory_hindsight`
 - `contaminated_local_fallback_propagation`
+- `healthy_reference_comparison`
+- `blocked_locality_contradiction_forensics`
+- `contaminated_replay_refusal`
+- `stale_forensic_evidence_propagation`
 
 ## Validation
 

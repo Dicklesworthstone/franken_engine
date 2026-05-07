@@ -42,7 +42,13 @@ fixtures_shape_ok() {
     and .base_promotion_candidates_json.schema_version == "franken-engine.swarm-autopilot-promotion-candidates.v1"
     and .base_promotion_candidate_receipts_json.schema_version == "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1"
     and .base_anomaly_cohorts_json.schema_version == "franken-engine.swarm-autopilot-anomaly-cohorts.v1"
-    and (.cases | length) == 9
+    and .base_cohort_diff_receipts_json.schema_version == "franken-engine.swarm-autopilot-cohort-diff-receipts.v1"
+    and .base_fingerprint_delta_plan_json.schema_version == "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1"
+    and .base_replay_recipe_bundle_json.schema_version == "franken-engine.swarm-autopilot-replay-recipe-bundle.v1"
+    and .base_replay_recipe_index_json.schema_version == "franken-engine.swarm-autopilot-replay-recipe-index.v1"
+    and .base_forensic_hypothesis_summary_json.schema_version == "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1"
+    and .base_forensic_hypothesis_evidence_json.schema_version == "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1"
+    and (.cases | length) == 13
     and any(.cases[]; .case_id == "healthy_autopilot")
     and any(.cases[]; .case_id == "degraded_forecast")
     and any(.cases[]; .case_id == "fail_closed_policy_conflict")
@@ -52,6 +58,10 @@ fixtures_shape_ok() {
     and any(.cases[]; .case_id == "degraded_storage_pressure")
     and any(.cases[]; .case_id == "blocked_contradictory_hindsight")
     and any(.cases[]; .case_id == "contaminated_local_fallback_propagation")
+    and any(.cases[]; .case_id == "healthy_reference_comparison")
+    and any(.cases[]; .case_id == "blocked_locality_contradiction_forensics")
+    and any(.cases[]; .case_id == "contaminated_replay_refusal")
+    and any(.cases[]; .case_id == "stale_forensic_evidence_propagation")
   ' "$fixtures_path" >/dev/null
 }
 
@@ -60,7 +70,8 @@ contract_shape_ok() {
     .schema_version == "franken-engine.swarm-autopilot-operator-status-contract.v1"
     and .bead_id == "bd-bhddc"
     and (.extension_beads | index("bd-gra1z.5") != null)
-    and ((["bd-8e5cw","bd-09g6k","bd-gra1z.2","bd-gra1z.3","bd-gra1z.4"] - .depends_on) | length) == 0
+    and (.extension_beads | index("bd-00ofm.5") != null)
+    and ((["bd-8e5cw","bd-09g6k","bd-gra1z.2","bd-gra1z.3","bd-gra1z.4","bd-00ofm.2","bd-00ofm.3","bd-00ofm.4"] - .depends_on) | length) == 0
     and .script == "scripts/swarm_autopilot_operator_status_bundle.sh"
     and .smoke_script == "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh"
     and .docs == "docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md"
@@ -70,7 +81,7 @@ contract_shape_ok() {
     and .renderer_contract.provider == "/dp/frankentui"
     and .renderer_contract.local_renderer == false
     and .renderer_contract.no_local_tui_runtime == true
-    and ((["forecast_state","policy_state","lease_scarcity","recommendation_rank","safe_mode_state","required_operator_action","chaos_replay_readiness","warehouse_lifecycle"] - .required_panels) | length) == 0
+    and ((["forecast_state","policy_state","lease_scarcity","recommendation_rank","safe_mode_state","required_operator_action","chaos_replay_readiness","warehouse_lifecycle","forensic_replay"] - .required_panels) | length) == 0
     and .mutation_policy.advisory_only == true
     and .mutation_policy.proof_only == true
     and .mutation_policy.mutates_br == false
@@ -86,7 +97,8 @@ docs_shape_ok() {
     && grep -Fq 'Hidden panel state or missing evidence links fail closed.' "$docs_path" \
     && grep -Fq 'Fail-closed policy conflicts stay visibly fail-closed in both operator status and panel projection.' "$docs_path" \
     && grep -Fq 'Safe-mode recommendations stay visible as conservative operator guidance and do not claim live mutation authority.' "$docs_path" \
-    && grep -Fq 'Warehouse lifecycle status preserves retention, storage, promotion, and anomaly cohort artifact paths.' "$docs_path"
+    && grep -Fq 'Warehouse lifecycle status preserves retention, storage, promotion, and anomaly cohort artifact paths.' "$docs_path" \
+    && grep -Fq 'Forensic replay status preserves cohort diff, replay recipe, and hypothesis artifact paths.' "$docs_path"
 }
 
 materialize_case() {
@@ -108,7 +120,13 @@ materialize_case() {
         storage_budget_ledger_json: ($root.base_storage_budget_ledger_json * ($case.overrides.storage_budget_ledger_json // {})),
         promotion_candidates_json: ($root.base_promotion_candidates_json * ($case.overrides.promotion_candidates_json // {})),
         promotion_candidate_receipts_json: ($root.base_promotion_candidate_receipts_json * ($case.overrides.promotion_candidate_receipts_json // {})),
-        anomaly_cohorts_json: ($root.base_anomaly_cohorts_json * ($case.overrides.anomaly_cohorts_json // {}))
+        anomaly_cohorts_json: ($root.base_anomaly_cohorts_json * ($case.overrides.anomaly_cohorts_json // {})),
+        cohort_diff_receipts_json: ($root.base_cohort_diff_receipts_json * ($case.overrides.cohort_diff_receipts_json // {})),
+        fingerprint_delta_plan_json: ($root.base_fingerprint_delta_plan_json * ($case.overrides.fingerprint_delta_plan_json // {})),
+        replay_recipe_bundle_json: ($root.base_replay_recipe_bundle_json * ($case.overrides.replay_recipe_bundle_json // {})),
+        replay_recipe_index_json: ($root.base_replay_recipe_index_json * ($case.overrides.replay_recipe_index_json // {})),
+        forensic_hypothesis_summary_json: ($root.base_forensic_hypothesis_summary_json * ($case.overrides.forensic_hypothesis_summary_json // {})),
+        forensic_hypothesis_evidence_json: ($root.base_forensic_hypothesis_evidence_json * ($case.overrides.forensic_hypothesis_evidence_json // {}))
       }
   ' "$fixtures_path" >"${case_dir}/materialized_inputs.json"
 
@@ -125,6 +143,12 @@ materialize_case() {
   jq '.promotion_candidates_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/promotion_candidates.json"
   jq '.promotion_candidate_receipts_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/promotion_candidate_receipts.json"
   jq '.anomaly_cohorts_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/anomaly_cohorts.json"
+  jq '.cohort_diff_receipts_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/cohort_diff_receipts.json"
+  jq '.fingerprint_delta_plan_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/fingerprint_delta_plan.json"
+  jq '.replay_recipe_bundle_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/replay_recipe_bundle.json"
+  jq '.replay_recipe_index_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/replay_recipe_index.json"
+  jq '.forensic_hypothesis_summary_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/forensic_hypothesis_summary.json"
+  jq '.forensic_hypothesis_evidence_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/forensic_hypothesis_evidence.json"
 }
 
 validate_required_artifacts() {
@@ -160,13 +184,18 @@ validate_outputs() {
     and .mutation_policy.advisory_only == true
     and .mutation_policy.proof_only == true
     and .mutation_policy.local_renderer == false
-    and ((.sections | keys | length) == 8)
+    and ((.sections | keys | length) == 9)
     and (.sections.warehouse_lifecycle.summary.storage_pressure_state | type == "string")
     and (.sections.warehouse_lifecycle.summary.top_promotion_candidate_type | type == "string")
     and (.sections.warehouse_lifecycle.summary.anomaly_total_cohort_count | type == "number")
     and (.sections.warehouse_lifecycle.summary.artifact_paths.retention_plan_json | length > 0)
     and (.sections.warehouse_lifecycle.summary.artifact_paths.promotion_candidate_receipts_json | length > 0)
     and (.sections.warehouse_lifecycle.summary.artifact_paths.anomaly_cohorts_json | length > 0)
+    and (.sections.forensic_replay.summary.top_hypothesis_pivot | type == "string")
+    and (.sections.forensic_replay.summary.replay_ready_count | type == "number")
+    and (.sections.forensic_replay.summary.artifact_paths.cohort_diff_receipts_json | length > 0)
+    and (.sections.forensic_replay.summary.artifact_paths.replay_recipe_bundle_json | length > 0)
+    and (.sections.forensic_replay.summary.artifact_paths.forensic_hypothesis_summary_json | length > 0)
   ' "$status_json" >/dev/null || record_failure "${case_id} status shape mismatch"
 
   jq -e '
@@ -175,8 +204,8 @@ validate_outputs() {
     and .renderer_contract.provider == "/dp/frankentui"
     and .renderer_contract.local_renderer == false
     and .renderer_contract.no_local_tui_runtime == true
-    and .status_bar.summary.panel_count == 8
-    and ((.panels | length) == 8)
+    and .status_bar.summary.panel_count == 9
+    and ((.panels | length) == 9)
     and all(.panels[];
       (.panel_id | length > 0)
       and (.display_state | length > 0)
@@ -215,6 +244,11 @@ validate_outputs() {
     and (($expected[0].expected_anomaly_availability // null) == null or .summary.anomaly_cohort_availability == $expected[0].expected_anomaly_availability)
   ' "$status_json" >/dev/null || record_failure "${case_id} warehouse lifecycle summary mismatch"
 
+  jq -e --slurpfile expected "$expected_json" '
+    (($expected[0].required_top_hypothesis_pivot // null) == null or .sections.forensic_replay.summary.top_hypothesis_pivot == $expected[0].required_top_hypothesis_pivot)
+    and (($expected[0].minimum_replay_ready_count // null) == null or .sections.forensic_replay.summary.replay_ready_count >= $expected[0].minimum_replay_ready_count)
+  ' "$status_json" >/dev/null || record_failure "${case_id} forensic replay summary mismatch"
+
   grep -Fq './scripts/swarm_autopilot_operator_status_bundle.sh' "${output_case_dir}/commands.txt" \
     || record_failure "${case_id} commands.txt missing operator-status command"
 }
@@ -245,6 +279,12 @@ run_case() {
     --promotion-candidates-json "${case_dir}/promotion_candidates.json" \
     --promotion-candidate-receipts-json "${case_dir}/promotion_candidate_receipts.json" \
     --anomaly-cohorts-json "${case_dir}/anomaly_cohorts.json" \
+    --cohort-diff-receipts-json "${case_dir}/cohort_diff_receipts.json" \
+    --fingerprint-delta-plan-json "${case_dir}/fingerprint_delta_plan.json" \
+    --replay-recipe-bundle-json "${case_dir}/replay_recipe_bundle.json" \
+    --replay-recipe-index-json "${case_dir}/replay_recipe_index.json" \
+    --forensic-hypothesis-summary-json "${case_dir}/forensic_hypothesis_summary.json" \
+    --forensic-hypothesis-evidence-json "${case_dir}/forensic_hypothesis_evidence.json" \
     --source-revision "fixture-${case_id}" \
     --now-epoch-seconds "$fixed_now_epoch_seconds" \
     --stale-after-seconds "$stale_after_seconds" \

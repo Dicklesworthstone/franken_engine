@@ -20,6 +20,12 @@ storage_budget_ledger_json=""
 promotion_candidates_json=""
 promotion_candidate_receipts_json=""
 anomaly_cohorts_json=""
+cohort_diff_receipts_json=""
+fingerprint_delta_plan_json=""
+replay_recipe_bundle_json=""
+replay_recipe_index_json=""
+forensic_hypothesis_summary_json=""
+forensic_hypothesis_evidence_json=""
 now_epoch_seconds="$(date -u +%s)"
 stale_after_seconds="1800"
 
@@ -44,6 +50,12 @@ Required inputs:
   --promotion-candidates-json FILE
   --promotion-candidate-receipts-json FILE
   --anomaly-cohorts-json FILE
+  --cohort-diff-receipts-json FILE
+  --fingerprint-delta-plan-json FILE
+  --replay-recipe-bundle-json FILE
+  --replay-recipe-index-json FILE
+  --forensic-hypothesis-summary-json FILE
+  --forensic-hypothesis-evidence-json FILE
 
 Optional inputs:
   --source-revision REV
@@ -119,6 +131,30 @@ while [[ "$#" -gt 0 ]]; do
       anomaly_cohorts_json="${2:-}"
       shift 2
       ;;
+    --cohort-diff-receipts-json)
+      cohort_diff_receipts_json="${2:-}"
+      shift 2
+      ;;
+    --fingerprint-delta-plan-json)
+      fingerprint_delta_plan_json="${2:-}"
+      shift 2
+      ;;
+    --replay-recipe-bundle-json)
+      replay_recipe_bundle_json="${2:-}"
+      shift 2
+      ;;
+    --replay-recipe-index-json)
+      replay_recipe_index_json="${2:-}"
+      shift 2
+      ;;
+    --forensic-hypothesis-summary-json)
+      forensic_hypothesis_summary_json="${2:-}"
+      shift 2
+      ;;
+    --forensic-hypothesis-evidence-json)
+      forensic_hypothesis_evidence_json="${2:-}"
+      shift 2
+      ;;
     --source-revision)
       source_revision="${2:-}"
       shift 2
@@ -164,7 +200,13 @@ for required_path in \
   "$storage_budget_ledger_json" \
   "$promotion_candidates_json" \
   "$promotion_candidate_receipts_json" \
-  "$anomaly_cohorts_json"; do
+  "$anomaly_cohorts_json" \
+  "$cohort_diff_receipts_json" \
+  "$fingerprint_delta_plan_json" \
+  "$replay_recipe_bundle_json" \
+  "$replay_recipe_index_json" \
+  "$forensic_hypothesis_summary_json" \
+  "$forensic_hypothesis_evidence_json"; do
   if [[ -z "$required_path" ]]; then
     printf 'all required autopilot operator-status inputs must be provided\n' >&2
     usage
@@ -210,6 +252,12 @@ storage_ledger_normalized="${run_dir}/storage_budget_ledger.normalized.json"
 promotion_candidates_normalized="${run_dir}/promotion_candidates.normalized.json"
 promotion_receipts_normalized="${run_dir}/promotion_candidate_receipts.normalized.json"
 anomaly_cohorts_normalized="${run_dir}/anomaly_cohorts.normalized.json"
+cohort_diff_receipts_normalized="${run_dir}/cohort_diff_receipts.normalized.json"
+fingerprint_delta_plan_normalized="${run_dir}/fingerprint_delta_plan.normalized.json"
+replay_recipe_bundle_normalized="${run_dir}/replay_recipe_bundle.normalized.json"
+replay_recipe_index_normalized="${run_dir}/replay_recipe_index.normalized.json"
+forensic_hypothesis_summary_normalized="${run_dir}/forensic_hypothesis_summary.normalized.json"
+forensic_hypothesis_evidence_normalized="${run_dir}/forensic_hypothesis_evidence.normalized.json"
 
 printf './scripts/swarm_autopilot_operator_status_bundle.sh' >"$commands_path"
 for arg in "${original_args[@]}"; do
@@ -325,6 +373,12 @@ normalize_required_json "$storage_budget_ledger_json" "$storage_ledger_normalize
 normalize_required_json "$promotion_candidates_json" "$promotion_candidates_normalized" "promotion_candidates"
 normalize_required_json "$promotion_candidate_receipts_json" "$promotion_receipts_normalized" "promotion_candidate_receipts"
 normalize_required_json "$anomaly_cohorts_json" "$anomaly_cohorts_normalized" "anomaly_cohorts"
+normalize_required_json "$cohort_diff_receipts_json" "$cohort_diff_receipts_normalized" "cohort_diff_receipts"
+normalize_required_json "$fingerprint_delta_plan_json" "$fingerprint_delta_plan_normalized" "fingerprint_delta_plan"
+normalize_required_json "$replay_recipe_bundle_json" "$replay_recipe_bundle_normalized" "replay_recipe_bundle"
+normalize_required_json "$replay_recipe_index_json" "$replay_recipe_index_normalized" "replay_recipe_index"
+normalize_required_json "$forensic_hypothesis_summary_json" "$forensic_hypothesis_summary_normalized" "forensic_hypothesis_summary"
+normalize_required_json "$forensic_hypothesis_evidence_json" "$forensic_hypothesis_evidence_normalized" "forensic_hypothesis_evidence"
 
 if [[ "$source_revision" == "unknown" ]]; then
   source_revision="$(jq -r '.source_revision // empty' "$recommendation_normalized")"
@@ -550,6 +604,92 @@ check_shape "$anomaly_cohorts_normalized" '
   "anomaly cohort bundle is missing cohort summary, replay links, or safety markers" \
   "Regenerate anomaly cohorts before building operator status."
 
+check_shape "$cohort_diff_receipts_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-cohort-diff-receipts.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.comparison_summary.diff_receipt_count // null) | type == "number")
+  and ((.cohort_diff_receipts // null) | type == "array")
+  and ((.artifact_paths.cohort_diff_receipts_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "cohort_diff_receipts_json" \
+  "cohort diff receipts are missing comparison summary, receipts, evidence links, or safety markers" \
+  "Regenerate cohort diff receipts before building operator status."
+
+check_shape "$fingerprint_delta_plan_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.fingerprint_delta_summary.diff_receipt_count // null) | type == "number")
+  and ((.fingerprint_deltas // null) | type == "array")
+  and ((.artifact_paths.fingerprint_delta_plan_json // "") | (type == "string" and length > 0))
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "fingerprint_delta_plan_json" \
+  "fingerprint delta plan is missing summary, deltas, or artifact links" \
+  "Regenerate fingerprint delta plan from cohort diff receipts."
+
+check_shape "$replay_recipe_bundle_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-replay-recipe-bundle.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.recipe_summary.recipe_count // null) | type == "number")
+  and ((.recipe_summary.replay_ready_count // null) | type == "number")
+  and ((.replay_recipes // null) | type == "array")
+  and ((.artifact_paths.replay_recipe_bundle_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+  and .mutation_policy.approves_replay_automatically == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "replay_recipe_bundle_json" \
+  "replay recipe bundle is missing recipe summary, recipes, evidence links, or safety markers" \
+  "Regenerate replay recipes before building operator status."
+
+check_shape "$replay_recipe_index_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-replay-recipe-index.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.entries // null) | type == "array")
+  and ((.artifact_paths.replay_recipe_index_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "replay_recipe_index_json" \
+  "replay recipe index is missing entries, artifact links, or safety markers" \
+  "Regenerate replay recipe index before building operator status."
+
+check_shape "$forensic_hypothesis_summary_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.hypothesis_summary.hypothesis_count // null) | type == "number")
+  and ((.hypotheses // null) | type == "array")
+  and ((.artifact_paths.hypothesis_summary_json // "") | (type == "string" and length > 0))
+  and ((.artifact_paths.hypothesis_evidence_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+  and .mutation_policy.promotes_hypotheses_automatically == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "forensic_hypothesis_summary_json" \
+  "forensic hypothesis summary is missing hypothesis summary, evidence links, or safety markers" \
+  "Regenerate forensic hypotheses before building operator status."
+
+check_shape "$forensic_hypothesis_evidence_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.hypotheses // null) | type == "array")
+  and ((.source_receipts // null) | type == "array")
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "forensic_hypothesis_evidence_json" \
+  "forensic hypothesis evidence is missing source receipts, hypotheses, or safety markers" \
+  "Regenerate forensic hypothesis evidence before building operator status."
+
 check_staleness "$policy_normalized" "operator_intent_policy_json" "operator intent policy" \
   "Refresh the operator intent policy before building operator status."
 check_staleness "$forecast_normalized" "brownout_forecaster_json" "brownout forecaster" \
@@ -576,6 +716,18 @@ check_staleness "$promotion_receipts_normalized" "promotion_candidate_receipts_j
   "Refresh promotion candidate receipts before building operator status."
 check_staleness "$anomaly_cohorts_normalized" "anomaly_cohorts_json" "anomaly cohorts" \
   "Refresh anomaly cohorts before building operator status."
+check_staleness "$cohort_diff_receipts_normalized" "cohort_diff_receipts_json" "cohort diff receipts" \
+  "Refresh cohort diff receipts before building operator status."
+check_staleness "$fingerprint_delta_plan_normalized" "fingerprint_delta_plan_json" "fingerprint delta plan" \
+  "Refresh fingerprint delta plan before building operator status."
+check_staleness "$replay_recipe_bundle_normalized" "replay_recipe_bundle_json" "replay recipe bundle" \
+  "Refresh replay recipe bundle before building operator status."
+check_staleness "$replay_recipe_index_normalized" "replay_recipe_index_json" "replay recipe index" \
+  "Refresh replay recipe index before building operator status."
+check_staleness "$forensic_hypothesis_summary_normalized" "forensic_hypothesis_summary_json" "forensic hypothesis summary" \
+  "Refresh forensic hypothesis summary before building operator status."
+check_staleness "$forensic_hypothesis_evidence_normalized" "forensic_hypothesis_evidence_json" "forensic hypothesis evidence" \
+  "Refresh forensic hypothesis evidence before building operator status."
 
 if ! jq -e --slurpfile receipts "$receipts_normalized" '.allocation_id == $receipts[0].allocation_id' "$lease_plan_normalized" >/dev/null 2>&1; then
   append_failure "FE-SWARM-AUTOPILOT-STATUS-MISSING-EVIDENCE" "resource_scarcity_receipts_json" \
@@ -591,7 +743,12 @@ for doc in \
   "$retention_plan_normalized" \
   "$promotion_candidates_normalized" \
   "$promotion_receipts_normalized" \
-  "$anomaly_cohorts_normalized"; do
+  "$anomaly_cohorts_normalized" \
+  "$cohort_diff_receipts_normalized" \
+  "$replay_recipe_bundle_normalized" \
+  "$replay_recipe_index_normalized" \
+  "$forensic_hypothesis_summary_normalized" \
+  "$forensic_hypothesis_evidence_normalized"; do
   if jq -e '.decision == "fail_closed"' "$doc" >/dev/null 2>&1; then
     source_id="$(basename "$doc" .normalized.json)_json"
     append_failure "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED" "$source_id" \
@@ -613,6 +770,12 @@ storage_ledger_sha="$(sha256sum "$storage_ledger_normalized" | awk '{print $1}')
 promotion_candidates_sha="$(sha256sum "$promotion_candidates_normalized" | awk '{print $1}')"
 promotion_receipts_sha="$(sha256sum "$promotion_receipts_normalized" | awk '{print $1}')"
 anomaly_cohorts_sha="$(sha256sum "$anomaly_cohorts_normalized" | awk '{print $1}')"
+cohort_diff_receipts_sha="$(sha256sum "$cohort_diff_receipts_normalized" | awk '{print $1}')"
+fingerprint_delta_plan_sha="$(sha256sum "$fingerprint_delta_plan_normalized" | awk '{print $1}')"
+replay_recipe_bundle_sha="$(sha256sum "$replay_recipe_bundle_normalized" | awk '{print $1}')"
+replay_recipe_index_sha="$(sha256sum "$replay_recipe_index_normalized" | awk '{print $1}')"
+forensic_hypothesis_summary_sha="$(sha256sum "$forensic_hypothesis_summary_normalized" | awk '{print $1}')"
+forensic_hypothesis_evidence_sha="$(sha256sum "$forensic_hypothesis_evidence_normalized" | awk '{print $1}')"
 
 decision="pass"
 truth_state="confirmed"
@@ -632,7 +795,10 @@ elif jq -e '.truth_state != "confirmed"' "$forecast_normalized" >/dev/null 2>&1 
   || jq -e '.decision == "degraded" or .storage_pressure_state != "normal"' "$retention_plan_normalized" >/dev/null 2>&1 \
   || jq -e '.decision == "degraded" or .storage_pressure_state != "normal"' "$storage_ledger_normalized" >/dev/null 2>&1 \
   || jq -e '.decision == "degraded" or .truth_state == "insufficient_evidence"' "$promotion_candidates_normalized" >/dev/null 2>&1 \
-  || jq -e '.decision == "degraded"' "$anomaly_cohorts_normalized" >/dev/null 2>&1; then
+  || jq -e '.decision == "degraded"' "$anomaly_cohorts_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded"' "$cohort_diff_receipts_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded" or .truth_state == "degraded"' "$replay_recipe_bundle_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded" or .truth_state == "degraded" or .truth_state == "low_evidence"' "$forensic_hypothesis_summary_normalized" >/dev/null 2>&1; then
   decision="degraded"
   truth_state="degraded"
 fi
@@ -651,6 +817,12 @@ jq -n \
   --slurpfile promotion_candidates "$promotion_candidates_normalized" \
   --slurpfile promotion_receipts "$promotion_receipts_normalized" \
   --slurpfile anomaly_cohorts "$anomaly_cohorts_normalized" \
+  --slurpfile cohort_diff_receipts "$cohort_diff_receipts_normalized" \
+  --slurpfile fingerprint_delta_plan "$fingerprint_delta_plan_normalized" \
+  --slurpfile replay_recipe_bundle "$replay_recipe_bundle_normalized" \
+  --slurpfile replay_recipe_index "$replay_recipe_index_normalized" \
+  --slurpfile forensic_hypothesis_summary "$forensic_hypothesis_summary_normalized" \
+  --slurpfile forensic_hypothesis_evidence "$forensic_hypothesis_evidence_normalized" \
   --slurpfile fail_closed_reasons "$fail_closed_reasons_jsonl" \
   --arg source_revision "$source_revision" \
   --arg decision "$decision" \
@@ -673,6 +845,12 @@ jq -n \
   --arg promotion_candidates_sha "$promotion_candidates_sha" \
   --arg promotion_receipts_sha "$promotion_receipts_sha" \
   --arg anomaly_cohorts_sha "$anomaly_cohorts_sha" \
+  --arg cohort_diff_receipts_sha "$cohort_diff_receipts_sha" \
+  --arg fingerprint_delta_plan_sha "$fingerprint_delta_plan_sha" \
+  --arg replay_recipe_bundle_sha "$replay_recipe_bundle_sha" \
+  --arg replay_recipe_index_sha "$replay_recipe_index_sha" \
+  --arg forensic_hypothesis_summary_sha "$forensic_hypothesis_summary_sha" \
+  --arg forensic_hypothesis_evidence_sha "$forensic_hypothesis_evidence_sha" \
   --argjson now_epoch_seconds "$now_epoch_seconds" \
   '
   def theme_for($state):
@@ -706,6 +884,12 @@ jq -n \
   ($promotion_candidates[0]) as $pc |
   ($promotion_receipts[0]) as $pr |
   ($anomaly_cohorts[0]) as $ac |
+  ($cohort_diff_receipts[0]) as $cdr |
+  ($fingerprint_delta_plan[0]) as $fdp |
+  ($replay_recipe_bundle[0]) as $rrb |
+  ($replay_recipe_index[0]) as $rri |
+  ($forensic_hypothesis_summary[0]) as $fhs |
+  ($forensic_hypothesis_evidence[0]) as $fhe |
   ($fail_closed_reasons) as $reasons |
   (
     [
@@ -721,7 +905,13 @@ jq -n \
       ($sl.artifact_paths.storage_budget_ledger_json // ""),
       ($pc.artifact_paths.promotion_candidates_json // ""),
       ($pr.artifact_paths.promotion_candidate_receipts_json // ""),
-      ($ac.artifact_paths.anomaly_cohorts_json // "")
+      ($ac.artifact_paths.anomaly_cohorts_json // ""),
+      ($cdr.artifact_paths.cohort_diff_receipts_json // ""),
+      ($fdp.artifact_paths.fingerprint_delta_plan_json // ""),
+      ($rrb.artifact_paths.replay_recipe_bundle_json // ""),
+      ($rri.artifact_paths.replay_recipe_index_json // ""),
+      ($fhs.artifact_paths.hypothesis_summary_json // ""),
+      ($fhs.artifact_paths.hypothesis_evidence_json // "")
     ] | map(select(length > 0)) | unique
   ) as $base_evidence_paths |
   ($rb.summary.top_action // $d.top_action.action // "none") as $top_action |
@@ -787,6 +977,19 @@ jq -n \
   ) as $warehouse_state |
   ($pc.candidates[0].candidate_type // "none") as $top_promotion_candidate_type |
   ($pc.candidates[0].candidate_id // "none") as $top_promotion_candidate_id |
+  (
+    if $decision == "fail_closed" then "fail_closed"
+    elif (($cdr.decision // "pass") != "pass")
+      or (($rrb.decision // "pass") != "pass")
+      or (($rri.decision // "pass") != "pass")
+      or (($fhs.decision // "pass") != "pass")
+      or (($fhe.decision // "pass") != "pass")
+      or (($rrb.recipe_summary.replay_ready_count // 0) == 0) then "degraded"
+    else "healthy"
+    end
+  ) as $forensic_state |
+  ($fhs.hypotheses[0].pivot // "none") as $top_hypothesis_pivot |
+  ($fhs.hypotheses[0].confidence_band // "none") as $top_hypothesis_confidence_band |
   [
     panel(
       "forecast_state";
@@ -945,6 +1148,63 @@ jq -n \
           }))
       );
       $reasons
+    ),
+    panel(
+      "forensic_replay";
+      "Forensic Replay";
+      $forensic_state;
+      {
+        cohort_diff_decision: ($cdr.decision // "unknown"),
+        diff_receipt_count: ($cdr.comparison_summary.diff_receipt_count // 0),
+        changed_fingerprint_count: ($cdr.comparison_summary.changed_fingerprint_count // $fdp.fingerprint_delta_summary.changed_fingerprint_count // 0),
+        blocked_transition_count: ($cdr.comparison_summary.blocked_transition_count // 0),
+        contaminated_transition_count: ($cdr.comparison_summary.contaminated_transition_count // 0),
+        replay_recipe_decision: ($rrb.decision // "unknown"),
+        replay_recipe_count: ($rrb.recipe_summary.recipe_count // 0),
+        replay_ready_count: ($rrb.recipe_summary.replay_ready_count // 0),
+        counterexample_count: ($rrb.recipe_summary.counterexample_count // 0),
+        quarantine_only_count: ($rrb.recipe_summary.quarantine_only_count // 0),
+        hypothesis_decision: ($fhs.decision // "unknown"),
+        top_hypothesis_pivot: $top_hypothesis_pivot,
+        top_hypothesis_confidence_band: $top_hypothesis_confidence_band,
+        hypothesis_count: ($fhs.hypothesis_summary.hypothesis_count // 0),
+        artifact_paths: {
+          cohort_diff_receipts_json: ($cdr.artifact_paths.cohort_diff_receipts_json // ""),
+          replay_recipe_bundle_json: ($rrb.artifact_paths.replay_recipe_bundle_json // ""),
+          replay_recipe_index_json: ($rri.artifact_paths.replay_recipe_index_json // ""),
+          forensic_hypothesis_summary_json: ($fhs.artifact_paths.hypothesis_summary_json // ""),
+          forensic_hypothesis_evidence_json: ($fhs.artifact_paths.hypothesis_evidence_json // "")
+        }
+      };
+      (
+        [
+          {kind:"cohort_diff_receipts", decision:($cdr.decision // "unknown"), path:($cdr.artifact_paths.cohort_diff_receipts_json // "")},
+          {kind:"fingerprint_delta_plan", decision:($fdp.decision // "unknown"), path:($fdp.artifact_paths.fingerprint_delta_plan_json // "")},
+          {kind:"replay_recipe_bundle", decision:($rrb.decision // "unknown"), path:($rrb.artifact_paths.replay_recipe_bundle_json // "")},
+          {kind:"forensic_hypothesis_summary", decision:($fhs.decision // "unknown"), path:($fhs.artifact_paths.hypothesis_summary_json // "")}
+        ]
+        + (($cdr.cohort_diff_receipts // [])[0:3] | map({
+            kind:"cohort_delta",
+            receipt_id,
+            classification_transition,
+            changed_fingerprint_count:((.changed_fingerprints // []) | length),
+            remote_truth_valid
+          }))
+        + (($rrb.replay_recipes // [])[0:3] | map({
+            kind:"replay_recipe",
+            recipe_id,
+            replay_mode,
+            replay_ready,
+            expected_classification
+          }))
+        + (($fhs.hypotheses // [])[0:3] | map({
+            kind:"forensic_hypothesis",
+            hypothesis_id,
+            pivot,
+            confidence_band
+          }))
+      );
+      $reasons
     )
   ] as $panels |
   {
@@ -969,6 +1229,9 @@ jq -n \
       anomaly_cohort_availability: (
         if (($ac.cohort_summary.total_cohort_count // 0) > 0) then "available" else "missing" end
       ),
+      forensic_replay_state: $forensic_state,
+      forensic_top_hypothesis_pivot: $top_hypothesis_pivot,
+      replay_ready_count: ($rrb.recipe_summary.replay_ready_count // 0),
       degraded_panel_count: ($panels | map(select(.display_state == "degraded" or .display_state == "missing" or .display_state == "stale")) | length),
       fail_closed_panel_count: ($panels | map(select(.display_state == "fail_closed" or .display_state == "blocked")) | length)
     },
@@ -980,7 +1243,8 @@ jq -n \
       safe_mode_state: ($panels[] | select(.panel_id == "safe_mode_state")),
       required_operator_action: ($panels[] | select(.panel_id == "required_operator_action")),
       chaos_replay_readiness: ($panels[] | select(.panel_id == "chaos_replay_readiness")),
-      warehouse_lifecycle: ($panels[] | select(.panel_id == "warehouse_lifecycle"))
+      warehouse_lifecycle: ($panels[] | select(.panel_id == "warehouse_lifecycle")),
+      forensic_replay: ($panels[] | select(.panel_id == "forensic_replay"))
     },
     fail_closed_reasons: $reasons,
     deterministic_replay_hash_basis: {
@@ -996,7 +1260,13 @@ jq -n \
       storage_budget_ledger_sha256: $storage_ledger_sha,
       promotion_candidates_sha256: $promotion_candidates_sha,
       promotion_candidate_receipts_sha256: $promotion_receipts_sha,
-      anomaly_cohorts_sha256: $anomaly_cohorts_sha
+      anomaly_cohorts_sha256: $anomaly_cohorts_sha,
+      cohort_diff_receipts_sha256: $cohort_diff_receipts_sha,
+      fingerprint_delta_plan_sha256: $fingerprint_delta_plan_sha,
+      replay_recipe_bundle_sha256: $replay_recipe_bundle_sha,
+      replay_recipe_index_sha256: $replay_recipe_index_sha,
+      forensic_hypothesis_summary_sha256: $forensic_hypothesis_summary_sha,
+      forensic_hypothesis_evidence_sha256: $forensic_hypothesis_evidence_sha
     },
     renderer_contract: {
       provider: "/dp/frankentui",
@@ -1015,7 +1285,13 @@ jq -n \
       storage_budget_ledger_json: ($sl.artifact_paths.storage_budget_ledger_json // ""),
       promotion_candidates_json: ($pc.artifact_paths.promotion_candidates_json // ""),
       promotion_candidate_receipts_json: ($pr.artifact_paths.promotion_candidate_receipts_json // ""),
-      anomaly_cohorts_json: ($ac.artifact_paths.anomaly_cohorts_json // "")
+      anomaly_cohorts_json: ($ac.artifact_paths.anomaly_cohorts_json // ""),
+      cohort_diff_receipts_json: ($cdr.artifact_paths.cohort_diff_receipts_json // ""),
+      fingerprint_delta_plan_json: ($fdp.artifact_paths.fingerprint_delta_plan_json // ""),
+      replay_recipe_bundle_json: ($rrb.artifact_paths.replay_recipe_bundle_json // ""),
+      replay_recipe_index_json: ($rri.artifact_paths.replay_recipe_index_json // ""),
+      forensic_hypothesis_summary_json: ($fhs.artifact_paths.hypothesis_summary_json // ""),
+      forensic_hypothesis_evidence_json: ($fhs.artifact_paths.hypothesis_evidence_json // "")
     },
     mutation_policy: {
       advisory_only: true,
@@ -1055,7 +1331,8 @@ jq -n \
     $status.sections.safe_mode_state,
     $status.sections.required_operator_action,
     $status.sections.chaos_replay_readiness,
-    $status.sections.warehouse_lifecycle
+    $status.sections.warehouse_lifecycle,
+    $status.sections.forensic_replay
   ] | to_entries | map(.value + {focus_order:(.key + 1)})) as $panels |
   {
     schema_version: "franken-engine.swarm-autopilot-frankentui-panels.v1",

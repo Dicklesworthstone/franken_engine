@@ -560,6 +560,243 @@
       "changes_live_queue_policy": false
     }
   },
+  "base_cohort_diff_receipts_json": {
+    "schema_version": "franken-engine.swarm-autopilot-cohort-diff-receipts.v1",
+    "source_revision": "fixture-cohort-diff-base",
+    "generated_epoch_seconds": 1778123510,
+    "decision": "pass",
+    "comparison_summary": {
+      "reference_cohort_id": "healthy-host-a",
+      "comparison_cohort_count": 1,
+      "diff_receipt_count": 1,
+      "added_fingerprint_count": 0,
+      "removed_fingerprint_count": 0,
+      "changed_fingerprint_count": 0,
+      "blocked_transition_count": 0,
+      "contaminated_transition_count": 0
+    },
+    "cohort_diff_receipts": [
+      {
+        "receipt_id": "cohort-diff-healthy-reference",
+        "reference_cohort_id": "healthy-host-a",
+        "comparison_cohort_id": "healthy-host-b",
+        "classification_transition": "reference_to_reference",
+        "added_fingerprints": [],
+        "removed_fingerprints": [],
+        "changed_fingerprints": [],
+        "worker_deltas": [],
+        "toolchain_deltas": [],
+        "topology_deltas": [],
+        "source_ids": [
+          "run_manifest_json",
+          "queue_locality_json"
+        ],
+        "raw_artifact_paths": {
+          "reference": {
+            "evidence_warehouse_json": "/fixture/reference_warehouse.json"
+          },
+          "comparison": {
+            "evidence_warehouse_json": "/fixture/comparison_warehouse.json"
+          }
+        },
+        "remote_truth_valid": true
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json",
+      "fingerprint_delta_plan_json": "/fixture/fingerprint_delta_plan.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "approves_replay_automatically": false,
+      "promotes_evidence_automatically": false
+    }
+  },
+  "base_fingerprint_delta_plan_json": {
+    "schema_version": "franken-engine.swarm-autopilot-fingerprint-delta-plan.v1",
+    "source_revision": "fixture-fingerprint-delta-base",
+    "generated_epoch_seconds": 1778123520,
+    "decision": "pass",
+    "fingerprint_delta_summary": {
+      "diff_receipt_count": 1,
+      "added_fingerprint_count": 0,
+      "removed_fingerprint_count": 0,
+      "changed_fingerprint_count": 0,
+      "blocked_transition_count": 0,
+      "contaminated_transition_count": 0
+    },
+    "fingerprint_deltas": [],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "fingerprint_delta_plan_json": "/fixture/fingerprint_delta_plan.json",
+      "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json"
+    }
+  },
+  "base_replay_recipe_bundle_json": {
+    "schema_version": "franken-engine.swarm-autopilot-replay-recipe-bundle.v1",
+    "source_revision": "fixture-replay-recipe-base",
+    "generated_epoch_seconds": 1778123530,
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "recipe_summary": {
+      "recipe_count": 1,
+      "replay_ready_count": 1,
+      "reference_baseline_count": 1,
+      "counterexample_count": 0,
+      "quarantine_only_count": 0
+    },
+    "replay_recipes": [
+      {
+        "recipe_id": "replay-recipe-healthy-reference",
+        "receipt_id": "cohort-diff-healthy-reference",
+        "replay_mode": "reference_baseline_replay",
+        "replay_ready": true,
+        "reference_cohort_id": "healthy-host-a",
+        "comparison_cohort_id": "healthy-host-b",
+        "expected_classification": "reference",
+        "safe_rerun_instruction": "Replay the reference cohort as a baseline only; do not promote or mutate live policy from this recipe."
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "replay_recipe_bundle_json": "/fixture/replay_recipe_bundle.json",
+      "replay_recipe_index_json": "/fixture/replay_recipe_index.json",
+      "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "approves_replay_automatically": false,
+      "promotes_evidence_automatically": false
+    }
+  },
+  "base_replay_recipe_index_json": {
+    "schema_version": "franken-engine.swarm-autopilot-replay-recipe-index.v1",
+    "source_revision": "fixture-replay-index-base",
+    "generated_epoch_seconds": 1778123540,
+    "decision": "pass",
+    "entries": [
+      {
+        "recipe_id": "replay-recipe-healthy-reference",
+        "receipt_id": "cohort-diff-healthy-reference",
+        "replay_mode": "reference_baseline_replay",
+        "replay_ready": true,
+        "expected_classification": "reference",
+        "evidence_paths": {
+          "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json"
+        },
+        "safe_rerun_instruction": "Replay the reference cohort as a baseline only; do not promote or mutate live policy from this recipe."
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "replay_recipe_index_json": "/fixture/replay_recipe_index.json",
+      "replay_recipe_bundle_json": "/fixture/replay_recipe_bundle.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "runs_cargo": false,
+      "runs_rch": false
+    }
+  },
+  "base_forensic_hypothesis_summary_json": {
+    "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-summary.v1",
+    "source_revision": "fixture-hypothesis-base",
+    "generated_epoch_seconds": 1778123550,
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "hypothesis_summary": {
+      "hypothesis_count": 1,
+      "promoted_count": 1,
+      "low_evidence_count": 0,
+      "topology_drift_count": 0,
+      "toolchain_skew_count": 0,
+      "worker_locality_shift_count": 0
+    },
+    "hypotheses": [
+      {
+        "hypothesis_id": "hypothesis-reference-stability",
+        "pivot": "reference_stability",
+        "confidence_band": "high",
+        "supporting_source_ids": [
+          "run_manifest_json",
+          "queue_locality_json"
+        ],
+        "rationale": "Reference comparison remained stable."
+      }
+    ],
+    "suppressed_hypotheses": [],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "hypothesis_summary_json": "/fixture/forensic_hypothesis_summary.json",
+      "hypothesis_evidence_json": "/fixture/forensic_hypothesis_evidence.json",
+      "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json",
+      "evidence_warehouse_json": "/fixture/evidence_warehouse.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "promotes_hypotheses_automatically": false
+    }
+  },
+  "base_forensic_hypothesis_evidence_json": {
+    "schema_version": "franken-engine.swarm-autopilot-forensic-hypothesis-evidence.v1",
+    "source_revision": "fixture-hypothesis-evidence-base",
+    "generated_epoch_seconds": 1778123560,
+    "decision": "pass",
+    "hypotheses": [
+      {
+        "hypothesis_id": "hypothesis-reference-stability",
+        "pivot": "reference_stability",
+        "confidence_band": "high"
+      }
+    ],
+    "source_receipts": [
+      {
+        "receipt_id": "cohort-diff-healthy-reference"
+      }
+    ],
+    "warehouse_rows": [],
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "runs_cargo": false,
+      "runs_rch": false
+    }
+  },
   "cases": [
     {
       "case_id": "healthy_autopilot",
@@ -872,6 +1109,304 @@
               "code": "FE-SWARM-AUTOPILOT-COHORT-CONTAMINATED",
               "source_id": "evidence_warehouse_json",
               "detail": "warehouse is contaminated by local fallback evidence"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+      }
+    },
+    {
+      "case_id": "healthy_reference_comparison",
+      "description": "Healthy forensic comparison evidence must surface as a healthy forensic replay panel with replay-ready recipes.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_panel_id": "forensic_replay",
+        "required_panel_state": "healthy",
+        "required_top_hypothesis_pivot": "reference_stability",
+        "minimum_replay_ready_count": 1
+      }
+    },
+    {
+      "case_id": "blocked_locality_contradiction_forensics",
+      "description": "Blocked locality contradictions must degrade forensic replay status while preserving diff, delta, and hypothesis evidence.",
+      "overrides": {
+        "cohort_diff_receipts_json": {
+          "decision": "degraded",
+          "comparison_summary": {
+            "reference_cohort_id": "healthy-host-a",
+            "comparison_cohort_count": 1,
+            "diff_receipt_count": 1,
+            "added_fingerprint_count": 0,
+            "removed_fingerprint_count": 0,
+            "changed_fingerprint_count": 1,
+            "blocked_transition_count": 1,
+            "contaminated_transition_count": 0
+          },
+          "cohort_diff_receipts": [
+            {
+              "receipt_id": "cohort-diff-blocked-topology",
+              "reference_cohort_id": "healthy-host-a",
+              "comparison_cohort_id": "blocked-host-c",
+              "classification_transition": "reference_to_blocked",
+              "added_fingerprints": [],
+              "removed_fingerprints": [],
+              "changed_fingerprints": [
+                {
+                  "fingerprint_id": "fp-topology-sensitive",
+                  "reference_hash": "sha256-reference",
+                  "comparison_hash": "sha256-blocked",
+                  "reason_code": "topology_drift"
+                }
+              ],
+              "worker_deltas": [
+                "rch-a -> rch-c"
+              ],
+              "toolchain_deltas": [
+                "nightly-x86_64 -> nightly-aarch64"
+              ],
+              "topology_deltas": [
+                "numa_hot_cache -> cold_cache"
+              ],
+              "source_ids": [
+                "run_manifest_json",
+                "queue_locality_json",
+                "evidence_warehouse_json"
+              ],
+              "raw_artifact_paths": {
+                "reference": {
+                  "evidence_warehouse_json": "/fixture/reference_warehouse.json"
+                },
+                "comparison": {
+                  "evidence_warehouse_json": "/fixture/blocked_warehouse.json"
+                }
+              },
+              "remote_truth_valid": true
+            }
+          ]
+        },
+        "fingerprint_delta_plan_json": {
+          "decision": "degraded",
+          "fingerprint_delta_summary": {
+            "diff_receipt_count": 1,
+            "added_fingerprint_count": 0,
+            "removed_fingerprint_count": 0,
+            "changed_fingerprint_count": 1,
+            "blocked_transition_count": 1,
+            "contaminated_transition_count": 0
+          },
+          "fingerprint_deltas": [
+            {
+              "receipt_id": "cohort-diff-blocked-topology",
+              "fingerprint_id": "fp-topology-sensitive",
+              "classification_transition": "reference_to_blocked",
+              "reason_code": "topology_drift",
+              "advisory_action": "replay_counterexample_before_promotion"
+            }
+          ]
+        },
+        "replay_recipe_bundle_json": {
+          "decision": "pass",
+          "truth_state": "confirmed",
+          "recipe_summary": {
+            "recipe_count": 1,
+            "replay_ready_count": 1,
+            "reference_baseline_count": 0,
+            "counterexample_count": 1,
+            "quarantine_only_count": 0
+          },
+          "replay_recipes": [
+            {
+              "recipe_id": "replay-recipe-blocked-topology",
+              "receipt_id": "cohort-diff-blocked-topology",
+              "replay_mode": "counterexample_replay",
+              "replay_ready": true,
+              "reference_cohort_id": "healthy-host-a",
+              "comparison_cohort_id": "blocked-host-c",
+              "expected_classification": "blocked",
+              "safe_rerun_instruction": "Replay the blocked topology counterexample only; do not promote or mutate live policy from this recipe."
+            }
+          ]
+        },
+        "replay_recipe_index_json": {
+          "decision": "pass",
+          "entries": [
+            {
+              "recipe_id": "replay-recipe-blocked-topology",
+              "receipt_id": "cohort-diff-blocked-topology",
+              "replay_mode": "counterexample_replay",
+              "replay_ready": true,
+              "expected_classification": "blocked",
+              "evidence_paths": {
+                "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json",
+                "fingerprint_delta_plan_json": "/fixture/fingerprint_delta_plan.json"
+              },
+              "safe_rerun_instruction": "Replay the blocked topology counterexample only; do not promote or mutate live policy from this recipe."
+            }
+          ]
+        },
+        "forensic_hypothesis_summary_json": {
+          "decision": "pass",
+          "truth_state": "confirmed",
+          "hypothesis_summary": {
+            "hypothesis_count": 1,
+            "promoted_count": 1,
+            "low_evidence_count": 0,
+            "topology_drift_count": 1,
+            "toolchain_skew_count": 0,
+            "worker_locality_shift_count": 0
+          },
+          "hypotheses": [
+            {
+              "hypothesis_id": "hypothesis-topology-drift",
+              "pivot": "topology_drift",
+              "confidence_band": "high",
+              "supporting_source_ids": [
+                "run_manifest_json",
+                "queue_locality_json",
+                "cohort_diff_receipts_json"
+              ],
+              "rationale": "Changed fingerprint and blocked transition align with topology drift."
+            }
+          ]
+        },
+        "forensic_hypothesis_evidence_json": {
+          "decision": "pass",
+          "hypotheses": [
+            {
+              "hypothesis_id": "hypothesis-topology-drift",
+              "pivot": "topology_drift",
+              "confidence_band": "high"
+            }
+          ],
+          "source_receipts": [
+            {
+              "receipt_id": "cohort-diff-blocked-topology"
+            }
+          ],
+          "warehouse_rows": [
+            {
+              "row_id": "blocked-topology-row",
+              "cohort_id": "blocked-host-c"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_panel_id": "forensic_replay",
+        "required_panel_state": "degraded",
+        "required_top_hypothesis_pivot": "topology_drift",
+        "minimum_replay_ready_count": 1
+      }
+    },
+    {
+      "case_id": "contaminated_replay_refusal",
+      "description": "Contaminated replay recipes must propagate fail-closed into operator status.",
+      "overrides": {
+        "replay_recipe_bundle_json": {
+          "decision": "fail_closed",
+          "truth_state": "unknown",
+          "recipe_summary": {
+            "recipe_count": 1,
+            "replay_ready_count": 0,
+            "reference_baseline_count": 0,
+            "counterexample_count": 0,
+            "quarantine_only_count": 1
+          },
+          "replay_recipes": [
+            {
+              "recipe_id": "replay-recipe-contaminated-local-fallback",
+              "receipt_id": "cohort-diff-contaminated-local-fallback",
+              "replay_mode": "quarantine_only",
+              "replay_ready": false,
+              "reference_cohort_id": "healthy-host-a",
+              "comparison_cohort_id": "contaminated-fallback-a",
+              "expected_classification": "contaminated",
+              "safe_rerun_instruction": "Do not replay contaminated local-fallback evidence as a remote-only baseline."
+            }
+          ],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-CONTAMINATED-BASELINE",
+              "source_id": "cohort_diff_receipts_json",
+              "detail": "contaminated local fallback evidence cannot produce a replay-ready recipe"
+            }
+          ]
+        },
+        "replay_recipe_index_json": {
+          "decision": "fail_closed",
+          "entries": [
+            {
+              "recipe_id": "replay-recipe-contaminated-local-fallback",
+              "receipt_id": "cohort-diff-contaminated-local-fallback",
+              "replay_mode": "quarantine_only",
+              "replay_ready": false,
+              "expected_classification": "contaminated",
+              "evidence_paths": {
+                "cohort_diff_receipts_json": "/fixture/cohort_diff_receipts.json"
+              },
+              "safe_rerun_instruction": "Do not replay contaminated local-fallback evidence as a remote-only baseline."
+            }
+          ],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-REPLAY-RECIPE-CONTAMINATED-BASELINE",
+              "source_id": "cohort_diff_receipts_json",
+              "detail": "contaminated local fallback evidence cannot produce a replay-ready recipe"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+      }
+    },
+    {
+      "case_id": "stale_forensic_evidence_propagation",
+      "description": "Stale forensic hypothesis evidence must propagate fail-closed into operator status.",
+      "overrides": {
+        "forensic_hypothesis_summary_json": {
+          "generated_epoch_seconds": 1778118000,
+          "decision": "fail_closed",
+          "truth_state": "unknown",
+          "hypothesis_summary": {
+            "hypothesis_count": 0,
+            "promoted_count": 0,
+            "low_evidence_count": 0,
+            "topology_drift_count": 0,
+            "toolchain_skew_count": 0,
+            "worker_locality_shift_count": 0
+          },
+          "hypotheses": [],
+          "suppressed_hypotheses": [],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-STALE-EVIDENCE",
+              "source_id": "forensic_hypothesis_evidence_json",
+              "detail": "forensic hypothesis evidence is stale and cannot support operator guidance"
+            }
+          ]
+        },
+        "forensic_hypothesis_evidence_json": {
+          "generated_epoch_seconds": 1778118000,
+          "decision": "fail_closed",
+          "hypotheses": [],
+          "source_receipts": [],
+          "warehouse_rows": [],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-HYPOTHESIS-STALE-EVIDENCE",
+              "source_id": "forensic_hypothesis_evidence_json",
+              "detail": "forensic hypothesis evidence is stale and cannot support operator guidance"
             }
           ]
         }

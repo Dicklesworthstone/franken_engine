@@ -205,9 +205,32 @@ if [[ "$fixture_mode" == true ]]; then
       jq -n \
         --slurpfile queue "$queue_json" \
         --slurpfile status "$status_json" '
+          def parse_iso_epoch:
+            . as $value
+            | ($value | sub("\\.[0-9]+(?=[+-Z])"; "")) as $trimmed
+            | (
+                ($trimmed | fromdateiso8601?)
+                // (
+                  ($trimmed | capture("(?<base>.*?)(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$")?) as $parts
+                  | if $parts == null then empty
+                    else (
+                      $parts.base
+                      + (
+                        if $parts.tz == "Z" then "+0000"
+                        else ($parts.tz | sub(":"; ""))
+                        end
+                      )
+                      | strptime("%Y-%m-%dT%H:%M:%S%z")?
+                      | mktime?
+                    )
+                    end
+                )
+              );
           def epochish:
             if . == null or . == "" then 0
-            else ((sub("\\.[0-9]+(?=[+-Z])"; "")) | fromdateiso8601? // 0)
+            elif type == "number" then floor
+            elif type == "string" and test("^[0-9]+$") then tonumber
+            else (parse_iso_epoch // 0)
             end;
           [
             (($queue[0].timestamp // $queue[0].data.timestamp // "") | epochish),

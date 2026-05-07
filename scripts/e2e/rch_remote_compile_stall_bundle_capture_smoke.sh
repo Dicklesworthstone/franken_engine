@@ -104,6 +104,70 @@ run_case() {
   record_pass "${case_name}"
 }
 
+run_numeric_timestamp_case() {
+  local tmp_root="$1"
+  local source_case="confirmed"
+  local source_dir="${fixture_root}/${source_case}"
+  local case_dir="${tmp_root}/numeric-top-level-timestamps"
+  local output_dir="${tmp_root}/numeric-top-level-timestamps-output"
+  local expected_path="${source_dir}/expected.json"
+  local bead_id actual_exit
+  local -a cmd
+
+  mkdir -p "$case_dir"
+  cp "${source_dir}/bead_metadata.json" "$case_dir/bead_metadata.json"
+  cp "${source_dir}/command_excerpt.txt" "$case_dir/command_excerpt.txt"
+  cp "${source_dir}/worker_inventory.json" "$case_dir/worker_inventory.json"
+  cp "${source_dir}/operator_note.md" "$case_dir/operator_note.md"
+
+  jq '
+    .timestamp |= (
+      if type == "string" then fromdateiso8601
+      else .
+      end
+    )
+  ' "${source_dir}/queue.json" >"$case_dir/queue.json"
+
+  jq '
+    .timestamp |= (
+      if type == "string" then fromdateiso8601
+      else .
+      end
+    )
+  ' "${source_dir}/status.json" >"$case_dir/status.json"
+
+  bead_id="$(jq -r '.[0].id' "$case_dir/bead_metadata.json")"
+
+  cmd=(
+    "$capture_script"
+    --output-dir "$output_dir"
+    --bead-id "$bead_id"
+    --bead-metadata-json "$case_dir/bead_metadata.json"
+    --queue-json "$case_dir/queue.json"
+    --status-json "$case_dir/status.json"
+    --command-log "$case_dir/command_excerpt.txt"
+    --worker-inventory-json "$case_dir/worker_inventory.json"
+    --operator-note "$case_dir/operator_note.md"
+  )
+
+  set +e
+  "${cmd[@]}" >/dev/null 2>&1
+  actual_exit=$?
+  set -e
+
+  if [[ "$actual_exit" -ne "$(jq -r '.expected_exit_code' "$expected_path")" ]]; then
+    record_failure "numeric_top_level_timestamps exit ${actual_exit}, expected $(jq -r '.expected_exit_code' "$expected_path")"
+    return 1
+  fi
+
+  if ! assert_bundle "$case_dir" "$expected_path" "$output_dir"; then
+    record_failure "numeric_top_level_timestamps bundle assertion failed"
+    return 1
+  fi
+
+  record_pass "numeric_top_level_timestamps"
+}
+
 run_check() {
   bash -n "$capture_script"
   bash -n "${BASH_SOURCE[0]}"
@@ -126,6 +190,7 @@ run_selftest() {
   tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/rch-remote-compile-stall-bundle.XXXXXX")"
 
   run_case "$tmp_root" confirmed
+  run_numeric_timestamp_case "$tmp_root"
   run_case "$tmp_root" degraded_missing_optional
   run_case "$tmp_root" blocked_contradictory_queue
   run_case "$tmp_root" contaminated_local_fallback

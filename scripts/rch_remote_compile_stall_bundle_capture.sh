@@ -193,9 +193,32 @@ fi
 
 queue_timestamp_epoch="$(
   jq -r '
+    def parse_iso_epoch:
+      . as $value
+      | ($value | sub("\\.[0-9]+(?=[+-Z])"; "")) as $trimmed
+      | (
+          ($trimmed | fromdateiso8601?)
+          // (
+            ($trimmed | capture("(?<base>.*?)(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$")?) as $parts
+            | if $parts == null then empty
+              else (
+                $parts.base
+                + (
+                  if $parts.tz == "Z" then "+0000"
+                  else ($parts.tz | sub(":"; ""))
+                  end
+                )
+                | strptime("%Y-%m-%dT%H:%M:%S%z")?
+                | mktime?
+              )
+              end
+          )
+        );
     def epochish:
       if . == null or . == "" then 0
-      else ((sub("\\.[0-9]+(?=[+-Z])"; "")) | fromdateiso8601? // 0)
+      elif type == "number" then floor
+      elif type == "string" and test("^[0-9]+$") then tonumber
+      else (parse_iso_epoch // 0)
       end;
     (.timestamp // .data.timestamp // "") | epochish
   ' "$raw_queue_path"
@@ -203,9 +226,32 @@ queue_timestamp_epoch="$(
 
 status_timestamp_epoch="$(
   jq -r '
+    def parse_iso_epoch:
+      . as $value
+      | ($value | sub("\\.[0-9]+(?=[+-Z])"; "")) as $trimmed
+      | (
+          ($trimmed | fromdateiso8601?)
+          // (
+            ($trimmed | capture("(?<base>.*?)(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$")?) as $parts
+            | if $parts == null then empty
+              else (
+                $parts.base
+                + (
+                  if $parts.tz == "Z" then "+0000"
+                  else ($parts.tz | sub(":"; ""))
+                  end
+                )
+                | strptime("%Y-%m-%dT%H:%M:%S%z")?
+                | mktime?
+              )
+              end
+          )
+        );
     def epochish:
       if . == null or . == "" then 0
-      else ((sub("\\.[0-9]+(?=[+-Z])"; "")) | fromdateiso8601? // 0)
+      elif type == "number" then floor
+      elif type == "string" and test("^[0-9]+$") then tonumber
+      else (parse_iso_epoch // 0)
       end;
     (.timestamp // .data.timestamp // "") | epochish
   ' "$raw_status_path"
@@ -352,9 +398,31 @@ bundle_json="$(
     --argjson worker_inventory_summary "$worker_inventory_summary_json" \
     --argjson bead_metadata_summary "$bead_metadata_summary_json" \
     --argjson remote_command_receipt "$remote_command_receipt_json" '
+      def parse_iso_epoch($value):
+        ($value | sub("\\.[0-9]+(?=[+-Z])"; "")) as $trimmed
+        | (
+            ($trimmed | fromdateiso8601?)
+            // (
+              ($trimmed | capture("(?<base>.*?)(?<tz>Z|[+-][0-9]{2}:[0-9]{2})$")?) as $parts
+              | if $parts == null then empty
+                else (
+                  $parts.base
+                  + (
+                    if $parts.tz == "Z" then "+0000"
+                    else ($parts.tz | sub(":"; ""))
+                    end
+                  )
+                  | strptime("%Y-%m-%dT%H:%M:%S%z")?
+                  | mktime?
+                )
+                end
+            )
+          );
       def epochish($value):
-        if ($value | type) != "string" or $value == "" then 0
-        else (($value | sub("\\.[0-9]+(?=[+-Z])"; "")) | fromdateiso8601? // 0)
+        if $value == null or $value == "" then 0
+        elif ($value | type) == "number" then ($value | floor)
+        elif ($value | type) == "string" and ($value | test("^[0-9]+$")) then ($value | tonumber)
+        else (parse_iso_epoch($value) // 0)
         end;
       def absnum:
         if . < 0 then -. else . end;

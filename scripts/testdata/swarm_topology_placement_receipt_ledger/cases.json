@@ -1,0 +1,396 @@
+{
+  "schema_version": "franken-engine.swarm-topology-placement-receipt-ledger-fixtures.v1",
+  "reference_time": "2026-05-06T20:30:00Z",
+  "ttl_seconds": 1800,
+  "cases": [
+    {
+      "case_id": "healthy_adopted_hot_cache",
+      "placement_plan": {
+        "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+        "plan_id": "plan-healthy-hot-cache",
+        "decision": "pass",
+        "placement_readiness": "ready",
+        "recommended_topology_class": "numa_hot_cache_preferred",
+        "recommended_worker_targets": [
+          {
+            "rank": 1,
+            "lane_class": "heavy",
+            "worker_id": "rch-a",
+            "numa_node": 0,
+            "shard_hint": "heavy-numa-0-shard-0",
+            "cache_reuse": true,
+            "target_dir": "/mnt/rch/target-a",
+            "certainty": "confirmed",
+            "reason_codes": [
+              "numa_preferred",
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "warm_cache_residency_state": "hot",
+        "warm_cache_opportunities": [
+          {
+            "opportunity_id": "reuse_hot_cache",
+            "action": "prefer_hot_cache_worker_before_cold_recompute",
+            "certainty": "confirmed",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "target_dirs": [
+              {
+                "path": "/mnt/rch/target-a",
+                "warm": true,
+                "cache_key": "franken-engine-main"
+              }
+            ],
+            "reason_codes": [
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "locality_assumptions": [
+          "Preferred NUMA nodes and workers are inherited from the normalized placement input."
+        ],
+        "context": {
+          "host_identity": {
+            "host_id": "host-scale-a"
+          }
+        },
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "adoption_observation": {
+        "schema_version": "franken-engine.swarm-topology-placement-adoption-observation.v1",
+        "observed_at": "2026-05-06T20:40:00Z",
+        "host_id": "host-scale-a",
+        "worker_ids": [
+          "rch-a"
+        ],
+        "cache_reuse_observed": true
+      },
+      "expected": {
+        "decision": "pass",
+        "adoption_status": "adopted",
+        "required_reason_code": "cache_reuse_confirmed",
+        "ttl_seconds": 1800,
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "drifted_worker",
+      "placement_plan": {
+        "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+        "plan_id": "plan-drifted-worker",
+        "decision": "pass",
+        "placement_readiness": "ready",
+        "recommended_topology_class": "numa_hot_cache_preferred",
+        "recommended_worker_targets": [
+          {
+            "rank": 1,
+            "lane_class": "latency_sensitive",
+            "worker_id": "rch-a",
+            "numa_node": 0,
+            "shard_hint": "latency_sensitive-numa-0-shard-0",
+            "cache_reuse": true,
+            "target_dir": "/mnt/rch/target-a",
+            "certainty": "confirmed",
+            "reason_codes": [
+              "numa_preferred",
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "warm_cache_residency_state": "hot",
+        "warm_cache_opportunities": [
+          {
+            "opportunity_id": "reuse_hot_cache",
+            "action": "prefer_hot_cache_worker_before_cold_recompute",
+            "certainty": "confirmed",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "target_dirs": [
+              {
+                "path": "/mnt/rch/target-a",
+                "warm": true,
+                "cache_key": "franken-engine-main"
+              }
+            ],
+            "reason_codes": [
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "locality_assumptions": [
+          "Preferred NUMA nodes and workers are inherited from the normalized placement input."
+        ],
+        "context": {
+          "host_identity": {
+            "host_id": "host-scale-a"
+          }
+        },
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "adoption_observation": {
+        "schema_version": "franken-engine.swarm-topology-placement-adoption-observation.v1",
+        "observed_at": "2026-05-06T20:40:00Z",
+        "host_id": "host-scale-a",
+        "worker_ids": [
+          "rch-z"
+        ],
+        "cache_reuse_observed": false
+      },
+      "expected": {
+        "decision": "degraded",
+        "adoption_status": "drifted",
+        "required_reason_code": "worker_drift",
+        "ttl_seconds": 1800,
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "expired_receipt",
+      "placement_plan": {
+        "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+        "plan_id": "plan-expired-receipt",
+        "decision": "pass",
+        "placement_readiness": "ready",
+        "recommended_topology_class": "numa_hot_cache_preferred",
+        "recommended_worker_targets": [
+          {
+            "rank": 1,
+            "lane_class": "heavy",
+            "worker_id": "rch-a",
+            "numa_node": 0,
+            "shard_hint": "heavy-numa-0-shard-0",
+            "cache_reuse": true,
+            "target_dir": "/mnt/rch/target-a",
+            "certainty": "confirmed",
+            "reason_codes": [
+              "numa_preferred",
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "warm_cache_residency_state": "hot",
+        "warm_cache_opportunities": [
+          {
+            "opportunity_id": "reuse_hot_cache",
+            "action": "prefer_hot_cache_worker_before_cold_recompute",
+            "certainty": "confirmed",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "target_dirs": [
+              {
+                "path": "/mnt/rch/target-a",
+                "warm": true,
+                "cache_key": "franken-engine-main"
+              }
+            ],
+            "reason_codes": [
+              "hot_cache_reuse"
+            ]
+          }
+        ],
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "locality_assumptions": [
+          "Preferred NUMA nodes and workers are inherited from the normalized placement input."
+        ],
+        "context": {
+          "host_identity": {
+            "host_id": "host-scale-a"
+          }
+        },
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "adoption_observation": {
+        "schema_version": "franken-engine.swarm-topology-placement-adoption-observation.v1",
+        "observed_at": "2026-05-06T21:20:01Z",
+        "host_id": "host-scale-a",
+        "worker_ids": [
+          "rch-a"
+        ],
+        "cache_reuse_observed": true
+      },
+      "expected": {
+        "decision": "degraded",
+        "adoption_status": "expired",
+        "required_reason_code": "receipt_expired",
+        "ttl_seconds": 1800,
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "blocked_plan",
+      "placement_plan": {
+        "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+        "plan_id": "plan-blocked-locality",
+        "decision": "blocked",
+        "placement_readiness": "blocked",
+        "recommended_topology_class": "blocked_contradictory_locality",
+        "recommended_worker_targets": [],
+        "warm_cache_residency_state": "hot",
+        "warm_cache_opportunities": [],
+        "degraded_reasons": [],
+        "blocked_reasons": [
+          {
+            "code": "contradictory_locality_evidence",
+            "source_id": "required_topology",
+            "detail": "required topology snapshots disagree on host identity"
+          }
+        ],
+        "fail_closed_reasons": [],
+        "locality_assumptions": [
+          "Contradictory locality evidence blocks placement adoption."
+        ],
+        "context": {
+          "host_identity": {
+            "host_id": "host-scale-a"
+          }
+        },
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "adoption_observation": null,
+      "expected": {
+        "decision": "blocked",
+        "adoption_status": "not_applicable",
+        "required_reason_code": "blocked_plan_not_adoptable",
+        "ttl_seconds": 1800,
+        "expected_exit_code": 75
+      }
+    },
+    {
+      "case_id": "cache_cold_adopted_no_reuse",
+      "placement_plan": {
+        "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+        "plan_id": "plan-cache-cold",
+        "decision": "pass",
+        "placement_readiness": "ready",
+        "recommended_topology_class": "numa_cache_cold_fallback",
+        "recommended_worker_targets": [
+          {
+            "rank": 1,
+            "lane_class": "heavy",
+            "worker_id": "rch-a",
+            "numa_node": 0,
+            "shard_hint": "heavy-numa-0-shard-0",
+            "cache_reuse": false,
+            "target_dir": null,
+            "certainty": "bounded_uncertain",
+            "reason_codes": [
+              "numa_preferred",
+              "cache_cold_fallback"
+            ]
+          }
+        ],
+        "warm_cache_residency_state": "cold",
+        "warm_cache_opportunities": [
+          {
+            "opportunity_id": "cache_cold_fallback",
+            "action": "prefer_numa_local_worker_without_cache_reuse_claim",
+            "certainty": "bounded_uncertain",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "target_dirs": [],
+            "reason_codes": [
+              "cache_cold_fallback",
+              "no_hot_cache_reuse_claim"
+            ]
+          }
+        ],
+        "degraded_reasons": [],
+        "blocked_reasons": [],
+        "fail_closed_reasons": [],
+        "locality_assumptions": [
+          "Cache-cold plans do not claim warm target reuse."
+        ],
+        "context": {
+          "host_identity": {
+            "host_id": "host-scale-a"
+          }
+        },
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "proof_only": true,
+          "advisory_only": true,
+          "mutates_br": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false,
+          "pins_workers_automatically": false,
+          "rebinds_hosts_automatically": false
+        }
+      },
+      "adoption_observation": {
+        "schema_version": "franken-engine.swarm-topology-placement-adoption-observation.v1",
+        "observed_at": "2026-05-06T20:40:00Z",
+        "host_id": "host-scale-a",
+        "worker_ids": [
+          "rch-a"
+        ],
+        "cache_reuse_observed": false
+      },
+      "expected": {
+        "decision": "pass",
+        "adoption_status": "adopted",
+        "required_reason_code": "cache_cold_no_reuse_claim",
+        "ttl_seconds": 1800,
+        "expected_exit_code": 0
+      }
+    }
+  ]
+}

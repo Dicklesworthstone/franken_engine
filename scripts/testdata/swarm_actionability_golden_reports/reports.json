@@ -1,0 +1,433 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-golden-reports.v1",
+  "bead_id": "bd-p02f6",
+  "contract_bead_id": "bd-1tsvb",
+  "contract_schema_version": "franken-engine.swarm-actionability-truth-gate-contract.v1",
+  "golden_strategy": {
+    "pattern": "canonicalized structured JSON golden",
+    "dynamic_fields": [
+      "source_revision.captured_at",
+      "source_revision.br_state_hash",
+      "source_revision.bv_plan_hash",
+      "source_revision.git_status_hash",
+      "source_revision.agent_mail_hash"
+    ],
+    "scrubbed_markers": [
+      "[SCRUBBED_TIMESTAMP]",
+      "[SCRUBBED_HASH]"
+    ]
+  },
+  "reports": [
+    {
+      "case_id": "healthy_ready_safe_to_claim",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "safe_to_claim",
+        "candidate_summary": {
+          "selected_candidate_id": "bd-ready1",
+          "total_candidates": 1,
+          "safe_to_claim_count": 1,
+          "defer_count": 0,
+          "fail_closed_count": 0,
+          "observe_only_count": 0
+        },
+        "candidate_reports": [
+          {
+            "id": "bd-ready1",
+            "title": "Ready actionable bead",
+            "decision": "safe_to_claim",
+            "source_status": "ready",
+            "assignee": null,
+            "reason_codes": [],
+            "source_ids": [
+              "br_ready_json",
+              "br_open_json",
+              "bv_robot_plan_json",
+              "agent_mail_snapshot_json",
+              "git_status_snapshot_json",
+              "source_freshness_json"
+            ],
+            "evidence_paths": [
+              "sources.br_ready_json[0]",
+              "sources.bv_robot_plan_json.plan.tracks[0].items[0]"
+            ]
+          }
+        ],
+        "fail_closed_reasons": [],
+        "advisory_remediation_commands": [],
+        "source_freshness_summary": {
+          "state": "fresh",
+          "db_newer": false,
+          "jsonl_newer": false,
+          "missing_sources": []
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    },
+    {
+      "case_id": "bv_blocked_track_fail_closed",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "fail_closed",
+        "candidate_summary": {
+          "selected_candidate_id": null,
+          "total_candidates": 1,
+          "safe_to_claim_count": 0,
+          "defer_count": 0,
+          "fail_closed_count": 1,
+          "observe_only_count": 0
+        },
+        "candidate_reports": [
+          {
+            "id": "bd-5oef0",
+            "title": "[BV] Exclude blocked parent tracks from actionable plans",
+            "decision": "fail_closed",
+            "source_status": "blocked",
+            "assignee": null,
+            "reason_codes": [
+              "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"
+            ],
+            "source_ids": [
+              "br_blocked_json",
+              "bv_robot_plan_json",
+              "source_freshness_json"
+            ],
+            "evidence_paths": [
+              "sources.br_blocked_json[0]",
+              "sources.bv_robot_plan_json.plan.tracks[0].items[0]"
+            ]
+          }
+        ],
+        "fail_closed_reasons": [
+          "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"
+        ],
+        "advisory_remediation_commands": [
+          "br show bd-5oef0 --json",
+          "br list --status=blocked --json"
+        ],
+        "source_freshness_summary": {
+          "state": "fresh",
+          "db_newer": false,
+          "jsonl_newer": false,
+          "missing_sources": []
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    },
+    {
+      "case_id": "in_progress_owned_defer",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "defer",
+        "candidate_summary": {
+          "selected_candidate_id": null,
+          "total_candidates": 1,
+          "safe_to_claim_count": 0,
+          "defer_count": 1,
+          "fail_closed_count": 0,
+          "observe_only_count": 0
+        },
+        "candidate_reports": [
+          {
+            "id": "bd-djejh.2",
+            "title": "[SWARM-AUTOPILOT-P0-B] Implement frankensqlite-backed shadow evidence journal",
+            "decision": "defer",
+            "source_status": "in_progress",
+            "assignee": "LavenderElk",
+            "reason_codes": [
+              "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE"
+            ],
+            "source_ids": [
+              "br_in_progress_json",
+              "bv_robot_plan_json",
+              "agent_mail_snapshot_json",
+              "source_freshness_json"
+            ],
+            "evidence_paths": [
+              "sources.br_in_progress_json[0]",
+              "sources.bv_robot_plan_json.plan.tracks[0].items[0]"
+            ]
+          }
+        ],
+        "fail_closed_reasons": [
+          "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE"
+        ],
+        "advisory_remediation_commands": [
+          "br show bd-djejh.2 --json",
+          "br list --status=in_progress --json"
+        ],
+        "source_freshness_summary": {
+          "state": "fresh",
+          "db_newer": false,
+          "jsonl_newer": false,
+          "missing_sources": []
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    },
+    {
+      "case_id": "stale_export_fail_closed",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "fail_closed",
+        "candidate_summary": {
+          "selected_candidate_id": null,
+          "total_candidates": 1,
+          "safe_to_claim_count": 0,
+          "defer_count": 0,
+          "fail_closed_count": 1,
+          "observe_only_count": 0
+        },
+        "candidate_reports": [
+          {
+            "id": "bd-parent",
+            "title": "Parent bead emitted from stale exported state",
+            "decision": "fail_closed",
+            "source_status": "stale_export",
+            "assignee": null,
+            "reason_codes": [
+              "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"
+            ],
+            "source_ids": [
+              "source_freshness_json",
+              "br_open_json",
+              "bv_robot_plan_json"
+            ],
+            "evidence_paths": [
+              "sources.source_freshness_json",
+              "sources.bv_robot_plan_json.plan.tracks[0].items[0]"
+            ]
+          }
+        ],
+        "fail_closed_reasons": [
+          "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"
+        ],
+        "advisory_remediation_commands": [
+          "br sync --status --json",
+          "br sync --flush-only"
+        ],
+        "source_freshness_summary": {
+          "state": "stale",
+          "db_newer": true,
+          "jsonl_newer": false,
+          "missing_sources": []
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    },
+    {
+      "case_id": "dirty_overlap_defer",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "defer",
+        "candidate_summary": {
+          "selected_candidate_id": null,
+          "total_candidates": 1,
+          "safe_to_claim_count": 0,
+          "defer_count": 1,
+          "fail_closed_count": 0,
+          "observe_only_count": 0
+        },
+        "candidate_reports": [
+          {
+            "id": "bd-ready-dirty",
+            "title": "Ready bead with dirty-file overlap",
+            "decision": "defer",
+            "source_status": "ready",
+            "assignee": null,
+            "reason_codes": [
+              "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"
+            ],
+            "source_ids": [
+              "br_ready_json",
+              "git_status_snapshot_json",
+              "agent_mail_snapshot_json"
+            ],
+            "evidence_paths": [
+              "sources.br_ready_json[0]",
+              "sources.git_status_snapshot_json.dirty_paths[0]"
+            ]
+          }
+        ],
+        "fail_closed_reasons": [
+          "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"
+        ],
+        "advisory_remediation_commands": [
+          "git status --short",
+          "br show bd-ready-dirty --json"
+        ],
+        "source_freshness_summary": {
+          "state": "fresh",
+          "db_newer": false,
+          "jsonl_newer": false,
+          "missing_sources": []
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    },
+    {
+      "case_id": "missing_optional_mail_observe_only",
+      "actionability_report": {
+        "schema_version": "franken-engine.swarm-actionability-report.v1",
+        "source_revision": {
+          "captured_at": "[SCRUBBED_TIMESTAMP]",
+          "br_state_hash": "[SCRUBBED_HASH]",
+          "bv_plan_hash": "[SCRUBBED_HASH]",
+          "git_status_hash": "[SCRUBBED_HASH]",
+          "agent_mail_hash": "[SCRUBBED_HASH]"
+        },
+        "decision": "observe_only",
+        "candidate_summary": {
+          "selected_candidate_id": null,
+          "total_candidates": 0,
+          "safe_to_claim_count": 0,
+          "defer_count": 0,
+          "fail_closed_count": 0,
+          "observe_only_count": 1
+        },
+        "candidate_reports": [],
+        "fail_closed_reasons": [
+          "FE-SWARM-ACTIONABILITY-MISSING-SOURCE"
+        ],
+        "advisory_remediation_commands": [
+          "br ready --json",
+          "bv --recipe actionable --robot-plan"
+        ],
+        "source_freshness_summary": {
+          "state": "degraded",
+          "db_newer": false,
+          "jsonl_newer": false,
+          "missing_sources": [
+            "agent_mail_snapshot_json"
+          ]
+        },
+        "mutation_policy": {
+          "advisory_only": true,
+          "proof_only": true,
+          "mutates_br": false,
+          "claims_beads": false,
+          "reopens_beads": false,
+          "closes_beads": false,
+          "reassigns_beads": false,
+          "releases_reservations": false,
+          "sends_agent_mail": false,
+          "mutates_git": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "changes_live_queue_policy": false
+        }
+      }
+    }
+  ]
+}

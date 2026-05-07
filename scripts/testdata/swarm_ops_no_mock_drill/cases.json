@@ -1,0 +1,470 @@
+{
+  "schema_version": "franken-engine.swarm-ops-no-mock-drill-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "green",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_error_code": ""
+      },
+      "state_capture": {
+        "br_ready_json": [
+          {
+            "id": "bd-green-heavy",
+            "title": "green heavy lane",
+            "priority": 1
+          },
+          {
+            "id": "bd-green-light",
+            "title": "green light lane",
+            "priority": 2
+          }
+        ],
+        "br_in_progress_json": {
+          "issues": [],
+          "total": 0
+        },
+        "br_sync_status_json": {
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "bv_plan_txt": "{\"plan\":{\"summary\":{\"highest_impact\":\"bd-green-heavy\"}}}",
+        "agent_mail_agents_json": {
+          "agents": [
+            {
+              "name": "BrownCreek",
+              "last_active_epoch_seconds": 1778115600
+            }
+          ]
+        },
+        "agent_mail_inbox_json": {
+          "messages": []
+        },
+        "agent_mail_reservations_txt": "",
+        "rch_status_json": {
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "state": "idle",
+              "active_builds": 0
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue_json": {
+          "jobs": [],
+          "running": []
+        },
+        "git_status_txt": ""
+      },
+      "capacity_envelope": {
+        "total_cpu_slots": 32,
+        "total_memory_bytes": 137438953472,
+        "total_rch_slots": 8,
+        "target_dir_available_bytes": 107374182400,
+        "min_target_dir_available_bytes": 10737418240,
+        "max_parallel_heavy_lanes": 3
+      },
+      "candidate_lanes": [
+        {
+          "lane_id": "green-heavy",
+          "bead_id": "bd-green-heavy",
+          "priority": 1,
+          "lane_class": "heavy",
+          "cpu_slots": 8,
+          "memory_bytes": 17179869184,
+          "rch_slots": 1,
+          "target_dir_bytes": 10737418240,
+          "write_paths": [
+            "docs/green-heavy.md"
+          ]
+        },
+        {
+          "lane_id": "green-light",
+          "bead_id": "bd-green-light",
+          "priority": 2,
+          "lane_class": "light",
+          "cpu_slots": 1,
+          "memory_bytes": 1073741824,
+          "rch_slots": 0,
+          "target_dir_bytes": 0,
+          "write_paths": [
+            "docs/green-light.md"
+          ]
+        }
+      ],
+      "reservation_conflicts": [],
+      "worker_status_json": {
+        "schema_version": "franken-engine.swarm-rch-worker-status.v1",
+        "captured_at_epoch_seconds": 1778115600,
+        "queue_depth": 0,
+        "slot_utilization_millionths": 125000,
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "state": "IDLE",
+            "active_builds": 0
+          }
+        ]
+      },
+      "stall_observations_json": {
+        "schema_version": "franken-engine.swarm-rch-stall-observations.v1",
+        "observations": []
+      },
+      "worker_capabilities_json": {
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "capabilities_state": "fresh"
+          }
+        ]
+      },
+      "operator_actions_json": {
+        "actions": []
+      }
+    },
+    {
+      "case_id": "stale_bv_fail",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-OPS-STALE-BV"
+      },
+      "state_capture": {
+        "br_ready_json": [
+          {
+            "id": "bd-stale-heavy",
+            "title": "stale heavy lane",
+            "priority": 1
+          }
+        ],
+        "br_in_progress_json": {
+          "issues": [],
+          "total": 0
+        },
+        "br_sync_status_json": {
+          "db_newer": true,
+          "jsonl_newer": false,
+          "dirty_count": 1
+        },
+        "bv_plan_txt": "{\"plan\":{\"summary\":{\"highest_impact\":\"bd-stale-heavy\"}}}",
+        "agent_mail_agents_json": {
+          "agents": []
+        },
+        "agent_mail_inbox_json": {
+          "messages": []
+        },
+        "agent_mail_reservations_txt": "",
+        "rch_status_json": {
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "state": "idle",
+              "active_builds": 0
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue_json": {
+          "jobs": [],
+          "running": []
+        },
+        "git_status_txt": ""
+      },
+      "capacity_envelope": {
+        "total_cpu_slots": 32,
+        "total_memory_bytes": 137438953472,
+        "total_rch_slots": 8,
+        "target_dir_available_bytes": 107374182400,
+        "min_target_dir_available_bytes": 10737418240,
+        "max_parallel_heavy_lanes": 3
+      },
+      "candidate_lanes": [
+        {
+          "lane_id": "stale-heavy",
+          "bead_id": "bd-stale-heavy",
+          "priority": 1,
+          "lane_class": "heavy",
+          "cpu_slots": 8,
+          "memory_bytes": 17179869184,
+          "rch_slots": 1,
+          "target_dir_bytes": 10737418240,
+          "write_paths": [
+            "docs/stale-heavy.md"
+          ]
+        }
+      ],
+      "reservation_conflicts": [],
+      "worker_status_json": {
+        "schema_version": "franken-engine.swarm-rch-worker-status.v1",
+        "captured_at_epoch_seconds": 1778115600,
+        "queue_depth": 0,
+        "slot_utilization_millionths": 125000,
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "state": "IDLE",
+            "active_builds": 0
+          }
+        ]
+      },
+      "stall_observations_json": {
+        "schema_version": "franken-engine.swarm-rch-stall-observations.v1",
+        "observations": []
+      },
+      "worker_capabilities_json": {
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "capabilities_state": "fresh"
+          }
+        ]
+      },
+      "operator_actions_json": {
+        "actions": []
+      }
+    },
+    {
+      "case_id": "rch_stale_progress",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED"
+      },
+      "state_capture": {
+        "br_ready_json": [
+          {
+            "id": "bd-rch-heavy",
+            "title": "rch stale progress heavy lane",
+            "priority": 1
+          }
+        ],
+        "br_in_progress_json": {
+          "issues": [],
+          "total": 0
+        },
+        "br_sync_status_json": {
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "bv_plan_txt": "{\"plan\":{\"summary\":{\"highest_impact\":\"bd-rch-heavy\"}}}",
+        "agent_mail_agents_json": {
+          "agents": []
+        },
+        "agent_mail_inbox_json": {
+          "messages": []
+        },
+        "agent_mail_reservations_txt": "",
+        "rch_status_json": {
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "state": "busy",
+              "active_builds": 1
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue_json": {
+          "jobs": [
+            {
+              "worker_id": "rch-a",
+              "state": "stale",
+              "progress_age_seconds": 1200,
+              "stale_progress": true
+            }
+          ],
+          "running": []
+        },
+        "git_status_txt": ""
+      },
+      "capacity_envelope": {
+        "total_cpu_slots": 32,
+        "total_memory_bytes": 137438953472,
+        "total_rch_slots": 8,
+        "target_dir_available_bytes": 107374182400,
+        "min_target_dir_available_bytes": 10737418240,
+        "max_parallel_heavy_lanes": 3
+      },
+      "candidate_lanes": [
+        {
+          "lane_id": "rch-heavy",
+          "bead_id": "bd-rch-heavy",
+          "priority": 1,
+          "lane_class": "heavy",
+          "cpu_slots": 8,
+          "memory_bytes": 17179869184,
+          "rch_slots": 1,
+          "target_dir_bytes": 10737418240,
+          "write_paths": [
+            "docs/rch-heavy.md"
+          ]
+        }
+      ],
+      "reservation_conflicts": [],
+      "worker_status_json": {
+        "schema_version": "franken-engine.swarm-rch-worker-status.v1",
+        "captured_at_epoch_seconds": 1778115600,
+        "queue_depth": 3,
+        "slot_utilization_millionths": 950000,
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "state": "BUSY",
+            "active_builds": 1
+          }
+        ]
+      },
+      "stall_observations_json": {
+        "schema_version": "franken-engine.swarm-rch-stall-observations.v1",
+        "observations": [
+          {
+            "worker_id": "rch-a",
+            "build_id": "build-1",
+            "command": "rch exec -- cargo check --all-targets",
+            "final_verdict": "transport_timeout",
+            "reason_code": "remote_progress_stale",
+            "source_evidence": "rch_queue",
+            "local_fallback_observed": false,
+            "cancellation_outcome": "none",
+            "queue_depth": 3,
+            "slot_utilization_millionths": 950000,
+            "observed_at_epoch_seconds": 1778115600,
+            "heartbeat_age_seconds": 30,
+            "progress_age_seconds": 1200
+          },
+          {
+            "worker_id": "rch-a",
+            "build_id": "build-2",
+            "command": "rch exec -- cargo test",
+            "final_verdict": "transport_timeout",
+            "reason_code": "remote_progress_stale",
+            "source_evidence": "rch_queue",
+            "local_fallback_observed": false,
+            "cancellation_outcome": "none",
+            "queue_depth": 3,
+            "slot_utilization_millionths": 950000,
+            "observed_at_epoch_seconds": 1778115660,
+            "heartbeat_age_seconds": 35,
+            "progress_age_seconds": 1260
+          }
+        ]
+      },
+      "worker_capabilities_json": {
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "capabilities_state": "fresh"
+          }
+        ]
+      },
+      "operator_actions_json": {
+        "actions": []
+      }
+    },
+    {
+      "case_id": "bare_cargo_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-OPS-BARE-CARGO"
+      },
+      "state_capture": {
+        "br_ready_json": [
+          {
+            "id": "bd-bare-cargo",
+            "title": "bare cargo contamination lane",
+            "priority": 1
+          }
+        ],
+        "br_in_progress_json": {
+          "issues": [],
+          "total": 0
+        },
+        "br_sync_status_json": {
+          "db_newer": false,
+          "jsonl_newer": false,
+          "dirty_count": 0
+        },
+        "bv_plan_txt": "operator tried cargo check --all-targets without remote wrapper",
+        "agent_mail_agents_json": {
+          "agents": []
+        },
+        "agent_mail_inbox_json": {
+          "messages": []
+        },
+        "agent_mail_reservations_txt": "",
+        "rch_status_json": {
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "state": "idle",
+              "active_builds": 0
+            }
+          ],
+          "jobs": []
+        },
+        "rch_queue_json": {
+          "jobs": [],
+          "running": []
+        },
+        "git_status_txt": ""
+      },
+      "capacity_envelope": {
+        "total_cpu_slots": 32,
+        "total_memory_bytes": 137438953472,
+        "total_rch_slots": 8,
+        "target_dir_available_bytes": 107374182400,
+        "min_target_dir_available_bytes": 10737418240,
+        "max_parallel_heavy_lanes": 3
+      },
+      "candidate_lanes": [
+        {
+          "lane_id": "bare-cargo",
+          "bead_id": "bd-bare-cargo",
+          "priority": 1,
+          "lane_class": "heavy",
+          "cpu_slots": 8,
+          "memory_bytes": 17179869184,
+          "rch_slots": 1,
+          "target_dir_bytes": 10737418240,
+          "write_paths": [
+            "docs/bare-cargo.md"
+          ]
+        }
+      ],
+      "reservation_conflicts": [],
+      "worker_status_json": {
+        "schema_version": "franken-engine.swarm-rch-worker-status.v1",
+        "captured_at_epoch_seconds": 1778115600,
+        "queue_depth": 0,
+        "slot_utilization_millionths": 125000,
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "state": "IDLE",
+            "active_builds": 0
+          }
+        ]
+      },
+      "stall_observations_json": {
+        "schema_version": "franken-engine.swarm-rch-stall-observations.v1",
+        "observations": []
+      },
+      "worker_capabilities_json": {
+        "workers": [
+          {
+            "worker_id": "rch-a",
+            "capabilities_state": "fresh"
+          }
+        ]
+      },
+      "operator_actions_json": {
+        "actions": []
+      }
+    }
+  ]
+}

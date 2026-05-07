@@ -1,0 +1,88 @@
+{
+  "schema_version": "franken-engine.swarm-ops-no-mock-drill-contract.v1",
+  "bead_id": "bd-r1abw",
+  "track": "SWARM-OPS-P0",
+  "script": "scripts/e2e/swarm_ops_no_mock_drill.sh",
+  "smoke_script": "scripts/e2e/swarm_ops_no_mock_drill_smoke.sh",
+  "operator_docs": "docs/SWARM_OPS_NO_MOCK_DRILL.md",
+  "fixture_bundle": "scripts/testdata/swarm_ops_no_mock_drill/cases.json",
+  "modes": [
+    "live",
+    "fixture",
+    "replay"
+  ],
+  "stage_scripts": [
+    "scripts/swarm_ops_state_snapshot_capture.sh",
+    "scripts/swarm_ops_admission_planner.sh",
+    "scripts/swarm_ops_stale_recovery_policy.sh",
+    "scripts/swarm_rch_stall_rehabilitation_ledger.sh",
+    "scripts/swarm_proof_cache_locality_optimizer.sh",
+    "scripts/swarm_frankentui_dashboard_bundle.sh",
+    "scripts/swarm_saturation_replay_drill.sh",
+    "scripts/swarm_slo_gate.sh"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "state_snapshot.json",
+    "admission_plan.json",
+    "recovery_receipts.json",
+    "rch_rehab_ledger.json",
+    "locality_plan.json",
+    "dashboard_bundle.json",
+    "saturation_replay_report.json",
+    "slo_gate_report.json",
+    "truth_gate_report.json"
+  ],
+  "truth_invariants": [
+    "stale br/bv sync state must propagate into admission fail-closed evidence",
+    "RCH stale-progress or rehab evidence must remain degraded and must not be upgraded to pass",
+    "heavy Cargo commands must be wrapped by rch exec when they appear in command evidence",
+    "local fallback contamination must fail closed through the SLO gate",
+    "replay mode must verify a pinned bundle or the latest bundle without re-running capture"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "green",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "stale_bv_fail",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-OPS-STALE-BV"
+    },
+    {
+      "case_id": "rch_stale_progress",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED"
+    },
+    {
+      "case_id": "bare_cargo_contamination",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-OPS-BARE-CARGO"
+    }
+  ],
+  "mutation_policy": {
+    "live_capture_allowed": true,
+    "fixture_mode_deterministic": true,
+    "replay_verification_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch_heavy_commands": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_ops_no_mock_drill.sh scripts/e2e/swarm_ops_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_ops_no_mock_drill.sh scripts/e2e/swarm_ops_no_mock_drill_smoke.sh",
+    "jq empty docs/swarm_ops_no_mock_drill_contract_v1.json scripts/testdata/swarm_ops_no_mock_drill/cases.json",
+    "bash scripts/e2e/swarm_ops_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_ops_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_OPS_NO_MOCK_DRILL.md docs/swarm_ops_no_mock_drill_contract_v1.json scripts/e2e/swarm_ops_no_mock_drill.sh scripts/e2e/swarm_ops_no_mock_drill_smoke.sh scripts/testdata/swarm_ops_no_mock_drill/cases.json"
+  ]
+}

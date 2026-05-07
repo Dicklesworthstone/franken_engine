@@ -1,0 +1,156 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster-contract.v1",
+  "bead_id": "bd-g7bk2",
+  "depends_on": [
+    "bd-4t4oi",
+    "bd-2pn2x"
+  ],
+  "script": "scripts/swarm_autopilot_brownout_forecaster.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_BROWNOUT_FORECASTER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json",
+  "forecast_schema_version": "franken-engine.swarm-autopilot-brownout-forecast.v1",
+  "comparison_schema_version": "franken-engine.swarm-autopilot-brownout-hindsight-comparison.v1",
+  "required_inputs": [
+    {
+      "source_id": "evidence_warehouse_json",
+      "argument": "--evidence-warehouse-json",
+      "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+      "required": true
+    },
+    {
+      "source_id": "queue_signal_input_json",
+      "argument": "--queue-signal-input-json",
+      "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+      "required": true
+    },
+    {
+      "source_id": "queue_fidelity_receipt_json",
+      "argument": "--queue-fidelity-receipt-json",
+      "schema_version": "franken-engine.swarm-topology-aware-queue-fidelity-receipt.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_bundle_json",
+      "argument": "--hindsight-bundle-json",
+      "schema_version": "franken-engine.swarm-autopilot-brownout-hindsight-bundle.v1",
+      "required": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "operator_intent_policy_json",
+      "argument": "--operator-intent-policy-json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1"
+    }
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--validated-horizon-seconds",
+    "--output-dir"
+  ],
+  "artifacts": {
+    "forecast_json": "swarm_autopilot_brownout_forecast.json",
+    "comparison_json": "swarm_autopilot_brownout_hindsight_comparison.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "forecast_categories": [
+    "admitted_heavy_lane_pressure",
+    "rch_slot_exhaustion",
+    "target_dir_pressure",
+    "stale_progress_risk",
+    "proof_cache_pressure",
+    "fairness_starvation_window"
+  ],
+  "forecast_state_enum": [
+    "green",
+    "watch",
+    "brownout",
+    "unknown"
+  ],
+  "required_forecast_fields": [
+    "forecast_id",
+    "decision",
+    "truth_state",
+    "summary.overall_state",
+    "summary.brownout_state",
+    "summary.deterministic_replay_hash_basis",
+    "validated_horizon_seconds",
+    "resolved_inputs",
+    "fail_closed_reasons",
+    "forecasts.admitted_heavy_lane_pressure.state",
+    "forecasts.rch_slot_exhaustion.state",
+    "forecasts.target_dir_pressure.state",
+    "forecasts.stale_progress_risk.state",
+    "forecasts.proof_cache_pressure.state",
+    "forecasts.fairness_starvation_window.state",
+    "artifact_paths.swarm_autopilot_brownout_forecast_json",
+    "artifact_paths.swarm_autopilot_brownout_hindsight_comparison_json",
+    "artifact_paths.report_md"
+  ],
+  "required_comparison_fields": [
+    "comparison_id",
+    "forecast_id",
+    "summary.match_count",
+    "summary.over_warn_count",
+    "summary.under_warn_count",
+    "comparisons"
+  ],
+  "fail_closed_rules": [
+    "stale warehouse, queue, fidelity, or hindsight evidence fails closed",
+    "local fallback contamination fails closed",
+    "contradictory heavy-lane or free-slot evidence fails closed",
+    "blocked upstream queue evidence fails closed instead of being promoted into a forecast",
+    "validated horizon requests above the hindsight support window fail closed",
+    "unknown or incomplete required evidence fails closed"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "fixture_cases": [
+    {
+      "case_id": "green_low_pressure",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "imminent_rch_slot_brownout",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "proof_cache_pressure_escalation",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "stale_progress_risk",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "contradictory_evidence_fail_closed",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-BROWNOUT-CONTRADICTORY-EVIDENCE"
+    }
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_brownout_forecaster.sh",
+    "bash -n scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_brownout_forecaster.sh scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh",
+    "jq empty docs/swarm_autopilot_brownout_forecaster_contract_v1.json scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json",
+    "bash scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_BROWNOUT_FORECASTER.md docs/swarm_autopilot_brownout_forecaster_contract_v1.json scripts/swarm_autopilot_brownout_forecaster.sh scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json"
+  ]
+}

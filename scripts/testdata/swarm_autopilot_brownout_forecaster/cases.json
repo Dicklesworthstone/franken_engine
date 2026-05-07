@@ -1,0 +1,343 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster-fixtures.v1",
+  "base_evidence_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "source_revision": "fixture-warehouse-base",
+    "generated_epoch_seconds": 1778121400,
+    "decision": "pass",
+    "summary": {
+      "observed_heavy_lane_pressure_millionths": 220000,
+      "heavy_lane_count": 1,
+      "heavy_lane_capacity": 4,
+      "free_rch_slots": 5,
+      "total_rch_slots": 8,
+      "target_dir_pressure_millionths": 240000,
+      "proof_cache_pressure_millionths": 200000,
+      "fairness_starvation_millionths": 140000,
+      "stale_progress_risk_millionths": 120000
+    },
+    "artifact_rows": [
+      {
+        "source_id": "dashboard_bundle_json",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ],
+    "hash_basis": {
+      "warehouse_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "artifact_paths": {
+      "evidence_warehouse_json": "/fixture/evidence_warehouse.json",
+      "commands_txt": "/fixture/commands.txt",
+      "events_jsonl": "/fixture/events.jsonl"
+    },
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_queue_signal_input_json": {
+    "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+    "source_revision": "fixture-queue-signal-base",
+    "generated_epoch_seconds": 1778121420,
+    "truth_state": "confirmed",
+    "decision": "pass",
+    "queue_context": {
+      "ready_heavy_lane_count": 1,
+      "heavy_lane_pressure_millionths": 240000,
+      "starved_ready_count": 0
+    },
+    "locality_context": {
+      "target_dir_pressure_millionths": 260000,
+      "target_dir_hotspot_state": "stable"
+    },
+    "rehabilitation_context": {
+      "available_slot_count": 5,
+      "total_slot_count": 8,
+      "active_stall_count": 0,
+      "stale_progress_worker_count": 0
+    },
+    "artifact_paths": {
+      "input_json": "/fixture/queue_signal_input.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_queue_fidelity_receipt_json": {
+    "schema_version": "franken-engine.swarm-topology-aware-queue-fidelity-receipt.v1",
+    "source_revision": "fixture-fidelity-base",
+    "generated_epoch_seconds": 1778121440,
+    "truth_state": "confirmed",
+    "decision": "pass",
+    "aggregate_metrics": {
+      "locality_match_rate_millionths": 910000,
+      "cache_reuse_confirmation_rate_millionths": 890000,
+      "drained_worker_avoidance_rate_millionths": 1000000,
+      "contradiction_rate_millionths": 0,
+      "evidence_completeness_rate_millionths": 960000,
+      "confidence_band": "high"
+    },
+    "reason_codes": [
+      "matched_locality_advisory"
+    ],
+    "artifact_paths": {
+      "fidelity_receipt_json": "/fixture/queue_fidelity_receipt.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_hindsight_bundle_json": {
+    "schema_version": "franken-engine.swarm-autopilot-brownout-hindsight-bundle.v1",
+    "source_revision": "fixture-hindsight-base",
+    "generated_epoch_seconds": 1778121460,
+    "validated_horizon_seconds": 3600,
+    "local_fallback_contaminated": false,
+    "actuals": {
+      "admitted_heavy_lane_pressure": {
+        "state": "green"
+      },
+      "rch_slot_exhaustion": {
+        "state": "green"
+      },
+      "target_dir_pressure": {
+        "state": "green"
+      },
+      "stale_progress_risk": {
+        "state": "green"
+      },
+      "proof_cache_pressure": {
+        "state": "green"
+      },
+      "fairness_starvation_window": {
+        "state": "green"
+      }
+    },
+    "actual_summary": {
+      "overall_state": "green",
+      "brownout_state": "green"
+    },
+    "artifact_paths": {
+      "hindsight_bundle_json": "/fixture/hindsight_bundle.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "green_low_pressure",
+      "description": "Healthy low-pressure forecast with all categories green and exact hindsight matches.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_category": "admitted_heavy_lane_pressure",
+        "required_state": "green",
+        "expected_match_count": 6
+      }
+    },
+    {
+      "case_id": "imminent_rch_slot_brownout",
+      "description": "Free RCH slots collapse and active stalls rise before operators would otherwise notice admission pressure.",
+      "overrides": {
+        "evidence_warehouse_json": {
+          "summary": {
+            "observed_heavy_lane_pressure_millionths": 760000,
+            "heavy_lane_count": 3,
+            "free_rch_slots": 1
+          }
+        },
+        "queue_signal_input_json": {
+          "queue_context": {
+            "ready_heavy_lane_count": 3,
+            "heavy_lane_pressure_millionths": 820000
+          },
+          "rehabilitation_context": {
+            "available_slot_count": 1,
+            "active_stall_count": 2
+          }
+        },
+        "hindsight_bundle_json": {
+          "actuals": {
+            "admitted_heavy_lane_pressure": {
+              "state": "watch"
+            },
+            "rch_slot_exhaustion": {
+              "state": "brownout"
+            }
+          },
+          "actual_summary": {
+            "overall_state": "brownout",
+            "brownout_state": "brownout"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_category": "rch_slot_exhaustion",
+        "required_state": "brownout",
+        "expected_match_count": 6
+      }
+    },
+    {
+      "case_id": "proof_cache_pressure_escalation",
+      "description": "Proof-cache reuse collapses and the forecast escalates cache pressure to brownout severity.",
+      "overrides": {
+        "evidence_warehouse_json": {
+          "summary": {
+            "proof_cache_pressure_millionths": 880000
+          }
+        },
+        "queue_fidelity_receipt_json": {
+          "aggregate_metrics": {
+            "cache_reuse_confirmation_rate_millionths": 250000,
+            "evidence_completeness_rate_millionths": 910000
+          },
+          "reason_codes": [
+            "cache_reuse_outcome_missed"
+          ]
+        },
+        "hindsight_bundle_json": {
+          "actuals": {
+            "proof_cache_pressure": {
+              "state": "brownout"
+            }
+          },
+          "actual_summary": {
+            "overall_state": "brownout",
+            "brownout_state": "brownout"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_category": "proof_cache_pressure",
+        "required_state": "brownout",
+        "expected_match_count": 6
+      }
+    },
+    {
+      "case_id": "stale_progress_risk",
+      "description": "Worker progress stalls raise a brownout-grade stale-progress warning before lane starvation becomes visible to operators.",
+      "overrides": {
+        "evidence_warehouse_json": {
+          "summary": {
+            "stale_progress_risk_millionths": 810000,
+            "fairness_starvation_millionths": 690000
+          }
+        },
+        "queue_signal_input_json": {
+          "queue_context": {
+            "starved_ready_count": 1
+          },
+          "rehabilitation_context": {
+            "stale_progress_worker_count": 2
+          }
+        },
+        "hindsight_bundle_json": {
+          "actuals": {
+            "stale_progress_risk": {
+              "state": "brownout"
+            },
+            "fairness_starvation_window": {
+              "state": "watch"
+            }
+          },
+          "actual_summary": {
+            "overall_state": "brownout",
+            "brownout_state": "brownout"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_category": "stale_progress_risk",
+        "required_state": "brownout",
+        "expected_match_count": 6
+      }
+    },
+    {
+      "case_id": "contradictory_evidence_fail_closed",
+      "description": "Warehouse and queue-signal evidence disagree about free slots and blocked state, so the forecast must fail closed.",
+      "overrides": {
+        "evidence_warehouse_json": {
+          "summary": {
+            "observed_heavy_lane_pressure_millionths": 890000,
+            "heavy_lane_count": 4,
+            "free_rch_slots": 5
+          }
+        },
+        "queue_signal_input_json": {
+          "truth_state": "blocked",
+          "decision": "blocked",
+          "queue_context": {
+            "ready_heavy_lane_count": 0,
+            "heavy_lane_pressure_millionths": 900000
+          },
+          "rehabilitation_context": {
+            "available_slot_count": 0,
+            "active_stall_count": 3
+          }
+        },
+        "queue_fidelity_receipt_json": {
+          "aggregate_metrics": {
+            "contradiction_rate_millionths": 400000
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-BROWNOUT-CONTRADICTORY-EVIDENCE",
+        "expected_match_count": 0
+      }
+    }
+  ]
+}

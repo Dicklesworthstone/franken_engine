@@ -35,6 +35,24 @@ It also supports `--collect-live` for lightweight local collection of the `br`,
 - `observe_only`: no safe candidate exists, but the report remains useful for
   operator diagnostics.
 
+## Adoption Workflow
+
+- Run `scripts/swarm_actionability_truth_gate.sh` before any claim or reassignment driven by `bv --recipe actionable --robot-plan`.
+- A `safe_to_claim` result is advisory only. Operators must still rerun
+  `br show <id>` and `br list --status=in_progress --json` immediately before
+  `br update --assignee`.
+- `defer` means do not claim. Leave ownership and reservations unchanged, then
+  move to a non-overlapping bead or wait for the conflicting evidence to clear.
+- `fail_closed` means do not claim. Preserve the emitted bundle, and if fresh
+  `br` plus `bv` evidence still reproduces the blocked-versus-actionable
+  divergence, update the upstream follow-up bead `bd-5oef0` instead of masking
+  the planner bug.
+- `observe_only` is diagnostics only and never authorizes a claim.
+
+The gate does not file or update upstream follow-up beads by itself. It only
+preserves the evidence bundle needed for an operator to attach or refresh that
+external-tool follow-up manually.
+
 ## Reason Codes
 
 - `FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE`

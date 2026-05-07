@@ -102,13 +102,42 @@
     "dirty_overlap_defer",
     "missing_optional_mail_observe_only"
   ],
+  "operator_pre_claim_workflow": [
+    "Run scripts/swarm_actionability_truth_gate.sh before any claim or reassignment driven by bv --recipe actionable --robot-plan.",
+    "Treat safe_to_claim as advisory only and rerun br show <id> plus br list --status=in_progress --json immediately before br update --assignee.",
+    "Treat defer as do-not-claim guidance and leave ownership plus reservations unchanged until conflicts clear.",
+    "Treat fail_closed as do-not-claim guidance, preserve the emitted bundle, and update the upstream follow-up bead bd-5oef0 when fresh br and bv evidence still diverge.",
+    "Treat observe_only as diagnostics only; it never authorizes a claim."
+  ],
+  "upstream_follow_up_beads": [
+    {
+      "bead_id": "bd-5oef0",
+      "purpose": "Preserved blocked-versus-actionable planner divergence follow-up when fresh br and bv evidence disagree."
+    }
+  ],
+  "mutation_policy_scanner": {
+    "observe_only_script_paths": [
+      "scripts/swarm_actionability_truth_gate.sh",
+      "scripts/e2e/swarm_actionability_truth_gate_smoke.sh",
+      "scripts/e2e/swarm_actionability_truth_gate_no_mock_drill.sh"
+    ],
+    "required_rejections": [
+      "br_update_close_reopen_create_claim",
+      "agent_mail_mutation_api",
+      "git_mutation",
+      "cargo_heavy",
+      "rch_exec"
+    ]
+  },
   "validation_commands": [
     "jq empty docs/swarm_actionability_truth_gate_contract_v1.json scripts/testdata/swarm_actionability_truth_gate_contract/cases.json",
     "bash -n scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh",
     "shellcheck -x scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh",
     "bash scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh check",
     "bash scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh selftest",
-    "git diff --check -- docs/SWARM_ACTIONABILITY_TRUTH_GATE_CONTRACT.md docs/swarm_actionability_truth_gate_contract_v1.json scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh scripts/testdata/swarm_actionability_truth_gate_contract/cases.json"
+    "bash scripts/e2e/swarm_actionability_live_divergence_fixture_smoke.sh check",
+    "bash scripts/e2e/swarm_actionability_live_divergence_fixture_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_ACTIONABILITY_TRUTH_GATE.md docs/SWARM_ACTIONABILITY_TRUTH_GATE_CONTRACT.md docs/swarm_actionability_truth_gate_contract_v1.json scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh scripts/testdata/swarm_actionability_truth_gate_contract/cases.json"
   ],
   "mutation_policy": {
     "advisory_only": true,

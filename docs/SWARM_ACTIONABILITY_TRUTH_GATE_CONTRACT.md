@@ -63,3 +63,29 @@ The implementation bead must emit an actionability report with:
 The contract smoke gate proves this contract is stable before implementation.
 It checks exact source IDs, decision vocabulary, fail-closed reason coverage,
 required fixture scenarios, and advisory-only mutation policy.
+
+## Required Operator Workflow
+
+- Run `scripts/swarm_actionability_truth_gate.sh` before any claim or reassignment driven by `bv --recipe actionable --robot-plan`.
+- Treat safe_to_claim as advisory only. Operators must still rerun `br show <id>` and `br list --status=in_progress --json` immediately before `br update --assignee`.
+- Treat `defer` as do-not-claim guidance. Ownership and reservations stay
+  unchanged until the conflicting evidence clears.
+- Treat `fail_closed` as do-not-claim guidance. The emitted bundle must be
+  preserved for diagnostics, and fresh blocked-versus-actionable divergence
+  evidence must be attached to the upstream follow-up bead `bd-5oef0` instead
+  of being masked locally.
+- Treat `observe_only` as diagnostics only. It never authorizes a claim.
+
+## Required Mutation-Policy Scanner
+
+The contract smoke must scan the observe-only actionability runners and reject
+direct calls to:
+
+- `br update`, `br close`, `br reopen`, `br create`, and `br claim`
+- Agent Mail mutation APIs
+- git mutation commands
+- heavy Cargo commands
+- `rch exec`
+
+This scanner exists to prove the actionability adoption surface remains
+observe-only even as future workflow automation and replay harnesses evolve.

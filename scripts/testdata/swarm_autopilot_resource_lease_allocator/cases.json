@@ -1,0 +1,419 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-resource-lease-allocator-fixtures.v1",
+  "base_operator_intent_policy_json": {
+    "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+    "source_revision": "fixture-policy-base",
+    "generated_epoch_seconds": 1778121400,
+    "decision": "pass",
+    "safe_mode_active": false,
+    "thresholds": {
+      "reserve_urgent_rch_slack_slots": 1,
+      "fairness_skew_limit_millionths": 600000,
+      "default_lease_duration_seconds": 1800,
+      "proof_cache_cooldown_seconds": 900
+    },
+    "precedence_order": [
+      "reserve_urgent_rch_slack",
+      "bound_per_agent_fairness_skew",
+      "prefer_warm_cache_reuse"
+    ],
+    "artifact_paths": {
+      "operator_intent_policy_json": "/fixture/operator_intent_policy.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_brownout_forecaster_json": {
+    "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+    "source_revision": "fixture-forecast-base",
+    "generated_epoch_seconds": 1778121420,
+    "decision": "pass",
+    "summary": {
+      "overall_state": "green",
+      "brownout_state": "green"
+    },
+    "forecasts": {
+      "admitted_heavy_lane_pressure": {
+        "state": "green"
+      },
+      "rch_slot_exhaustion": {
+        "state": "green"
+      },
+      "target_dir_pressure": {
+        "state": "green"
+      },
+      "stale_progress_risk": {
+        "state": "green"
+      },
+      "proof_cache_pressure": {
+        "state": "green"
+      },
+      "fairness_starvation_window": {
+        "state": "green"
+      }
+    },
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "swarm_autopilot_brownout_forecast_json": "/fixture/brownout_forecaster.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_queue_advisory_bundle_json": {
+    "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+    "source_revision": "fixture-queue-advisory-base",
+    "generated_epoch_seconds": 1778121440,
+    "truth_state": "confirmed",
+    "decision": "pass",
+    "reason_codes": [
+      "hot_cache_reuse_preferred"
+    ],
+    "worker_exclusions": [],
+    "locality_bias_summary": {
+      "preferred_workers": [
+        "rch-a",
+        "rch-b"
+      ],
+      "cache_reuse_preferred": true
+    },
+    "candidate_lanes": [
+      {
+        "lane_id": "bd-urgent-a",
+        "title": "Urgent latency lane",
+        "urgent": true,
+        "workload_class": "heavy",
+        "prefers_warm_target": true,
+        "needs_proof_cache_refresh": false,
+        "fairness_skew_millionths": 120000,
+        "resource_demand": {
+          "rch_slots": 1,
+          "cpu_slots": 2,
+          "memory_gib": 8
+        }
+      },
+      {
+        "lane_id": "bd-background-b",
+        "title": "Background heavy lane",
+        "urgent": false,
+        "workload_class": "heavy",
+        "prefers_warm_target": false,
+        "needs_proof_cache_refresh": false,
+        "fairness_skew_millionths": 180000,
+        "resource_demand": {
+          "rch_slots": 2,
+          "cpu_slots": 3,
+          "memory_gib": 10
+        }
+      },
+      {
+        "lane_id": "bd-cache-c",
+        "title": "Proof cache refresh lane",
+        "urgent": false,
+        "workload_class": "normal",
+        "prefers_warm_target": true,
+        "needs_proof_cache_refresh": true,
+        "fairness_skew_millionths": 160000,
+        "resource_demand": {
+          "rch_slots": 1,
+          "cpu_slots": 1,
+          "memory_gib": 6
+        }
+      },
+      {
+        "lane_id": "bd-fairness-d",
+        "title": "Fairness recovery lane",
+        "urgent": false,
+        "workload_class": "normal",
+        "prefers_warm_target": false,
+        "needs_proof_cache_refresh": false,
+        "fairness_skew_millionths": 320000,
+        "resource_demand": {
+          "rch_slots": 1,
+          "cpu_slots": 1,
+          "memory_gib": 4
+        }
+      }
+    ],
+    "artifact_paths": {
+      "queue_advisory_bundle_json": "/fixture/queue_advisory_bundle.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_rch_rehabilitation_ledger_json": {
+    "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+    "source_revision": "fixture-rehab-base",
+    "generated_epoch_seconds": 1778121460,
+    "decision": "pass",
+    "summary": {
+      "available_slot_count": 4
+    },
+    "worker_receipts": [
+      {
+        "worker_id": "rch-a",
+        "classification": "healthy",
+        "latest_progress_age_seconds": 90,
+        "latest_heartbeat_age_seconds": 10,
+        "pressure_telemetry": {
+          "slot_utilization_millionths": 300000
+        },
+        "reason_codes": [
+          "steady_progress"
+        ]
+      },
+      {
+        "worker_id": "rch-b",
+        "classification": "healthy",
+        "latest_progress_age_seconds": 120,
+        "latest_heartbeat_age_seconds": 12,
+        "pressure_telemetry": {
+          "slot_utilization_millionths": 280000
+        },
+        "reason_codes": [
+          "steady_progress"
+        ]
+      }
+    ],
+    "artifact_paths": {
+      "ledger_json": "/fixture/rch_rehabilitation_ledger.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_balanced_allocation",
+      "description": "Healthy green forecast admits balanced work with warm-target reuse where it is safe.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_lane_id": "bd-background-b",
+        "required_decision": "admit",
+        "expected_overall_state": "balanced"
+      }
+    },
+    {
+      "case_id": "urgent_lane_protection",
+      "description": "Urgent slack reservation outranks normal heavy fanout when RCH pressure is rising.",
+      "overrides": {
+        "brownout_forecaster_json": {
+          "summary": {
+            "overall_state": "watch",
+            "brownout_state": "watch"
+          },
+          "forecasts": {
+            "rch_slot_exhaustion": {
+              "state": "watch"
+            }
+          }
+        },
+        "operator_intent_policy_json": {
+          "thresholds": {
+            "reserve_urgent_rch_slack_slots": 2
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_lane_id": "bd-urgent-a",
+        "required_decision": "reserve",
+        "expected_overall_state": "urgent_protected"
+      }
+    },
+    {
+      "case_id": "fairness_recovery",
+      "description": "Fairness skew recovery outranks warm-cache reuse when starvation pressure is active.",
+      "overrides": {
+        "brownout_forecaster_json": {
+          "summary": {
+            "overall_state": "watch",
+            "brownout_state": "watch"
+          },
+          "forecasts": {
+            "fairness_starvation_window": {
+              "state": "watch"
+            }
+          }
+        },
+        "queue_advisory_bundle_json": {
+          "candidate_lanes": [
+            {
+              "lane_id": "bd-urgent-a",
+              "title": "Urgent latency lane",
+              "urgent": true,
+              "workload_class": "heavy",
+              "prefers_warm_target": true,
+              "needs_proof_cache_refresh": false,
+              "fairness_skew_millionths": 120000,
+              "resource_demand": {
+                "rch_slots": 1,
+                "cpu_slots": 2,
+                "memory_gib": 8
+              }
+            },
+            {
+              "lane_id": "bd-background-b",
+              "title": "Background heavy lane",
+              "urgent": false,
+              "workload_class": "heavy",
+              "prefers_warm_target": false,
+              "needs_proof_cache_refresh": false,
+              "fairness_skew_millionths": 180000,
+              "resource_demand": {
+                "rch_slots": 2,
+                "cpu_slots": 3,
+                "memory_gib": 10
+              }
+            },
+            {
+              "lane_id": "bd-cache-c",
+              "title": "Proof cache refresh lane",
+              "urgent": false,
+              "workload_class": "normal",
+              "prefers_warm_target": true,
+              "needs_proof_cache_refresh": true,
+              "fairness_skew_millionths": 160000,
+              "resource_demand": {
+                "rch_slots": 1,
+                "cpu_slots": 1,
+                "memory_gib": 6
+              }
+            },
+            {
+              "lane_id": "bd-fairness-d",
+              "title": "Fairness recovery lane",
+              "urgent": false,
+              "workload_class": "normal",
+              "prefers_warm_target": false,
+              "needs_proof_cache_refresh": false,
+              "fairness_skew_millionths": 720000,
+              "resource_demand": {
+                "rch_slots": 1,
+                "cpu_slots": 1,
+                "memory_gib": 4
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_lane_id": "bd-fairness-d",
+        "required_decision": "rebalance",
+        "expected_overall_state": "fairness_recovery"
+      }
+    },
+    {
+      "case_id": "rch_brownout_deferral",
+      "description": "Nonurgent heavy work is deferred while urgent slack remains protected during RCH brownout.",
+      "overrides": {
+        "brownout_forecaster_json": {
+          "summary": {
+            "overall_state": "brownout",
+            "brownout_state": "brownout"
+          },
+          "forecasts": {
+            "rch_slot_exhaustion": {
+              "state": "brownout"
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_lane_id": "bd-background-b",
+        "required_decision": "defer",
+        "expected_overall_state": "brownout_deferral"
+      }
+    },
+    {
+      "case_id": "proof_cache_cooling",
+      "description": "Proof-cache cooldown is emitted when proof-cache pressure is brownout and refresh work would worsen it.",
+      "overrides": {
+        "brownout_forecaster_json": {
+          "summary": {
+            "overall_state": "brownout",
+            "brownout_state": "brownout"
+          },
+          "forecasts": {
+            "proof_cache_pressure": {
+              "state": "brownout"
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_lane_id": "bd-cache-c",
+        "required_decision": "cool",
+        "expected_overall_state": "proof_cache_cooling"
+      }
+    },
+    {
+      "case_id": "contradictory_locality_fail_closed",
+      "description": "Blocked locality evidence must fail closed instead of being upgraded into a scarcity plan.",
+      "overrides": {
+        "queue_advisory_bundle_json": {
+          "truth_state": "blocked",
+          "decision": "blocked",
+          "reason_codes": [
+            "contradictory_locality"
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-LEASE-CONTRADICTORY-QUEUE",
+        "expected_overall_state": "fail_closed"
+      }
+    }
+  ]
+}

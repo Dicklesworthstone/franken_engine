@@ -1,0 +1,165 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-source-watchers-fixtures.v1",
+  "base_inputs": {
+    "br_queue": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-br-queue-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "ready": [
+        {
+          "id": "bd-djejh.3",
+          "title": "one-shot source watchers"
+        }
+      ],
+      "in_progress": [],
+      "blocked": [],
+      "error_codes": []
+    },
+    "bv_robot_plan": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-bv-plan-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "plan": {
+        "tracks": [
+          {
+            "track_id": "track-shadow",
+            "items": [
+              {
+                "id": "bd-djejh.3"
+              }
+            ]
+          }
+        ]
+      },
+      "error_codes": []
+    },
+    "agent_mail": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-agent-mail-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "health": {
+        "degraded": false
+      },
+      "recent_message_count": 2,
+      "error_codes": []
+    },
+    "rch_status": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-rch-status-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "local_fallback": false,
+      "available_slots": 4,
+      "error_codes": []
+    },
+    "git_state": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-git-state-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "branch": "main",
+      "dirty": false,
+      "error_codes": []
+    },
+    "artifact_bundles": {
+      "schema_version": "franken-engine.swarm-autopilot-shadow-artifact-bundles-fixture.v1",
+      "fresh": true,
+      "degraded": false,
+      "items": [
+        {
+          "path": "artifacts/shadow_status.json",
+          "hash": "sha256:artifactfixture0000000000000000000000000000000000000000000001"
+        }
+      ],
+      "error_codes": []
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_sources",
+      "expected": {
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "expected_exit_code": 0
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "stale_br_queue",
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+      },
+      "overrides": {
+        "br_queue": {
+          "fresh": false,
+          "stale": true
+        }
+      }
+    },
+    {
+      "case_id": "degraded_agent_mail_rch",
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+      },
+      "overrides": {
+        "agent_mail": {
+          "degraded": true,
+          "health": {
+            "degraded": true
+          }
+        },
+        "rch_status": {
+          "degraded": true
+        }
+      }
+    },
+    {
+      "case_id": "rch_local_fallback_contamination",
+      "expected": {
+        "truth_state": "contaminated",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+      },
+      "overrides": {
+        "rch_status": {
+          "local_fallback": true
+        }
+      }
+    },
+    {
+      "case_id": "missing_artifact_bundle",
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE"
+      },
+      "omit_sources": [
+        "artifact_bundles"
+      ],
+      "overrides": {}
+    },
+    {
+      "case_id": "contradictory_bead_ownership",
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP"
+      },
+      "overrides": {
+        "br_queue": {
+          "degraded": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP"
+          ]
+        }
+      }
+    }
+  ]
+}

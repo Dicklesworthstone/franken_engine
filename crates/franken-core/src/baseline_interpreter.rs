@@ -425,6 +425,9 @@ pub struct HeapObject {
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
     pub constructor_function: Option<u32>,
+    /// Whether this object was allocated by an array-producing path.
+    #[serde(default)]
+    pub is_array: bool,
 }
 
 impl HeapObject {
@@ -4033,7 +4036,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::NewArray { dst } => {
                     self.run_pre_allocation_hook(module, AllocKind::Array, 0)?;
-                    let id = self.alloc_object_with_prototype(None)?;
+                    let id = self.alloc_array_with_prototype(None)?;
                     self.write_reg(dst, Value::Object(id))?;
                     self.ip += 1;
                 }
@@ -4054,6 +4057,11 @@ impl InterpreterCore {
                             })
                             .unwrap_or(0);
                         self.set_object_property(arr_id, next_idx.to_string(), elem_val)?;
+                        self.set_object_property(
+                            arr_id,
+                            "length".to_string(),
+                            Value::Int(i64::from(next_idx.saturating_add(1))),
+                        )?;
                     }
                     self.ip += 1;
                 }
@@ -5692,6 +5700,35 @@ impl InterpreterCore {
         Ok(values)
     }
 
+    fn array_like_length(&self, obj_id: ObjectId) -> Result<u32, InterpreterError> {
+        let object = self
+            .heap
+            .get(obj_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?;
+        if let Some(Value::Int(length)) = object.properties.get("length") {
+            return Ok(u32::try_from((*length).max(0)).unwrap_or(u32::MAX));
+        }
+        Ok(object.properties.keys().fold(0u32, |current, key| {
+            key.parse::<u32>()
+                .ok()
+                .map_or(current, |index| current.max(index.saturating_add(1)))
+        }))
+    }
+
+    fn array_index_value(
+        &self,
+        obj_id: ObjectId,
+        index: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        Ok(self
+            .heap
+            .get(obj_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: obj_id.0 })?
+            .properties
+            .get(&index.to_string())
+            .cloned())
+    }
+
     fn read_array_like_values(&self, obj_id: ObjectId) -> Vec<Value> {
         self.heap
             .get(obj_id.0 as usize)
@@ -5700,7 +5737,7 @@ impl InterpreterCore {
                 let mut idx = 0u32;
                 while let Some(val) = obj.properties.get(&idx.to_string()) {
                     values.push(val.clone());
-                    idx += 1;
+                    idx = idx.saturating_add(1);
                 }
                 values
             })
@@ -5708,7 +5745,7 @@ impl InterpreterCore {
     }
 
     fn alloc_array_from_values(&mut self, values: &[Value]) -> Result<ObjectId, InterpreterError> {
-        let id = self.alloc_object_with_prototype(None)?;
+        let id = self.alloc_array_with_prototype(None)?;
         for (index, value) in values.iter().cloned().enumerate() {
             self.set_object_property(id, index.to_string(), value)?;
         }
@@ -6840,34 +6877,108 @@ impl InterpreterCore {
         match cap {
             // Array methods
             "builtin:ArrayPrototypePush" => {
-                // TODO: Implement Array.prototype.push
-                // For now, return placeholder to bridge the execution gap
-                Ok(Value::Undefined)
+                let this = self.required_arg(args, 0, "array object")?;
+                let array_id = self.expect_object(this, "array object")?;
+                let base_len = self.array_like_length(array_id)?;
+                for offset in 1..args.count {
+                    let value = self.read_arg(args, offset)?;
+                    let index = base_len.saturating_add(offset - 1);
+                    self.set_object_property(array_id, index.to_string(), value)?;
+                }
+                let new_len = base_len.saturating_add(args.count.saturating_sub(1));
+                self.set_object_property(
+                    array_id,
+                    "length".to_string(),
+                    Value::Int(i64::from(new_len)),
+                )?;
+                Ok(Value::Int(i64::from(new_len)))
             }
             "builtin:ArrayIsArray" => {
-                // TODO: Implement Array.isArray
-                Ok(Value::Bool(false))
+                let Some(arg) = self.optional_arg(args, 0)? else {
+                    return Ok(Value::Bool(false));
+                };
+                match arg {
+                    Value::Object(object_id) => {
+                        let is_array = self
+                            .heap
+                            .get(object_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                            .is_array;
+                        Ok(Value::Bool(is_array))
+                    }
+                    _ => Ok(Value::Bool(false)),
+                }
             }
             "builtin:ArrayPrototypePop" => {
-                // TODO: Implement Array.prototype.pop
-                Ok(Value::Undefined)
+                let this = self.required_arg(args, 0, "array object")?;
+                let array_id = self.expect_object(this, "array object")?;
+                let length = self.array_like_length(array_id)?;
+                if length == 0 {
+                    self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                    return Ok(Value::Undefined);
+                }
+                let index = length - 1;
+                let value = self
+                    .array_index_value(array_id, index)?
+                    .unwrap_or(Value::Undefined);
+                self.remove_object_property(array_id, &index.to_string())?;
+                self.set_object_property(
+                    array_id,
+                    "length".to_string(),
+                    Value::Int(i64::from(index)),
+                )?;
+                Ok(value)
             }
 
             // Object methods
             "builtin:ObjectKeys" => {
-                // TODO: Implement Object.keys
-                // Return empty array for now
-                Ok(Value::Object(ObjectId(0)))
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let keys = self.own_enumerable_keys(object_id)?;
+                let values = keys.into_iter().map(Value::Str).collect::<Vec<_>>();
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
             "builtin:ObjectValues" => {
-                // TODO: Implement Object.values
-                Ok(Value::Object(ObjectId(0)))
+                let this = self.required_arg(args, 0, "object")?;
+                let object_id = self.expect_object(this, "object")?;
+                let keys = self.own_enumerable_keys(object_id)?;
+                let values = {
+                    let object = self
+                        .heap
+                        .get(object_id.0 as usize)
+                        .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                    keys.into_iter()
+                        .filter_map(|key| object.properties.get(&key).cloned())
+                        .collect::<Vec<_>>()
+                };
+                Ok(Value::Object(self.alloc_array_from_values(&values)?))
             }
 
             // String methods
             "builtin:StringPrototypeCharAt" => {
-                // TODO: Implement String.prototype.charAt
-                Ok(Value::Str("".to_string()))
+                let receiver = self.required_arg(args, 0, "string")?;
+                let text = match receiver {
+                    Value::Str(text) => text,
+                    other => self.value_to_string(&other),
+                };
+                let index = match self.optional_arg(args, 1)? {
+                    Some(Value::Int(index)) if index >= 0 => usize::try_from(index).ok(),
+                    Some(Value::Float(index)) => {
+                        let index = index.inner();
+                        if index.is_finite() && index >= 0.0 {
+                            Some(index.trunc() as usize)
+                        } else {
+                            Some(0)
+                        }
+                    }
+                    Some(Value::Undefined | Value::Null) | None => Some(0),
+                    _ => Some(0),
+                };
+                let ch = index
+                    .and_then(|index| text.chars().nth(index))
+                    .map(|ch| ch.to_string())
+                    .unwrap_or_default();
+                Ok(Value::Str(ch))
             }
 
             // Math methods
@@ -6928,6 +7039,69 @@ impl InterpreterCore {
                 Ok(Value::Undefined)
             }
         }
+    }
+
+    fn optional_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if offset >= args.count {
+            return Ok(None);
+        }
+        Ok(Some(self.read_arg(args, offset)?))
+    }
+
+    fn required_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+        expected: &str,
+    ) -> Result<Value, InterpreterError> {
+        self.optional_arg(args, offset)?
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: "undefined".to_string(),
+            })
+    }
+
+    fn read_arg(&self, args: RegRange, offset: u32) -> Result<Value, InterpreterError> {
+        let reg = args
+            .start
+            .checked_add(offset)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            })?;
+        self.read_reg(reg)
+    }
+
+    fn expect_object(&self, value: Value, expected: &str) -> Result<ObjectId, InterpreterError> {
+        match value {
+            Value::Object(object_id) => {
+                self.heap
+                    .get(object_id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+                Ok(object_id)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: expected.to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn own_enumerable_keys(&self, object_id: ObjectId) -> Result<Vec<String>, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        Ok(object
+            .properties
+            .keys()
+            .filter(|key| !(object.is_array && key.as_str() == "length"))
+            .cloned()
+            .collect())
     }
 
     /// Map a function index to a builtin capability string if it corresponds to a builtin.
@@ -7339,6 +7513,17 @@ impl InterpreterCore {
 
         // TODO: Add allocation profiling when needed
 
+        Ok(id)
+    }
+
+    pub fn alloc_array_with_prototype(
+        &mut self,
+        prototype: Option<ObjectId>,
+    ) -> Result<ObjectId, InterpreterError> {
+        let id = self.alloc_object_with_prototype(prototype)?;
+        if let Some(object) = self.heap.get_mut(id.0 as usize) {
+            object.is_array = true;
+        }
         Ok(id)
     }
 
@@ -8866,6 +9051,145 @@ mod tests {
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
+    }
+
+    #[test]
+    fn builtin_array_is_array_uses_explicit_array_metadata() {
+        let array = quickjs_execute(&test_module(vec![
+            Ir3Instruction::NewArray { dst: 4 },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ArrayIsArray".to_string()),
+                args: RegRange { start: 4, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+        assert_eq!(array.value, Value::Bool(true));
+
+        let object = quickjs_execute(&test_module(vec![
+            Ir3Instruction::NewObject { dst: 4 },
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("builtin:ArrayIsArray".to_string()),
+                args: RegRange { start: 4, count: 1 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]))
+        .unwrap();
+        assert_eq!(object.value, Value::Bool(false));
+    }
+
+    #[test]
+    fn builtin_array_push_and_pop_mutate_receiver_length() {
+        let mut core = quickjs_test_core();
+        let array_id = core.alloc_array_with_prototype(None).unwrap();
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Int(7);
+        core.registers[2] = Value::Str("x".to_string());
+
+        let pushed = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypePush",
+                RegRange { start: 0, count: 3 },
+            )
+            .unwrap();
+        assert_eq!(pushed, Value::Int(2));
+        assert_eq!(
+            core.heap[array_id.0 as usize].properties.get("0"),
+            Some(&Value::Int(7))
+        );
+        assert_eq!(
+            core.heap[array_id.0 as usize].properties.get("1"),
+            Some(&Value::Str("x".to_string()))
+        );
+        assert_eq!(
+            core.heap[array_id.0 as usize].properties.get("length"),
+            Some(&Value::Int(2))
+        );
+
+        let popped = core
+            .dispatch_builtin_hostcall(
+                "builtin:ArrayPrototypePop",
+                RegRange { start: 0, count: 1 },
+            )
+            .unwrap();
+        assert_eq!(popped, Value::Str("x".to_string()));
+        assert_eq!(
+            core.heap[array_id.0 as usize].properties.get("length"),
+            Some(&Value::Int(1))
+        );
+        assert!(!core.heap[array_id.0 as usize].properties.contains_key("1"));
+    }
+
+    #[test]
+    fn builtin_object_keys_and_values_return_allocated_arrays() {
+        let mut core = quickjs_test_core();
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object_id, "b".to_string(), Value::Int(2))
+            .unwrap();
+        core.set_object_property(object_id, "a".to_string(), Value::Int(1))
+            .unwrap();
+        core.registers[4] = Value::Object(object_id);
+
+        let keys = core
+            .dispatch_builtin_hostcall("builtin:ObjectKeys", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Object(keys_id) = keys else {
+            panic!("Object.keys should return an array object");
+        };
+        assert_ne!(keys_id, object_id);
+        assert!(core.heap[keys_id.0 as usize].is_array);
+        assert_eq!(
+            core.read_array_like_values(keys_id),
+            vec![Value::Str("a".to_string()), Value::Str("b".to_string())]
+        );
+
+        let values = core
+            .dispatch_builtin_hostcall("builtin:ObjectValues", RegRange { start: 4, count: 1 })
+            .unwrap();
+        let Value::Object(values_id) = values else {
+            panic!("Object.values should return an array object");
+        };
+        assert_ne!(values_id, object_id);
+        assert!(core.heap[values_id.0 as usize].is_array);
+        assert_eq!(
+            core.read_array_like_values(values_id),
+            vec![Value::Int(1), Value::Int(2)]
+        );
+    }
+
+    #[test]
+    fn builtin_string_char_at_uses_receiver_and_optional_index() {
+        let mut core = quickjs_test_core();
+        core.registers[4] = Value::Str("hello".to_string());
+        core.registers[5] = Value::Int(1);
+
+        let explicit = core
+            .dispatch_builtin_hostcall(
+                "builtin:StringPrototypeCharAt",
+                RegRange { start: 4, count: 2 },
+            )
+            .unwrap();
+        assert_eq!(explicit, Value::Str("e".to_string()));
+
+        core.registers[4] = Value::Int(42);
+        let default_index = core
+            .dispatch_builtin_hostcall(
+                "builtin:StringPrototypeCharAt",
+                RegRange { start: 4, count: 1 },
+            )
+            .unwrap();
+        assert_eq!(default_index, Value::Str("4".to_string()));
+
+        core.registers[5] = Value::Int(99);
+        let out_of_range = core
+            .dispatch_builtin_hostcall(
+                "builtin:StringPrototypeCharAt",
+                RegRange { start: 4, count: 2 },
+            )
+            .unwrap();
+        assert_eq!(out_of_range, Value::Str(String::new()));
     }
 
     // -----------------------------------------------------------------------

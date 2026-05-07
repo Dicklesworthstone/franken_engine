@@ -1,0 +1,237 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-warehouse-retention-planner-fixtures.v1",
+  "base_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "source_revision": "fixture-revision",
+    "decision": "pass",
+    "fail_closed_reasons": [],
+    "remediation_commands": [],
+    "artifact_rows": [
+      {
+        "source_id": "run_manifest_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-run-manifest.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "provided": true,
+        "estimated_bytes": 36000
+      },
+      {
+        "source_id": "trace_ids_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-trace-ids.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "provided": true,
+        "estimated_bytes": 28000,
+        "replay_preserve": true
+      },
+      {
+        "source_id": "state_snapshot_json",
+        "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+        "retention_class": "short_lived_raw_capture",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "provided": true,
+        "estimated_bytes": 14000
+      },
+      {
+        "source_id": "commands_txt",
+        "schema_version": "franken-engine.commands.txt.v1",
+        "retention_class": "audit_log",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "provided": true,
+        "estimated_bytes": 8000
+      },
+      {
+        "source_id": "queue_locality_json",
+        "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "provided": true,
+        "estimated_bytes": 24000
+      },
+      {
+        "source_id": "truth_gate_report_json",
+        "schema_version": "franken-engine.swarm-ops-no-mock-drill-truth-gate.v1",
+        "retention_class": "long_lived_replay_evidence",
+        "decision": "pass",
+        "freshness": "fresh",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "provided": true,
+        "estimated_bytes": 24000
+      },
+      {
+        "source_id": "operator_intent_policy_json",
+        "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+        "retention_class": "policy_snapshot",
+        "decision": "provided",
+        "freshness": "fresh",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "provided": true,
+        "estimated_bytes": 6000
+      }
+    ],
+    "retention_classes": {
+      "short_lived_raw_capture": [
+        "state_snapshot_json"
+      ],
+      "long_lived_replay_evidence": [
+        "run_manifest_json",
+        "trace_ids_json",
+        "queue_locality_json",
+        "truth_gate_report_json"
+      ],
+      "audit_log": [
+        "commands_txt"
+      ],
+      "policy_snapshot": [
+        "operator_intent_policy_json"
+      ]
+    },
+    "hash_basis": {
+      "warehouse_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "artifact_paths": {
+      "evidence_warehouse_json": "fixtures/evidence_warehouse.json",
+      "commands_txt": "fixtures/commands.txt",
+      "events_jsonl": "fixtures/events.jsonl"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "pins_workers_automatically": false,
+      "writes_outside_output_dir": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_bounded_retention",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "storage_pressure_state": "normal",
+        "replay_preserve_source": "trace_ids_json",
+        "minimum_compaction_candidate_count": 1
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "storage_pressure_degradation",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "storage_pressure_state": "critical",
+        "replay_preserve_source": "trace_ids_json",
+        "minimum_compaction_candidate_count": 3
+      },
+      "overrides": {
+        "artifact_rows": [
+          {
+            "source_id": "run_manifest_json",
+            "estimated_bytes": 90000
+          },
+          {
+            "source_id": "trace_ids_json",
+            "estimated_bytes": 80000,
+            "replay_preserve": true
+          },
+          {
+            "source_id": "state_snapshot_json",
+            "estimated_bytes": 40000
+          },
+          {
+            "source_id": "commands_txt",
+            "estimated_bytes": 30000
+          },
+          {
+            "source_id": "queue_locality_json",
+            "estimated_bytes": 70000
+          },
+          {
+            "source_id": "truth_gate_report_json",
+            "estimated_bytes": 60000
+          },
+          {
+            "source_id": "operator_intent_policy_json",
+            "estimated_bytes": 20000
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "replay_preserve_exemption",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "storage_pressure_state": "normal",
+        "replay_preserve_source": "state_snapshot_json",
+        "minimum_compaction_candidate_count": 0
+      },
+      "overrides": {
+        "artifact_rows": [
+          {
+            "source_id": "state_snapshot_json",
+            "replay_preserve": true
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "stale_warehouse_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "storage_pressure_state": "normal",
+        "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-STALE",
+        "minimum_compaction_candidate_count": 1
+      },
+      "overrides": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          {
+            "code": "FE-SWARM-OPS-STALE-BV",
+            "source_id": "state_snapshot_json",
+            "detail": "warehouse freshness is stale"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "contaminated_evidence_refusal",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "storage_pressure_state": "normal",
+        "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-CONTAMINATED",
+        "minimum_compaction_candidate_count": 1
+      },
+      "overrides": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          {
+            "code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK",
+            "source_id": "saturation_replay_report_json",
+            "detail": "local_fallback contamination observed"
+          }
+        ]
+      }
+    }
+  ]
+}

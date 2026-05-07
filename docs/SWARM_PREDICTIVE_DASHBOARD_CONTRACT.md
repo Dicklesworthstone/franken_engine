@@ -275,6 +275,27 @@ cache-reuse evidence is missing, `blocked` when queue-locality evidence is
 contradictory, and `contaminated` when local fallback or fail-closed evidence
 invalidates the advice.
 
+The same operator report now also integrates the SWARM-ACTIONABILITY
+claim-preflight handoff:
+
+- Guard script: `scripts/swarm_actionability_truth_gate.sh`
+- Guard contract: `docs/swarm_actionability_truth_gate_contract_v1.json`
+- Guard report schema: `franken-engine.swarm-actionability-truth-gate.v1`
+- Operator status section: `swarm_actionability_guard`
+
+That handoff carries actionability readiness, guard decision, top blocked or
+divergent candidate, fail-closed reason codes, exact remediation commands, and
+deterministic source artifact paths into the existing
+`scripts/swarm_operator_status_report.sh` producer. It is advisory-only. It
+must not be described as live bead mutation, automatic claim execution,
+automatic reopen, automatic reassignment, Agent Mail mutation, Git mutation,
+`rch` execution, Cargo execution, or queue mutation. The operator status
+section reports `ready` when claim guidance is fresh and safe, `degraded` when
+the guard only supports defer or observe-only guidance, `blocked` when the
+guard fails closed on blocked or divergent claimability evidence, and
+`contaminated` when stale exported state or unsafe mutation claims invalidate
+the guidance.
+
 The same operator report now also integrates the SWARM-SCALE-IV
 capability-affinity routing handoff:
 

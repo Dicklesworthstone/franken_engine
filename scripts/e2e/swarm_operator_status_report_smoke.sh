@@ -1434,6 +1434,129 @@ write_topology_queue_advisory_fixtures() {
     }' >"${fixture_dir}/swarm_topology_aware_queue_advisory.json"
 }
 
+write_actionability_guard_fixtures() {
+  local fixture_dir="$1"
+  local mode="${2:-healthy}"
+  local decision="safe_to_claim"
+  local primary_candidate_id="bd-ready1"
+  local primary_candidate_decision="safe_to_claim"
+  local primary_candidate_states='["ready"]'
+  local primary_candidate_assignees='[]'
+  local reason_codes='[]'
+  local fail_closed_reasons='[]'
+  local remediation_commands='[]'
+  local db_newer=false
+  local all_sources_fresh=true
+  local missing_optional_sources='[]'
+  local candidate_summary='{"candidate_count":1,"ready_count":1,"in_progress_count":0,"blocked_count":0,"reservation_count":0,"dirty_overlap_count":0}'
+
+  case "$mode" in
+    healthy)
+      ;;
+    blocked_divergence)
+      decision="fail_closed"
+      primary_candidate_id="bd-5oef0"
+      primary_candidate_decision="fail_closed"
+      primary_candidate_states='["blocked"]'
+      reason_codes='["FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"]'
+      fail_closed_reasons='[{"code":"FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE","source_id":"bd-5oef0","detail":"blocked bead advertised as actionable in bv"}]'
+      remediation_commands='["br ready --json","bv --recipe actionable --robot-plan"]'
+      candidate_summary='{"candidate_count":1,"ready_count":0,"in_progress_count":0,"blocked_count":1,"reservation_count":0,"dirty_overlap_count":0}'
+      ;;
+    stale_source)
+      decision="fail_closed"
+      primary_candidate_id="bd-parent"
+      primary_candidate_decision="fail_closed"
+      primary_candidate_states='["ready"]'
+      reason_codes='["FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"]'
+      fail_closed_reasons='[{"code":"FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE","source_id":"source_freshness_json","detail":"source freshness metadata reports stale exported state"}]'
+      remediation_commands='["br sync --status --json"]'
+      db_newer=true
+      all_sources_fresh=false
+      candidate_summary='{"candidate_count":1,"ready_count":1,"in_progress_count":0,"blocked_count":0,"reservation_count":0,"dirty_overlap_count":0}'
+      ;;
+    dirty_overlap)
+      decision="defer"
+      primary_candidate_id="bd-ready-dirty"
+      primary_candidate_decision="defer"
+      primary_candidate_states='["ready","reserved","dirty_overlap"]'
+      primary_candidate_assignees='["OtherAgent"]'
+      reason_codes='["FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"]'
+      fail_closed_reasons='[{"code":"FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP","source_id":"dirty_paths","detail":"dirty worktree overlaps reserved or claimed surface"}]'
+      remediation_commands='["git status --short --branch"]'
+      candidate_summary='{"candidate_count":1,"ready_count":1,"in_progress_count":0,"blocked_count":0,"reservation_count":1,"dirty_overlap_count":1}'
+      ;;
+    *)
+      record_failure "unknown actionability guard mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  : >"${fixture_dir}/swarm_actionability_guard.events.jsonl"
+  printf 'swarm actionability guard fixture\n' >"${fixture_dir}/swarm_actionability_guard.report.md"
+  printf './scripts/swarm_actionability_truth_gate.sh --smoke-fixture\n' >"${fixture_dir}/swarm_actionability_guard.commands.txt"
+
+  jq -n \
+    --arg artifact_path "${fixture_dir}/swarm_actionability_report.json" \
+    --arg fixture_dir "$fixture_dir" \
+    --arg decision "$decision" \
+    --arg primary_candidate_id "$primary_candidate_id" \
+    --arg primary_candidate_decision "$primary_candidate_decision" \
+    --argjson primary_candidate_states "$primary_candidate_states" \
+    --argjson primary_candidate_assignees "$primary_candidate_assignees" \
+    --argjson reason_codes "$reason_codes" \
+    --argjson fail_closed_reasons "$fail_closed_reasons" \
+    --argjson remediation_commands "$remediation_commands" \
+    --argjson db_newer "$db_newer" \
+    --argjson all_sources_fresh "$all_sources_fresh" \
+    --argjson missing_optional_sources "$missing_optional_sources" \
+    --argjson candidate_summary "$candidate_summary" \
+    '{
+      schema_version:"franken-engine.swarm-actionability-truth-gate.v1",
+      source_revision:"smoke-rev",
+      generated_epoch_seconds:1786176000,
+      decision:$decision,
+      primary_candidate_id:$primary_candidate_id,
+      candidate_summary:$candidate_summary,
+      candidate_reports:[{
+        candidate_id:$primary_candidate_id,
+        decision:$primary_candidate_decision,
+        states:$primary_candidate_states,
+        reason_codes:$reason_codes,
+        evidence:{assignees:$primary_candidate_assignees}
+      }],
+      fail_closed_reasons:$fail_closed_reasons,
+      remediation_commands:$remediation_commands,
+      source_freshness:{
+        db_newer:$db_newer,
+        all_sources_fresh:$all_sources_fresh,
+        missing_optional_sources:$missing_optional_sources
+      },
+      artifact_paths:{
+        actionability_report_json:$artifact_path,
+        events_jsonl:($fixture_dir + "/swarm_actionability_guard.events.jsonl"),
+        commands_txt:($fixture_dir + "/swarm_actionability_guard.commands.txt"),
+        report_md:($fixture_dir + "/swarm_actionability_guard.report.md")
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        mutates_br:false,
+        claims_beads:false,
+        reopens_beads:false,
+        closes_beads:false,
+        reassigns_beads:false,
+        releases_reservations:false,
+        sends_agent_mail:false,
+        mutates_git:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false
+      }
+    }' >"${fixture_dir}/swarm_actionability_report.json"
+}
+
 write_queue_tuning_promotion_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -2370,6 +2493,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_capability_affinity_fixtures "$fixture_dir" "blocked"
       ;;
+    actionability_guard_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_actionability_guard_fixtures "$fixture_dir" "healthy"
+      ;;
+    actionability_guard_blocked_divergence)
+      write_healthy_fixtures "$fixture_dir"
+      write_actionability_guard_fixtures "$fixture_dir" "blocked_divergence"
+      ;;
+    actionability_guard_stale_source)
+      write_healthy_fixtures "$fixture_dir"
+      write_actionability_guard_fixtures "$fixture_dir" "stale_source"
+      ;;
+    actionability_guard_dirty_overlap)
+      write_healthy_fixtures "$fixture_dir"
+      write_actionability_guard_fixtures "$fixture_dir" "dirty_overlap"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -2418,6 +2557,7 @@ run_case() {
   [[ -f "${fixture_dir}/swarm_topology_placement_receipt.json" ]] && extra_args+=(--swarm-topology-placement-receipt-json "${fixture_dir}/swarm_topology_placement_receipt.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" ]] && extra_args+=(--swarm-topology-placement-evidence-ledger-json "${fixture_dir}/swarm_topology_placement_evidence_ledger.json")
   [[ -f "${fixture_dir}/swarm_topology_aware_queue_advisory.json" ]] && extra_args+=(--swarm-topology-aware-queue-advisory-json "${fixture_dir}/swarm_topology_aware_queue_advisory.json")
+  [[ -f "${fixture_dir}/swarm_actionability_report.json" ]] && extra_args+=(--swarm-actionability-report-json "${fixture_dir}/swarm_actionability_report.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_advisory.json" ]] && extra_args+=(--swarm-capability-affinity-routing-advisory-json "${fixture_dir}/swarm_capability_affinity_routing_advisory.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json" ]] && extra_args+=(--swarm-capability-affinity-routing-outcome-ledger-json "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json")
 
@@ -2564,6 +2704,24 @@ run_case() {
       and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.changes_live_queue_policy == false)
       and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.pins_workers_automatically == false)
     ))
+    and (.predictive_dashboard.swarm_actionability_guard.readiness | type == "string")
+    and (.predictive_dashboard.swarm_actionability_guard.guard_decision | type == "string")
+    and ((.predictive_dashboard.swarm_actionability_guard.primary_candidate_id == null) or (.predictive_dashboard.swarm_actionability_guard.primary_candidate_id | type == "string"))
+    and (.predictive_dashboard.swarm_actionability_guard.reason_codes | type == "array")
+    and (.predictive_dashboard.swarm_actionability_guard.remediation_commands | type == "array")
+    and (.predictive_dashboard.swarm_actionability_guard.source_freshness | type == "object")
+    and (.predictive_dashboard.swarm_actionability_guard.artifact_paths | type == "object")
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.mutates_br == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.claims_beads == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.reopens_beads == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.closes_beads == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.reassigns_beads == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.releases_reservations == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.sends_agent_mail == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.mutates_git == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.runs_cargo == false)
+    and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.runs_rch == false)
     and (.predictive_dashboard.swarm_capability_affinity_routing.readiness | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.advisory_decision | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision | type == "string")
@@ -3145,6 +3303,49 @@ run_case() {
         and any(.degraded[]; .component == "swarm_capability_affinity_routing")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    actionability_guard_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_actionability_guard.readiness == "ready"
+        and .predictive_dashboard.swarm_actionability_guard.severity == "ok"
+        and .predictive_dashboard.swarm_actionability_guard.guard_decision == "safe_to_claim"
+        and .predictive_dashboard.swarm_actionability_guard.primary_candidate_id == "bd-ready1"
+        and (.predictive_dashboard.swarm_actionability_guard.reason_codes | length) == 0
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    actionability_guard_blocked_divergence)
+      jq -e '
+        .predictive_dashboard.swarm_actionability_guard.readiness == "blocked"
+        and .predictive_dashboard.swarm_actionability_guard.severity == "warning"
+        and .predictive_dashboard.swarm_actionability_guard.guard_decision == "fail_closed"
+        and .predictive_dashboard.swarm_actionability_guard.primary_candidate_id == "bd-5oef0"
+        and (.predictive_dashboard.swarm_actionability_guard.reason_codes | index("FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"))
+        and .recommendations[0].action == "respect_actionability_guard_block"
+        and any(.degraded[]; .component == "swarm_actionability_guard")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    actionability_guard_stale_source)
+      jq -e '
+        .predictive_dashboard.swarm_actionability_guard.readiness == "contaminated"
+        and .predictive_dashboard.swarm_actionability_guard.severity == "critical"
+        and .predictive_dashboard.swarm_actionability_guard.guard_decision == "fail_closed"
+        and .predictive_dashboard.swarm_actionability_guard.source_freshness.db_newer == true
+        and .predictive_dashboard.swarm_actionability_guard.source_freshness.all_sources_fresh == false
+        and (.predictive_dashboard.swarm_actionability_guard.reason_codes | index("FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"))
+        and .recommendations[0].action == "refresh_actionability_guard"
+        and any(.degraded[]; .component == "swarm_actionability_guard")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    actionability_guard_dirty_overlap)
+      jq -e '
+        .predictive_dashboard.swarm_actionability_guard.readiness == "degraded"
+        and .predictive_dashboard.swarm_actionability_guard.severity == "warning"
+        and .predictive_dashboard.swarm_actionability_guard.guard_decision == "defer"
+        and .predictive_dashboard.swarm_actionability_guard.primary_candidate_id == "bd-ready-dirty"
+        and (.predictive_dashboard.swarm_actionability_guard.reason_codes | index("FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"))
+        and .recommendations[0].action == "review_actionability_guard"
+        and any(.degraded[]; .component == "swarm_actionability_guard")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -3202,6 +3403,10 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("capability_affinity_healthy"))
     and (.golden_fixture_cases | index("capability_affinity_degraded"))
     and (.golden_fixture_cases | index("capability_affinity_blocked"))
+    and (.golden_fixture_cases | index("actionability_guard_healthy"))
+    and (.golden_fixture_cases | index("actionability_guard_blocked_divergence"))
+    and (.golden_fixture_cases | index("actionability_guard_stale_source"))
+    and (.golden_fixture_cases | index("actionability_guard_dirty_overlap"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -3268,6 +3473,14 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.related_queue_fidelity"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.artifact_paths"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.guard_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.primary_candidate_id"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.remediation_commands"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.source_freshness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.artifact_paths"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_actionability_guard.mutation_policy"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.readiness"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.advisory_decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision"))
@@ -3321,6 +3534,8 @@ assert_dashboard_contract_truth() {
   grep -Fq 'scripts/swarm_topology_placement_receipt_ledger.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_topology_aware_queue_scorer.sh' "$contract_doc"
   grep -Fq 'docs/swarm_topology_aware_queue_scorer_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_actionability_truth_gate.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_actionability_truth_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_queue_routing_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_routing_outcome_ledger.sh' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
@@ -3331,6 +3546,7 @@ assert_dashboard_contract_truth() {
   grep -Fq 'swarm_resource_envelope' "$contract_doc"
   grep -Fq 'swarm_topology_placement' "$contract_doc"
   grep -Fq 'swarm_topology_aware_queue_advisory' "$contract_doc"
+  grep -Fq 'swarm_actionability_guard' "$contract_doc"
   grep -Fq 'swarm_capability_affinity_routing' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
@@ -3383,6 +3599,10 @@ run_selftest() {
   run_case "capability_affinity_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "actionability_guard_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "actionability_guard_blocked_divergence" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "actionability_guard_stale_source" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "actionability_guard_dirty_overlap" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

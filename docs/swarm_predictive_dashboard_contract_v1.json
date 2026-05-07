@@ -218,6 +218,21 @@
     },
     "handoff_note": "The operator status report integrates topology-aware queue scorer artifacts as advisory-only queue-locality evidence. It must not be described as live queue mutation, automatic worker pinning, automatic task rerouting, automatic queue retuning, RCH execution, Cargo execution, or worker mutation."
   },
+  "swarm_actionability_guard_handoff": {
+    "guard_script": "scripts/swarm_actionability_truth_gate.sh",
+    "guard_contract_json": "docs/swarm_actionability_truth_gate_contract_v1.json",
+    "guard_report_schema_version": "franken-engine.swarm-actionability-truth-gate.v1",
+    "operator_status_section": "swarm_actionability_guard",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "ready": "actionability report is fresh, advisory-only, and can be used as safe claim guidance",
+      "degraded": "actionability report is fresh but only supports defer or observe-only claim guidance",
+      "blocked": "actionability report fails closed on blocked or divergent claimability evidence",
+      "contaminated": "stale exported state or unsafe mutation claims invalidate actionability guidance"
+    },
+    "handoff_note": "The operator status report integrates actionability guard artifacts as advisory-only claim-preflight evidence. It must not be described as live bead mutation, automatic claim execution, automatic reopen, automatic reassignment, Agent Mail mutation, Git mutation, RCH execution, Cargo execution, or queue mutation."
+  },
   "swarm_capability_affinity_routing_handoff": {
     "planner_script": "scripts/swarm_capability_affinity_queue_routing_planner.sh",
     "outcome_ledger_script": "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
@@ -349,6 +364,14 @@
     "predictive_dashboard.swarm_topology_aware_queue_advisory.related_queue_fidelity",
     "predictive_dashboard.swarm_topology_aware_queue_advisory.artifact_paths",
     "predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy",
+    "predictive_dashboard.swarm_actionability_guard.readiness",
+    "predictive_dashboard.swarm_actionability_guard.guard_decision",
+    "predictive_dashboard.swarm_actionability_guard.primary_candidate_id",
+    "predictive_dashboard.swarm_actionability_guard.reason_codes",
+    "predictive_dashboard.swarm_actionability_guard.remediation_commands",
+    "predictive_dashboard.swarm_actionability_guard.source_freshness",
+    "predictive_dashboard.swarm_actionability_guard.artifact_paths",
+    "predictive_dashboard.swarm_actionability_guard.mutation_policy",
     "predictive_dashboard.swarm_capability_affinity_routing.readiness",
     "predictive_dashboard.swarm_capability_affinity_routing.advisory_decision",
     "predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision",
@@ -450,7 +473,11 @@
     "topology_queue_advisory_contaminated",
     "capability_affinity_healthy",
     "capability_affinity_degraded",
-    "capability_affinity_blocked"
+    "capability_affinity_blocked",
+    "actionability_guard_healthy",
+    "actionability_guard_blocked_divergence",
+    "actionability_guard_stale_source",
+    "actionability_guard_dirty_overlap"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",

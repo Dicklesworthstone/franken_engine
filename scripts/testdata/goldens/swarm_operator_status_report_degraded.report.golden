@@ -10,6 +10,7 @@
 - Admission budget: `unknown` with `0` deferred
 - Resource envelope: `degraded` / `missing` with `0` admitted and `0` deferred
 - Topology placement: `degraded` class=`missing` cache=`missing` adoption=`missing`
+- Actionability guard: `missing` decision=`missing` candidate=`none` reasons=`0`
 - Capability affinity: `degraded` mode=`missing` preferred=`0` mismatch=`0` gap=`0` drift=`0`
 - Lease exchange posture: `missing`
 - Prefetch advisory: `missing`
@@ -33,6 +34,7 @@
 - Swarm topology placement plan: ``
 - Swarm topology placement receipt: ``
 - Swarm topology placement evidence ledger: ``
+- Swarm actionability report: ``
 - Swarm capability-affinity routing advisory: ``
 - Swarm capability-affinity routing outcome ledger: ``
 - Lease exchange salvage simulation: `missing`

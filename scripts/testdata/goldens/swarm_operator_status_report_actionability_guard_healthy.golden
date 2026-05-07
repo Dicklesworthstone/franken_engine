@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "degraded",
+  "status": "healthy",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 1,
+    "degraded_count": 0,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -94,11 +94,11 @@
     "queue_tuning_canary_action": "continue_canary",
     "queue_tuning_manual_blocker_count": 0,
     "queue_tuning_evidence_link_count": 3,
-    "queue_policy_adoption_readiness": "expiry_required",
+    "queue_policy_adoption_readiness": "retained",
     "queue_policy_adoption_state": "recorded_active_policy",
-    "queue_policy_sustained_gain_verdict": "regression_detected",
-    "queue_policy_expiry_decision": "expire_adopted_policy",
-    "queue_policy_expiry_required": true,
+    "queue_policy_sustained_gain_verdict": "sustained_gain",
+    "queue_policy_expiry_decision": "retain_adopted_policy",
+    "queue_policy_expiry_required": false,
     "queue_policy_supersession_required": false,
     "causal_trace_readiness": "complete",
     "causal_trace_decision": "pass",
@@ -269,13 +269,15 @@
       "changed_paths": []
     },
     "swarm_actionability_guard": {
-      "artifact_status": "missing",
-      "readiness": "missing",
-      "severity": "warning",
-      "guard_decision": "missing",
-      "primary_candidate_id": null,
-      "primary_candidate_decision": null,
-      "primary_candidate_states": [],
+      "artifact_status": "provided",
+      "readiness": "ready",
+      "severity": "ok",
+      "guard_decision": "safe_to_claim",
+      "primary_candidate_id": "bd-ready1",
+      "primary_candidate_decision": "safe_to_claim",
+      "primary_candidate_states": [
+        "ready"
+      ],
       "primary_candidate_assignees": [],
       "reason_codes": [],
       "remediation_commands": [],
@@ -285,8 +287,8 @@
         "missing_optional_sources": []
       },
       "candidate_summary": {
-        "candidate_count": 0,
-        "ready_count": 0,
+        "candidate_count": 1,
+        "ready_count": 1,
         "in_progress_count": 0,
         "blocked_count": 0,
         "reservation_count": 0,
@@ -309,10 +311,10 @@
         "changes_live_queue_policy": false
       },
       "artifact_paths": {
-        "actionability_report_json": "",
-        "events_jsonl": null,
-        "commands_txt": null,
-        "report_md": null
+        "actionability_report_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_actionability_report.json",
+        "events_jsonl": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_actionability_guard.events.jsonl",
+        "commands_txt": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_actionability_guard.commands.txt",
+        "report_md": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_actionability_guard.report.md"
       }
     },
     "rch_incidents": {
@@ -427,7 +429,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -453,7 +455,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -474,7 +476,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/admission_budget_plan.json"
     },
     "swarm_resource_envelope": {
       "artifact_statuses": {
@@ -520,8 +522,8 @@
       "blocked_reason_count": 0,
       "fail_closed_reason_count": 0,
       "artifact_paths": {
-        "resource_envelope_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_resource_envelope.json",
-        "fair_share_batch_plan_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_fair_share_batch_plan.json"
+        "resource_envelope_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
     "swarm_topology_placement": {
@@ -667,9 +669,9 @@
         "enforces_placement_automatically": false
       },
       "artifact_paths": {
-        "placement_plan_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_topology_placement_plan.json",
-        "placement_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_topology_placement_receipt.json",
-        "placement_evidence_ledger_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_topology_placement_evidence_ledger.json"
+        "placement_plan_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
     "swarm_capability_affinity_routing": {
@@ -740,8 +742,8 @@
         "reroutes_tasks_automatically": false
       },
       "artifact_paths": {
-        "routing_advisory_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_capability_affinity_routing_advisory.json",
-        "outcome_ledger_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
+        "routing_advisory_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_capability_affinity_routing_advisory.json",
+        "outcome_ledger_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
       }
     },
     "lease_exchange_salvage": {
@@ -754,7 +756,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -770,7 +772,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -802,8 +804,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -822,9 +824,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -867,10 +869,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -909,11 +911,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -953,11 +955,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -968,8 +970,8 @@
         "expiry_supersession_plan": "provided",
         "expiry_supersession_ledger": "provided"
       },
-      "severity": "warning",
-      "readiness": "expiry_required",
+      "severity": "ok",
+      "readiness": "retained",
       "adoption_receipt_id": "queue-policy-adoption-receipt-smoke",
       "adoption_state": "recorded_active_policy",
       "adopted_policy_bundle_id": "queue-tuning-policy-bundle-smoke",
@@ -993,11 +995,11 @@
         "previous_policy_retention": "retain_for_rollback",
         "expiry_policy": "score after window"
       },
-      "sustained_gain_verdict": "regression_detected",
+      "sustained_gain_verdict": "sustained_gain",
       "sustained_gain_receipt_id": "queue-policy-sustained-gain-smoke",
-      "rollback_relevant_drift_count": 1,
-      "expiry_decision": "expire_adopted_policy",
-      "expiry_required": true,
+      "rollback_relevant_drift_count": 0,
+      "expiry_decision": "retain_adopted_policy",
+      "expiry_required": false,
       "supersession_required": false,
       "newer_candidate_bundle_id": "queue-tuning-policy-bundle-smoke",
       "newer_candidate_id": "raise_proof_health_penalty",
@@ -1006,31 +1008,27 @@
       "supersession_executed": false,
       "decision_reasons": [
         {
-          "kind": "sustained_gain_regression",
-          "detail": "sustained-gain receipt reports regression"
-        },
-        {
-          "kind": "rollback_relevant_drift",
-          "detail": "post-adoption drift ledger contains rollback-relevant rows"
+          "kind": "sustained_gain_retained",
+          "detail": "sustained-gain evidence supports retention"
         }
       ],
       "fail_closed_reasons": [],
       "ledger_rows": [
         {
           "check": "sustained_gain_verdict",
-          "observed_value": "regression_detected",
-          "effect": "expiry_pressure"
+          "observed_value": "sustained_gain",
+          "effect": "retention_support"
         },
         {
           "check": "newer_candidate_delta",
           "observed_value": "240000",
           "adopted_value": "240000",
-          "effect": "expiry_pressure"
+          "effect": "retention_support"
         },
         {
           "check": "rollback_relevant_drift_count",
-          "observed_value": "1",
-          "effect": "expiry_pressure"
+          "observed_value": "0",
+          "effect": "retention_support"
         }
       ],
       "mutation_policy": {
@@ -1042,10 +1040,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -1103,8 +1101,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/queue_policy_adoption_expiry_required-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/actionability_guard_healthy-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {
@@ -1164,19 +1162,12 @@
       "local_tui_renderer": false
     }
   },
-  "degraded": [
-    {
-      "component": "queue_policy_adoption",
-      "status": "expiry_required",
-      "impact": "policy lifecycle evidence recommends expiry, supersession, or manual review",
-      "remediation": "Route the advisory to a human operator; do not treat it as executed policy retirement or supersession."
-    }
-  ],
+  "degraded": [],
   "recommendations": [
     {
-      "action": "review_queue_policy_adoption_lifecycle",
-      "bead_id": null,
-      "reason": "queue policy adoption lifecycle recommends expiry, supersession, or manual review"
+      "action": "pick_next_ready_bead",
+      "bead_id": "bd-p03vs",
+      "reason": "resource governor admits validation and bead is ready"
     }
   ]
 }

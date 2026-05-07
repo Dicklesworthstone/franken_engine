@@ -64,6 +64,7 @@ swarm_topology_placement_plan_json=""
 swarm_topology_placement_receipt_json=""
 swarm_topology_placement_evidence_ledger_json=""
 swarm_topology_aware_queue_advisory_json=""
+swarm_actionability_report_json=""
 swarm_capability_affinity_routing_advisory_json=""
 swarm_capability_affinity_routing_outcome_ledger_json=""
 
@@ -137,6 +138,7 @@ Options:
   --swarm-topology-placement-receipt-json FILE
   --swarm-topology-placement-evidence-ledger-json FILE
   --swarm-topology-aware-queue-advisory-json FILE
+  --swarm-actionability-report-json FILE
   --swarm-capability-affinity-routing-advisory-json FILE
   --swarm-capability-affinity-routing-outcome-ledger-json FILE
 EOF
@@ -396,6 +398,10 @@ while [[ "$#" -gt 0 ]]; do
       swarm_topology_aware_queue_advisory_json="$2"
       shift 2
       ;;
+    --swarm-actionability-report-json)
+      swarm_actionability_report_json="$2"
+      shift 2
+      ;;
     --swarm-capability-affinity-routing-advisory-json)
       swarm_capability_affinity_routing_advisory_json="$2"
       shift 2
@@ -500,6 +506,7 @@ swarm_topology_placement_receipt_status="missing"
 swarm_topology_placement_evidence_ledger_status="missing"
 swarm_capability_affinity_routing_advisory_status="missing"
 swarm_capability_affinity_routing_outcome_ledger_status="missing"
+swarm_actionability_report_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -541,6 +548,7 @@ if [[ -n "$swarm_topology_placement_plan_json" ]]; then swarm_topology_placement
 if [[ -n "$swarm_topology_placement_receipt_json" ]]; then swarm_topology_placement_receipt_status="provided"; fi
 if [[ -n "$swarm_topology_placement_evidence_ledger_json" ]]; then swarm_topology_placement_evidence_ledger_status="provided"; fi
 if [[ -n "$swarm_topology_aware_queue_advisory_json" ]]; then swarm_topology_aware_queue_advisory_status="provided"; else swarm_topology_aware_queue_advisory_status="missing"; fi
+if [[ -n "$swarm_actionability_report_json" ]]; then swarm_actionability_report_status="provided"; fi
 if [[ -n "$swarm_capability_affinity_routing_advisory_json" ]]; then swarm_capability_affinity_routing_advisory_status="provided"; fi
 if [[ -n "$swarm_capability_affinity_routing_outcome_ledger_json" ]]; then swarm_capability_affinity_routing_outcome_ledger_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
@@ -584,6 +592,7 @@ swarm_topology_placement_plan_data="$(json_or_default "$swarm_topology_placement
 swarm_topology_placement_receipt_data="$(json_or_default "$swarm_topology_placement_receipt_json" '{"schema_version":"franken-engine.swarm-topology-placement-receipt.v1","decision":"missing","adoption_status":"missing","recommended_placement_targets":[],"recommended_worker_ids":[],"topology_locality_assumptions":[],"cache_warmth_assumptions":{"state":"missing","opportunities":[]},"validity_window":{},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"adoption_drift_reason_codes":[],"adoption_drift_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-receipt')"
 swarm_topology_placement_evidence_ledger_data="$(json_or_default "$swarm_topology_placement_evidence_ledger_json" '{"schema_version":"franken-engine.swarm-topology-placement-evidence-ledger.v1","decision":"missing","receipts":[],"adoption_history":[],"summary":{"receipt_count":0,"adopted_count":0,"drifted_count":0,"expired_count":0,"blocked_count":0,"fail_closed_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-evidence-ledger')"
 swarm_topology_aware_queue_advisory_data="$(json_or_default "$swarm_topology_aware_queue_advisory_json" '{"schema_version":"franken-engine.swarm-topology-aware-queue-advisory.v1","decision":"missing","truth_state":"missing","reason_codes":[],"worker_exclusions":{"excluded_worker_ids":[],"excluded_worker_count":0},"locality_bias_summary":{"rank_bias_mode":"missing","usable_preferred_worker_ids":[],"preferred_worker_ids":[],"preferred_numa_nodes":[],"hot_cache_reuse_confidence_millionths":0,"locality_confidence_millionths":0},"risk_budget_summary":{"task_count":0,"queue_row_count":0,"bottleneck_count":0,"critical_bottleneck_count":0,"proof_transport_state":"missing"},"feedback_summary":{"locality_outcome_sample_count":0,"confirmed_task_ids":[],"missed_cache_reuse_task_ids":[],"drift_task_ids":[],"contamination_task_ids":[]},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false}}' 'swarm-topology-aware-queue-advisory')"
+swarm_actionability_report_data="$(json_or_default "$swarm_actionability_report_json" '{"schema_version":"franken-engine.swarm-actionability-truth-gate.v1","decision":"missing","primary_candidate_id":null,"candidate_summary":{"candidate_count":0,"ready_count":0,"in_progress_count":0,"blocked_count":0,"reservation_count":0,"dirty_overlap_count":0},"candidate_reports":[],"fail_closed_reasons":[],"remediation_commands":[],"source_freshness":{"db_newer":false,"all_sources_fresh":true,"missing_optional_sources":[]},"artifact_paths":{},"mutation_policy":{"advisory_only":true,"proof_only":true,"mutates_br":false,"claims_beads":false,"reopens_beads":false,"closes_beads":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"mutates_git":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-actionability-report')"
 swarm_capability_affinity_routing_advisory_data="$(json_or_default "$swarm_capability_affinity_routing_advisory_json" '{"schema_version":"franken-engine.capability-affinity-queue-routing-advisory.v1","decision":"missing","truth_state":"missing","reason_codes":[],"worker_affinity_summary":{"task_count":0,"routing_mode":"missing","recommended_topology_class":"missing","preferred_worker_ids":[],"advised_worker_ids":[],"excluded_worker_ids":[],"watch_worker_ids":[],"rehab_candidate_worker_ids":[],"broader_fallback_task_ids":[],"preferred_cohort_score":{"capability_coverage_score":0,"toolchain_parity_score":0,"locality_compatibility_score":0,"rehabilitation_exclusion_score":0,"total_score":0},"advisory_cohort_score":{"capability_coverage_score":0,"toolchain_parity_score":0,"locality_compatibility_score":0,"rehabilitation_exclusion_score":0,"total_score":0},"confidence_score":0},"capability_coverage_summary":{"required_capabilities":[],"coverage_confirmed_task_ids":[],"missing_required_capability_task_ids":[],"score":0},"toolchain_parity_summary":{"required_toolchain_fingerprints":[],"toolchain_mismatch_task_ids":[],"score":0},"supporting_evidence_summary":{"routing_outcome_samples_present":false,"routing_outcome_sample_count":0},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"reroutes_tasks_automatically":false}}' 'swarm-capability-affinity-routing-advisory')"
 swarm_capability_affinity_routing_outcome_ledger_data="$(json_or_default "$swarm_capability_affinity_routing_outcome_ledger_json" '{"schema_version":"franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1","decision":"missing","truth_state":"missing","routing_mode":"missing","reason_codes":[],"planned_advised_worker_ids":[],"upstream_missing_required_capability_task_ids":[],"upstream_toolchain_mismatch_task_ids":[],"matched_task_ids":[],"mismatched_task_ids":[],"capability_gap_task_ids":[],"toolchain_drift_task_ids":[],"contamination_task_ids":[],"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"task_outcomes":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"reroutes_tasks_automatically":false}}' 'swarm-capability-affinity-routing-outcome-ledger')"
 inputs_bundle_path="${run_dir}/inputs.bundle.json"
@@ -643,6 +652,7 @@ inputs_bundle_path="${run_dir}/inputs.bundle.json"
   printf '"swarm_topology_placement_receipt":%s,\n' "$swarm_topology_placement_receipt_data"
   printf '"swarm_topology_placement_evidence_ledger":%s,\n' "$swarm_topology_placement_evidence_ledger_data"
   printf '"swarm_topology_aware_queue_advisory":%s,\n' "$swarm_topology_aware_queue_advisory_data"
+  printf '"swarm_actionability_report":%s,\n' "$swarm_actionability_report_data"
   printf '"swarm_capability_affinity_routing_advisory":%s,\n' "$swarm_capability_affinity_routing_advisory_data"
   printf '"swarm_capability_affinity_routing_outcome_ledger":%s\n' "$swarm_capability_affinity_routing_outcome_ledger_data"
   printf '}\n'
@@ -697,6 +707,7 @@ jq -n \
   --arg swarm_topology_placement_receipt_status "$swarm_topology_placement_receipt_status" \
   --arg swarm_topology_placement_evidence_ledger_status "$swarm_topology_placement_evidence_ledger_status" \
   --arg swarm_topology_aware_queue_advisory_status "$swarm_topology_aware_queue_advisory_status" \
+  --arg swarm_actionability_report_status "$swarm_actionability_report_status" \
   --arg swarm_capability_affinity_routing_advisory_status "$swarm_capability_affinity_routing_advisory_status" \
   --arg swarm_capability_affinity_routing_outcome_ledger_status "$swarm_capability_affinity_routing_outcome_ledger_status" \
   --arg swarm_resource_envelope_json "$swarm_resource_envelope_json" \
@@ -705,6 +716,7 @@ jq -n \
   --arg swarm_topology_placement_receipt_json "$swarm_topology_placement_receipt_json" \
   --arg swarm_topology_placement_evidence_ledger_json "$swarm_topology_placement_evidence_ledger_json" \
   --arg swarm_topology_aware_queue_advisory_json "$swarm_topology_aware_queue_advisory_json" \
+  --arg swarm_actionability_report_json "$swarm_actionability_report_json" \
   --arg swarm_capability_affinity_routing_advisory_json "$swarm_capability_affinity_routing_advisory_json" \
   --arg swarm_capability_affinity_routing_outcome_ledger_json "$swarm_capability_affinity_routing_outcome_ledger_json" \
   --arg status_path "$status_path" \
@@ -794,6 +806,7 @@ jq -n \
   | $input.swarm_topology_placement_receipt as $swarm_topology_placement_receipt
   | $input.swarm_topology_placement_evidence_ledger as $swarm_topology_placement_evidence_ledger
   | $input.swarm_topology_aware_queue_advisory as $swarm_topology_aware_queue_advisory
+  | $input.swarm_actionability_report as $swarm_actionability_report
   | $input.swarm_capability_affinity_routing_advisory as $swarm_capability_affinity_routing_advisory
   | $input.swarm_capability_affinity_routing_outcome_ledger as $swarm_capability_affinity_routing_outcome_ledger
   | ($ready | map(bead_row) | sort_by(.priority // 999, .id)) as $ready_rows
@@ -1995,6 +2008,93 @@ jq -n \
       }
     }) as $topology_queue_advisory_summary
   | ([
+        $swarm_actionability_report.mutation_policy
+      ]
+      | map(select(. != null))
+      | any(.[]; (.advisory_only != true)
+          or (.mutates_br == true)
+          or (.claims_beads == true)
+          or (.reopens_beads == true)
+          or (.closes_beads == true)
+          or (.reassigns_beads == true)
+          or (.releases_reservations == true)
+          or (.sends_agent_mail == true)
+          or (.mutates_git == true)
+          or (.runs_cargo == true)
+          or (.runs_rch == true)
+          or (.mutates_remote_workers == true)
+          or (.changes_live_queue_policy == true))) as $actionability_unsafe_mutation_claim
+  | (($swarm_actionability_report.fail_closed_reasons // [])
+      | unique_by([.code, .source_id, .detail])) as $actionability_fail_reasons
+  | (($swarm_actionability_report.candidate_reports // [])
+      | map(select(.candidate_id == ($swarm_actionability_report.primary_candidate_id // "")))
+      | .[0]) as $actionability_primary_candidate
+  | (($swarm_actionability_report.source_freshness // {})) as $actionability_source_freshness
+  | ((($actionability_source_freshness.db_newer // false)
+      or ((if ($actionability_source_freshness | has("all_sources_fresh")) then $actionability_source_freshness.all_sources_fresh else true end) | not))) as $actionability_stale_sources
+  | ({
+      artifact_status: $swarm_actionability_report_status,
+      readiness: (
+        if $swarm_actionability_report_status == "missing" then "missing"
+        elif $actionability_unsafe_mutation_claim
+          or $actionability_stale_sources then "contaminated"
+        elif (($swarm_actionability_report.decision // "") == "fail_closed") then "blocked"
+        elif (($swarm_actionability_report.decision // "") | IN("defer", "observe_only")) then "degraded"
+        else "ready"
+        end
+      ),
+      severity: (
+        if $swarm_actionability_report_status == "missing" then "warning"
+        elif $actionability_unsafe_mutation_claim
+          or $actionability_stale_sources then "critical"
+        elif (($swarm_actionability_report.decision // "") | IN("fail_closed", "defer", "observe_only")) then "warning"
+        else "ok"
+        end
+      ),
+      guard_decision: ($swarm_actionability_report.decision // "missing"),
+      primary_candidate_id: ($swarm_actionability_report.primary_candidate_id // null),
+      primary_candidate_decision: ($actionability_primary_candidate.decision // null),
+      primary_candidate_states: ($actionability_primary_candidate.states // []),
+      primary_candidate_assignees: ($actionability_primary_candidate.evidence.assignees // []),
+      reason_codes: ($actionability_fail_reasons | map(.code) | unique),
+      remediation_commands: ($swarm_actionability_report.remediation_commands // []),
+      source_freshness: {
+        db_newer: ($actionability_source_freshness.db_newer // false),
+        all_sources_fresh: (if ($actionability_source_freshness | has("all_sources_fresh")) then $actionability_source_freshness.all_sources_fresh else true end),
+        missing_optional_sources: ($actionability_source_freshness.missing_optional_sources // [])
+      },
+      candidate_summary: {
+        candidate_count: ($swarm_actionability_report.candidate_summary.candidate_count // 0),
+        ready_count: ($swarm_actionability_report.candidate_summary.ready_count // 0),
+        in_progress_count: ($swarm_actionability_report.candidate_summary.in_progress_count // 0),
+        blocked_count: ($swarm_actionability_report.candidate_summary.blocked_count // 0),
+        reservation_count: ($swarm_actionability_report.candidate_summary.reservation_count // 0),
+        dirty_overlap_count: ($swarm_actionability_report.candidate_summary.dirty_overlap_count // 0)
+      },
+      warnings: bounded($actionability_fail_reasons),
+      mutation_policy: {
+        advisory_only: ($swarm_actionability_report.mutation_policy.advisory_only // true),
+        mutates_br: ($swarm_actionability_report.mutation_policy.mutates_br // false),
+        claims_beads: ($swarm_actionability_report.mutation_policy.claims_beads // false),
+        reopens_beads: ($swarm_actionability_report.mutation_policy.reopens_beads // false),
+        closes_beads: ($swarm_actionability_report.mutation_policy.closes_beads // false),
+        reassigns_beads: ($swarm_actionability_report.mutation_policy.reassigns_beads // false),
+        releases_reservations: ($swarm_actionability_report.mutation_policy.releases_reservations // false),
+        sends_agent_mail: ($swarm_actionability_report.mutation_policy.sends_agent_mail // false),
+        mutates_git: ($swarm_actionability_report.mutation_policy.mutates_git // false),
+        runs_cargo: ($swarm_actionability_report.mutation_policy.runs_cargo // false),
+        runs_rch: ($swarm_actionability_report.mutation_policy.runs_rch // false),
+        mutates_remote_workers: ($swarm_actionability_report.mutation_policy.mutates_remote_workers // false),
+        changes_live_queue_policy: ($swarm_actionability_report.mutation_policy.changes_live_queue_policy // false)
+      },
+      artifact_paths: {
+        actionability_report_json: ($swarm_actionability_report.artifact_paths.actionability_report_json // $swarm_actionability_report_json),
+        events_jsonl: ($swarm_actionability_report.artifact_paths.events_jsonl // null),
+        commands_txt: ($swarm_actionability_report.artifact_paths.commands_txt // null),
+        report_md: ($swarm_actionability_report.artifact_paths.report_md // null)
+      }
+    }) as $actionability_summary
+  | ([
         $swarm_capability_affinity_routing_advisory.mutation_policy,
         $swarm_capability_affinity_routing_outcome_ledger.mutation_policy
       ]
@@ -2135,6 +2235,15 @@ jq -n \
         [{component: "resource_leases", status: "missing", impact: "resource lease admission artifact is missing", remediation: "Provide --resource-lease-plan-json before publishing the operator status feed."}]
       elif $resource_leases_summary.severity != "ok" then
         [{component: "resource_leases", status: $resource_leases_summary.lease_decision, impact: "resource lease admission is not fully green", remediation: ($resource_leases_summary.reason // "Inspect the resource lease plan before running validation.")}]
+      else [] end)
+    + (if $swarm_actionability_report_status == "missing" then
+        []
+      elif $actionability_summary.readiness == "contaminated" then
+        [{component: "swarm_actionability_guard", status: "contaminated", impact: "actionability guard report is stale or carries unsafe mutation claims", remediation: (if (($actionability_summary.remediation_commands // []) | length) > 0 then (($actionability_summary.remediation_commands // []) | join("; ")) else "Refresh the actionability report before trusting claim guidance." end)}]
+      elif $actionability_summary.readiness == "blocked" then
+        [{component: "swarm_actionability_guard", status: "blocked", impact: "actionability guard reports blocked or divergent claimability", remediation: (if (($actionability_summary.remediation_commands // []) | length) > 0 then (($actionability_summary.remediation_commands // []) | join("; ")) else "Respect blocked actionability evidence before claiming new work." end)}]
+      elif $actionability_summary.readiness == "degraded" then
+        [{component: "swarm_actionability_guard", status: "degraded", impact: "actionability guard cannot yet endorse a safe claim", remediation: (if (($actionability_summary.remediation_commands // []) | length) > 0 then (($actionability_summary.remediation_commands // []) | join("; ")) else "Review reservations, dirty overlap, and ownership evidence before claiming work." end)}]
       else [] end)
     + (if $proof_cache_plan_status == "missing" then
         [{component: "proof_cache", status: "missing", impact: "proof reuse cache artifact is missing", remediation: "Provide --proof-cache-plan-json before reusing prior proof artifacts."}]
@@ -2419,6 +2528,7 @@ jq -n \
         },
         collision_risk: $collision_summary,
         proof_freshness: $proof_freshness_summary,
+        swarm_actionability_guard: $actionability_summary,
         rch_incidents: {
           status: (
             if ($rch_incident_summaries | length) == 0 then "none"
@@ -2449,7 +2559,7 @@ jq -n \
         swarm_agent_causal_trace: $causal_trace_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated", "topology_placement_healthy", "topology_placement_drifted", "topology_placement_expired", "topology_placement_blocked", "capability_affinity_healthy", "capability_affinity_degraded", "capability_affinity_blocked"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated", "topology_placement_healthy", "topology_placement_drifted", "topology_placement_expired", "topology_placement_blocked", "topology_queue_advisory_healthy", "topology_queue_advisory_degraded", "topology_queue_advisory_blocked", "topology_queue_advisory_contaminated", "capability_affinity_healthy", "capability_affinity_degraded", "capability_affinity_blocked", "actionability_guard_healthy", "actionability_guard_blocked_divergence", "actionability_guard_stale_source", "actionability_guard_dirty_overlap"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -2462,6 +2572,12 @@ jq -n \
           [recommendation("respect_causal_trace_contamination"; $causal_trace_summary.bead_id; "causal trace handoff is contaminated by fail-closed anomaly evidence")]
         elif $causal_trace_summary.readiness == "blocked" then
           [recommendation("complete_causal_trace_edges"; $causal_trace_summary.bead_id; "in-progress causal trace is missing required handoff edges")]
+        elif $swarm_actionability_report_status != "missing" and $actionability_summary.readiness == "contaminated" then
+          [recommendation("refresh_actionability_guard"; $actionability_summary.primary_candidate_id; "actionability guard report is stale or contaminated")]
+        elif $swarm_actionability_report_status != "missing" and $actionability_summary.readiness == "blocked" then
+          [recommendation("respect_actionability_guard_block"; $actionability_summary.primary_candidate_id; "actionability guard reports blocked or divergent claimability")]
+        elif $swarm_actionability_report_status != "missing" and $actionability_summary.readiness == "degraded" then
+          [recommendation("review_actionability_guard"; $actionability_summary.primary_candidate_id; "actionability guard cannot yet recommend a safe claim")]
         elif $resource_envelope_summary.readiness == "contaminated" then
           [recommendation("respect_resource_envelope_contamination"; null; "resource envelope or fair-share plan is contaminated by fail-closed capacity evidence")]
         elif $resource_envelope_summary.readiness == "blocked" then
@@ -2603,7 +2719,8 @@ jq -n \
         queue_policy_expiry_supersession_plan_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_plan_json,
         queue_policy_expiry_supersession_ledger_json: $queue_policy_adoption_summary.artifact_paths.expiry_supersession_ledger_json,
         swarm_agent_causal_trace_graph_json: $causal_trace_summary.artifact_paths.causal_graph_json,
-        swarm_agent_causal_trace_anomaly_report_json: $causal_trace_summary.artifact_paths.anomaly_report_json
+        swarm_agent_causal_trace_anomaly_report_json: $causal_trace_summary.artifact_paths.anomaly_report_json,
+        swarm_actionability_report_json: $actionability_summary.artifact_paths.actionability_report_json
       }
     }
 JQ
@@ -2621,6 +2738,9 @@ JQ
   printf -- "- Topology placement: \`%s\` class=\`%s\` cache=\`%s\` adoption=\`%s\`\n" "$(jq -r '.summary.topology_placement_readiness' "$status_path")" "$(jq -r '.summary.topology_placement_topology_class' "$status_path")" "$(jq -r '.summary.topology_placement_warm_cache_state' "$status_path")" "$(jq -r '.summary.topology_placement_adoption_status' "$status_path")"
   if jq -e '.predictive_dashboard | has("swarm_topology_aware_queue_advisory")' "$status_path" >/dev/null; then
     printf -- "- Topology queue advisory: \`%s\` decision=\`%s\` bias=\`%s\` excluded=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode' "$status_path")" "$(jq '.predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_count' "$status_path")"
+  fi
+  if jq -e '.predictive_dashboard | has("swarm_actionability_guard")' "$status_path" >/dev/null; then
+    printf -- "- Actionability guard: \`%s\` decision=\`%s\` candidate=\`%s\` reasons=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.guard_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.primary_candidate_id // "none"' "$status_path")" "$(jq '.predictive_dashboard.swarm_actionability_guard.reason_codes | length' "$status_path")"
   fi
   printf -- "- Capability affinity: \`%s\` mode=\`%s\` preferred=\`%s\` mismatch=\`%s\` gap=\`%s\` drift=\`%s\`\n" "$(jq -r '.summary.capability_affinity_readiness' "$status_path")" "$(jq -r '.summary.capability_affinity_routing_mode' "$status_path")" "$(jq '.summary.capability_affinity_preferred_worker_count' "$status_path")" "$(jq '.summary.capability_affinity_mismatch_count' "$status_path")" "$(jq '.summary.capability_affinity_capability_gap_count' "$status_path")" "$(jq '.summary.capability_affinity_toolchain_drift_count' "$status_path")"
   printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
@@ -2645,6 +2765,7 @@ JQ
       {label:"Swarm topology placement plan", path:.artifact_paths.swarm_topology_placement_plan_json},
       {label:"Swarm topology placement receipt", path:.artifact_paths.swarm_topology_placement_receipt_json},
       {label:"Swarm topology placement evidence ledger", path:.artifact_paths.swarm_topology_placement_evidence_ledger_json},
+      {label:"Swarm actionability report", path:.artifact_paths.swarm_actionability_report_json},
       {label:"Swarm capability-affinity routing advisory", path:.artifact_paths.swarm_capability_affinity_routing_advisory_json},
       {label:"Swarm capability-affinity routing outcome ledger", path:.artifact_paths.swarm_capability_affinity_routing_outcome_ledger_json},
       {label:"Lease exchange salvage simulation", path:.artifact_paths.lease_exchange_salvage_simulation_json},

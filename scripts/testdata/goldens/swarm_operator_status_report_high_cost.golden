@@ -321,6 +321,53 @@
       ],
       "changed_paths": []
     },
+    "swarm_actionability_guard": {
+      "artifact_status": "missing",
+      "readiness": "missing",
+      "severity": "warning",
+      "guard_decision": "missing",
+      "primary_candidate_id": null,
+      "primary_candidate_decision": null,
+      "primary_candidate_states": [],
+      "primary_candidate_assignees": [],
+      "reason_codes": [],
+      "remediation_commands": [],
+      "source_freshness": {
+        "db_newer": false,
+        "all_sources_fresh": true,
+        "missing_optional_sources": []
+      },
+      "candidate_summary": {
+        "candidate_count": 0,
+        "ready_count": 0,
+        "in_progress_count": 0,
+        "blocked_count": 0,
+        "reservation_count": 0,
+        "dirty_overlap_count": 0
+      },
+      "warnings": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "claims_beads": false,
+        "reopens_beads": false,
+        "closes_beads": false,
+        "reassigns_beads": false,
+        "releases_reservations": false,
+        "sends_agent_mail": false,
+        "mutates_git": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false
+      },
+      "artifact_paths": {
+        "actionability_report_json": "",
+        "events_jsonl": null,
+        "commands_txt": null,
+        "report_md": null
+      }
+    },
     "rch_incidents": {
       "status": "none",
       "incidents": []
@@ -1150,9 +1197,17 @@
         "topology_placement_drifted",
         "topology_placement_expired",
         "topology_placement_blocked",
+        "topology_queue_advisory_healthy",
+        "topology_queue_advisory_degraded",
+        "topology_queue_advisory_blocked",
+        "topology_queue_advisory_contaminated",
         "capability_affinity_healthy",
         "capability_affinity_degraded",
-        "capability_affinity_blocked"
+        "capability_affinity_blocked",
+        "actionability_guard_healthy",
+        "actionability_guard_blocked_divergence",
+        "actionability_guard_stale_source",
+        "actionability_guard_dirty_overlap"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

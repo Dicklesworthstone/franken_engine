@@ -249,6 +249,25 @@
     },
     "handoff_note": "The operator status report integrates capability-affinity routing advisory and outcome-ledger artifacts as advisory-only worker-cohort and toolchain-safe routing evidence. It must not be described as live queue mutation, automatic task rerouting, automatic worker mutation, RCH execution, Cargo execution, or worker mutation."
   },
+  "swarm_control_surface_catalog_handoff": {
+    "catalog_script": "scripts/swarm_control_surface_catalog_normalizer.sh",
+    "intent_router_script": "scripts/swarm_control_surface_intent_router.sh",
+    "drift_gate_script": "scripts/swarm_control_surface_drift_gate.sh",
+    "catalog_schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+    "intent_plan_schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+    "drift_report_schema_version": "franken-engine.swarm-control-surface-drift-report.v1",
+    "catalog_contract_doc": "docs/SWARM_CONTROL_SURFACE_CATALOG.md",
+    "operator_status_section": "swarm_control_surface_catalog",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "ready": "catalog, intent-router, and drift-gate artifacts agree on an advisory-only surface recommendation",
+      "degraded": "one catalog-routing artifact is missing or degraded but no fail-closed or blocked condition is present",
+      "blocked": "intent routing is blocked by active ownership or explicit route blockers",
+      "contaminated": "catalog, router, or drift evidence fails closed or claims unsafe mutation authority"
+    },
+    "handoff_note": "The operator status report integrates control-surface catalog, intent-router, and drift-gate artifacts as advisory-only routing evidence. It must not be described as a second dashboard producer, live bead mutation, automatic remediation, automatic worker mutation, RCH execution, Cargo execution, or queue mutation."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -384,6 +403,20 @@
     "predictive_dashboard.swarm_capability_affinity_routing.reason_codes",
     "predictive_dashboard.swarm_capability_affinity_routing.artifact_paths",
     "predictive_dashboard.swarm_capability_affinity_routing.mutation_policy",
+    "predictive_dashboard.swarm_control_surface_catalog.readiness",
+    "predictive_dashboard.swarm_control_surface_catalog.catalog_decision",
+    "predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision",
+    "predictive_dashboard.swarm_control_surface_catalog.drift_report_decision",
+    "predictive_dashboard.swarm_control_surface_catalog.surface_count",
+    "predictive_dashboard.swarm_control_surface_catalog.drift_count",
+    "predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface",
+    "predictive_dashboard.swarm_control_surface_catalog.recommended_command_count",
+    "predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes",
+    "predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes",
+    "predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes",
+    "predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning",
+    "predictive_dashboard.swarm_control_surface_catalog.artifact_paths",
+    "predictive_dashboard.swarm_control_surface_catalog.mutation_policy",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -431,6 +464,9 @@
     "franken-engine.swarm-topology-aware-queue-advisory-sources.v1",
     "franken-engine.capability-affinity-queue-routing-advisory.v1",
     "franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1",
+    "franken-engine.swarm-control-surface-catalog.v1",
+    "franken-engine.swarm-control-surface-intent-plan.v1",
+    "franken-engine.swarm-control-surface-drift-report.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -477,7 +513,12 @@
     "actionability_guard_healthy",
     "actionability_guard_blocked_divergence",
     "actionability_guard_stale_source",
-    "actionability_guard_dirty_overlap"
+    "actionability_guard_dirty_overlap",
+    "control_surface_catalog_healthy",
+    "control_surface_catalog_no_match",
+    "control_surface_catalog_drift_fail_closed",
+    "control_surface_catalog_duplicate_warning",
+    "control_surface_catalog_shadow_blocked"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -519,6 +560,7 @@
     "The causal trace section is advisory handoff evidence backed by scripts/swarm_agent_causal_trace_graph.sh and docs/swarm_agent_causal_trace_spine_contract_v1.json; it must not be described as live Agent Mail querying, automatic reservation release, automatic bead repair, rch execution, Cargo execution, or queue mutation.",
     "The topology placement section is advisory locality and cache-residency evidence backed by scripts/swarm_topology_placement_planner.sh and scripts/swarm_topology_placement_receipt_ledger.sh; it must not be described as live worker pinning, host rebinding, queue mutation, placement enforcement, target-dir repair, RCH execution, Cargo execution, or worker mutation.",
     "The capability-affinity routing section is advisory worker-cohort and toolchain-safe routing evidence backed by scripts/swarm_capability_affinity_queue_routing_planner.sh and scripts/swarm_capability_affinity_routing_outcome_ledger.sh; it must not be described as live queue mutation, automatic task rerouting, automatic worker mutation, RCH execution, Cargo execution, or worker mutation.",
+    "The control-surface catalog section is advisory routing evidence backed by scripts/swarm_control_surface_catalog_normalizer.sh, scripts/swarm_control_surface_intent_router.sh, and scripts/swarm_control_surface_drift_gate.sh; it must not be described as a second dashboard producer, live bead mutation, automatic remediation, automatic worker mutation, RCH execution, Cargo execution, or queue mutation.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

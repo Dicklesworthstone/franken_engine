@@ -722,6 +722,206 @@ write_capability_affinity_fixtures() {
     }' >"${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json"
 }
 
+write_control_surface_catalog_fixtures() {
+  local fixture_dir="$1"
+  local mode="${2:-healthy}"
+  local catalog_decision="pass"
+  local catalog_findings='[]'
+  local intent_decision="pass"
+  local recommendations='[]'
+  local advisory_commands='[]'
+  local artifacts_to_preserve='[]'
+  local blocked_reasons='[]'
+  local degraded_reasons='[]'
+  local fail_closed_reasons='[]'
+  local fail_closed_count=0
+  local duplicate_new_work_warnings='[]'
+  local drift_decision="pass"
+  local drift_findings='[]'
+  local drift_fail_closed_count=0
+  local remediation_commands='[]'
+  local surfaces='[
+    {
+      "surface_id":"swarm_actionability_truth_gate",
+      "track":"claim_preflight",
+      "purpose":"Detect unsafe bead claim candidates before agents create duplicate work.",
+      "intent_tags":["actionability"],
+      "symptom_tags":["br-bv-divergence","blocked-actionable"],
+      "validation_commands":["bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh check","bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh selftest"],
+      "emitted_artifacts":["swarm_actionability_report.json"],
+      "mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}
+    },
+    {
+      "surface_id":"swarm_capability_affinity_routing",
+      "track":"worker_routing",
+      "purpose":"Route validation to workers with the required capabilities and toolchain fingerprints.",
+      "intent_tags":["worker-routing","capability-affinity"],
+      "symptom_tags":["toolchain-drift","capability-gap"],
+      "validation_commands":["bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"],
+      "emitted_artifacts":["swarm_capability_affinity_routing_advisory.json","swarm_capability_affinity_routing_outcome_ledger.json"],
+      "mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}
+    },
+    {
+      "surface_id":"swarm_autopilot_shadow_daemon",
+      "track":"autopilot_shadow",
+      "purpose":"Preserve shadow-daemon source watcher state without becoming a live mutation controller.",
+      "intent_tags":["shadow-daemon","autopilot"],
+      "symptom_tags":["shadow-lane-blocked","active-owner"],
+      "validation_commands":["bash scripts/e2e/swarm_autopilot_shadow_daemon_smoke.sh selftest"],
+      "emitted_artifacts":["swarm_autopilot_shadow_daemon_report.json"],
+      "mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}
+    }
+  ]'
+
+  case "$mode" in
+    healthy)
+      recommendations='[{"surface_id":"swarm_actionability_truth_gate","track":"claim_preflight","validation_commands":["bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh check","bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh selftest"],"emitted_artifacts":["swarm_actionability_report.json"]}]'
+      advisory_commands='["bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh check","bash scripts/e2e/swarm_actionability_truth_gate_smoke.sh selftest"]'
+      artifacts_to_preserve='["swarm_actionability_report.json"]'
+      ;;
+    no_match)
+      intent_decision="fail_closed"
+      fail_closed_count=1
+      fail_closed_reasons='[{"code":"FE-SWARM-INTENT-NO-MATCHING-SURFACE","surface_id":"intent","detail":"no catalog surface matched requested queue-retuning tags"}]'
+      ;;
+    drift_fail_closed)
+      recommendations='[{"surface_id":"swarm_capability_affinity_routing","track":"worker_routing","validation_commands":["bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"],"emitted_artifacts":["swarm_capability_affinity_routing_advisory.json","swarm_capability_affinity_routing_outcome_ledger.json"]}]'
+      advisory_commands='["bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"]'
+      artifacts_to_preserve='["swarm_capability_affinity_routing_advisory.json","swarm_capability_affinity_routing_outcome_ledger.json"]'
+      drift_decision="fail_closed"
+      drift_fail_closed_count=1
+      drift_findings='[{"severity":"fail_closed","code":"FE-SWARM-DRIFT-DUPLICATE-INTENT","surface_id":"swarm_capability_affinity_routing","detail":"duplicate capability-affinity intent lacks an upstream/downstream relation"}]'
+      remediation_commands='["Refresh the normalized catalog and remove duplicate capability-affinity ownership before routing."]'
+      ;;
+    duplicate_warning)
+      recommendations='[{"surface_id":"swarm_capability_affinity_routing","track":"worker_routing","validation_commands":["bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"],"emitted_artifacts":["swarm_capability_affinity_routing_advisory.json","swarm_capability_affinity_routing_outcome_ledger.json"]}]'
+      advisory_commands='["bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"]'
+      artifacts_to_preserve='["swarm_capability_affinity_routing_advisory.json","swarm_capability_affinity_routing_outcome_ledger.json"]'
+      duplicate_new_work_warnings='["A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."]'
+      ;;
+    shadow_blocked)
+      intent_decision="blocked"
+      recommendations='[{"surface_id":"swarm_autopilot_shadow_daemon","track":"autopilot_shadow","validation_commands":["bash scripts/e2e/swarm_autopilot_shadow_daemon_smoke.sh selftest"],"emitted_artifacts":["swarm_autopilot_shadow_daemon_report.json"]}]'
+      advisory_commands='["bash scripts/e2e/swarm_autopilot_shadow_daemon_smoke.sh selftest"]'
+      artifacts_to_preserve='["swarm_autopilot_shadow_daemon_report.json"]'
+      blocked_reasons='[{"code":"FE-SWARM-INTENT-ACTIVE-OWNER","surface_id":"swarm_autopilot_shadow_daemon","detail":"shadow-daemon lane is blocked by an active owner"}]'
+      ;;
+    *)
+      record_failure "unknown control surface catalog mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg catalog_path "${fixture_dir}/swarm_control_surface_catalog.json" \
+    --arg findings_path "${fixture_dir}/swarm_control_surface_catalog_findings.json" \
+    --arg decision "$catalog_decision" \
+    --argjson surfaces "$surfaces" \
+    --argjson findings "$catalog_findings" \
+    '{
+      schema_version:"franken-engine.swarm-control-surface-catalog.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      surface_count:($surfaces | length),
+      fail_closed_count:($findings | map(select(.severity == "fail_closed")) | length),
+      degraded_count:($findings | map(select(.severity == "degraded")) | length),
+      surfaces:$surfaces,
+      findings:$findings,
+      artifact_paths:{
+        swarm_control_surface_catalog_json:$catalog_path,
+        catalog_findings_json:$findings_path,
+        events_jsonl:"control_surface_catalog.events.jsonl",
+        commands_txt:"control_surface_catalog.commands.txt",
+        report_md:"control_surface_catalog.report.md"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false
+      }
+    }' >"${fixture_dir}/swarm_control_surface_catalog.json"
+
+  jq -n \
+    --arg plan_path "${fixture_dir}/swarm_control_surface_intent_plan.json" \
+    --arg decision "$intent_decision" \
+    --argjson recommendations "$recommendations" \
+    --argjson advisory_commands "$advisory_commands" \
+    --argjson artifacts_to_preserve "$artifacts_to_preserve" \
+    --argjson blocked_reasons "$blocked_reasons" \
+    --argjson degraded_reasons "$degraded_reasons" \
+    --argjson fail_closed_reasons "$fail_closed_reasons" \
+    --argjson fail_closed_count "$fail_closed_count" \
+    --argjson duplicate_new_work_warnings "$duplicate_new_work_warnings" \
+    '{
+      schema_version:"franken-engine.swarm-control-surface-intent-plan.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      recommendations:$recommendations,
+      advisory_commands:$advisory_commands,
+      artifacts_to_preserve:$artifacts_to_preserve,
+      blocked_reasons:$blocked_reasons,
+      degraded_reasons:$degraded_reasons,
+      fail_closed_reasons:$fail_closed_reasons,
+      fail_closed_count:$fail_closed_count,
+      duplicate_new_work_warnings:$duplicate_new_work_warnings,
+      artifact_paths:{
+        swarm_control_surface_intent_plan_json:$plan_path,
+        events_jsonl:"control_surface_intent.events.jsonl",
+        commands_txt:"control_surface_intent.commands.txt",
+        report_md:"control_surface_intent.report.md"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false
+      }
+    }' >"${fixture_dir}/swarm_control_surface_intent_plan.json"
+
+  jq -n \
+    --arg report_path "${fixture_dir}/swarm_control_surface_drift_report.json" \
+    --arg decision "$drift_decision" \
+    --argjson fail_closed_count "$drift_fail_closed_count" \
+    --argjson findings "$drift_findings" \
+    --argjson remediation_commands "$remediation_commands" \
+    '{
+      schema_version:"franken-engine.swarm-control-surface-drift-report.v1",
+      source_revision:"smoke-rev",
+      decision:$decision,
+      fail_closed_count:$fail_closed_count,
+      findings:$findings,
+      remediation_commands:$remediation_commands,
+      artifact_paths:{
+        control_surface_drift_report_json:$report_path,
+        events_jsonl:"control_surface_drift.events.jsonl",
+        commands_txt:"control_surface_drift.commands.txt",
+        report_md:"control_surface_drift.report.md"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false
+      }
+    }' >"${fixture_dir}/swarm_control_surface_drift_report.json"
+}
+
 write_starvation_rescue_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -2493,6 +2693,26 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_capability_affinity_fixtures "$fixture_dir" "blocked"
       ;;
+    control_surface_catalog_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "healthy"
+      ;;
+    control_surface_catalog_no_match)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "no_match"
+      ;;
+    control_surface_catalog_drift_fail_closed)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "drift_fail_closed"
+      ;;
+    control_surface_catalog_duplicate_warning)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "duplicate_warning"
+      ;;
+    control_surface_catalog_shadow_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "shadow_blocked"
+      ;;
     actionability_guard_healthy)
       write_healthy_fixtures "$fixture_dir"
       write_actionability_guard_fixtures "$fixture_dir" "healthy"
@@ -2560,6 +2780,9 @@ run_case() {
   [[ -f "${fixture_dir}/swarm_actionability_report.json" ]] && extra_args+=(--swarm-actionability-report-json "${fixture_dir}/swarm_actionability_report.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_advisory.json" ]] && extra_args+=(--swarm-capability-affinity-routing-advisory-json "${fixture_dir}/swarm_capability_affinity_routing_advisory.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json" ]] && extra_args+=(--swarm-capability-affinity-routing-outcome-ledger-json "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json")
+  [[ -f "${fixture_dir}/swarm_control_surface_catalog.json" ]] && extra_args+=(--swarm-control-surface-catalog-json "${fixture_dir}/swarm_control_surface_catalog.json")
+  [[ -f "${fixture_dir}/swarm_control_surface_intent_plan.json" ]] && extra_args+=(--swarm-control-surface-intent-plan-json "${fixture_dir}/swarm_control_surface_intent_plan.json")
+  [[ -f "${fixture_dir}/swarm_control_surface_drift_report.json" ]] && extra_args+=(--swarm-control-surface-drift-report-json "${fixture_dir}/swarm_control_surface_drift_report.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -2738,6 +2961,28 @@ run_case() {
     and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.mutates_remote_workers == false)
     and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.changes_live_queue_policy == false)
     and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.reroutes_tasks_automatically == false)
+    and ((.predictive_dashboard | has("swarm_control_surface_catalog") | not) or (
+      (.predictive_dashboard.swarm_control_surface_catalog.readiness | type == "string")
+      and (.predictive_dashboard.swarm_control_surface_catalog.catalog_decision | type == "string")
+      and (.predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision | type == "string")
+      and (.predictive_dashboard.swarm_control_surface_catalog.drift_report_decision | type == "string")
+      and (.predictive_dashboard.swarm_control_surface_catalog.surface_count | type == "number")
+      and (.predictive_dashboard.swarm_control_surface_catalog.drift_count | type == "number")
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface | type == "string"))
+      and (.predictive_dashboard.swarm_control_surface_catalog.recommended_command_count | type == "number")
+      and (.predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes | type == "array")
+      and ((.predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning == null) or (.predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning | type == "string"))
+      and (.predictive_dashboard.swarm_control_surface_catalog.artifact_paths | type == "object")
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.advisory_only == true)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.mutates_br == false)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.sends_agent_mail == false)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.runs_cargo == false)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.runs_rch == false)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.mutates_remote_workers == false)
+      and (.predictive_dashboard.swarm_control_surface_catalog.mutation_policy.changes_live_queue_policy == false)
+    ))
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.pins_workers_automatically == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.enforces_placement_automatically == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
@@ -3303,6 +3548,72 @@ run_case() {
         and any(.degraded[]; .component == "swarm_capability_affinity_routing")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    control_surface_catalog_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.artifact_statuses.catalog == "provided"
+        and .predictive_dashboard.swarm_control_surface_catalog.artifact_statuses.intent_plan == "provided"
+        and .predictive_dashboard.swarm_control_surface_catalog.artifact_statuses.drift_report == "provided"
+        and .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "ok"
+        and .predictive_dashboard.swarm_control_surface_catalog.catalog_decision == "pass"
+        and .predictive_dashboard.swarm_control_surface_catalog.surface_count == 3
+        and .predictive_dashboard.swarm_control_surface_catalog.drift_count == 0
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_actionability_truth_gate"
+        and .predictive_dashboard.swarm_control_surface_catalog.recommended_command_count == 2
+        and (.predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes | length) == 0
+        and (.predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes | length) == 0
+        and (.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes | length) == 0
+        and .predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning == null
+        and .summary.control_surface_catalog_readiness == "ready"
+        and .summary.control_surface_catalog_top_recommended_surface == "swarm_actionability_truth_gate"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_no_match)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "contaminated"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "critical"
+        and .predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision == "fail_closed"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == null
+        and .predictive_dashboard.swarm_control_surface_catalog.recommended_command_count == 0
+        and (.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes | index("FE-SWARM-INTENT-NO-MATCHING-SURFACE"))
+        and .recommendations[0].action == "respect_control_surface_catalog_fail_closed"
+        and any(.degraded[]; .component == "swarm_control_surface_catalog")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_drift_fail_closed)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "contaminated"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "critical"
+        and .predictive_dashboard.swarm_control_surface_catalog.drift_report_decision == "fail_closed"
+        and .predictive_dashboard.swarm_control_surface_catalog.drift_count == 1
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_capability_affinity_routing"
+        and (.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes | index("FE-SWARM-DRIFT-DUPLICATE-INTENT"))
+        and .recommendations[0].action == "respect_control_surface_catalog_fail_closed"
+        and any(.degraded[]; .component == "swarm_control_surface_catalog")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_duplicate_warning)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "ok"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_capability_affinity_routing"
+        and .predictive_dashboard.swarm_control_surface_catalog.recommended_command_count == 1
+        and (.predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning | test("matching catalog surface"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warnings | length) == 1
+        and .summary.control_surface_catalog_readiness == "ready"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_shadow_blocked)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "blocked"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "warning"
+        and .predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision == "blocked"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_autopilot_shadow_daemon"
+        and (.predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes | index("FE-SWARM-INTENT-ACTIVE-OWNER"))
+        and .recommendations[0].action == "respect_control_surface_catalog_block"
+        and any(.degraded[]; .component == "swarm_control_surface_catalog")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
     actionability_guard_healthy)
       jq -e '
         .predictive_dashboard.swarm_actionability_guard.readiness == "ready"
@@ -3407,6 +3718,11 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("actionability_guard_blocked_divergence"))
     and (.golden_fixture_cases | index("actionability_guard_stale_source"))
     and (.golden_fixture_cases | index("actionability_guard_dirty_overlap"))
+    and (.golden_fixture_cases | index("control_surface_catalog_healthy"))
+    and (.golden_fixture_cases | index("control_surface_catalog_no_match"))
+    and (.golden_fixture_cases | index("control_surface_catalog_drift_fail_closed"))
+    and (.golden_fixture_cases | index("control_surface_catalog_duplicate_warning"))
+    and (.golden_fixture_cases | index("control_surface_catalog_shadow_blocked"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -3493,6 +3809,20 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.reason_codes"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.artifact_paths"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.catalog_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.drift_report_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.surface_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.drift_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.recommended_command_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.artifact_paths"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -3538,6 +3868,9 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_actionability_truth_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_queue_routing_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_routing_outcome_ledger.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_control_surface_catalog_normalizer.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_control_surface_intent_router.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_control_surface_drift_gate.sh' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
@@ -3548,6 +3881,7 @@ assert_dashboard_contract_truth() {
   grep -Fq 'swarm_topology_aware_queue_advisory' "$contract_doc"
   grep -Fq 'swarm_actionability_guard' "$contract_doc"
   grep -Fq 'swarm_capability_affinity_routing' "$contract_doc"
+  grep -Fq 'swarm_control_surface_catalog' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -3599,6 +3933,11 @@ run_selftest() {
   run_case "capability_affinity_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_no_match" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_drift_fail_closed" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_duplicate_warning" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_shadow_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_blocked_divergence" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_stale_source" "degraded" "ok" "ok" "ok" "$tmp_root"

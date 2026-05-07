@@ -359,6 +359,7 @@ consumption:
 | `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
 | `swarm_topology_aware_queue_advisory` | `swarm-topology-aware-queue-advisory.v1` from `scripts/swarm_topology_aware_queue_scorer.sh` | Show preferred-locality confidence, cache-reuse guidance, worker exclusions, degraded/blocked/contaminated queue-locality advice, and source artifact links without mutating the live queue or pinning workers. |
 | `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
+| `swarm_control_surface_catalog` | `swarm-control-surface-catalog.v1` plus `swarm-control-surface-intent-plan.v1` and `swarm-control-surface-drift-report.v1` from `scripts/swarm_control_surface_catalog_normalizer.sh`, `scripts/swarm_control_surface_intent_router.sh`, and `scripts/swarm_control_surface_drift_gate.sh` | Show catalog decision, surface count, drift count, top recommended surface, command count, blocked/degraded/fail-closed reason codes, duplicate-new-work warning, and artifact links without creating another dashboard producer or mutating live work. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 The resource-envelope input contract is fixed by
@@ -374,6 +375,13 @@ The capability-affinity routing handoff is fixed by the advisory and
 outcome-ledger schemas emitted by
 `scripts/swarm_capability_affinity_queue_routing_planner.sh` and
 `scripts/swarm_capability_affinity_routing_outcome_ledger.sh`.
+The control-surface catalog handoff is fixed by the catalog, intent-router, and
+drift-gate schemas emitted by `scripts/swarm_control_surface_catalog_normalizer.sh`,
+`scripts/swarm_control_surface_intent_router.sh`, and
+`scripts/swarm_control_surface_drift_gate.sh`. The operator status producer
+uses those artifacts as advisory routing evidence only; it does not create a
+second dashboard, claim live mutation authority, or perform automatic
+remediation.
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
 adding a parallel TUI framework inside `franken_engine`.
@@ -423,6 +431,11 @@ The smoke test publishes deterministic goldens for:
 - `capability_affinity_healthy`
 - `capability_affinity_degraded`
 - `capability_affinity_blocked`
+- `control_surface_catalog_healthy`
+- `control_surface_catalog_no_match`
+- `control_surface_catalog_drift_fail_closed`
+- `control_surface_catalog_duplicate_warning`
+- `control_surface_catalog_shadow_blocked`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.

@@ -1,0 +1,93 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-queue-routing-planner-contract.v1",
+  "bead_id": "bd-vp44k",
+  "parent_bead_id": "bd-lg2qn",
+  "depends_on": [
+    "bd-7ayfz",
+    "bd-ywibz",
+    "bd-wplun",
+    "bd-t58g5"
+  ],
+  "script": "scripts/swarm_capability_affinity_queue_routing_planner.sh",
+  "smoke_script": "scripts/e2e/swarm_capability_affinity_queue_routing_planner_smoke.sh",
+  "docs": "docs/SWARM_CAPABILITY_AFFINITY_QUEUE_ROUTING_PLANNER.md",
+  "fixture_bundle": "scripts/testdata/swarm_capability_affinity_queue_routing_planner/fixtures.json",
+  "advisory_schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+  "source_schema_version": "franken-engine.capability-affinity-queue-routing-sources.v1",
+  "required_inputs": [
+    "worker_capability_toolchain_input_json"
+  ],
+  "optional_inputs": [
+    "routing_outcome_samples_json"
+  ],
+  "advisory_fields": [
+    "routing_advisory_id",
+    "truth_state",
+    "decision",
+    "reason_codes",
+    "worker_affinity_summary",
+    "toolchain_parity_summary",
+    "capability_coverage_summary",
+    "source_artifacts",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "reason_codes": [
+    "capability_coverage_confirmed",
+    "toolchain_parity_confirmed",
+    "preferred_cohort_confirmed",
+    "broader_cohort_fallback",
+    "missing_optional_source",
+    "outcome_samples_observed_mismatch",
+    "missing_required_capability",
+    "toolchain_fingerprint_mismatch",
+    "local_fallback_contaminated",
+    "remote_stall_contaminated",
+    "contradictory_input_state"
+  ],
+  "fail_closed_rules": [
+    "Malformed worker_capability_toolchain_input_json fails closed.",
+    "Malformed routing_outcome_samples_json fails closed when provided.",
+    "Local fallback contamination fails closed and invalidates remote-only routing truth.",
+    "Contradictory upstream decision, truth-state, and routing-mode combinations fail closed.",
+    "The planner must not claim that it changed the live queue, rerouted tasks, or repaired workers automatically."
+  ],
+  "blocked_rules": [
+    "Missing required capability coverage blocks routing advice.",
+    "Toolchain fingerprint mismatch blocks routing advice.",
+    "Blocked upstream routing advice must stay blocked instead of being upgraded by optional inputs."
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "selftest_scenarios": [
+    "healthy_confirmed",
+    "degraded_missing_optional_support",
+    "blocked_toolchain_fingerprint_mismatch",
+    "blocked_missing_required_capability",
+    "contaminated_local_fallback"
+  ]
+}

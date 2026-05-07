@@ -1,0 +1,722 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-queue-routing-planner-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_confirmed",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "expected_routing_mode": "capability_affinity_confirmed",
+      "expected_advised_worker_ids": [
+        "rch-a"
+      ],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "capability_coverage_confirmed",
+        "toolchain_parity_confirmed",
+        "preferred_cohort_confirmed"
+      ],
+      "inputs": {
+        "worker_capability_toolchain_input_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+          "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+          "source_revision": "fixture-rev",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_context": {
+            "task_count": 1,
+            "proof_transport_state": "remote_only_ok"
+          },
+          "topology_context": {
+            "recommended_topology_class": "cpu_locality_preferred",
+            "preferred_worker_ids": [
+              "rch-a",
+              "rch-b"
+            ]
+          },
+          "rehabilitation_context": {
+            "excluded_worker_ids": [],
+            "watch_worker_ids": [],
+            "rehab_candidate_worker_ids": []
+          },
+          "capability_context": {
+            "required_capabilities": [
+              "rust-nightly",
+              "queue-routing"
+            ],
+            "coverage_confirmed_task_ids": [
+              "task-healthy"
+            ],
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_context": {
+            "required_toolchain_fingerprints": [
+              "nightly-2026-05-01"
+            ],
+            "toolchain_mismatch_task_ids": []
+          },
+          "routing_hints": {
+            "routing_mode": "capability_affinity_confirmed",
+            "advised_worker_ids": [
+              "rch-a"
+            ],
+            "broader_fallback_task_ids": []
+          },
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "source_artifacts": [
+            {
+              "source_id": "execution_queue_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/execution_queue_input.json",
+              "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+              "trust_state": "remote_only_ok"
+            },
+            {
+              "source_id": "topology_queue_signal_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/topology_queue_signal_input.json",
+              "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "rehabilitation_ledger_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/rehabilitation_ledger.json",
+              "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+              "trust_state": "pass"
+            },
+            {
+              "source_id": "rch_remote_compile_stall_bundle_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/stall_bundle.json",
+              "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "worker_capability_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_capability_snapshot.json",
+              "schema_version": "franken-engine.worker-capability-snapshot.v1",
+              "trust_state": "provided"
+            },
+            {
+              "source_id": "worker_toolchain_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_toolchain_snapshot.json",
+              "schema_version": "franken-engine.worker-toolchain-snapshot.v1",
+              "trust_state": "provided"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "proof_only": true,
+            "fixture_fed_only": true,
+            "mutates_br": false,
+            "reassigns_beads": false,
+            "releases_reservations": false,
+            "sends_agent_mail": false,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "reroutes_tasks_automatically": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-healthy",
+              "recommended_worker_id": "rch-a",
+              "observed_worker_id": "rch-a",
+              "observed_outcome": "matched_recommended_route"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_optional_support",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "expected_routing_mode": "broader_cohort_fallback",
+      "expected_advised_worker_ids": [
+        "rch-c"
+      ],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "broader_cohort_fallback",
+        "missing_optional_source",
+        "watch_workers_present",
+        "rehab_candidates_present"
+      ],
+      "inputs": {
+        "worker_capability_toolchain_input_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+          "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+          "source_revision": "fixture-rev",
+          "truth_state": "degraded",
+          "decision": "degraded",
+          "queue_context": {
+            "task_count": 1,
+            "proof_transport_state": "remote_only_ok"
+          },
+          "topology_context": {
+            "recommended_topology_class": "cache_locality_preferred",
+            "preferred_worker_ids": [
+              "rch-b"
+            ]
+          },
+          "rehabilitation_context": {
+            "excluded_worker_ids": [
+              "rch-b"
+            ],
+            "watch_worker_ids": [
+              "rch-d"
+            ],
+            "rehab_candidate_worker_ids": [
+              "rch-e"
+            ]
+          },
+          "capability_context": {
+            "required_capabilities": [
+              "queue-routing"
+            ],
+            "coverage_confirmed_task_ids": [
+              "task-degraded"
+            ],
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_context": {
+            "required_toolchain_fingerprints": [
+              "nightly-2026-05-01"
+            ],
+            "toolchain_mismatch_task_ids": []
+          },
+          "routing_hints": {
+            "routing_mode": "broader_cohort_fallback",
+            "advised_worker_ids": [
+              "rch-c"
+            ],
+            "broader_fallback_task_ids": [
+              "task-degraded"
+            ]
+          },
+          "degraded_reasons": [
+            {
+              "code": "broader_cohort_fallback",
+              "source_id": "rehabilitation_ledger_json",
+              "detail": "preferred workers were excluded so a broader cohort carried the advisory"
+            },
+            {
+              "code": "watch_workers_present",
+              "source_id": "rehabilitation_ledger_json",
+              "detail": "watch-classified workers reduce confidence"
+            },
+            {
+              "code": "rehab_candidates_present",
+              "source_id": "rehabilitation_ledger_json",
+              "detail": "rehab candidates reduce confidence"
+            }
+          ],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "source_artifacts": [
+            {
+              "source_id": "execution_queue_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/execution_queue_input.json",
+              "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+              "trust_state": "remote_only_ok"
+            },
+            {
+              "source_id": "topology_queue_signal_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/topology_queue_signal_input.json",
+              "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+              "trust_state": "degraded"
+            },
+            {
+              "source_id": "rehabilitation_ledger_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/rehabilitation_ledger.json",
+              "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+              "trust_state": "degraded"
+            },
+            {
+              "source_id": "rch_remote_compile_stall_bundle_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/stall_bundle.json",
+              "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "worker_capability_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_capability_snapshot.json",
+              "schema_version": "franken-engine.worker-capability-snapshot.v1",
+              "trust_state": "provided"
+            },
+            {
+              "source_id": "worker_toolchain_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_toolchain_snapshot.json",
+              "schema_version": "franken-engine.worker-toolchain-snapshot.v1",
+              "trust_state": "provided"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "proof_only": true,
+            "fixture_fed_only": true,
+            "mutates_br": false,
+            "reassigns_beads": false,
+            "releases_reservations": false,
+            "sends_agent_mail": false,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "reroutes_tasks_automatically": false
+          }
+        },
+        "routing_outcome_samples_json": null
+      }
+    },
+    {
+      "scenario_id": "blocked_toolchain_fingerprint_mismatch",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_routing_mode": "blocked_toolchain_mismatch",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [
+        "task-toolchain"
+      ],
+      "expected_reason_codes": [
+        "toolchain_fingerprint_mismatch"
+      ],
+      "inputs": {
+        "worker_capability_toolchain_input_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+          "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+          "source_revision": "fixture-rev",
+          "truth_state": "blocked",
+          "decision": "blocked",
+          "queue_context": {
+            "task_count": 1,
+            "proof_transport_state": "remote_only_ok"
+          },
+          "topology_context": {
+            "recommended_topology_class": "portable_fallback",
+            "preferred_worker_ids": [
+              "rch-f"
+            ]
+          },
+          "rehabilitation_context": {
+            "excluded_worker_ids": [],
+            "watch_worker_ids": [],
+            "rehab_candidate_worker_ids": []
+          },
+          "capability_context": {
+            "required_capabilities": [
+              "queue-routing"
+            ],
+            "coverage_confirmed_task_ids": [],
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_context": {
+            "required_toolchain_fingerprints": [
+              "nightly-2026-05-02"
+            ],
+            "toolchain_mismatch_task_ids": [
+              "task-toolchain"
+            ]
+          },
+          "routing_hints": {
+            "routing_mode": "blocked_toolchain_mismatch",
+            "advised_worker_ids": [],
+            "broader_fallback_task_ids": []
+          },
+          "degraded_reasons": [],
+          "blocked_reasons": [
+            {
+              "code": "toolchain_fingerprint_mismatch",
+              "source_id": "worker_toolchain_snapshot_json",
+              "detail": "non-excluded workers cover capabilities but not the required toolchain fingerprint"
+            }
+          ],
+          "fail_closed_reasons": [],
+          "source_artifacts": [
+            {
+              "source_id": "execution_queue_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/execution_queue_input.json",
+              "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+              "trust_state": "remote_only_ok"
+            },
+            {
+              "source_id": "topology_queue_signal_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/topology_queue_signal_input.json",
+              "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "rehabilitation_ledger_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/rehabilitation_ledger.json",
+              "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+              "trust_state": "pass"
+            },
+            {
+              "source_id": "rch_remote_compile_stall_bundle_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/stall_bundle.json",
+              "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "worker_capability_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_capability_snapshot.json",
+              "schema_version": "franken-engine.worker-capability-snapshot.v1",
+              "trust_state": "provided"
+            },
+            {
+              "source_id": "worker_toolchain_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_toolchain_snapshot.json",
+              "schema_version": "franken-engine.worker-toolchain-snapshot.v1",
+              "trust_state": "provided"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "proof_only": true,
+            "fixture_fed_only": true,
+            "mutates_br": false,
+            "reassigns_beads": false,
+            "releases_reservations": false,
+            "sends_agent_mail": false,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "reroutes_tasks_automatically": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-toolchain",
+              "recommended_worker_id": "rch-f",
+              "observed_worker_id": "rch-f",
+              "observed_outcome": "toolchain_drift_observed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "blocked_missing_required_capability",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_routing_mode": "blocked_missing_required_capability",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [
+        "task-capability"
+      ],
+      "expected_reason_codes": [
+        "missing_required_capability"
+      ],
+      "inputs": {
+        "worker_capability_toolchain_input_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+          "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+          "source_revision": "fixture-rev",
+          "truth_state": "blocked",
+          "decision": "blocked",
+          "queue_context": {
+            "task_count": 1,
+            "proof_transport_state": "remote_only_ok"
+          },
+          "topology_context": {
+            "recommended_topology_class": "portable_fallback",
+            "preferred_worker_ids": [
+              "rch-g"
+            ]
+          },
+          "rehabilitation_context": {
+            "excluded_worker_ids": [],
+            "watch_worker_ids": [],
+            "rehab_candidate_worker_ids": []
+          },
+          "capability_context": {
+            "required_capabilities": [
+              "special-hw"
+            ],
+            "coverage_confirmed_task_ids": [],
+            "missing_required_capability_task_ids": [
+              "task-capability"
+            ]
+          },
+          "toolchain_context": {
+            "required_toolchain_fingerprints": [
+              "nightly-2026-05-02"
+            ],
+            "toolchain_mismatch_task_ids": []
+          },
+          "routing_hints": {
+            "routing_mode": "blocked_missing_required_capability",
+            "advised_worker_ids": [],
+            "broader_fallback_task_ids": []
+          },
+          "degraded_reasons": [],
+          "blocked_reasons": [
+            {
+              "code": "missing_required_capability",
+              "source_id": "worker_capability_snapshot_json",
+              "detail": "no non-excluded worker covers the required capabilities"
+            }
+          ],
+          "fail_closed_reasons": [],
+          "source_artifacts": [
+            {
+              "source_id": "execution_queue_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/execution_queue_input.json",
+              "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+              "trust_state": "remote_only_ok"
+            },
+            {
+              "source_id": "topology_queue_signal_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/topology_queue_signal_input.json",
+              "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "rehabilitation_ledger_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/rehabilitation_ledger.json",
+              "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+              "trust_state": "pass"
+            },
+            {
+              "source_id": "rch_remote_compile_stall_bundle_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/stall_bundle.json",
+              "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+              "trust_state": "confirmed"
+            },
+            {
+              "source_id": "worker_capability_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_capability_snapshot.json",
+              "schema_version": "franken-engine.worker-capability-snapshot.v1",
+              "trust_state": "provided"
+            },
+            {
+              "source_id": "worker_toolchain_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_toolchain_snapshot.json",
+              "schema_version": "franken-engine.worker-toolchain-snapshot.v1",
+              "trust_state": "provided"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "proof_only": true,
+            "fixture_fed_only": true,
+            "mutates_br": false,
+            "reassigns_beads": false,
+            "releases_reservations": false,
+            "sends_agent_mail": false,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "reroutes_tasks_automatically": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-capability",
+              "recommended_worker_id": "rch-g",
+              "observed_worker_id": "rch-g",
+              "observed_outcome": "capability_gap_observed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "expected_routing_mode": "fail_closed",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "local_fallback_contaminated"
+      ],
+      "inputs": {
+        "worker_capability_toolchain_input_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+          "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+          "source_revision": "fixture-rev",
+          "truth_state": "contaminated",
+          "decision": "fail_closed",
+          "queue_context": {
+            "task_count": 1,
+            "proof_transport_state": "local_fallback_contaminated"
+          },
+          "topology_context": {
+            "recommended_topology_class": "portable_fallback",
+            "preferred_worker_ids": []
+          },
+          "rehabilitation_context": {
+            "excluded_worker_ids": [],
+            "watch_worker_ids": [],
+            "rehab_candidate_worker_ids": []
+          },
+          "capability_context": {
+            "required_capabilities": [
+              "queue-routing"
+            ],
+            "coverage_confirmed_task_ids": [],
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_context": {
+            "required_toolchain_fingerprints": [
+              "nightly-2026-05-01"
+            ],
+            "toolchain_mismatch_task_ids": []
+          },
+          "routing_hints": {
+            "routing_mode": "fail_closed",
+            "advised_worker_ids": [],
+            "broader_fallback_task_ids": []
+          },
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [
+            {
+              "code": "local_fallback_contaminated",
+              "source_id": "execution_queue_input_json",
+              "detail": "queue proof transport detected local fallback contamination"
+            }
+          ],
+          "source_artifacts": [
+            {
+              "source_id": "execution_queue_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/execution_queue_input.json",
+              "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+              "trust_state": "local_fallback_contaminated"
+            },
+            {
+              "source_id": "topology_queue_signal_input_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/topology_queue_signal_input.json",
+              "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+              "trust_state": "contaminated"
+            },
+            {
+              "source_id": "rehabilitation_ledger_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/rehabilitation_ledger.json",
+              "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+              "trust_state": "fail_closed"
+            },
+            {
+              "source_id": "rch_remote_compile_stall_bundle_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/stall_bundle.json",
+              "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+              "trust_state": "contaminated"
+            },
+            {
+              "source_id": "worker_capability_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_capability_snapshot.json",
+              "schema_version": "franken-engine.worker-capability-snapshot.v1",
+              "trust_state": "provided"
+            },
+            {
+              "source_id": "worker_toolchain_snapshot_json",
+              "required": true,
+              "provided": true,
+              "artifact_path": "/fixtures/worker_toolchain_snapshot.json",
+              "schema_version": "franken-engine.worker-toolchain-snapshot.v1",
+              "trust_state": "provided"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "proof_only": true,
+            "fixture_fed_only": true,
+            "mutates_br": false,
+            "reassigns_beads": false,
+            "releases_reservations": false,
+            "sends_agent_mail": false,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "reroutes_tasks_automatically": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-contaminated",
+              "recommended_worker_id": "rch-h",
+              "observed_worker_id": "rch-h",
+              "observed_outcome": "matched_recommended_route"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

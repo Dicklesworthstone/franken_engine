@@ -275,6 +275,28 @@ cache-reuse evidence is missing, `blocked` when queue-locality evidence is
 contradictory, and `contaminated` when local fallback or fail-closed evidence
 invalidates the advice.
 
+The same operator report now also integrates the SWARM-BENCH-I benchmark
+responsiveness handoff:
+
+- Catalog normalizer script: `scripts/swarm_benchmark_workload_catalog_normalizer.sh`
+- Catalog contract: `docs/swarm_benchmark_workload_catalog_contract_v1.json`
+- Catalog schema: `franken-engine.swarm-benchmark-workload-catalog.v1`
+
+- Responsiveness scorer script: `scripts/swarm_benchmark_responsiveness_scorer.sh`
+- Advisory schema: `franken-engine.swarm-benchmark-responsiveness-advisory.v1`
+
+That handoff carries workload-catalog decision, selected workload, benchmark
+class, throughput-gap band, utilization-pressure band, cache recommendation,
+remote-proof confidence, bottleneck classes, and deterministic artifact links
+into the existing `scripts/swarm_operator_status_report.sh` producer. It is
+advisory-only. It must not be described as live benchmark execution, automatic
+queue mutation, automatic worker mutation, `rch` execution, Cargo execution, or
+automatic claim of measurement truth. The operator status section reports
+`ready` when benchmark evidence is confirmed and coherent, `degraded` when
+catalog or responsiveness evidence is stale, saturated, or incomplete,
+`blocked` when throughput measurement remains blocked, and `contaminated` when
+local fallback or fail-closed evidence invalidates benchmark guidance.
+
 The same operator report now also integrates the SWARM-ACTIONABILITY
 claim-preflight handoff:
 
@@ -358,6 +380,7 @@ consumption:
 | `swarm_resource_envelope` | `swarm-resource-envelope.v1` plus `swarm-fair-share-batch-plan.v1` from `scripts/swarm_resource_envelope_normalizer.sh` and `scripts/swarm_fair_share_batch_planner.sh` | Show host resource-envelope readiness, capacity summaries, admitted/deferred fair-share counts, and contaminated capacity classes without running Cargo, RCH, queue mutation, or worker mutation. |
 | `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
 | `swarm_topology_aware_queue_advisory` | `swarm-topology-aware-queue-advisory.v1` from `scripts/swarm_topology_aware_queue_scorer.sh` | Show preferred-locality confidence, cache-reuse guidance, worker exclusions, degraded/blocked/contaminated queue-locality advice, and source artifact links without mutating the live queue or pinning workers. |
+| `swarm_benchmark_responsiveness` | `swarm-benchmark-workload-catalog.v1` plus `swarm-benchmark-responsiveness-advisory.v1` from `scripts/swarm_benchmark_workload_catalog_normalizer.sh` and `scripts/swarm_benchmark_responsiveness_scorer.sh` | Show benchmark readiness, selected workload and class, throughput-gap and utilization bands, cache recommendation, remote-proof confidence, bottleneck classes, and source artifact links without running live benchmarks, mutating the queue, or mutating workers. |
 | `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
 | `swarm_control_surface_catalog` | `swarm-control-surface-catalog.v1` plus `swarm-control-surface-intent-plan.v1` and `swarm-control-surface-drift-report.v1` from `scripts/swarm_control_surface_catalog_normalizer.sh`, `scripts/swarm_control_surface_intent_router.sh`, and `scripts/swarm_control_surface_drift_gate.sh` | Show catalog decision, surface count, drift count, top recommended surface, command count, blocked/degraded/fail-closed reason codes, duplicate-new-work warning, and artifact links without creating another dashboard producer or mutating live work. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
@@ -371,6 +394,9 @@ schemas emitted by `scripts/swarm_topology_placement_planner.sh` and
 The topology-aware queue advisory handoff is fixed by
 `docs/swarm_topology_aware_queue_scorer_contract_v1.json`; its advisory schema
 is emitted by `scripts/swarm_topology_aware_queue_scorer.sh`.
+The benchmark responsiveness handoff is fixed by the workload-catalog contract
+in `docs/swarm_benchmark_workload_catalog_contract_v1.json` plus the advisory
+schema emitted by `scripts/swarm_benchmark_responsiveness_scorer.sh`.
 The capability-affinity routing handoff is fixed by the advisory and
 outcome-ledger schemas emitted by
 `scripts/swarm_capability_affinity_queue_routing_planner.sh` and
@@ -428,6 +454,11 @@ The smoke test publishes deterministic goldens for:
 - `topology_queue_advisory_degraded`
 - `topology_queue_advisory_blocked`
 - `topology_queue_advisory_contaminated`
+- `benchmark_advisory_healthy`
+- `benchmark_advisory_blocked_measurement`
+- `benchmark_advisory_local_fallback_contaminated`
+- `benchmark_advisory_stale_baseline`
+- `benchmark_advisory_resource_saturation`
 - `capability_affinity_healthy`
 - `capability_affinity_degraded`
 - `capability_affinity_blocked`

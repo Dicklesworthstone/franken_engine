@@ -1,0 +1,74 @@
+# Swarm Operator Status
+
+- Status: `degraded`
+- Ready beads: `1`
+- In progress: `1`
+- Degraded fields: `1`
+
+- Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
+- Forecast confidence: `high` / `nominal`
+- Admission budget: `balanced` with `0` deferred
+- Resource envelope: `ready` / `admit` with `3` admitted and `0` deferred
+- Topology placement: `ready` class=`numa_hot_cache_preferred` cache=`hot` adoption=`adopted`
+- Actionability guard: `missing` decision=`missing` candidate=`none` reasons=`0`
+- Benchmark advisory: `contaminated` workload=`plas_benchmark_bundle` class=`constrained_ambient_bundle` gap=`contaminated` utilization=`relaxed`
+- Capability affinity: `ready` mode=`capability_affinity_confirmed` preferred=`2` mismatch=`0` gap=`0` drift=`0`
+- Lease exchange posture: `retain_current_assignments`
+- Prefetch advisory: `prefetch_recommended`
+- Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
+- Checkpoint restore escalation: `ready` via `resume_from_checkpoint`
+- Execution queue: `pass` top=`1` deferred=`0` restore=`clear`
+- Queue fidelity: trust=`trustworthy` drift=`none` top-mismatch=`none` tuning=`none`
+- Queue tuning promotion: readiness=`ready` decision=`eligible_canary` rollback=`better_than_current` canary=`continue_canary`
+- Queue policy adoption: readiness=`retained` sustained=`sustained_gain` expiry=`retain_adopted_policy` expire=`false` supersede=`false`
+- Causal trace: readiness=`complete` decision=`pass` anomalies=`0` missing-edges=`0`
+- High-cost commands: `0`
+- Collision risk: `none`
+- RCH incidents: `0`
+
+## Artifact Sources
+
+- Capacity forecast: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/capacity_forecast.json`
+- Admission budget plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/admission_budget_plan.json`
+- Swarm resource envelope: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_resource_envelope.json`
+- Swarm fair-share batch plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_fair_share_batch_plan.json`
+- Swarm topology placement plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_topology_placement_plan.json`
+- Swarm topology placement receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_topology_placement_receipt.json`
+- Swarm topology placement evidence ledger: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_topology_placement_evidence_ledger.json`
+- Swarm actionability report: ``
+- Swarm capability-affinity routing advisory: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_capability_affinity_routing_advisory.json`
+- Swarm capability-affinity routing outcome ledger: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/swarm_capability_affinity_routing_outcome_ledger.json`
+- Lease exchange salvage simulation: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/lease_exchange_salvage_simulation.json`
+- Warm target prefetch ROI advisory: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/warm_target_prefetch_roi_advisory.json`
+- Starvation rescue plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/starvation_rescue_plan.json`
+- Starvation rescue conformance report: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/starvation_rescue_conformance_report.json`
+- Checkpoint bundle: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/checkpoint_bundle.json`
+- Checkpoint restore plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/checkpoint_restore_plan.json`
+- Checkpoint restore conformance report: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/checkpoint_restore_conformance_report.json`
+- Execution queue artifact: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/execution_queue_artifact.json`
+- Execution queue risk budget: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/execution_queue_risk_budget_receipt.json`
+- Execution queue bottleneck report: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/execution_queue_bottleneck_report.json`
+- Execution queue run manifest: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/execution_queue_run_manifest.json`
+- Queue fidelity score receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/fidelity_score_receipt.json`
+- Queue drift ledger: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/drift_ledger.json`
+- Queue counterfactual backtest report: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/counterfactual_backtest_report.json`
+- Queue tuning plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/tuning_plan.json`
+- Queue tuning frontier: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/frontier.json`
+- Queue tuning policy bundle: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/tuning_policy_bundle.json`
+- Queue tuning promotion guard receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/promotion_guard_receipt.json`
+- Queue tuning rollout plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/manual_approval_rollout_plan.json`
+- Queue tuning rollback comparator receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/rollback_comparator_receipt.json`
+- Queue tuning canary verdict ledger: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/canary_verdict_ledger.json`
+- Queue policy adoption receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/adoption_receipt.json`
+- Queue policy adoption snapshot bundle: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/adoption_snapshot_bundle.json`
+- Queue policy sustained-gain receipt: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/sustained_gain_receipt.json`
+- Queue policy expiry/supersession plan: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/expiry_supersession_plan.json`
+- Queue policy expiry/supersession ledger: `expiry_supersession_ledger.json`
+- Causal trace graph: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/causal_trace_graph.json`
+- Causal trace anomalies: `[SMOKE_ROOT]/benchmark_advisory_local_fallback_contaminated-fixtures/causal_trace_anomalies.json`
+
+- `respect_benchmark_advisory_contamination` for `plas_benchmark_bundle`: benchmark responsiveness advisory is contaminated by fail-closed or unsafe mutation claims
+
+## Degraded
+
+- `swarm_benchmark_responsiveness` `contaminated`: benchmark responsiveness advisory is contaminated by fail-closed or unsafe mutation claims. ./scripts/e2e/rch_remote_compile_stall_bundle_capture_smoke.sh check

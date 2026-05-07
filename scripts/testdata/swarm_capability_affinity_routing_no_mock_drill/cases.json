@@ -1,0 +1,106 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-routing-no-mock-drill-fixtures.v1",
+  "primary_scenario_id": "healthy_confirmed",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_confirmed",
+      "normalizer_fixture_scenario": "healthy_capability_parity",
+      "planner_fixture_scenario": "healthy_confirmed",
+      "ledger_fixture_scenario": "successful_cohort_match",
+      "expected": {
+        "normalizer_decision": "pass",
+        "normalizer_truth_state": "confirmed",
+        "planner_decision": "pass",
+        "planner_truth_state": "confirmed",
+        "planner_routing_mode": "capability_affinity_confirmed",
+        "ledger_decision": "pass",
+        "ledger_truth_state": "confirmed",
+        "operator_capability_affinity_readiness": "ready",
+        "operator_advisory_decision": "pass",
+        "operator_outcome_ledger_decision": "pass",
+        "operator_routing_mode": "capability_affinity_confirmed",
+        "required_reason_code": "capability_coverage_confirmed"
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_optional_support",
+      "normalizer_fixture_scenario": "degraded_missing_optional_telemetry",
+      "planner_fixture_scenario": "degraded_missing_optional_support",
+      "ledger_fixture_scenario": "degraded_exclusion_reason_recorded",
+      "expected": {
+        "normalizer_decision": "degraded",
+        "normalizer_truth_state": "degraded",
+        "planner_decision": "degraded",
+        "planner_truth_state": "degraded",
+        "planner_routing_mode": "broader_cohort_fallback",
+        "ledger_decision": "degraded",
+        "ledger_truth_state": "degraded",
+        "operator_capability_affinity_readiness": "degraded",
+        "operator_advisory_decision": "degraded",
+        "operator_outcome_ledger_decision": "degraded",
+        "operator_routing_mode": "broader_cohort_fallback",
+        "required_reason_code": "missing_optional_source"
+      }
+    },
+    {
+      "scenario_id": "blocked_capability_gap",
+      "normalizer_fixture_scenario": "blocked_missing_required_capability",
+      "planner_fixture_scenario": "blocked_missing_required_capability",
+      "ledger_fixture_scenario": "blocked_capability_gap_receipt",
+      "expected": {
+        "normalizer_decision": "blocked",
+        "normalizer_truth_state": "blocked",
+        "planner_decision": "blocked",
+        "planner_truth_state": "blocked",
+        "planner_routing_mode": "blocked_missing_required_capability",
+        "ledger_decision": "blocked",
+        "ledger_truth_state": "blocked",
+        "operator_capability_affinity_readiness": "blocked",
+        "operator_advisory_decision": "blocked",
+        "operator_outcome_ledger_decision": "blocked",
+        "operator_routing_mode": "blocked_missing_required_capability",
+        "required_reason_code": "observed_capability_gap"
+      }
+    },
+    {
+      "scenario_id": "blocked_unsupported_toolchain",
+      "normalizer_fixture_scenario": "blocked_toolchain_mismatch",
+      "planner_fixture_scenario": "blocked_toolchain_fingerprint_mismatch",
+      "ledger_fixture_scenario": "blocked_toolchain_drift_receipt",
+      "expected": {
+        "normalizer_decision": "blocked",
+        "normalizer_truth_state": "blocked",
+        "planner_decision": "blocked",
+        "planner_truth_state": "blocked",
+        "planner_routing_mode": "blocked_toolchain_mismatch",
+        "ledger_decision": "blocked",
+        "ledger_truth_state": "blocked",
+        "operator_capability_affinity_readiness": "blocked",
+        "operator_advisory_decision": "blocked",
+        "operator_outcome_ledger_decision": "blocked",
+        "operator_routing_mode": "blocked_toolchain_mismatch",
+        "required_reason_code": "observed_toolchain_drift"
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "normalizer_fixture_scenario": "contaminated_local_fallback",
+      "planner_fixture_scenario": "contaminated_local_fallback",
+      "ledger_fixture_scenario": "contaminated_local_fallback",
+      "expected": {
+        "normalizer_decision": "fail_closed",
+        "normalizer_truth_state": "contaminated",
+        "planner_decision": "fail_closed",
+        "planner_truth_state": "contaminated",
+        "planner_routing_mode": "fail_closed",
+        "ledger_decision": "fail_closed",
+        "ledger_truth_state": "contaminated",
+        "operator_capability_affinity_readiness": "contaminated",
+        "operator_advisory_decision": "fail_closed",
+        "operator_outcome_ledger_decision": "fail_closed",
+        "operator_routing_mode": "fail_closed",
+        "required_reason_code": "local_fallback_contaminated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,155 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-routing-no-mock-drill-contract.v1",
+  "bead_id": "bd-x0030",
+  "parent_bead_id": "bd-lg2qn",
+  "depends_on": [
+    "bd-wplun",
+    "bd-vp44k",
+    "bd-wa7by",
+    "bd-da98k"
+  ],
+  "track_contract_path": "docs/swarm_capability_affinity_routing_contract_v1.json",
+  "drill_script": "scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh",
+  "composed_scripts": [
+    "scripts/swarm_worker_capability_toolchain_normalizer.sh",
+    "scripts/swarm_capability_affinity_queue_routing_planner.sh",
+    "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "fixture_bundles": [
+    "scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_queue_routing_planner/fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_routing_outcome_ledger/fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_routing_no_mock_drill/cases.json"
+  ],
+  "required_repo_paths": [
+    "docs/swarm_capability_affinity_routing_contract_v1.json",
+    "docs/swarm_capability_affinity_routing_no_mock_drill_contract_v1.json",
+    "scripts/swarm_worker_capability_toolchain_normalizer.sh",
+    "scripts/swarm_capability_affinity_queue_routing_planner.sh",
+    "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh",
+    "scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh",
+    "scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_queue_routing_planner/fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_routing_outcome_ledger/fixtures.json",
+    "scripts/testdata/swarm_capability_affinity_routing_no_mock_drill/cases.json"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_confirmed",
+      "proves": "healthy worker capability parity, preferred cohort routing, and successful advised-worker execution remain confirmed end to end",
+      "expected": {
+        "normalizer_decision": "pass",
+        "planner_decision": "pass",
+        "ledger_decision": "pass",
+        "operator_capability_affinity_readiness": "ready",
+        "required_reason_code": "capability_coverage_confirmed"
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_optional_support",
+      "proves": "missing optional support evidence stays degraded instead of silently upgrading worker-affinity truth",
+      "expected": {
+        "normalizer_decision": "degraded",
+        "planner_decision": "degraded",
+        "ledger_decision": "degraded",
+        "operator_capability_affinity_readiness": "degraded",
+        "required_reason_code": "missing_optional_source"
+      }
+    },
+    {
+      "scenario_id": "blocked_capability_gap",
+      "proves": "capability gaps block routing adoption and surface explicit blocked evidence in the operator handoff",
+      "expected": {
+        "normalizer_decision": "blocked",
+        "planner_decision": "blocked",
+        "ledger_decision": "blocked",
+        "operator_capability_affinity_readiness": "blocked",
+        "required_reason_code": "observed_capability_gap"
+      }
+    },
+    {
+      "scenario_id": "blocked_unsupported_toolchain",
+      "proves": "unsupported toolchain evidence remains blocked all the way through the outcome ledger and operator status",
+      "expected": {
+        "normalizer_decision": "blocked",
+        "planner_decision": "blocked",
+        "ledger_decision": "blocked",
+        "operator_capability_affinity_readiness": "blocked",
+        "required_reason_code": "observed_toolchain_drift"
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "proves": "local fallback contamination fails closed before capability-affinity advice is trusted",
+      "expected": {
+        "normalizer_decision": "fail_closed",
+        "planner_decision": "fail_closed",
+        "ledger_decision": "fail_closed",
+        "operator_capability_affinity_readiness": "contaminated",
+        "required_reason_code": "local_fallback_contaminated"
+      }
+    }
+  ],
+  "required_artifact_references": [
+    "swarm_worker_capability_toolchain_input.json",
+    "swarm_worker_capability_toolchain_sources.json",
+    "capability_affinity_queue_routing_advisory.json",
+    "swarm_capability_affinity_routing_outcome_ledger.json",
+    "status.json",
+    "swarm_capability_affinity_routing_no_mock_drill_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "operator_truth_claims": [
+    "The drill is fixture-fed, proof-only, and advisory-only.",
+    "The drill runs the real worker capability or toolchain normalizer, routing planner, outcome ledger, and operator-status reporter against checked-in fixtures.",
+    "The drill does not run Cargo or RCH work.",
+    "The drill does not mutate live workers, change live queue policy, reroute tasks automatically, or repair workers automatically.",
+    "Degraded optional evidence must stay degraded instead of healthy by default.",
+    "Capability gaps and unsupported toolchain evidence must block routing adoption.",
+    "Local fallback contamination must fail closed before capability-affinity routing advice is trusted."
+  ],
+  "required_truth_gate_rejections": [
+    "heavy_cargo_or_rch_claim",
+    "live_worker_or_queue_mutation_claim",
+    "automatic_reroute_or_worker_repair_claim",
+    "degraded_optional_evidence_healthy_claim",
+    "capability_gap_or_unsupported_toolchain_healthy_claim",
+    "contamination_non_fail_closed_claim"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_live_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false,
+    "repairs_workers_automatically": false,
+    "treats_degraded_optional_evidence_as_healthy": false,
+    "treats_capability_gaps_as_healthy": false,
+    "treats_unsupported_toolchain_as_healthy": false,
+    "treats_contamination_as_non_fail_closed": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh",
+    "jq empty docs/swarm_capability_affinity_routing_no_mock_drill_contract_v1.json scripts/testdata/swarm_capability_affinity_routing_no_mock_drill/cases.json",
+    "bash scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh check",
+    "bash scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh selftest",
+    "bash scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh selftest",
+    "git diff --check -- docs/swarm_capability_affinity_routing_no_mock_drill_contract_v1.json scripts/e2e/swarm_capability_affinity_routing_no_mock_drill.sh scripts/e2e/swarm_capability_affinity_routing_truth_gate.sh scripts/testdata/swarm_capability_affinity_routing_no_mock_drill/cases.json"
+  ],
+  "artifact_retention_notes": [
+    "The drill emits one scenario directory per proof case under the selected output directory.",
+    "Each scenario retains normalizer, planner, outcome-ledger, and operator-status stdout and stderr logs.",
+    "The top-level report records stable artifact paths for the primary healthy case plus per-scenario result paths."
+  ]
+}

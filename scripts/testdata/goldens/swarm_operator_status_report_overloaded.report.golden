@@ -9,6 +9,7 @@
 - Forecast confidence: `medium` / `brownout`
 - Admission budget: `brownout` with `2` deferred
 - Resource envelope: `ready` / `admit` with `3` admitted and `0` deferred
+- Topology placement: `ready` class=`numa_hot_cache_preferred` cache=`hot` adoption=`adopted`
 - Lease exchange posture: `manual_confirmation_required`
 - Prefetch advisory: `manual_review_required`
 - Starvation rescue escalation: `manual_review` via `preserve_pinned_evidence`
@@ -28,6 +29,9 @@
 - Admission budget plan: `[SMOKE_ROOT]/overloaded-fixtures/admission_budget_plan.json`
 - Swarm resource envelope: `[SMOKE_ROOT]/overloaded-fixtures/swarm_resource_envelope.json`
 - Swarm fair-share batch plan: `[SMOKE_ROOT]/overloaded-fixtures/swarm_fair_share_batch_plan.json`
+- Swarm topology placement plan: `[SMOKE_ROOT]/overloaded-fixtures/swarm_topology_placement_plan.json`
+- Swarm topology placement receipt: `[SMOKE_ROOT]/overloaded-fixtures/swarm_topology_placement_receipt.json`
+- Swarm topology placement evidence ledger: `[SMOKE_ROOT]/overloaded-fixtures/swarm_topology_placement_evidence_ledger.json`
 - Lease exchange salvage simulation: `[SMOKE_ROOT]/overloaded-fixtures/lease_exchange_salvage_simulation.json`
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/overloaded-fixtures/warm_target_prefetch_roi_advisory.json`
 - Starvation rescue plan: `[SMOKE_ROOT]/overloaded-fixtures/starvation_rescue_plan.json`

@@ -275,6 +275,158 @@ write_resource_envelope_fixtures() {
     }' >"${fixture_dir}/swarm_fair_share_batch_plan.json"
 }
 
+write_topology_placement_fixtures() {
+  local fixture_dir="$1"
+  local mode="${2:-healthy}"
+  local plan_decision="pass"
+  local placement_readiness="ready"
+  local topology_class="numa_hot_cache_preferred"
+  local adoption_decision="pass"
+  local adoption_status="adopted"
+  local plan_blocked_reasons='[]'
+  local receipt_degraded_reasons='[]'
+  local receipt_blocked_reasons='[]'
+  local reason_codes='["adopted_recommended_target","cache_reuse_confirmed"]'
+  local observed_worker="rch-a"
+  local cache_reuse_observed="true"
+  local observed_at="2026-05-06T20:40:00Z"
+  local observed_epoch_seconds=1778100000
+
+  case "$mode" in
+    healthy)
+      ;;
+    drifted)
+      adoption_decision="degraded"
+      adoption_status="drifted"
+      receipt_degraded_reasons='[{"code":"worker_drift","source_id":"adoption_observation_json","detail":"observed worker was not one of the recommended placement targets"},{"code":"cache_reuse_missing","source_id":"adoption_observation_json","detail":"plan recommended hot-cache reuse but observation did not confirm it"}]'
+      reason_codes='["cache_reuse_missing","worker_drift"]'
+      observed_worker="rch-z"
+      cache_reuse_observed="false"
+      ;;
+    expired)
+      adoption_decision="degraded"
+      adoption_status="expired"
+      receipt_degraded_reasons='[{"code":"receipt_expired","source_id":"validity_window","detail":"adoption observation arrived after receipt expiry"}]'
+      reason_codes='["receipt_expired"]'
+      observed_at="2026-05-06T21:20:01Z"
+      observed_epoch_seconds=1778102401
+      ;;
+    blocked)
+      plan_decision="blocked"
+      placement_readiness="blocked"
+      topology_class="blocked_contradictory_locality"
+      adoption_decision="blocked"
+      adoption_status="not_applicable"
+      plan_blocked_reasons='[{"code":"contradictory_locality_evidence","source_id":"required_topology","detail":"required topology snapshots disagree on host identity"}]'
+      receipt_blocked_reasons='[{"code":"blocked_plan_not_adoptable","source_id":"placement_plan_json","detail":"blocked placement plan cannot be adopted as a receipt target"}]'
+      reason_codes='["blocked_plan_not_adoptable","contradictory_locality_evidence"]'
+      ;;
+    *)
+      record_failure "unknown topology placement mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg plan_path "${fixture_dir}/swarm_topology_placement_plan.json" \
+    --arg decision "$plan_decision" \
+    --arg readiness "$placement_readiness" \
+    --arg topology_class "$topology_class" \
+    --argjson blocked_reasons "$plan_blocked_reasons" \
+    '{
+      schema_version:"franken-engine.swarm-topology-placement-plan.v1",
+      source_revision:"smoke-rev",
+      bead_id:"bd-peqvp",
+      plan_id:"plan-smoke-topology-placement",
+      decision:$decision,
+      placement_readiness:$readiness,
+      recommended_topology_class:$topology_class,
+      recommended_worker_targets:(if $decision == "blocked" then [] else [
+        {rank:1,lane_class:"heavy",worker_id:"rch-a",numa_node:0,shard_hint:"heavy-numa-0-shard-0",cache_reuse:true,target_dir:"/mnt/rch/target-a",certainty:"confirmed",reason_codes:["numa_preferred","hot_cache_reuse"]},
+        {rank:2,lane_class:"latency_sensitive",worker_id:"rch-a",numa_node:0,shard_hint:"latency_sensitive-numa-0-shard-1",cache_reuse:true,target_dir:"/mnt/rch/target-a",certainty:"confirmed",reason_codes:["numa_preferred","hot_cache_reuse"]}
+      ] end),
+      warm_cache_residency_state:"hot",
+      warm_cache_opportunities:(if $decision == "blocked" then [] else [{
+        opportunity_id:"reuse_hot_cache",
+        action:"prefer_hot_cache_worker_before_cold_recompute",
+        certainty:"confirmed",
+        worker_ids:["rch-a"],
+        target_dirs:[{path:"/mnt/rch/target-a",warm:true,cache_key:"franken-engine-main"}],
+        reason_codes:["hot_cache_reuse","reuse_warm_target_dir"]
+      }] end),
+      degraded_reasons:[],
+      blocked_reasons:$blocked_reasons,
+      fail_closed_reasons:[],
+      locality_assumptions:["Preferred NUMA nodes and workers are inherited from the normalized placement input.","Warm-cache reuse is advisory and must not pin workers automatically."],
+      context:{host_identity:{host_id:"host-scale-a"},numa_summary:{preferred_numa_nodes:[0]},worker_inventory:{ready_worker_count:2}},
+      summary:{
+        target_count:(if $decision == "blocked" then 0 else 2 end),
+        warm_cache_opportunity_count:(if $decision == "blocked" then 0 else 1 end),
+        heavy_target_count:(if $decision == "blocked" then 0 else 1 end),
+        latency_sensitive_target_count:(if $decision == "blocked" then 0 else 1 end)
+      },
+      artifact_paths:{swarm_topology_placement_plan_json:$plan_path},
+      mutation_policy:{fixture_fed_only:true,proof_only:true,advisory_only:true,mutates_br:false,reassigns_beads:false,releases_reservations:false,sends_agent_mail:false,queries_live_agent_mail:false,runs_cargo:false,runs_rch:false,mutates_remote_workers:false,changes_live_queue_policy:false,pins_workers_automatically:false,rebinds_hosts_automatically:false,repairs_target_dirs_automatically:false}
+    }' >"${fixture_dir}/swarm_topology_placement_plan.json"
+
+  jq -n \
+    --slurpfile plan "${fixture_dir}/swarm_topology_placement_plan.json" \
+    --arg receipt_path "${fixture_dir}/swarm_topology_placement_receipt.json" \
+    --arg ledger_path "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" \
+    --arg decision "$adoption_decision" \
+    --arg adoption_status "$adoption_status" \
+    --arg observed_worker "$observed_worker" \
+    --arg observed_at "$observed_at" \
+    --argjson cache_reuse_observed "$cache_reuse_observed" \
+    --argjson observed_epoch_seconds "$observed_epoch_seconds" \
+    --argjson degraded_reasons "$receipt_degraded_reasons" \
+    --argjson blocked_reasons "$receipt_blocked_reasons" \
+    --argjson reason_codes "$reason_codes" \
+    '($plan[0]) as $p | {
+      schema_version:"franken-engine.swarm-topology-placement-receipt.v1",
+      source_revision:"smoke-rev",
+      bead_id:"bd-peqvp",
+      receipt_id:"receipt-smoke-topology-placement",
+      source_plan:{path:$p.artifact_paths.swarm_topology_placement_plan_json,schema_version:$p.schema_version,plan_id:$p.plan_id,decision:$p.decision},
+      decision:$decision,
+      adoption_status:$adoption_status,
+      recommended_placement_targets:$p.recommended_worker_targets,
+      recommended_worker_ids:($p.recommended_worker_targets | map(.worker_id) | unique | sort),
+      topology_locality_assumptions:$p.locality_assumptions,
+      cache_warmth_assumptions:{state:$p.warm_cache_residency_state,opportunities:$p.warm_cache_opportunities},
+      validity_window:{reference_time:"2026-05-06T20:30:00Z",reference_epoch_seconds:1778099400,ttl_seconds:1800,expires_at:"2026-05-06T21:00:00Z",expires_epoch_seconds:1778101200,expired_at_observation:($adoption_status == "expired")},
+      adoption_observation:(if $adoption_status == "not_applicable" then null else {path:"adoption_observation.json",observed_at:$observed_at,observed_epoch_seconds:$observed_epoch_seconds,host_id:"host-scale-a",worker_ids:[$observed_worker],cache_reuse_observed:$cache_reuse_observed} end),
+      expected_host_id:"host-scale-a",
+      degraded_reasons:$degraded_reasons,
+      blocked_reasons:$blocked_reasons,
+      fail_closed_reasons:[],
+      adoption_drift_reason_codes:$reason_codes,
+      adoption_drift_reasons:(
+        (if $adoption_status == "adopted" then [{code:"adopted_recommended_target",source_id:"adoption_observation_json",detail:"observation matched recommended worker and host assumptions"},{code:"cache_reuse_confirmed",source_id:"adoption_observation_json",detail:"observation confirmed hot-cache reuse"}] else [] end)
+        + $degraded_reasons
+        + $blocked_reasons
+      ),
+      artifact_paths:{placement_plan_json:$p.artifact_paths.swarm_topology_placement_plan_json,adoption_observation_json:(if $adoption_status == "not_applicable" then null else "adoption_observation.json" end),swarm_topology_placement_receipt_json:$receipt_path,swarm_topology_placement_evidence_ledger_json:$ledger_path},
+      mutation_policy:{fixture_fed_only:true,proof_only:true,advisory_only:true,mutates_br:false,reassigns_beads:false,releases_reservations:false,sends_agent_mail:false,queries_live_agent_mail:false,runs_cargo:false,runs_rch:false,mutates_remote_workers:false,changes_live_queue_policy:false,pins_workers_automatically:false,rebinds_hosts_automatically:false,enforces_placement_automatically:false}
+    }' >"${fixture_dir}/swarm_topology_placement_receipt.json"
+
+  jq -n \
+    --slurpfile receipt "${fixture_dir}/swarm_topology_placement_receipt.json" \
+    --arg ledger_path "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" \
+    '($receipt[0]) as $r | {
+      schema_version:"franken-engine.swarm-topology-placement-evidence-ledger.v1",
+      source_revision:"smoke-rev",
+      bead_id:"bd-peqvp",
+      ledger_id:"ledger-smoke-topology-placement",
+      decision:$r.decision,
+      receipts:[$r],
+      adoption_history:[{receipt_id:$r.receipt_id,plan_id:$r.source_plan.plan_id,adoption_status:$r.adoption_status,expected_host_id:$r.expected_host_id,expected_worker_ids:$r.recommended_worker_ids,observed:$r.adoption_observation,drift_reason_codes:$r.adoption_drift_reason_codes,validity_window:$r.validity_window}],
+      summary:{receipt_count:1,adopted_count:(if $r.adoption_status == "adopted" then 1 else 0 end),drifted_count:(if $r.adoption_status == "drifted" then 1 else 0 end),expired_count:(if $r.adoption_status == "expired" then 1 else 0 end),blocked_count:(if $r.decision == "blocked" then 1 else 0 end),fail_closed_count:(if $r.decision == "fail_closed" then 1 else 0 end)},
+      artifact_paths:{swarm_topology_placement_evidence_ledger_json:$ledger_path,swarm_topology_placement_receipt_json:$r.artifact_paths.swarm_topology_placement_receipt_json},
+      mutation_policy:$r.mutation_policy
+    }' >"${fixture_dir}/swarm_topology_placement_evidence_ledger.json"
+}
+
 write_starvation_rescue_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -1389,6 +1541,7 @@ write_healthy_fixtures() {
   write_queue_policy_adoption_fixtures "$fixture_dir" "healthy"
   write_causal_trace_fixtures "$fixture_dir" "complete"
   write_resource_envelope_fixtures "$fixture_dir" "healthy"
+  write_topology_placement_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -1745,6 +1898,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_resource_envelope_fixtures "$fixture_dir" "contaminated"
       ;;
+    topology_placement_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_placement_fixtures "$fixture_dir" "healthy"
+      ;;
+    topology_placement_drifted)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_placement_fixtures "$fixture_dir" "drifted"
+      ;;
+    topology_placement_expired)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_placement_fixtures "$fixture_dir" "expired"
+      ;;
+    topology_placement_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_placement_fixtures "$fixture_dir" "blocked"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1789,6 +1958,9 @@ run_case() {
   [[ -f "${fixture_dir}/causal_trace_anomalies.json" ]] && extra_args+=(--swarm-agent-causal-trace-anomaly-report-json "${fixture_dir}/causal_trace_anomalies.json")
   [[ -f "${fixture_dir}/swarm_resource_envelope.json" ]] && extra_args+=(--swarm-resource-envelope-json "${fixture_dir}/swarm_resource_envelope.json")
   [[ -f "${fixture_dir}/swarm_fair_share_batch_plan.json" ]] && extra_args+=(--swarm-fair-share-batch-plan-json "${fixture_dir}/swarm_fair_share_batch_plan.json")
+  [[ -f "${fixture_dir}/swarm_topology_placement_plan.json" ]] && extra_args+=(--swarm-topology-placement-plan-json "${fixture_dir}/swarm_topology_placement_plan.json")
+  [[ -f "${fixture_dir}/swarm_topology_placement_receipt.json" ]] && extra_args+=(--swarm-topology-placement-receipt-json "${fixture_dir}/swarm_topology_placement_receipt.json")
+  [[ -f "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" ]] && extra_args+=(--swarm-topology-placement-evidence-ledger-json "${fixture_dir}/swarm_topology_placement_evidence_ledger.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -1894,6 +2066,27 @@ run_case() {
     and (.predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count | type == "number")
     and (.predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count | type == "number")
     and (.predictive_dashboard.swarm_resource_envelope.contaminating_classes | type == "array")
+    and (.predictive_dashboard.swarm_topology_placement.readiness | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.plan_decision | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.receipt_decision | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.recommended_topology_class | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.recommended_worker_target_count | type == "number")
+    and (.predictive_dashboard.swarm_topology_placement.heavy_target_count | type == "number")
+    and (.predictive_dashboard.swarm_topology_placement.latency_sensitive_target_count | type == "number")
+    and (.predictive_dashboard.swarm_topology_placement.warm_cache_residency_state | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.warm_cache_opportunity_count | type == "number")
+    and (.predictive_dashboard.swarm_topology_placement.shard_hints | type == "array")
+    and (.predictive_dashboard.swarm_topology_placement.adoption_status | type == "string")
+    and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | type == "array")
+    and (.predictive_dashboard.swarm_topology_placement.expiry | type == "object")
+    and (.predictive_dashboard.swarm_topology_placement.warnings | type == "array")
+    and (.predictive_dashboard.swarm_topology_placement.artifact_paths | type == "object")
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_br == false)
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_remote_workers == false)
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.changes_live_queue_policy == false)
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.pins_workers_automatically == false)
+    and (.predictive_dashboard.swarm_topology_placement.mutation_policy.enforces_placement_automatically == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
     and ((.artifact_paths.capacity_forecast_json == null) or (.artifact_paths.capacity_forecast_json | type == "string"))
     and ((.artifact_paths.admission_budget_plan_json == null) or (.artifact_paths.admission_budget_plan_json | type == "string"))
@@ -1927,6 +2120,9 @@ run_case() {
     and ((.artifact_paths.swarm_agent_causal_trace_anomaly_report_json == null) or (.artifact_paths.swarm_agent_causal_trace_anomaly_report_json | type == "string"))
     and ((.artifact_paths.swarm_resource_envelope_json == null) or (.artifact_paths.swarm_resource_envelope_json | type == "string"))
     and ((.artifact_paths.swarm_fair_share_batch_plan_json == null) or (.artifact_paths.swarm_fair_share_batch_plan_json | type == "string"))
+    and ((.artifact_paths.swarm_topology_placement_plan_json == null) or (.artifact_paths.swarm_topology_placement_plan_json | type == "string"))
+    and ((.artifact_paths.swarm_topology_placement_receipt_json == null) or (.artifact_paths.swarm_topology_placement_receipt_json | type == "string"))
+    and ((.artifact_paths.swarm_topology_placement_evidence_ledger_json == null) or (.artifact_paths.swarm_topology_placement_evidence_ledger_json | type == "string"))
     and (.recommendations | length) >= 1
   ' "${output_dir}/status.json" >/dev/null
   record_pass "${case_name} report validates"
@@ -1982,8 +2178,18 @@ run_case() {
         and .predictive_dashboard.swarm_resource_envelope.fair_share_decision == "admit"
         and .predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count == 3
         and .predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count == 0
+        and .predictive_dashboard.swarm_topology_placement.readiness == "ready"
+        and .predictive_dashboard.swarm_topology_placement.plan_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.receipt_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.recommended_topology_class == "numa_hot_cache_preferred"
+        and .predictive_dashboard.swarm_topology_placement.warm_cache_residency_state == "hot"
+        and .predictive_dashboard.swarm_topology_placement.adoption_status == "adopted"
+        and .predictive_dashboard.swarm_topology_placement.recommended_worker_target_count == 2
+        and .predictive_dashboard.swarm_topology_placement.warm_cache_opportunity_count == 1
+        and (.predictive_dashboard.swarm_topology_placement.shard_hints | index("heavy-numa-0-shard-0"))
         and .summary.causal_trace_readiness == "complete"
         and .summary.resource_envelope_readiness == "ready"
+        and .summary.topology_placement_readiness == "ready"
         and .summary.fair_share_admitted_count == 3
         and .predictive_dashboard.staged_contamination.decision == "pass"
       ' "${output_dir}/status.json" >/dev/null
@@ -2011,6 +2217,8 @@ run_case() {
         and .predictive_dashboard.swarm_agent_causal_trace.readiness == "degraded"
         and .predictive_dashboard.swarm_resource_envelope.artifact_statuses.resource_envelope == "missing"
         and .predictive_dashboard.swarm_resource_envelope.readiness == "degraded"
+        and .predictive_dashboard.swarm_topology_placement.artifact_statuses.placement_plan == "missing"
+        and .predictive_dashboard.swarm_topology_placement.readiness == "degraded"
         and .predictive_dashboard.staged_contamination.artifact_status == "missing"
       ' "${output_dir}/status.json" >/dev/null
       ;;
@@ -2278,6 +2486,70 @@ run_case() {
         and any(.degraded[]; .component == "swarm_resource_envelope")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    topology_placement_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_topology_placement.artifact_statuses.placement_plan == "provided"
+        and .predictive_dashboard.swarm_topology_placement.artifact_statuses.placement_receipt == "provided"
+        and .predictive_dashboard.swarm_topology_placement.artifact_statuses.evidence_ledger == "provided"
+        and .predictive_dashboard.swarm_topology_placement.readiness == "ready"
+        and .predictive_dashboard.swarm_topology_placement.severity == "ok"
+        and .predictive_dashboard.swarm_topology_placement.plan_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.receipt_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.ledger_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.recommended_topology_class == "numa_hot_cache_preferred"
+        and .predictive_dashboard.swarm_topology_placement.recommended_worker_target_count == 2
+        and .predictive_dashboard.swarm_topology_placement.heavy_target_count == 1
+        and .predictive_dashboard.swarm_topology_placement.latency_sensitive_target_count == 1
+        and .predictive_dashboard.swarm_topology_placement.warm_cache_residency_state == "hot"
+        and .predictive_dashboard.swarm_topology_placement.warm_cache_opportunity_count == 1
+        and .predictive_dashboard.swarm_topology_placement.adoption_status == "adopted"
+        and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | index("cache_reuse_confirmed"))
+        and .summary.topology_placement_readiness == "ready"
+        and .summary.topology_placement_adoption_status == "adopted"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_placement_drifted)
+      jq -e '
+        .predictive_dashboard.swarm_topology_placement.readiness == "degraded"
+        and .predictive_dashboard.swarm_topology_placement.severity == "warning"
+        and .predictive_dashboard.swarm_topology_placement.plan_decision == "pass"
+        and .predictive_dashboard.swarm_topology_placement.receipt_decision == "degraded"
+        and .predictive_dashboard.swarm_topology_placement.adoption_status == "drifted"
+        and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | index("worker_drift"))
+        and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | index("cache_reuse_missing"))
+        and .summary.topology_placement_readiness == "degraded"
+        and .summary.topology_placement_drift_reason_count == 2
+        and .recommendations[0].action == "review_topology_placement_advisory"
+        and any(.degraded[]; .component == "swarm_topology_placement")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_placement_expired)
+      jq -e '
+        .predictive_dashboard.swarm_topology_placement.readiness == "degraded"
+        and .predictive_dashboard.swarm_topology_placement.receipt_decision == "degraded"
+        and .predictive_dashboard.swarm_topology_placement.adoption_status == "expired"
+        and .predictive_dashboard.swarm_topology_placement.expiry.expired_at_observation == true
+        and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | index("receipt_expired"))
+        and .summary.topology_placement_adoption_status == "expired"
+        and .recommendations[0].action == "review_topology_placement_advisory"
+        and any(.degraded[]; .component == "swarm_topology_placement")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_placement_blocked)
+      jq -e '
+        .predictive_dashboard.swarm_topology_placement.readiness == "blocked"
+        and .predictive_dashboard.swarm_topology_placement.severity == "warning"
+        and .predictive_dashboard.swarm_topology_placement.plan_decision == "blocked"
+        and .predictive_dashboard.swarm_topology_placement.receipt_decision == "blocked"
+        and .predictive_dashboard.swarm_topology_placement.adoption_status == "not_applicable"
+        and .predictive_dashboard.swarm_topology_placement.recommended_topology_class == "blocked_contradictory_locality"
+        and .predictive_dashboard.swarm_topology_placement.recommended_worker_target_count == 0
+        and (.predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes | index("blocked_plan_not_adoptable"))
+        and .summary.topology_placement_readiness == "blocked"
+        and .recommendations[0].action == "respect_topology_placement_block"
+        and any(.degraded[]; .component == "swarm_topology_placement")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -2324,6 +2596,10 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("resource_envelope_degraded"))
     and (.golden_fixture_cases | index("resource_envelope_blocked"))
     and (.golden_fixture_cases | index("resource_envelope_contaminated"))
+    and (.golden_fixture_cases | index("topology_placement_healthy"))
+    and (.golden_fixture_cases | index("topology_placement_drifted"))
+    and (.golden_fixture_cases | index("topology_placement_expired"))
+    and (.golden_fixture_cases | index("topology_placement_blocked"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -2368,6 +2644,17 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.capacity.build_lane_limit"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_resource_envelope.contaminating_classes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.plan_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.receipt_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.recommended_topology_class"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.recommended_worker_target_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.warm_cache_residency_state"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.warm_cache_opportunity_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.adoption_status"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.expiry"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -2405,12 +2692,15 @@ assert_dashboard_contract_truth() {
   grep -Fq 'scripts/swarm_resource_envelope_normalizer.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_fair_share_batch_planner.sh' "$contract_doc"
   grep -Fq 'docs/swarm_resource_envelope_contract_v1.json' "$contract_doc"
+  grep -Fq 'scripts/swarm_topology_placement_planner.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_topology_placement_receipt_ledger.sh' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
   grep -Fq 'queue_policy_adoption' "$contract_doc"
   grep -Fq 'swarm_agent_causal_trace' "$contract_doc"
   grep -Fq 'swarm_resource_envelope' "$contract_doc"
+  grep -Fq 'swarm_topology_placement' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -2451,6 +2741,10 @@ run_selftest() {
   run_case "resource_envelope_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "resource_envelope_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "resource_envelope_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_placement_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_placement_drifted" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_placement_expired" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_placement_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

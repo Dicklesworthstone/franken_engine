@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "healthy",
+  "status": "degraded",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 0,
+    "degraded_count": 1,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -47,14 +47,14 @@
     "fair_share_admitted_count": 3,
     "fair_share_deferred_count": 0,
     "fair_share_heavy_admitted_count": 2,
-    "topology_placement_readiness": "ready",
-    "topology_placement_plan_decision": "pass",
-    "topology_placement_receipt_decision": "pass",
-    "topology_placement_topology_class": "numa_hot_cache_preferred",
+    "topology_placement_readiness": "blocked",
+    "topology_placement_plan_decision": "blocked",
+    "topology_placement_receipt_decision": "blocked",
+    "topology_placement_topology_class": "blocked_contradictory_locality",
     "topology_placement_warm_cache_state": "hot",
-    "topology_placement_warm_cache_opportunity_count": 1,
-    "topology_placement_adoption_status": "adopted",
-    "topology_placement_drift_reason_count": 0,
+    "topology_placement_warm_cache_opportunity_count": 0,
+    "topology_placement_adoption_status": "not_applicable",
+    "topology_placement_drift_reason_count": 3,
     "lease_exchange_decision": "retain_current_assignments",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -371,7 +371,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -397,7 +397,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -418,7 +418,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/admission_budget_plan.json"
     },
     "swarm_resource_envelope": {
       "artifact_statuses": {
@@ -464,8 +464,8 @@
       "blocked_reason_count": 0,
       "fail_closed_reason_count": 0,
       "artifact_paths": {
-        "resource_envelope_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_resource_envelope.json",
-        "fair_share_batch_plan_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_fair_share_batch_plan.json"
+        "resource_envelope_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
     "swarm_topology_placement": {
@@ -474,103 +474,38 @@
         "placement_receipt": "provided",
         "evidence_ledger": "provided"
       },
-      "readiness": "ready",
-      "severity": "ok",
-      "plan_decision": "pass",
-      "receipt_decision": "pass",
-      "ledger_decision": "pass",
-      "placement_readiness": "ready",
-      "recommended_topology_class": "numa_hot_cache_preferred",
-      "recommended_worker_targets": [
-        {
-          "rank": 1,
-          "lane_class": "heavy",
-          "worker_id": "rch-a",
-          "numa_node": 0,
-          "shard_hint": "heavy-numa-0-shard-0",
-          "cache_reuse": true,
-          "target_dir": "/mnt/rch/target-a",
-          "certainty": "confirmed",
-          "reason_codes": [
-            "numa_preferred",
-            "hot_cache_reuse"
-          ]
-        },
-        {
-          "rank": 2,
-          "lane_class": "latency_sensitive",
-          "worker_id": "rch-a",
-          "numa_node": 0,
-          "shard_hint": "latency_sensitive-numa-0-shard-1",
-          "cache_reuse": true,
-          "target_dir": "/mnt/rch/target-a",
-          "certainty": "confirmed",
-          "reason_codes": [
-            "numa_preferred",
-            "hot_cache_reuse"
-          ]
-        }
-      ],
-      "recommended_worker_target_count": 2,
-      "recommended_worker_ids": [
-        "rch-a"
-      ],
-      "heavy_target_count": 1,
-      "latency_sensitive_target_count": 1,
+      "readiness": "blocked",
+      "severity": "warning",
+      "plan_decision": "blocked",
+      "receipt_decision": "blocked",
+      "ledger_decision": "blocked",
+      "placement_readiness": "blocked",
+      "recommended_topology_class": "blocked_contradictory_locality",
+      "recommended_worker_targets": [],
+      "recommended_worker_target_count": 0,
+      "recommended_worker_ids": [],
+      "heavy_target_count": 0,
+      "latency_sensitive_target_count": 0,
       "warm_cache_residency_state": "hot",
-      "warm_cache_opportunities": [
-        {
-          "opportunity_id": "reuse_hot_cache",
-          "action": "prefer_hot_cache_worker_before_cold_recompute",
-          "certainty": "confirmed",
-          "worker_ids": [
-            "rch-a"
-          ],
-          "target_dirs": [
-            {
-              "path": "/mnt/rch/target-a",
-              "warm": true,
-              "cache_key": "franken-engine-main"
-            }
-          ],
-          "reason_codes": [
-            "hot_cache_reuse",
-            "reuse_warm_target_dir"
-          ]
-        }
-      ],
-      "warm_cache_opportunity_count": 1,
-      "shard_hints": [
-        "heavy-numa-0-shard-0",
-        "latency_sensitive-numa-0-shard-1"
-      ],
-      "adoption_status": "adopted",
+      "warm_cache_opportunities": [],
+      "warm_cache_opportunity_count": 0,
+      "shard_hints": [],
+      "adoption_status": "not_applicable",
       "adoption_drift_reason_codes": [
-        "adopted_recommended_target",
-        "cache_reuse_confirmed"
+        "blocked_plan_not_adoptable",
+        "contradictory_locality_evidence"
       ],
       "adoption_history": [
         {
           "receipt_id": "receipt-smoke-topology-placement",
           "plan_id": "plan-smoke-topology-placement",
-          "adoption_status": "adopted",
+          "adoption_status": "not_applicable",
           "expected_host_id": "host-scale-a",
-          "expected_worker_ids": [
-            "rch-a"
-          ],
-          "observed": {
-            "path": "adoption_observation.json",
-            "observed_at": "2026-05-06T20:40:00Z",
-            "observed_epoch_seconds": 1778100000,
-            "host_id": "host-scale-a",
-            "worker_ids": [
-              "rch-a"
-            ],
-            "cache_reuse_observed": true
-          },
+          "expected_worker_ids": [],
+          "observed": null,
           "drift_reason_codes": [
-            "adopted_recommended_target",
-            "cache_reuse_confirmed"
+            "blocked_plan_not_adoptable",
+            "contradictory_locality_evidence"
           ],
           "validity_window": {
             "reference_time": "2026-05-06T20:30:00Z",
@@ -590,16 +525,32 @@
         "expires_epoch_seconds": 1778101200,
         "expired_at_observation": false
       },
-      "warnings": [],
+      "warnings": [
+        {
+          "code": "blocked_plan_not_adoptable",
+          "source_id": "placement_plan_json",
+          "detail": "blocked placement plan cannot be adopted as a receipt target"
+        },
+        {
+          "code": "blocked_plan_not_adoptable",
+          "source_id": "placement_plan_json",
+          "detail": "blocked placement plan cannot be adopted as a receipt target"
+        },
+        {
+          "code": "contradictory_locality_evidence",
+          "source_id": "required_topology",
+          "detail": "required topology snapshots disagree on host identity"
+        }
+      ],
       "fail_closed_reason_count": 0,
-      "blocked_reason_count": 0,
-      "degraded_reason_count": 0,
+      "blocked_reason_count": 2,
+      "degraded_reason_count": 1,
       "ledger_summary": {
         "receipt_count": 1,
-        "adopted_count": 1,
+        "adopted_count": 0,
         "drifted_count": 0,
         "expired_count": 0,
-        "blocked_count": 0,
+        "blocked_count": 1,
         "fail_closed_count": 0
       },
       "mutation_policy": {
@@ -611,9 +562,9 @@
         "enforces_placement_automatically": false
       },
       "artifact_paths": {
-        "placement_plan_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_plan.json",
-        "placement_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_receipt.json",
-        "placement_evidence_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_evidence_ledger.json"
+        "placement_plan_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
     "lease_exchange_salvage": {
@@ -626,7 +577,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -642,7 +593,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -674,8 +625,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -694,9 +645,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -739,10 +690,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -781,11 +732,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/healthy-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/healthy-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/healthy-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -825,11 +776,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/healthy-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/healthy-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -910,10 +861,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/healthy-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/healthy-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -971,8 +922,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/healthy-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/healthy-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/topology_placement_blocked-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {
@@ -1021,12 +972,19 @@
       "local_tui_renderer": false
     }
   },
-  "degraded": [],
+  "degraded": [
+    {
+      "component": "swarm_topology_placement",
+      "status": "blocked",
+      "impact": "topology placement or cache-residency adoption evidence is degraded, blocked, or contaminated",
+      "remediation": "Refresh placement evidence or respect blocked/drift/expiry warnings before using locality advice."
+    }
+  ],
   "recommendations": [
     {
-      "action": "pick_next_ready_bead",
-      "bead_id": "bd-p03vs",
-      "reason": "resource governor admits validation and bead is ready"
+      "action": "respect_topology_placement_block",
+      "bead_id": null,
+      "reason": "topology placement evidence is blocked by contradictory locality or non-adoptable receipt state"
     }
   ]
 }

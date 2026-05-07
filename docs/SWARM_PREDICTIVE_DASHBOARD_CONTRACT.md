@@ -297,11 +297,15 @@ consumption:
 | `queue_policy_adoption` | `swarm-execution-queue-policy-adoption-receipt.v1` plus adoption snapshot, sustained-gain receipt, expiry/supersession plan, and expiry/supersession ledger artifacts | Show adoption state, sustained-gain verdict, expiry decision, and supersession advisory state without executing retirement or supersession. |
 | `swarm_agent_causal_trace` | `swarm-agent-causal-trace-graph.v1` plus `swarm-agent-causal-trace-anomaly-report.v1` | Show handoff readiness, required causal-edge coverage, and fail-closed coordination anomalies without querying live services or mutating ownership state. |
 | `swarm_resource_envelope` | `swarm-resource-envelope.v1` plus `swarm-fair-share-batch-plan.v1` from `scripts/swarm_resource_envelope_normalizer.sh` and `scripts/swarm_fair_share_batch_planner.sh` | Show host resource-envelope readiness, capacity summaries, admitted/deferred fair-share counts, and contaminated capacity classes without running Cargo, RCH, queue mutation, or worker mutation. |
+| `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 The resource-envelope input contract is fixed by
 `docs/swarm_resource_envelope_contract_v1.json`; its human-readable contract is
 `docs/SWARM_RESOURCE_ENVELOPE.md`.
+The topology placement handoff is fixed by the planner and receipt-ledger
+schemas emitted by `scripts/swarm_topology_placement_planner.sh` and
+`scripts/swarm_topology_placement_receipt_ledger.sh`.
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
 adding a parallel TUI framework inside `franken_engine`.
@@ -340,6 +344,10 @@ The smoke test publishes deterministic goldens for:
 - `resource_envelope_degraded`
 - `resource_envelope_blocked`
 - `resource_envelope_contaminated`
+- `topology_placement_healthy`
+- `topology_placement_drifted`
+- `topology_placement_expired`
+- `topology_placement_blocked`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.
@@ -416,6 +424,14 @@ missing claim edge plus degraded anomaly evidence; and
 `causal_trace_contaminated` proves a local `rch` fallback contamination anomaly
 stays fail-closed in operator recommendations.
 
+The topology placement planner and receipt ledger are integrated directly as
+advisory locality and cache-residency evidence. The `healthy` fixture covers
+adopted NUMA-local hot-cache advice, `topology_placement_drifted` covers worker
+and cache-reuse drift, `topology_placement_expired` covers an elapsed validity
+window, and `topology_placement_blocked` proves contradictory locality evidence
+remains a blocked advisory rather than automatic worker pinning or placement
+enforcement.
+
 ## Truth Constraints
 
 - `dashboard_contract.renderer.provider` must be `/dp/frankentui`.
@@ -453,8 +469,12 @@ stays fail-closed in operator recommendations.
 - The docs must describe the causal trace handoff as integrated advisory
   evidence, not as live Agent Mail querying, automatic reservation release,
   automatic bead repair, `rch` execution, Cargo execution, or queue mutation.
-- The docs must name the integrated advisory child producers and their contract
-  JSON files.
+- The docs must describe the topology placement handoff as integrated advisory
+  locality and cache-residency evidence, not as live worker pinning, automatic
+  host rebinding, queue mutation, placement enforcement, target-dir repair,
+  RCH execution, Cargo execution, or worker mutation.
+- The docs must name the integrated advisory child producers and their
+  schema/contract sources.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a
   second predictive dashboard producer.
 - The docs must not describe any integrated section as a live control plane,

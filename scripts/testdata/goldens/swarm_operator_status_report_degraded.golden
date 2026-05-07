@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 27,
+    "degraded_count": 28,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -47,6 +47,14 @@
     "fair_share_admitted_count": 0,
     "fair_share_deferred_count": 0,
     "fair_share_heavy_admitted_count": 0,
+    "topology_placement_readiness": "degraded",
+    "topology_placement_plan_decision": "missing",
+    "topology_placement_receipt_decision": "missing",
+    "topology_placement_topology_class": "missing",
+    "topology_placement_warm_cache_state": "missing",
+    "topology_placement_warm_cache_opportunity_count": 0,
+    "topology_placement_adoption_status": "missing",
+    "topology_placement_drift_reason_count": 0,
     "lease_exchange_decision": "missing",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -393,6 +401,58 @@
         "fair_share_batch_plan_json": ""
       }
     },
+    "swarm_topology_placement": {
+      "artifact_statuses": {
+        "placement_plan": "missing",
+        "placement_receipt": "missing",
+        "evidence_ledger": "missing"
+      },
+      "readiness": "degraded",
+      "severity": "warning",
+      "plan_decision": "missing",
+      "receipt_decision": "missing",
+      "ledger_decision": "missing",
+      "placement_readiness": "missing",
+      "recommended_topology_class": "missing",
+      "recommended_worker_targets": [],
+      "recommended_worker_target_count": 0,
+      "recommended_worker_ids": [],
+      "heavy_target_count": 0,
+      "latency_sensitive_target_count": 0,
+      "warm_cache_residency_state": "missing",
+      "warm_cache_opportunities": [],
+      "warm_cache_opportunity_count": 0,
+      "shard_hints": [],
+      "adoption_status": "missing",
+      "adoption_drift_reason_codes": [],
+      "adoption_history": [],
+      "expiry": {},
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "ledger_summary": {
+        "receipt_count": 0,
+        "adopted_count": 0,
+        "drifted_count": 0,
+        "expired_count": 0,
+        "blocked_count": 0,
+        "fail_closed_count": 0
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "pins_workers_automatically": false,
+        "enforces_placement_automatically": false
+      },
+      "artifact_paths": {
+        "placement_plan_json": "",
+        "placement_receipt_json": "",
+        "placement_evidence_ledger_json": ""
+      }
+    },
     "lease_exchange_salvage": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -697,7 +757,11 @@
         "resource_envelope_healthy",
         "resource_envelope_degraded",
         "resource_envelope_blocked",
-        "resource_envelope_contaminated"
+        "resource_envelope_contaminated",
+        "topology_placement_healthy",
+        "topology_placement_drifted",
+        "topology_placement_expired",
+        "topology_placement_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -805,6 +869,12 @@
       "status": "missing",
       "impact": "resource envelope and fair-share artifacts are missing",
       "remediation": "Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness."
+    },
+    {
+      "component": "swarm_topology_placement",
+      "status": "missing",
+      "impact": "topology placement plan, receipt, or evidence ledger is missing",
+      "remediation": "Provide topology placement planner and receipt ledger artifacts before publishing locality and cache-residency advice."
     },
     {
       "component": "lease_exchange_salvage",

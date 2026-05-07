@@ -60,6 +60,9 @@ swarm_agent_causal_trace_graph_json=""
 swarm_agent_causal_trace_anomaly_report_json=""
 swarm_resource_envelope_json=""
 swarm_fair_share_batch_plan_json=""
+swarm_topology_placement_plan_json=""
+swarm_topology_placement_receipt_json=""
+swarm_topology_placement_evidence_ledger_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -127,6 +130,9 @@ Options:
   --swarm-agent-causal-trace-anomaly-report-json FILE
   --swarm-resource-envelope-json FILE
   --swarm-fair-share-batch-plan-json FILE
+  --swarm-topology-placement-plan-json FILE
+  --swarm-topology-placement-receipt-json FILE
+  --swarm-topology-placement-evidence-ledger-json FILE
 EOF
 }
 
@@ -368,6 +374,18 @@ while [[ "$#" -gt 0 ]]; do
       swarm_fair_share_batch_plan_json="$2"
       shift 2
       ;;
+    --swarm-topology-placement-plan-json)
+      swarm_topology_placement_plan_json="$2"
+      shift 2
+      ;;
+    --swarm-topology-placement-receipt-json)
+      swarm_topology_placement_receipt_json="$2"
+      shift 2
+      ;;
+    --swarm-topology-placement-evidence-ledger-json)
+      swarm_topology_placement_evidence_ledger_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -459,6 +477,9 @@ swarm_agent_causal_trace_graph_status="missing"
 swarm_agent_causal_trace_anomaly_report_status="missing"
 swarm_resource_envelope_status="missing"
 swarm_fair_share_batch_plan_status="missing"
+swarm_topology_placement_plan_status="missing"
+swarm_topology_placement_receipt_status="missing"
+swarm_topology_placement_evidence_ledger_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
@@ -496,6 +517,9 @@ if [[ -n "$swarm_agent_causal_trace_graph_json" ]]; then swarm_agent_causal_trac
 if [[ -n "$swarm_agent_causal_trace_anomaly_report_json" ]]; then swarm_agent_causal_trace_anomaly_report_status="provided"; fi
 if [[ -n "$swarm_resource_envelope_json" ]]; then swarm_resource_envelope_status="provided"; fi
 if [[ -n "$swarm_fair_share_batch_plan_json" ]]; then swarm_fair_share_batch_plan_status="provided"; fi
+if [[ -n "$swarm_topology_placement_plan_json" ]]; then swarm_topology_placement_plan_status="provided"; fi
+if [[ -n "$swarm_topology_placement_receipt_json" ]]; then swarm_topology_placement_receipt_status="provided"; fi
+if [[ -n "$swarm_topology_placement_evidence_ledger_json" ]]; then swarm_topology_placement_evidence_ledger_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
@@ -533,6 +557,9 @@ swarm_agent_causal_trace_graph_data="$(json_or_default "$swarm_agent_causal_trac
 swarm_agent_causal_trace_anomaly_report_data="$(json_or_default "$swarm_agent_causal_trace_anomaly_report_json" '{"schema_version":"franken-engine.swarm-agent-causal-trace-anomaly-report.v1","trace_id":null,"bead_id":null,"source_revision":null,"decision":"missing","anomaly_count":0,"fail_closed_count":0,"degraded_count":0,"anomaly_classes":[],"anomalies":[],"artifact_paths":{}}' 'swarm-agent-causal-trace-anomaly-report')"
 swarm_resource_envelope_data="$(json_or_default "$swarm_resource_envelope_json" '{"schema_version":"franken-engine.swarm-resource-envelope.v1","decision":"missing","readiness":"missing","host_identity":{},"cpu_topology":{},"memory_pressure":{},"target_dir_pressure":{},"rch_slots":{},"capacity_budget":{"script_lane_limit":0,"proof_lane_limit":0,"build_lane_limit":0,"remote_rch_slot_limit":0,"memory_bytes_budget":0,"target_dir_bytes_budget":0,"defer_reasons":[]},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-resource-envelope')"
 swarm_fair_share_batch_plan_data="$(json_or_default "$swarm_fair_share_batch_plan_json" '{"schema_version":"franken-engine.swarm-fair-share-batch-plan.v1","decision":"missing","summary":{"requested_count":0,"admitted_count":0,"deferred_count":0,"heavy_admitted_count":0,"heavy_lane_limit":0,"remote_rch_slot_limit":0,"rch_slots_used":0,"contaminated_input":false},"admitted_lanes":[],"deferred_lanes":[],"fairness_rationale":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-fair-share-batch-plan')"
+swarm_topology_placement_plan_data="$(json_or_default "$swarm_topology_placement_plan_json" '{"schema_version":"franken-engine.swarm-topology-placement-plan.v1","decision":"missing","placement_readiness":"missing","recommended_topology_class":"missing","recommended_worker_targets":[],"warm_cache_residency_state":"missing","warm_cache_opportunities":[],"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"locality_assumptions":[],"summary":{"target_count":0,"warm_cache_opportunity_count":0,"heavy_target_count":0,"latency_sensitive_target_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"repairs_target_dirs_automatically":false}}' 'swarm-topology-placement-plan')"
+swarm_topology_placement_receipt_data="$(json_or_default "$swarm_topology_placement_receipt_json" '{"schema_version":"franken-engine.swarm-topology-placement-receipt.v1","decision":"missing","adoption_status":"missing","recommended_placement_targets":[],"recommended_worker_ids":[],"topology_locality_assumptions":[],"cache_warmth_assumptions":{"state":"missing","opportunities":[]},"validity_window":{},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"adoption_drift_reason_codes":[],"adoption_drift_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-receipt')"
+swarm_topology_placement_evidence_ledger_data="$(json_or_default "$swarm_topology_placement_evidence_ledger_json" '{"schema_version":"franken-engine.swarm-topology-placement-evidence-ledger.v1","decision":"missing","receipts":[],"adoption_history":[],"summary":{"receipt_count":0,"adopted_count":0,"drifted_count":0,"expired_count":0,"blocked_count":0,"fail_closed_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-evidence-ledger')"
 
 # shellcheck disable=SC2094
 jq -n \
@@ -579,8 +606,14 @@ jq -n \
   --arg swarm_agent_causal_trace_anomaly_report_status "$swarm_agent_causal_trace_anomaly_report_status" \
   --arg swarm_resource_envelope_status "$swarm_resource_envelope_status" \
   --arg swarm_fair_share_batch_plan_status "$swarm_fair_share_batch_plan_status" \
+  --arg swarm_topology_placement_plan_status "$swarm_topology_placement_plan_status" \
+  --arg swarm_topology_placement_receipt_status "$swarm_topology_placement_receipt_status" \
+  --arg swarm_topology_placement_evidence_ledger_status "$swarm_topology_placement_evidence_ledger_status" \
   --arg swarm_resource_envelope_json "$swarm_resource_envelope_json" \
   --arg swarm_fair_share_batch_plan_json "$swarm_fair_share_batch_plan_json" \
+  --arg swarm_topology_placement_plan_json "$swarm_topology_placement_plan_json" \
+  --arg swarm_topology_placement_receipt_json "$swarm_topology_placement_receipt_json" \
+  --arg swarm_topology_placement_evidence_ledger_json "$swarm_topology_placement_evidence_ledger_json" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -634,6 +667,9 @@ jq -n \
   --argjson swarm_agent_causal_trace_anomaly_report "$swarm_agent_causal_trace_anomaly_report_data" \
   --argjson swarm_resource_envelope "$swarm_resource_envelope_data" \
   --argjson swarm_fair_share_batch_plan "$swarm_fair_share_batch_plan_data" \
+  --argjson swarm_topology_placement_plan "$swarm_topology_placement_plan_data" \
+  --argjson swarm_topology_placement_receipt "$swarm_topology_placement_receipt_data" \
+  --argjson swarm_topology_placement_evidence_ledger "$swarm_topology_placement_evidence_ledger_data" \
   '
   def degraded($component; $status; $impact; $remediation):
     if ($status == "ok") then empty
@@ -1630,6 +1666,135 @@ jq -n \
       }
     }) as $resource_envelope_summary
   | ([
+        $swarm_topology_placement_plan.mutation_policy,
+        $swarm_topology_placement_receipt.mutation_policy,
+        $swarm_topology_placement_evidence_ledger.mutation_policy
+      ]
+      | map(select(. != null))
+      | any(.[]; (.advisory_only != true)
+          or (.mutates_br == true)
+          or (.reassigns_beads == true)
+          or (.releases_reservations == true)
+          or (.sends_agent_mail == true)
+          or (.queries_live_agent_mail == true)
+          or (.runs_cargo == true)
+          or (.runs_rch == true)
+          or (.mutates_remote_workers == true)
+          or (.changes_live_queue_policy == true)
+          or (.pins_workers_automatically == true)
+          or (.rebinds_hosts_automatically == true)
+          or (.repairs_target_dirs_automatically == true)
+          or (.enforces_placement_automatically == true))) as $topology_placement_unsafe_mutation_claim
+  | ((($swarm_topology_placement_plan.fail_closed_reasons // [])
+      + ($swarm_topology_placement_receipt.fail_closed_reasons // [])
+      + (($swarm_topology_placement_evidence_ledger.receipts // []) | map(.fail_closed_reasons // []) | add // []))
+      | unique_by([.code, .source_id, .detail])) as $topology_placement_fail_reasons
+  | ((($swarm_topology_placement_plan.blocked_reasons // [])
+      + ($swarm_topology_placement_receipt.blocked_reasons // [])
+      + (($swarm_topology_placement_evidence_ledger.receipts // []) | map(.blocked_reasons // []) | add // []))
+      | unique_by([.code, .source_id, .detail])) as $topology_placement_blocked_reasons
+  | ((($swarm_topology_placement_plan.degraded_reasons // [])
+      + ($swarm_topology_placement_receipt.degraded_reasons // [])
+      + (($swarm_topology_placement_evidence_ledger.receipts // []) | map(.degraded_reasons // []) | add // [])
+      + (($swarm_topology_placement_receipt.adoption_drift_reasons // []) | map(select((.code // "") != "adopted_recommended_target" and (.code // "") != "cache_reuse_confirmed" and (.code // "") != "cache_cold_no_reuse_claim"))))
+      | unique_by([.code, .source_id, .detail])) as $topology_placement_warning_reasons
+  | ({
+      artifact_statuses: {
+        placement_plan: $swarm_topology_placement_plan_status,
+        placement_receipt: $swarm_topology_placement_receipt_status,
+        evidence_ledger: $swarm_topology_placement_evidence_ledger_status
+      },
+      readiness: (
+        if $topology_placement_unsafe_mutation_claim
+          or (($swarm_topology_placement_plan.decision // "") == "fail_closed")
+          or (($swarm_topology_placement_receipt.decision // "") == "fail_closed")
+          or (($swarm_topology_placement_evidence_ledger.decision // "") == "fail_closed") then "contaminated"
+        elif (($swarm_topology_placement_plan.decision // "") == "blocked")
+          or (($swarm_topology_placement_receipt.decision // "") == "blocked")
+          or (($swarm_topology_placement_evidence_ledger.decision // "") == "blocked") then "blocked"
+        elif $swarm_topology_placement_plan_status == "missing"
+          or $swarm_topology_placement_receipt_status == "missing"
+          or $swarm_topology_placement_evidence_ledger_status == "missing"
+          or (($swarm_topology_placement_plan.decision // "") == "degraded")
+          or (($swarm_topology_placement_receipt.decision // "") == "degraded")
+          or (($swarm_topology_placement_evidence_ledger.decision // "") == "degraded")
+          or (($swarm_topology_placement_receipt.adoption_status // "") | IN("drifted", "expired", "pending_observation")) then "degraded"
+        else "ready"
+        end
+      ),
+      severity: (
+        if $topology_placement_unsafe_mutation_claim
+          or (($swarm_topology_placement_plan.decision // "") == "fail_closed")
+          or (($swarm_topology_placement_receipt.decision // "") == "fail_closed")
+          or (($swarm_topology_placement_evidence_ledger.decision // "") == "fail_closed") then "critical"
+        elif $swarm_topology_placement_plan_status == "missing"
+          or $swarm_topology_placement_receipt_status == "missing"
+          or $swarm_topology_placement_evidence_ledger_status == "missing"
+          or (($swarm_topology_placement_plan.decision // "") | IN("blocked", "degraded"))
+          or (($swarm_topology_placement_receipt.decision // "") | IN("blocked", "degraded"))
+          or (($swarm_topology_placement_evidence_ledger.decision // "") | IN("blocked", "degraded"))
+          or (($swarm_topology_placement_receipt.adoption_status // "") | IN("drifted", "expired", "pending_observation")) then "warning"
+        else "ok"
+        end
+      ),
+      plan_decision: ($swarm_topology_placement_plan.decision // "missing"),
+      receipt_decision: ($swarm_topology_placement_receipt.decision // "missing"),
+      ledger_decision: ($swarm_topology_placement_evidence_ledger.decision // "missing"),
+      placement_readiness: ($swarm_topology_placement_plan.placement_readiness // "missing"),
+      recommended_topology_class: ($swarm_topology_placement_plan.recommended_topology_class // "missing"),
+      recommended_worker_targets: bounded($swarm_topology_placement_plan.recommended_worker_targets),
+      recommended_worker_target_count: ($swarm_topology_placement_plan.summary.target_count // (($swarm_topology_placement_plan.recommended_worker_targets // []) | length)),
+      recommended_worker_ids: ($swarm_topology_placement_receipt.recommended_worker_ids // []),
+      heavy_target_count: ($swarm_topology_placement_plan.summary.heavy_target_count // (($swarm_topology_placement_plan.recommended_worker_targets // []) | map(select(.lane_class == "heavy")) | length)),
+      latency_sensitive_target_count: ($swarm_topology_placement_plan.summary.latency_sensitive_target_count // (($swarm_topology_placement_plan.recommended_worker_targets // []) | map(select(.lane_class == "latency_sensitive")) | length)),
+      warm_cache_residency_state: ($swarm_topology_placement_plan.warm_cache_residency_state // $swarm_topology_placement_receipt.cache_warmth_assumptions.state // "missing"),
+      warm_cache_opportunities: bounded($swarm_topology_placement_plan.warm_cache_opportunities),
+      warm_cache_opportunity_count: ($swarm_topology_placement_plan.summary.warm_cache_opportunity_count // (($swarm_topology_placement_plan.warm_cache_opportunities // []) | length)),
+      shard_hints: bounded(($swarm_topology_placement_plan.recommended_worker_targets // []) | map(.shard_hint // empty)),
+      adoption_status: ($swarm_topology_placement_receipt.adoption_status // "missing"),
+      adoption_drift_reason_codes: ($swarm_topology_placement_receipt.adoption_drift_reason_codes // []),
+      adoption_history: bounded($swarm_topology_placement_evidence_ledger.adoption_history),
+      expiry: ($swarm_topology_placement_receipt.validity_window // {}),
+      warnings: bounded($topology_placement_warning_reasons + $topology_placement_blocked_reasons + $topology_placement_fail_reasons),
+      fail_closed_reason_count: ($topology_placement_fail_reasons | length),
+      blocked_reason_count: ($topology_placement_blocked_reasons | length),
+      degraded_reason_count: ($topology_placement_warning_reasons | length),
+      ledger_summary: ($swarm_topology_placement_evidence_ledger.summary // {}),
+      mutation_policy: {
+        advisory_only: (
+          ($swarm_topology_placement_plan.mutation_policy.advisory_only // true)
+          and ($swarm_topology_placement_receipt.mutation_policy.advisory_only // true)
+          and ($swarm_topology_placement_evidence_ledger.mutation_policy.advisory_only // true)
+        ),
+        mutates_br: (
+          ($swarm_topology_placement_plan.mutation_policy.mutates_br // false)
+          or ($swarm_topology_placement_receipt.mutation_policy.mutates_br // false)
+          or ($swarm_topology_placement_evidence_ledger.mutation_policy.mutates_br // false)
+        ),
+        mutates_remote_workers: (
+          ($swarm_topology_placement_plan.mutation_policy.mutates_remote_workers // false)
+          or ($swarm_topology_placement_receipt.mutation_policy.mutates_remote_workers // false)
+          or ($swarm_topology_placement_evidence_ledger.mutation_policy.mutates_remote_workers // false)
+        ),
+        changes_live_queue_policy: (
+          ($swarm_topology_placement_plan.mutation_policy.changes_live_queue_policy // false)
+          or ($swarm_topology_placement_receipt.mutation_policy.changes_live_queue_policy // false)
+          or ($swarm_topology_placement_evidence_ledger.mutation_policy.changes_live_queue_policy // false)
+        ),
+        pins_workers_automatically: (
+          ($swarm_topology_placement_plan.mutation_policy.pins_workers_automatically // false)
+          or ($swarm_topology_placement_receipt.mutation_policy.pins_workers_automatically // false)
+          or ($swarm_topology_placement_evidence_ledger.mutation_policy.pins_workers_automatically // false)
+        ),
+        enforces_placement_automatically: ($swarm_topology_placement_receipt.mutation_policy.enforces_placement_automatically // $swarm_topology_placement_evidence_ledger.mutation_policy.enforces_placement_automatically // false)
+      },
+      artifact_paths: {
+        placement_plan_json: ($swarm_topology_placement_plan.artifact_paths.swarm_topology_placement_plan_json // $swarm_topology_placement_plan_json),
+        placement_receipt_json: ($swarm_topology_placement_receipt.artifact_paths.swarm_topology_placement_receipt_json // $swarm_topology_placement_receipt_json),
+        placement_evidence_ledger_json: ($swarm_topology_placement_evidence_ledger.artifact_paths.swarm_topology_placement_evidence_ledger_json // $swarm_topology_placement_evidence_ledger_json)
+      }
+    }) as $topology_placement_summary
+  | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
       degraded("proof_evidence_index"; $proof_index_status; "proof queries may be incomplete"; "Use explicit proof outcome snapshots until bd-p03vs lands.")
@@ -1684,6 +1849,13 @@ jq -n \
         [{component: "swarm_resource_envelope", status: "missing", impact: "resource envelope and fair-share artifacts are missing", remediation: "Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness."}]
       elif $resource_envelope_summary.severity != "ok" then
         [{component: "swarm_resource_envelope", status: $resource_envelope_summary.readiness, impact: "host resource envelope or fair-share admission is degraded, blocked, or contaminated", remediation: "Refresh the resource envelope and respect the fair-share plan before admitting more work."}]
+      else [] end)
+    + (if $swarm_topology_placement_plan_status == "missing"
+          or $swarm_topology_placement_receipt_status == "missing"
+          or $swarm_topology_placement_evidence_ledger_status == "missing" then
+        [{component: "swarm_topology_placement", status: "missing", impact: "topology placement plan, receipt, or evidence ledger is missing", remediation: "Provide topology placement planner and receipt ledger artifacts before publishing locality and cache-residency advice."}]
+      elif $topology_placement_summary.severity != "ok" then
+        [{component: "swarm_topology_placement", status: $topology_placement_summary.readiness, impact: "topology placement or cache-residency adoption evidence is degraded, blocked, or contaminated", remediation: "Refresh placement evidence or respect blocked/drift/expiry warnings before using locality advice."}]
       else [] end)
     + (if $lease_exchange_salvage_simulation_status == "missing" then
         [{component: "lease_exchange_salvage", status: "missing", impact: "lease-exchange salvage simulation artifact is missing", remediation: "Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles."}]
@@ -1818,6 +1990,14 @@ jq -n \
         fair_share_admitted_count: $resource_envelope_summary.fair_share.admitted_count,
         fair_share_deferred_count: $resource_envelope_summary.fair_share.deferred_count,
         fair_share_heavy_admitted_count: $resource_envelope_summary.fair_share.heavy_admitted_count,
+        topology_placement_readiness: $topology_placement_summary.readiness,
+        topology_placement_plan_decision: $topology_placement_summary.plan_decision,
+        topology_placement_receipt_decision: $topology_placement_summary.receipt_decision,
+        topology_placement_topology_class: $topology_placement_summary.recommended_topology_class,
+        topology_placement_warm_cache_state: $topology_placement_summary.warm_cache_residency_state,
+        topology_placement_warm_cache_opportunity_count: $topology_placement_summary.warm_cache_opportunity_count,
+        topology_placement_adoption_status: $topology_placement_summary.adoption_status,
+        topology_placement_drift_reason_count: (($topology_placement_summary.warnings // []) | length),
         lease_exchange_decision: $lease_exchange_salvage_summary.decision,
         lease_exchange_candidate_count: $lease_exchange_salvage_summary.lease_exchange_candidate_count,
         salvage_promotion_candidate_count: $lease_exchange_salvage_summary.salvage_promotion_candidate_count,
@@ -1917,6 +2097,7 @@ jq -n \
         capacity_forecast: $capacity_forecast_summary,
         admission_budgets: $admission_budget_summary,
         swarm_resource_envelope: $resource_envelope_summary,
+        swarm_topology_placement: $topology_placement_summary,
         lease_exchange_salvage: $lease_exchange_salvage_summary,
         prefetch_roi: $prefetch_roi_summary,
         starvation_rescue: $starvation_rescue_summary,
@@ -1928,7 +2109,7 @@ jq -n \
         swarm_agent_causal_trace: $causal_trace_summary,
         staged_contamination: $staged_contamination_summary,
         fixture_contract: {
-          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated"],
+          golden_cases: ["healthy", "degraded", "stale_proof", "high_cost", "collision_risk", "overloaded", "forecast_low_confidence", "execution_queue_conservative", "execution_queue_restore_blocked", "queue_fidelity_high_drift", "queue_fidelity_insufficient_evidence", "queue_tuning_promotion_blocked", "queue_tuning_promotion_stale_evidence", "queue_tuning_promotion_rollback_required", "queue_policy_adoption_expiry_required", "queue_policy_adoption_supersession_required", "causal_trace_degraded", "causal_trace_contaminated", "resource_envelope_healthy", "resource_envelope_degraded", "resource_envelope_blocked", "resource_envelope_contaminated", "topology_placement_healthy", "topology_placement_drifted", "topology_placement_expired", "topology_placement_blocked"],
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
@@ -1947,6 +2128,12 @@ jq -n \
           [recommendation("respect_resource_envelope_block"; null; "resource envelope reports saturated but trustworthy capacity")]
         elif $resource_envelope_summary.readiness == "degraded" then
           [recommendation("refresh_resource_envelope"; null; "resource envelope or fair-share plan is missing or degraded")]
+        elif $topology_placement_summary.readiness == "contaminated" then
+          [recommendation("respect_topology_placement_contamination"; null; "topology placement evidence is contaminated by fail-closed or unsafe mutation claims")]
+        elif $topology_placement_summary.readiness == "blocked" then
+          [recommendation("respect_topology_placement_block"; null; "topology placement evidence is blocked by contradictory locality or non-adoptable receipt state")]
+        elif $topology_placement_summary.readiness == "degraded" then
+          [recommendation("review_topology_placement_advisory"; null; "topology placement evidence has drift, expiry, pending observation, or degraded cache-residency assumptions")]
         elif $checkpoint_restore_summary.severity == "critical" then
           [recommendation("respect_checkpoint_restore_fail_closed"; null; "checkpoint restore handoff is fail-closed or contradicted by conformance evidence")]
         elif $starvation_rescue_summary.severity == "critical" then
@@ -2032,6 +2219,9 @@ jq -n \
         admission_budget_plan_json: $admission_budget_summary.artifact_path,
         swarm_resource_envelope_json: $resource_envelope_summary.artifact_paths.resource_envelope_json,
         swarm_fair_share_batch_plan_json: $resource_envelope_summary.artifact_paths.fair_share_batch_plan_json,
+        swarm_topology_placement_plan_json: $topology_placement_summary.artifact_paths.placement_plan_json,
+        swarm_topology_placement_receipt_json: $topology_placement_summary.artifact_paths.placement_receipt_json,
+        swarm_topology_placement_evidence_ledger_json: $topology_placement_summary.artifact_paths.placement_evidence_ledger_json,
         lease_exchange_salvage_simulation_json: $lease_exchange_salvage_summary.artifact_path,
         warm_target_prefetch_roi_advisory_json: $prefetch_roi_summary.artifact_path,
         starvation_rescue_plan_json: $starvation_rescue_summary.artifact_path,
@@ -2074,6 +2264,7 @@ jq -n \
   printf -- "- Forecast confidence: \`%s\` / \`%s\`\n" "$(jq -r '.summary.forecast_confidence_band' "$status_path")" "$(jq -r '.summary.forecast_overall_state' "$status_path")"
   printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
   printf -- "- Resource envelope: \`%s\` / \`%s\` with \`%s\` admitted and \`%s\` deferred\n" "$(jq -r '.summary.resource_envelope_readiness' "$status_path")" "$(jq -r '.summary.fair_share_decision' "$status_path")" "$(jq '.summary.fair_share_admitted_count' "$status_path")" "$(jq '.summary.fair_share_deferred_count' "$status_path")"
+  printf -- "- Topology placement: \`%s\` class=\`%s\` cache=\`%s\` adoption=\`%s\`\n" "$(jq -r '.summary.topology_placement_readiness' "$status_path")" "$(jq -r '.summary.topology_placement_topology_class' "$status_path")" "$(jq -r '.summary.topology_placement_warm_cache_state' "$status_path")" "$(jq -r '.summary.topology_placement_adoption_status' "$status_path")"
   printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
   printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"
   printf -- "- Starvation rescue escalation: \`%s\` via \`%s\`\n" "$(jq -r '.summary.starvation_rescue_escalation_band' "$status_path")" "$(jq -r '.summary.starvation_rescue_top_action' "$status_path")"
@@ -2093,6 +2284,9 @@ jq -n \
       {label:"Admission budget plan", path:.artifact_paths.admission_budget_plan_json},
       {label:"Swarm resource envelope", path:.artifact_paths.swarm_resource_envelope_json},
       {label:"Swarm fair-share batch plan", path:.artifact_paths.swarm_fair_share_batch_plan_json},
+      {label:"Swarm topology placement plan", path:.artifact_paths.swarm_topology_placement_plan_json},
+      {label:"Swarm topology placement receipt", path:.artifact_paths.swarm_topology_placement_receipt_json},
+      {label:"Swarm topology placement evidence ledger", path:.artifact_paths.swarm_topology_placement_evidence_ledger_json},
       {label:"Lease exchange salvage simulation", path:.artifact_paths.lease_exchange_salvage_simulation_json},
       {label:"Warm target prefetch ROI advisory", path:.artifact_paths.warm_target_prefetch_roi_advisory_json},
       {label:"Starvation rescue plan", path:.artifact_paths.starvation_rescue_plan_json},

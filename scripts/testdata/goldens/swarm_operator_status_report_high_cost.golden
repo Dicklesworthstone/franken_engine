@@ -47,6 +47,14 @@
     "fair_share_admitted_count": 3,
     "fair_share_deferred_count": 0,
     "fair_share_heavy_admitted_count": 2,
+    "topology_placement_readiness": "ready",
+    "topology_placement_plan_decision": "pass",
+    "topology_placement_receipt_decision": "pass",
+    "topology_placement_topology_class": "numa_hot_cache_preferred",
+    "topology_placement_warm_cache_state": "hot",
+    "topology_placement_warm_cache_opportunity_count": 1,
+    "topology_placement_adoption_status": "adopted",
+    "topology_placement_drift_reason_count": 0,
     "lease_exchange_decision": "retain_current_assignments",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -513,6 +521,154 @@
         "fair_share_batch_plan_json": "[SMOKE_ROOT]/high_cost-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
+    "swarm_topology_placement": {
+      "artifact_statuses": {
+        "placement_plan": "provided",
+        "placement_receipt": "provided",
+        "evidence_ledger": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "plan_decision": "pass",
+      "receipt_decision": "pass",
+      "ledger_decision": "pass",
+      "placement_readiness": "ready",
+      "recommended_topology_class": "numa_hot_cache_preferred",
+      "recommended_worker_targets": [
+        {
+          "rank": 1,
+          "lane_class": "heavy",
+          "worker_id": "rch-a",
+          "numa_node": 0,
+          "shard_hint": "heavy-numa-0-shard-0",
+          "cache_reuse": true,
+          "target_dir": "/mnt/rch/target-a",
+          "certainty": "confirmed",
+          "reason_codes": [
+            "numa_preferred",
+            "hot_cache_reuse"
+          ]
+        },
+        {
+          "rank": 2,
+          "lane_class": "latency_sensitive",
+          "worker_id": "rch-a",
+          "numa_node": 0,
+          "shard_hint": "latency_sensitive-numa-0-shard-1",
+          "cache_reuse": true,
+          "target_dir": "/mnt/rch/target-a",
+          "certainty": "confirmed",
+          "reason_codes": [
+            "numa_preferred",
+            "hot_cache_reuse"
+          ]
+        }
+      ],
+      "recommended_worker_target_count": 2,
+      "recommended_worker_ids": [
+        "rch-a"
+      ],
+      "heavy_target_count": 1,
+      "latency_sensitive_target_count": 1,
+      "warm_cache_residency_state": "hot",
+      "warm_cache_opportunities": [
+        {
+          "opportunity_id": "reuse_hot_cache",
+          "action": "prefer_hot_cache_worker_before_cold_recompute",
+          "certainty": "confirmed",
+          "worker_ids": [
+            "rch-a"
+          ],
+          "target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ],
+          "reason_codes": [
+            "hot_cache_reuse",
+            "reuse_warm_target_dir"
+          ]
+        }
+      ],
+      "warm_cache_opportunity_count": 1,
+      "shard_hints": [
+        "heavy-numa-0-shard-0",
+        "latency_sensitive-numa-0-shard-1"
+      ],
+      "adoption_status": "adopted",
+      "adoption_drift_reason_codes": [
+        "adopted_recommended_target",
+        "cache_reuse_confirmed"
+      ],
+      "adoption_history": [
+        {
+          "receipt_id": "receipt-smoke-topology-placement",
+          "plan_id": "plan-smoke-topology-placement",
+          "adoption_status": "adopted",
+          "expected_host_id": "host-scale-a",
+          "expected_worker_ids": [
+            "rch-a"
+          ],
+          "observed": {
+            "path": "adoption_observation.json",
+            "observed_at": "2026-05-06T20:40:00Z",
+            "observed_epoch_seconds": 1778100000,
+            "host_id": "host-scale-a",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "cache_reuse_observed": true
+          },
+          "drift_reason_codes": [
+            "adopted_recommended_target",
+            "cache_reuse_confirmed"
+          ],
+          "validity_window": {
+            "reference_time": "2026-05-06T20:30:00Z",
+            "reference_epoch_seconds": 1778099400,
+            "ttl_seconds": 1800,
+            "expires_at": "2026-05-06T21:00:00Z",
+            "expires_epoch_seconds": 1778101200,
+            "expired_at_observation": false
+          }
+        }
+      ],
+      "expiry": {
+        "reference_time": "2026-05-06T20:30:00Z",
+        "reference_epoch_seconds": 1778099400,
+        "ttl_seconds": 1800,
+        "expires_at": "2026-05-06T21:00:00Z",
+        "expires_epoch_seconds": 1778101200,
+        "expired_at_observation": false
+      },
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "ledger_summary": {
+        "receipt_count": 1,
+        "adopted_count": 1,
+        "drifted_count": 0,
+        "expired_count": 0,
+        "blocked_count": 0,
+        "fail_closed_count": 0
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "pins_workers_automatically": false,
+        "enforces_placement_automatically": false
+      },
+      "artifact_paths": {
+        "placement_plan_json": "[SMOKE_ROOT]/high_cost-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/high_cost-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/high_cost-fixtures/swarm_topology_placement_evidence_ledger.json"
+      }
+    },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -908,7 +1064,11 @@
         "resource_envelope_healthy",
         "resource_envelope_degraded",
         "resource_envelope_blocked",
-        "resource_envelope_contaminated"
+        "resource_envelope_contaminated",
+        "topology_placement_healthy",
+        "topology_placement_drifted",
+        "topology_placement_expired",
+        "topology_placement_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

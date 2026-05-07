@@ -185,6 +185,23 @@
     },
     "handoff_note": "The operator status report integrates resource envelope and fair-share batch-plan artifacts as advisory-only admission evidence. It must not be described as live queue mutation, automatic bead reassignment, automatic RCH or Cargo execution, target-dir cleanup, worker mutation, or a second dashboard producer."
   },
+  "swarm_topology_placement_handoff": {
+    "planner_script": "scripts/swarm_topology_placement_planner.sh",
+    "receipt_ledger_script": "scripts/swarm_topology_placement_receipt_ledger.sh",
+    "placement_plan_schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+    "placement_receipt_schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+    "placement_evidence_ledger_schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+    "operator_status_section": "swarm_topology_placement",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "ready": "placement plan, receipt, and evidence ledger are present with adopted locality and cache-residency assumptions",
+      "degraded": "placement evidence has drift, expiry, pending observation, or degraded cache-residency assumptions",
+      "blocked": "placement plan or receipt is non-adoptable because locality evidence is blocked",
+      "contaminated": "fail-closed evidence or unsafe mutation claims invalidate placement advice"
+    },
+    "handoff_note": "The operator status report integrates topology placement plan, receipt, and evidence-ledger artifacts as advisory-only locality and cache-residency evidence. It must not be described as live queue mutation, automatic worker pinning, automatic host rebinding, automatic target-dir repair, automatic placement enforcement, RCH or Cargo execution, or worker mutation."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -275,6 +292,20 @@
     "predictive_dashboard.swarm_resource_envelope.fair_share.admitted_count",
     "predictive_dashboard.swarm_resource_envelope.fair_share.deferred_count",
     "predictive_dashboard.swarm_resource_envelope.contaminating_classes",
+    "predictive_dashboard.swarm_topology_placement.readiness",
+    "predictive_dashboard.swarm_topology_placement.plan_decision",
+    "predictive_dashboard.swarm_topology_placement.receipt_decision",
+    "predictive_dashboard.swarm_topology_placement.recommended_topology_class",
+    "predictive_dashboard.swarm_topology_placement.recommended_worker_target_count",
+    "predictive_dashboard.swarm_topology_placement.heavy_target_count",
+    "predictive_dashboard.swarm_topology_placement.latency_sensitive_target_count",
+    "predictive_dashboard.swarm_topology_placement.warm_cache_residency_state",
+    "predictive_dashboard.swarm_topology_placement.warm_cache_opportunity_count",
+    "predictive_dashboard.swarm_topology_placement.adoption_status",
+    "predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes",
+    "predictive_dashboard.swarm_topology_placement.expiry",
+    "predictive_dashboard.swarm_topology_placement.artifact_paths",
+    "predictive_dashboard.swarm_topology_placement.mutation_policy",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -315,6 +346,9 @@
     "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
     "franken-engine.swarm-resource-envelope.v1",
     "franken-engine.swarm-fair-share-batch-plan.v1",
+    "franken-engine.swarm-topology-placement-plan.v1",
+    "franken-engine.swarm-topology-placement-receipt.v1",
+    "franken-engine.swarm-topology-placement-evidence-ledger.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -346,7 +380,11 @@
     "resource_envelope_healthy",
     "resource_envelope_degraded",
     "resource_envelope_blocked",
-    "resource_envelope_contaminated"
+    "resource_envelope_contaminated",
+    "topology_placement_healthy",
+    "topology_placement_drifted",
+    "topology_placement_expired",
+    "topology_placement_blocked"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -386,6 +424,7 @@
     "The queue tuning promotion section is advisory operator evidence backed by docs/swarm_execution_queue_tuning_policy_bundle_contract_v1.json, docs/swarm_execution_queue_tuning_promotion_guard_contract_v1.json, and docs/swarm_execution_queue_tuning_rollback_comparator_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, automatic promotion, or automatic bead changes.",
     "The queue policy adoption section is advisory lifecycle evidence backed by docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json, docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json, and docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, automatic retirement, automatic supersession, or proof that retirement already executed.",
     "The causal trace section is advisory handoff evidence backed by scripts/swarm_agent_causal_trace_graph.sh and docs/swarm_agent_causal_trace_spine_contract_v1.json; it must not be described as live Agent Mail querying, automatic reservation release, automatic bead repair, rch execution, Cargo execution, or queue mutation.",
+    "The topology placement section is advisory locality and cache-residency evidence backed by scripts/swarm_topology_placement_planner.sh and scripts/swarm_topology_placement_receipt_ledger.sh; it must not be described as live worker pinning, host rebinding, queue mutation, placement enforcement, target-dir repair, RCH execution, Cargo execution, or worker mutation.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

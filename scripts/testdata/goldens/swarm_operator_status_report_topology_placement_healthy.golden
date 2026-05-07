@@ -371,7 +371,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -397,7 +397,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -418,7 +418,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/admission_budget_plan.json"
     },
     "swarm_resource_envelope": {
       "artifact_statuses": {
@@ -464,8 +464,8 @@
       "blocked_reason_count": 0,
       "fail_closed_reason_count": 0,
       "artifact_paths": {
-        "resource_envelope_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_resource_envelope.json",
-        "fair_share_batch_plan_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_fair_share_batch_plan.json"
+        "resource_envelope_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
     "swarm_topology_placement": {
@@ -611,9 +611,9 @@
         "enforces_placement_automatically": false
       },
       "artifact_paths": {
-        "placement_plan_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_plan.json",
-        "placement_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_receipt.json",
-        "placement_evidence_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/swarm_topology_placement_evidence_ledger.json"
+        "placement_plan_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
     "lease_exchange_salvage": {
@@ -626,7 +626,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -642,7 +642,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -674,8 +674,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -694,9 +694,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -739,10 +739,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/healthy-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -781,11 +781,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/healthy-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/healthy-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/healthy-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -825,11 +825,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/healthy-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/healthy-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/healthy-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -910,10 +910,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/healthy-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/healthy-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/healthy-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -971,8 +971,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/healthy-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/healthy-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/topology_placement_healthy-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {

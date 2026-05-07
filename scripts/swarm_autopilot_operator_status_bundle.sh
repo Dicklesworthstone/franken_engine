@@ -15,6 +15,11 @@ recommendation_bundle_json=""
 dashboard_projection_json=""
 hindsight_chaos_scenarios_json=""
 hindsight_chaos_replay_index_json=""
+warehouse_retention_plan_json=""
+storage_budget_ledger_json=""
+promotion_candidates_json=""
+promotion_candidate_receipts_json=""
+anomaly_cohorts_json=""
 now_epoch_seconds="$(date -u +%s)"
 stale_after_seconds="1800"
 
@@ -34,6 +39,11 @@ Required inputs:
   --dashboard-projection-json FILE
   --hindsight-chaos-scenarios-json FILE
   --hindsight-chaos-replay-index-json FILE
+  --warehouse-retention-plan-json FILE
+  --storage-budget-ledger-json FILE
+  --promotion-candidates-json FILE
+  --promotion-candidate-receipts-json FILE
+  --anomaly-cohorts-json FILE
 
 Optional inputs:
   --source-revision REV
@@ -89,6 +99,26 @@ while [[ "$#" -gt 0 ]]; do
       hindsight_chaos_replay_index_json="${2:-}"
       shift 2
       ;;
+    --warehouse-retention-plan-json)
+      warehouse_retention_plan_json="${2:-}"
+      shift 2
+      ;;
+    --storage-budget-ledger-json)
+      storage_budget_ledger_json="${2:-}"
+      shift 2
+      ;;
+    --promotion-candidates-json)
+      promotion_candidates_json="${2:-}"
+      shift 2
+      ;;
+    --promotion-candidate-receipts-json)
+      promotion_candidate_receipts_json="${2:-}"
+      shift 2
+      ;;
+    --anomaly-cohorts-json)
+      anomaly_cohorts_json="${2:-}"
+      shift 2
+      ;;
     --source-revision)
       source_revision="${2:-}"
       shift 2
@@ -129,7 +159,12 @@ for required_path in \
   "$recommendation_bundle_json" \
   "$dashboard_projection_json" \
   "$hindsight_chaos_scenarios_json" \
-  "$hindsight_chaos_replay_index_json"; do
+  "$hindsight_chaos_replay_index_json" \
+  "$warehouse_retention_plan_json" \
+  "$storage_budget_ledger_json" \
+  "$promotion_candidates_json" \
+  "$promotion_candidate_receipts_json" \
+  "$anomaly_cohorts_json"; do
   if [[ -z "$required_path" ]]; then
     printf 'all required autopilot operator-status inputs must be provided\n' >&2
     usage
@@ -170,6 +205,11 @@ recommendation_normalized="${run_dir}/recommendation_bundle.normalized.json"
 dashboard_normalized="${run_dir}/dashboard_projection.normalized.json"
 chaos_scenarios_normalized="${run_dir}/hindsight_chaos_scenarios.normalized.json"
 chaos_replay_normalized="${run_dir}/hindsight_chaos_replay_index.normalized.json"
+retention_plan_normalized="${run_dir}/warehouse_retention_plan.normalized.json"
+storage_ledger_normalized="${run_dir}/storage_budget_ledger.normalized.json"
+promotion_candidates_normalized="${run_dir}/promotion_candidates.normalized.json"
+promotion_receipts_normalized="${run_dir}/promotion_candidate_receipts.normalized.json"
+anomaly_cohorts_normalized="${run_dir}/anomaly_cohorts.normalized.json"
 
 printf './scripts/swarm_autopilot_operator_status_bundle.sh' >"$commands_path"
 for arg in "${original_args[@]}"; do
@@ -280,6 +320,11 @@ normalize_required_json "$recommendation_bundle_json" "$recommendation_normalize
 normalize_required_json "$dashboard_projection_json" "$dashboard_normalized" "dashboard_projection"
 normalize_required_json "$hindsight_chaos_scenarios_json" "$chaos_scenarios_normalized" "hindsight_chaos_scenarios"
 normalize_required_json "$hindsight_chaos_replay_index_json" "$chaos_replay_normalized" "hindsight_chaos_replay_index"
+normalize_required_json "$warehouse_retention_plan_json" "$retention_plan_normalized" "warehouse_retention_plan"
+normalize_required_json "$storage_budget_ledger_json" "$storage_ledger_normalized" "storage_budget_ledger"
+normalize_required_json "$promotion_candidates_json" "$promotion_candidates_normalized" "promotion_candidates"
+normalize_required_json "$promotion_candidate_receipts_json" "$promotion_receipts_normalized" "promotion_candidate_receipts"
+normalize_required_json "$anomaly_cohorts_json" "$anomaly_cohorts_normalized" "anomaly_cohorts"
 
 if [[ "$source_revision" == "unknown" ]]; then
   source_revision="$(jq -r '.source_revision // empty' "$recommendation_normalized")"
@@ -427,6 +472,84 @@ check_shape "$chaos_replay_normalized" '
   "hindsight chaos replay index is missing entries, evidence links, or safety markers" \
   "Regenerate hindsight chaos replay index before building operator status."
 
+check_shape "$retention_plan_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-warehouse-retention-plan.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.storage_pressure_state // "") | (type == "string" and length > 0))
+  and ((.replay_preserve_sources // null) | type == "array")
+  and ((.compaction_candidates // null) | type == "array")
+  and ((.artifact_paths.retention_plan_json // "") | (type == "string" and length > 0))
+  and ((.artifact_paths.storage_budget_ledger_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "warehouse_retention_plan_json" \
+  "warehouse retention plan is missing pressure, replay-preserve, compaction, evidence links, or safety markers" \
+  "Regenerate the warehouse retention plan before building operator status."
+
+check_shape "$storage_ledger_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-storage-budget-ledger.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.storage_pressure_state // "") | (type == "string" and length > 0))
+  and ((.summary.total_estimated_bytes // null) | type == "number")
+  and ((.summary.replay_preserve_count // null) | type == "number")
+  and ((.summary.compaction_candidate_count // null) | type == "number")
+  and ((.artifact_paths.storage_budget_ledger_json // "") | (type == "string" and length > 0))
+  and ((.artifact_paths.retention_plan_json // "") | (type == "string" and length > 0))
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "storage_budget_ledger_json" \
+  "storage budget ledger is missing pressure summary or evidence links" \
+  "Regenerate the storage budget ledger from the matching retention planner run."
+
+check_shape "$promotion_candidates_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-promotion-candidates.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.candidate_summary.candidate_count // null) | type == "number")
+  and ((.candidates // null) | type == "array")
+  and ((.artifact_paths.promotion_candidates_json // "") | (type == "string" and length > 0))
+  and ((.artifact_paths.promotion_candidate_receipts_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+  and .mutation_policy.promotes_candidates_automatically == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "promotion_candidates_json" \
+  "promotion candidate bundle is missing candidate summary, receipt links, or advisory-only safety markers" \
+  "Regenerate promotion candidates before building operator status."
+
+check_shape "$promotion_receipts_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.receipts // null) | type == "array")
+  and ((.artifact_paths.promotion_candidate_receipts_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-MISSING-EVIDENCE" "promotion_candidate_receipts_json" \
+  "promotion candidate receipts are missing receipt rows, artifact links, or safety markers" \
+  "Regenerate promotion candidate receipts before building operator status."
+
+check_shape "$anomaly_cohorts_normalized" '
+  type == "object"
+  and .schema_version == "franken-engine.swarm-autopilot-anomaly-cohorts.v1"
+  and ((.decision // "") | (type == "string" and length > 0))
+  and ((.cohort_summary.total_cohort_count // null) | type == "number")
+  and ((.cohorts // null) | type == "array")
+  and ((.artifact_paths.anomaly_cohorts_json // "") | (type == "string" and length > 0))
+  and ((.artifact_paths.replay_index_json // "") | (type == "string" and length > 0))
+  and .mutation_policy.advisory_only == true
+  and .mutation_policy.proof_only == true
+  and .mutation_policy.runs_cargo == false
+  and .mutation_policy.runs_rch == false
+' "FE-SWARM-AUTOPILOT-STATUS-SCHEMA-DRIFT" "anomaly_cohorts_json" \
+  "anomaly cohort bundle is missing cohort summary, replay links, or safety markers" \
+  "Regenerate anomaly cohorts before building operator status."
+
 check_staleness "$policy_normalized" "operator_intent_policy_json" "operator intent policy" \
   "Refresh the operator intent policy before building operator status."
 check_staleness "$forecast_normalized" "brownout_forecaster_json" "brownout forecaster" \
@@ -443,6 +566,16 @@ check_staleness "$chaos_scenarios_normalized" "hindsight_chaos_scenarios_json" "
   "Refresh hindsight chaos scenarios before building operator status."
 check_staleness "$chaos_replay_normalized" "hindsight_chaos_replay_index_json" "hindsight chaos replay index" \
   "Refresh hindsight chaos replay index before building operator status."
+check_staleness "$retention_plan_normalized" "warehouse_retention_plan_json" "warehouse retention plan" \
+  "Refresh the warehouse retention plan before building operator status."
+check_staleness "$storage_ledger_normalized" "storage_budget_ledger_json" "storage budget ledger" \
+  "Refresh the storage budget ledger before building operator status."
+check_staleness "$promotion_candidates_normalized" "promotion_candidates_json" "promotion candidates" \
+  "Refresh promotion candidates before building operator status."
+check_staleness "$promotion_receipts_normalized" "promotion_candidate_receipts_json" "promotion candidate receipts" \
+  "Refresh promotion candidate receipts before building operator status."
+check_staleness "$anomaly_cohorts_normalized" "anomaly_cohorts_json" "anomaly cohorts" \
+  "Refresh anomaly cohorts before building operator status."
 
 if ! jq -e --slurpfile receipts "$receipts_normalized" '.allocation_id == $receipts[0].allocation_id' "$lease_plan_normalized" >/dev/null 2>&1; then
   append_failure "FE-SWARM-AUTOPILOT-STATUS-MISSING-EVIDENCE" "resource_scarcity_receipts_json" \
@@ -450,7 +583,15 @@ if ! jq -e --slurpfile receipts "$receipts_normalized" '.allocation_id == $recei
     "Regenerate the lease plan and receipts from the same allocator run before building operator status."
 fi
 
-for doc in "$policy_normalized" "$forecast_normalized" "$lease_plan_normalized" "$recommendation_normalized"; do
+for doc in \
+  "$policy_normalized" \
+  "$forecast_normalized" \
+  "$lease_plan_normalized" \
+  "$recommendation_normalized" \
+  "$retention_plan_normalized" \
+  "$promotion_candidates_normalized" \
+  "$promotion_receipts_normalized" \
+  "$anomaly_cohorts_normalized"; do
   if jq -e '.decision == "fail_closed"' "$doc" >/dev/null 2>&1; then
     source_id="$(basename "$doc" .normalized.json)_json"
     append_failure "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED" "$source_id" \
@@ -467,6 +608,11 @@ recommendation_sha="$(sha256sum "$recommendation_normalized" | awk '{print $1}')
 dashboard_sha="$(sha256sum "$dashboard_normalized" | awk '{print $1}')"
 chaos_scenarios_sha="$(sha256sum "$chaos_scenarios_normalized" | awk '{print $1}')"
 chaos_replay_sha="$(sha256sum "$chaos_replay_normalized" | awk '{print $1}')"
+retention_plan_sha="$(sha256sum "$retention_plan_normalized" | awk '{print $1}')"
+storage_ledger_sha="$(sha256sum "$storage_ledger_normalized" | awk '{print $1}')"
+promotion_candidates_sha="$(sha256sum "$promotion_candidates_normalized" | awk '{print $1}')"
+promotion_receipts_sha="$(sha256sum "$promotion_receipts_normalized" | awk '{print $1}')"
+anomaly_cohorts_sha="$(sha256sum "$anomaly_cohorts_normalized" | awk '{print $1}')"
 
 decision="pass"
 truth_state="confirmed"
@@ -482,7 +628,11 @@ elif jq -e '.decision == "safe_mode"' "$policy_normalized" >/dev/null 2>&1 \
   truth_state="degraded"
 elif jq -e '.truth_state != "confirmed"' "$forecast_normalized" >/dev/null 2>&1 \
   || jq -e '.truth_state != "confirmed"' "$recommendation_normalized" >/dev/null 2>&1 >/dev/null 2>&1 \
-  || jq -e '.decision == "degraded"' "$dashboard_normalized" >/dev/null 2>&1; then
+  || jq -e '.decision == "degraded"' "$dashboard_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded" or .storage_pressure_state != "normal"' "$retention_plan_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded" or .storage_pressure_state != "normal"' "$storage_ledger_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded" or .truth_state == "insufficient_evidence"' "$promotion_candidates_normalized" >/dev/null 2>&1 \
+  || jq -e '.decision == "degraded"' "$anomaly_cohorts_normalized" >/dev/null 2>&1; then
   decision="degraded"
   truth_state="degraded"
 fi
@@ -496,6 +646,11 @@ jq -n \
   --slurpfile dashboard "$dashboard_normalized" \
   --slurpfile chaos_scenarios "$chaos_scenarios_normalized" \
   --slurpfile chaos_replay "$chaos_replay_normalized" \
+  --slurpfile retention_plan "$retention_plan_normalized" \
+  --slurpfile storage_ledger "$storage_ledger_normalized" \
+  --slurpfile promotion_candidates "$promotion_candidates_normalized" \
+  --slurpfile promotion_receipts "$promotion_receipts_normalized" \
+  --slurpfile anomaly_cohorts "$anomaly_cohorts_normalized" \
   --slurpfile fail_closed_reasons "$fail_closed_reasons_jsonl" \
   --arg source_revision "$source_revision" \
   --arg decision "$decision" \
@@ -513,6 +668,11 @@ jq -n \
   --arg dashboard_sha "$dashboard_sha" \
   --arg chaos_scenarios_sha "$chaos_scenarios_sha" \
   --arg chaos_replay_sha "$chaos_replay_sha" \
+  --arg retention_plan_sha "$retention_plan_sha" \
+  --arg storage_ledger_sha "$storage_ledger_sha" \
+  --arg promotion_candidates_sha "$promotion_candidates_sha" \
+  --arg promotion_receipts_sha "$promotion_receipts_sha" \
+  --arg anomaly_cohorts_sha "$anomaly_cohorts_sha" \
   --argjson now_epoch_seconds "$now_epoch_seconds" \
   '
   def theme_for($state):
@@ -541,6 +701,11 @@ jq -n \
   ($dashboard[0]) as $d |
   ($chaos_scenarios[0]) as $cs |
   ($chaos_replay[0]) as $cr |
+  ($retention_plan[0]) as $ret |
+  ($storage_ledger[0]) as $sl |
+  ($promotion_candidates[0]) as $pc |
+  ($promotion_receipts[0]) as $pr |
+  ($anomaly_cohorts[0]) as $ac |
   ($fail_closed_reasons) as $reasons |
   (
     [
@@ -551,7 +716,12 @@ jq -n \
       ($rb.artifact_paths.bundle_json // ""),
       ($rb.artifact_paths.dashboard_projection_json // ""),
       ($cs.artifact_paths.scenarios_json // ""),
-      ($cr.artifact_paths.replay_index_json // "")
+      ($cr.artifact_paths.replay_index_json // ""),
+      ($ret.artifact_paths.retention_plan_json // ""),
+      ($sl.artifact_paths.storage_budget_ledger_json // ""),
+      ($pc.artifact_paths.promotion_candidates_json // ""),
+      ($pr.artifact_paths.promotion_candidate_receipts_json // ""),
+      ($ac.artifact_paths.anomaly_cohorts_json // "")
     ] | map(select(length > 0)) | unique
   ) as $base_evidence_paths |
   ($rb.summary.top_action // $d.top_action.action // "none") as $top_action |
@@ -604,6 +774,19 @@ jq -n \
     else "healthy"
     end
   ) as $chaos_state |
+  (
+    if $decision == "fail_closed" then "fail_closed"
+    elif (($ret.decision // "pass") != "pass")
+      or (($sl.decision // "pass") != "pass")
+      or (($pc.decision // "pass") != "pass")
+      or (($ac.decision // "pass") != "pass")
+      or (($ret.storage_pressure_state // "normal") != "normal")
+      or (($sl.storage_pressure_state // "normal") != "normal") then "degraded"
+    else "healthy"
+    end
+  ) as $warehouse_state |
+  ($pc.candidates[0].candidate_type // "none") as $top_promotion_candidate_type |
+  ($pc.candidates[0].candidate_id // "none") as $top_promotion_candidate_id |
   [
     panel(
       "forecast_state";
@@ -711,6 +894,57 @@ jq -n \
         classification_expectation
       }));
       $reasons
+    ),
+    panel(
+      "warehouse_lifecycle";
+      "Warehouse Lifecycle";
+      $warehouse_state;
+      {
+        retention_decision: ($ret.decision // "unknown"),
+        storage_pressure_state: ($ret.storage_pressure_state // $sl.storage_pressure_state // "unknown"),
+        total_estimated_bytes: ($sl.summary.total_estimated_bytes // $ret.total_estimated_bytes // 0),
+        replay_preserve_count: ($sl.summary.replay_preserve_count // (($ret.replay_preserve_sources // []) | length) // 0),
+        compaction_candidate_count: ($sl.summary.compaction_candidate_count // (($ret.compaction_candidates // []) | length) // 0),
+        promotion_decision: ($pc.decision // "unknown"),
+        top_promotion_candidate_type: $top_promotion_candidate_type,
+        top_promotion_candidate_id: $top_promotion_candidate_id,
+        promotion_candidate_count: ($pc.candidate_summary.candidate_count // 0),
+        promotion_receipt_count: (($pr.receipts // []) | length),
+        anomaly_decision: ($ac.decision // "unknown"),
+        anomaly_total_cohort_count: ($ac.cohort_summary.total_cohort_count // 0),
+        anomaly_reference_count: ($ac.cohort_summary.reference_count // 0),
+        anomaly_degraded_count: ($ac.cohort_summary.degraded_count // 0),
+        anomaly_blocked_count: ($ac.cohort_summary.blocked_count // 0),
+        anomaly_contaminated_count: ($ac.cohort_summary.contaminated_count // 0),
+        artifact_paths: {
+          retention_plan_json: ($ret.artifact_paths.retention_plan_json // ""),
+          storage_budget_ledger_json: ($sl.artifact_paths.storage_budget_ledger_json // ""),
+          promotion_candidate_receipts_json: ($pr.artifact_paths.promotion_candidate_receipts_json // ""),
+          anomaly_cohorts_json: ($ac.artifact_paths.anomaly_cohorts_json // "")
+        }
+      };
+      (
+        [
+          {kind:"retention_plan", decision:($ret.decision // "unknown"), path:($ret.artifact_paths.retention_plan_json // "")},
+          {kind:"storage_budget_ledger", decision:($sl.decision // "unknown"), path:($sl.artifact_paths.storage_budget_ledger_json // "")},
+          {kind:"promotion_candidate_receipts", decision:($pr.decision // "unknown"), path:($pr.artifact_paths.promotion_candidate_receipts_json // "")},
+          {kind:"anomaly_cohorts", decision:($ac.decision // "unknown"), path:($ac.artifact_paths.anomaly_cohorts_json // "")}
+        ]
+        + (($pc.candidates // [])[0:3] | map({
+            kind:"promotion_candidate",
+            candidate_id,
+            candidate_type,
+            confidence_band,
+            recommendation
+          }))
+        + (($ac.cohorts // [])[0:3] | map({
+            kind:"anomaly_cohort",
+            cohort_id,
+            classification,
+            source_count:(.source_ids | length)
+          }))
+      );
+      $reasons
     )
   ] as $panels |
   {
@@ -729,6 +963,12 @@ jq -n \
       ),
       top_action: $top_action,
       safe_mode_active: $safe_mode_active,
+      warehouse_lifecycle_state: $warehouse_state,
+      storage_pressure_state: ($ret.storage_pressure_state // $sl.storage_pressure_state // "unknown"),
+      top_promotion_candidate_type: $top_promotion_candidate_type,
+      anomaly_cohort_availability: (
+        if (($ac.cohort_summary.total_cohort_count // 0) > 0) then "available" else "missing" end
+      ),
       degraded_panel_count: ($panels | map(select(.display_state == "degraded" or .display_state == "missing" or .display_state == "stale")) | length),
       fail_closed_panel_count: ($panels | map(select(.display_state == "fail_closed" or .display_state == "blocked")) | length)
     },
@@ -739,7 +979,8 @@ jq -n \
       recommendation_rank: ($panels[] | select(.panel_id == "recommendation_rank")),
       safe_mode_state: ($panels[] | select(.panel_id == "safe_mode_state")),
       required_operator_action: ($panels[] | select(.panel_id == "required_operator_action")),
-      chaos_replay_readiness: ($panels[] | select(.panel_id == "chaos_replay_readiness"))
+      chaos_replay_readiness: ($panels[] | select(.panel_id == "chaos_replay_readiness")),
+      warehouse_lifecycle: ($panels[] | select(.panel_id == "warehouse_lifecycle"))
     },
     fail_closed_reasons: $reasons,
     deterministic_replay_hash_basis: {
@@ -750,7 +991,12 @@ jq -n \
       recommendation_bundle_sha256: $recommendation_sha,
       dashboard_projection_sha256: $dashboard_sha,
       hindsight_chaos_scenarios_sha256: $chaos_scenarios_sha,
-      hindsight_chaos_replay_index_sha256: $chaos_replay_sha
+      hindsight_chaos_replay_index_sha256: $chaos_replay_sha,
+      warehouse_retention_plan_sha256: $retention_plan_sha,
+      storage_budget_ledger_sha256: $storage_ledger_sha,
+      promotion_candidates_sha256: $promotion_candidates_sha,
+      promotion_candidate_receipts_sha256: $promotion_receipts_sha,
+      anomaly_cohorts_sha256: $anomaly_cohorts_sha
     },
     renderer_contract: {
       provider: "/dp/frankentui",
@@ -764,7 +1010,12 @@ jq -n \
       panel_bundle_json: $panels_path,
       events_jsonl: $events_path,
       commands_txt: $commands_path,
-      report_md: $report_path
+      report_md: $report_path,
+      warehouse_retention_plan_json: ($ret.artifact_paths.retention_plan_json // ""),
+      storage_budget_ledger_json: ($sl.artifact_paths.storage_budget_ledger_json // ""),
+      promotion_candidates_json: ($pc.artifact_paths.promotion_candidates_json // ""),
+      promotion_candidate_receipts_json: ($pr.artifact_paths.promotion_candidate_receipts_json // ""),
+      anomaly_cohorts_json: ($ac.artifact_paths.anomaly_cohorts_json // "")
     },
     mutation_policy: {
       advisory_only: true,
@@ -803,7 +1054,8 @@ jq -n \
     $status.sections.recommendation_rank,
     $status.sections.safe_mode_state,
     $status.sections.required_operator_action,
-    $status.sections.chaos_replay_readiness
+    $status.sections.chaos_replay_readiness,
+    $status.sections.warehouse_lifecycle
   ] | to_entries | map(.value + {focus_order:(.key + 1)})) as $panels |
   {
     schema_version: "franken-engine.swarm-autopilot-frankentui-panels.v1",

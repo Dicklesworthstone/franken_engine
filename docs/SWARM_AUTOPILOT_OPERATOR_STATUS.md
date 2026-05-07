@@ -25,6 +25,11 @@ Required inputs:
 - `dashboard_projection_json`
 - `hindsight_chaos_scenarios_json`
 - `hindsight_chaos_replay_index_json`
+- `warehouse_retention_plan_json`
+- `storage_budget_ledger_json`
+- `promotion_candidates_json`
+- `promotion_candidate_receipts_json`
+- `anomaly_cohorts_json`
 
 ## Artifacts
 
@@ -44,6 +49,10 @@ The operator-status bundle preserves:
 - `summary.overall_state`
 - `summary.top_action`
 - `summary.safe_mode_active`
+- `summary.warehouse_lifecycle_state`
+- `summary.storage_pressure_state`
+- `summary.top_promotion_candidate_type`
+- `summary.anomaly_cohort_availability`
 - `summary.degraded_panel_count`
 - `summary.fail_closed_panel_count`
 - `sections`
@@ -73,6 +82,9 @@ The frankentui panel bundle preserves:
 - Fail-closed policy conflicts stay visibly fail-closed in both operator status and panel projection.
 - Safe-mode recommendations stay visible as conservative operator guidance and do not claim live mutation authority.
 - Degraded forecast, policy, lease, recommendation, or chaos replay evidence must remain visibly degraded in the emitted panels.
+- Warehouse lifecycle status preserves retention, storage, promotion, and anomaly cohort artifact paths.
+- Degraded storage pressure remains visible in the warehouse lifecycle panel without promoting to healthy.
+- Contradictory promotion evidence and contaminated anomaly cohorts propagate fail-closed into operator status.
 - The producer must not claim it changed live queue policy, worker state, bead ownership, reservations, Agent Mail, Cargo, or RCH.
 
 ## Proof Cases
@@ -84,6 +96,10 @@ The checked-in fixtures cover:
 - `fail_closed_policy_conflict`
 - `safe_mode_recommendation`
 - `frankentui_panel_projection`
+- `healthy_warehouse_lifecycle_handoff`
+- `degraded_storage_pressure`
+- `blocked_contradictory_hindsight`
+- `contaminated_local_fallback_propagation`
 
 ## Validation
 

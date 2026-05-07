@@ -37,12 +37,21 @@ fixtures_shape_ok() {
     and .base_dashboard_projection_json.schema_version == "franken-engine.swarm-autopilot-dashboard-projection.v1"
     and .base_hindsight_chaos_scenarios_json.schema_version == "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1"
     and .base_hindsight_chaos_replay_index_json.schema_version == "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1"
-    and (.cases | length) == 5
+    and .base_warehouse_retention_plan_json.schema_version == "franken-engine.swarm-autopilot-warehouse-retention-plan.v1"
+    and .base_storage_budget_ledger_json.schema_version == "franken-engine.swarm-autopilot-storage-budget-ledger.v1"
+    and .base_promotion_candidates_json.schema_version == "franken-engine.swarm-autopilot-promotion-candidates.v1"
+    and .base_promotion_candidate_receipts_json.schema_version == "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1"
+    and .base_anomaly_cohorts_json.schema_version == "franken-engine.swarm-autopilot-anomaly-cohorts.v1"
+    and (.cases | length) == 9
     and any(.cases[]; .case_id == "healthy_autopilot")
     and any(.cases[]; .case_id == "degraded_forecast")
     and any(.cases[]; .case_id == "fail_closed_policy_conflict")
     and any(.cases[]; .case_id == "safe_mode_recommendation")
     and any(.cases[]; .case_id == "frankentui_panel_projection")
+    and any(.cases[]; .case_id == "healthy_warehouse_lifecycle_handoff")
+    and any(.cases[]; .case_id == "degraded_storage_pressure")
+    and any(.cases[]; .case_id == "blocked_contradictory_hindsight")
+    and any(.cases[]; .case_id == "contaminated_local_fallback_propagation")
   ' "$fixtures_path" >/dev/null
 }
 
@@ -50,7 +59,8 @@ contract_shape_ok() {
   jq -e '
     .schema_version == "franken-engine.swarm-autopilot-operator-status-contract.v1"
     and .bead_id == "bd-bhddc"
-    and ((["bd-8e5cw","bd-09g6k"] - .depends_on) | length) == 0
+    and (.extension_beads | index("bd-gra1z.5") != null)
+    and ((["bd-8e5cw","bd-09g6k","bd-gra1z.2","bd-gra1z.3","bd-gra1z.4"] - .depends_on) | length) == 0
     and .script == "scripts/swarm_autopilot_operator_status_bundle.sh"
     and .smoke_script == "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh"
     and .docs == "docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md"
@@ -60,7 +70,7 @@ contract_shape_ok() {
     and .renderer_contract.provider == "/dp/frankentui"
     and .renderer_contract.local_renderer == false
     and .renderer_contract.no_local_tui_runtime == true
-    and ((["forecast_state","policy_state","lease_scarcity","recommendation_rank","safe_mode_state","required_operator_action","chaos_replay_readiness"] - .required_panels) | length) == 0
+    and ((["forecast_state","policy_state","lease_scarcity","recommendation_rank","safe_mode_state","required_operator_action","chaos_replay_readiness","warehouse_lifecycle"] - .required_panels) | length) == 0
     and .mutation_policy.advisory_only == true
     and .mutation_policy.proof_only == true
     and .mutation_policy.mutates_br == false
@@ -75,7 +85,8 @@ docs_shape_ok() {
     && grep -Fq "The future rich renderer provider is \`/dp/frankentui\`; no local renderer ships in \`franken_engine\`." "$docs_path" \
     && grep -Fq 'Hidden panel state or missing evidence links fail closed.' "$docs_path" \
     && grep -Fq 'Fail-closed policy conflicts stay visibly fail-closed in both operator status and panel projection.' "$docs_path" \
-    && grep -Fq 'Safe-mode recommendations stay visible as conservative operator guidance and do not claim live mutation authority.' "$docs_path"
+    && grep -Fq 'Safe-mode recommendations stay visible as conservative operator guidance and do not claim live mutation authority.' "$docs_path" \
+    && grep -Fq 'Warehouse lifecycle status preserves retention, storage, promotion, and anomaly cohort artifact paths.' "$docs_path"
 }
 
 materialize_case() {
@@ -92,7 +103,12 @@ materialize_case() {
         recommendation_bundle_json: ($root.base_recommendation_bundle_json * ($case.overrides.recommendation_bundle_json // {})),
         dashboard_projection_json: ($root.base_dashboard_projection_json * ($case.overrides.dashboard_projection_json // {})),
         hindsight_chaos_scenarios_json: ($root.base_hindsight_chaos_scenarios_json * ($case.overrides.hindsight_chaos_scenarios_json // {})),
-        hindsight_chaos_replay_index_json: ($root.base_hindsight_chaos_replay_index_json * ($case.overrides.hindsight_chaos_replay_index_json // {}))
+        hindsight_chaos_replay_index_json: ($root.base_hindsight_chaos_replay_index_json * ($case.overrides.hindsight_chaos_replay_index_json // {})),
+        warehouse_retention_plan_json: ($root.base_warehouse_retention_plan_json * ($case.overrides.warehouse_retention_plan_json // {})),
+        storage_budget_ledger_json: ($root.base_storage_budget_ledger_json * ($case.overrides.storage_budget_ledger_json // {})),
+        promotion_candidates_json: ($root.base_promotion_candidates_json * ($case.overrides.promotion_candidates_json // {})),
+        promotion_candidate_receipts_json: ($root.base_promotion_candidate_receipts_json * ($case.overrides.promotion_candidate_receipts_json // {})),
+        anomaly_cohorts_json: ($root.base_anomaly_cohorts_json * ($case.overrides.anomaly_cohorts_json // {}))
       }
   ' "$fixtures_path" >"${case_dir}/materialized_inputs.json"
 
@@ -104,6 +120,11 @@ materialize_case() {
   jq '.dashboard_projection_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/dashboard_projection.json"
   jq '.hindsight_chaos_scenarios_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/hindsight_chaos_scenarios.json"
   jq '.hindsight_chaos_replay_index_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/hindsight_chaos_replay_index.json"
+  jq '.warehouse_retention_plan_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/warehouse_retention_plan.json"
+  jq '.storage_budget_ledger_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/storage_budget_ledger.json"
+  jq '.promotion_candidates_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/promotion_candidates.json"
+  jq '.promotion_candidate_receipts_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/promotion_candidate_receipts.json"
+  jq '.anomaly_cohorts_json' "${case_dir}/materialized_inputs.json" >"${case_dir}/anomaly_cohorts.json"
 }
 
 validate_required_artifacts() {
@@ -139,7 +160,13 @@ validate_outputs() {
     and .mutation_policy.advisory_only == true
     and .mutation_policy.proof_only == true
     and .mutation_policy.local_renderer == false
-    and ((.sections | keys | length) == 7)
+    and ((.sections | keys | length) == 8)
+    and (.sections.warehouse_lifecycle.summary.storage_pressure_state | type == "string")
+    and (.sections.warehouse_lifecycle.summary.top_promotion_candidate_type | type == "string")
+    and (.sections.warehouse_lifecycle.summary.anomaly_total_cohort_count | type == "number")
+    and (.sections.warehouse_lifecycle.summary.artifact_paths.retention_plan_json | length > 0)
+    and (.sections.warehouse_lifecycle.summary.artifact_paths.promotion_candidate_receipts_json | length > 0)
+    and (.sections.warehouse_lifecycle.summary.artifact_paths.anomaly_cohorts_json | length > 0)
   ' "$status_json" >/dev/null || record_failure "${case_id} status shape mismatch"
 
   jq -e '
@@ -148,8 +175,8 @@ validate_outputs() {
     and .renderer_contract.provider == "/dp/frankentui"
     and .renderer_contract.local_renderer == false
     and .renderer_contract.no_local_tui_runtime == true
-    and .status_bar.summary.panel_count == 7
-    and ((.panels | length) == 7)
+    and .status_bar.summary.panel_count == 8
+    and ((.panels | length) == 8)
     and all(.panels[];
       (.panel_id | length > 0)
       and (.display_state | length > 0)
@@ -182,6 +209,12 @@ validate_outputs() {
       || record_failure "${case_id} unexpected panel top action"
   fi
 
+  jq -e --slurpfile expected "$expected_json" '
+    (($expected[0].expected_storage_pressure_state // null) == null or .sections.warehouse_lifecycle.summary.storage_pressure_state == $expected[0].expected_storage_pressure_state)
+    and (($expected[0].required_candidate_type // null) == null or .sections.warehouse_lifecycle.summary.top_promotion_candidate_type == $expected[0].required_candidate_type)
+    and (($expected[0].expected_anomaly_availability // null) == null or .summary.anomaly_cohort_availability == $expected[0].expected_anomaly_availability)
+  ' "$status_json" >/dev/null || record_failure "${case_id} warehouse lifecycle summary mismatch"
+
   grep -Fq './scripts/swarm_autopilot_operator_status_bundle.sh' "${output_case_dir}/commands.txt" \
     || record_failure "${case_id} commands.txt missing operator-status command"
 }
@@ -207,6 +240,11 @@ run_case() {
     --dashboard-projection-json "${case_dir}/dashboard_projection.json" \
     --hindsight-chaos-scenarios-json "${case_dir}/hindsight_chaos_scenarios.json" \
     --hindsight-chaos-replay-index-json "${case_dir}/hindsight_chaos_replay_index.json" \
+    --warehouse-retention-plan-json "${case_dir}/warehouse_retention_plan.json" \
+    --storage-budget-ledger-json "${case_dir}/storage_budget_ledger.json" \
+    --promotion-candidates-json "${case_dir}/promotion_candidates.json" \
+    --promotion-candidate-receipts-json "${case_dir}/promotion_candidate_receipts.json" \
+    --anomaly-cohorts-json "${case_dir}/anomaly_cohorts.json" \
     --source-revision "fixture-${case_id}" \
     --now-epoch-seconds "$fixed_now_epoch_seconds" \
     --stale-after-seconds "$stale_after_seconds" \

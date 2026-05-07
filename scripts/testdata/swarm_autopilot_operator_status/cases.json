@@ -363,6 +363,203 @@
       "changes_live_queue_policy": false
     }
   },
+  "base_warehouse_retention_plan_json": {
+    "schema_version": "franken-engine.swarm-autopilot-warehouse-retention-plan.v1",
+    "source_revision": "fixture-retention-base",
+    "generated_epoch_seconds": 1778123460,
+    "decision": "pass",
+    "storage_pressure_state": "normal",
+    "total_estimated_bytes": 96000,
+    "replay_preserve_sources": [
+      "queue_locality_json"
+    ],
+    "compaction_candidates": [],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "retention_plan_json": "/fixture/warehouse_retention_plan.json",
+      "storage_budget_ledger_json": "/fixture/storage_budget_ledger.json",
+      "evidence_warehouse_json": "/fixture/evidence_warehouse.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_storage_budget_ledger_json": {
+    "schema_version": "franken-engine.swarm-autopilot-storage-budget-ledger.v1",
+    "source_revision": "fixture-storage-base",
+    "generated_epoch_seconds": 1778123470,
+    "decision": "pass",
+    "storage_pressure_state": "normal",
+    "summary": {
+      "artifact_row_count": 4,
+      "total_estimated_bytes": 96000,
+      "replay_preserve_count": 1,
+      "compaction_candidate_count": 0
+    },
+    "class_totals": [],
+    "action_totals": [],
+    "replay_preserve_sources": [
+      "queue_locality_json"
+    ],
+    "artifact_paths": {
+      "storage_budget_ledger_json": "/fixture/storage_budget_ledger.json",
+      "retention_plan_json": "/fixture/warehouse_retention_plan.json",
+      "evidence_warehouse_json": "/fixture/evidence_warehouse.json"
+    }
+  },
+  "base_promotion_candidates_json": {
+    "schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+    "source_revision": "fixture-promotion-base",
+    "generated_epoch_seconds": 1778123480,
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "candidate_summary": {
+      "candidate_count": 1,
+      "promotion_candidate_count": 1,
+      "stable_non_promotion_count": 0,
+      "degraded_insufficient_evidence_count": 0,
+      "required_evidence_count": 2,
+      "warehouse_row_count": 4,
+      "scenario_count": 2
+    },
+    "candidates": [
+      {
+        "candidate_id": "promotion-candidate-repeated-stable-advisory",
+        "candidate_type": "promotion_candidate",
+        "confidence_band": "high",
+        "required_evidence_count": 2,
+        "observed_evidence_count": 4,
+        "contradictory_outcome_reasons": [],
+        "source_artifact_paths": {
+          "evidence_warehouse_json": "/fixture/evidence_warehouse.json",
+          "hindsight_chaos_scenarios_json": "/fixture/hindsight_chaos_scenarios.json"
+        },
+        "recommendation": "queue for human promotion review; do not promote automatically"
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "promotion_candidates_json": "/fixture/promotion_candidates.json",
+      "promotion_candidate_receipts_json": "/fixture/promotion_candidate_receipts.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "promotes_candidates_automatically": false
+    }
+  },
+  "base_promotion_candidate_receipts_json": {
+    "schema_version": "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1",
+    "source_revision": "fixture-promotion-receipts-base",
+    "generated_epoch_seconds": 1778123490,
+    "decision": "pass",
+    "receipts": [
+      {
+        "receipt_id": "receipt-promotion-candidate-repeated-stable-advisory",
+        "candidate_id": "promotion-candidate-repeated-stable-advisory",
+        "candidate_type": "promotion_candidate",
+        "confidence_band": "high",
+        "required_evidence_count": 2,
+        "observed_evidence_count": 4,
+        "contradictory_outcome_reasons": [],
+        "recommendation": "queue for human promotion review; do not promote automatically"
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "promotion_candidate_receipts_json": "/fixture/promotion_candidate_receipts.json",
+      "promotion_candidates_json": "/fixture/promotion_candidates.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "promotes_candidates_automatically": false
+    }
+  },
+  "base_anomaly_cohorts_json": {
+    "schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+    "source_revision": "fixture-anomaly-base",
+    "generated_epoch_seconds": 1778123500,
+    "decision": "pass",
+    "cohort_summary": {
+      "total_cohort_count": 1,
+      "reference_count": 1,
+      "degraded_count": 0,
+      "blocked_count": 0,
+      "contaminated_count": 0
+    },
+    "cohorts": [
+      {
+        "cohort_id": "healthy-host-a",
+        "classification": "reference",
+        "worker_ids": [
+          "rch-a"
+        ],
+        "toolchain_targets": [
+          "nightly-x86_64"
+        ],
+        "topology_classes": [
+          "numa_hot_cache"
+        ],
+        "failure_modes": [
+          "healthy_reference"
+        ],
+        "source_ids": [
+          "run_manifest_json",
+          "queue_locality_json"
+        ],
+        "remediation_commands": [
+          "Use this cohort as a healthy replay baseline."
+        ]
+      }
+    ],
+    "fail_closed_reasons": [],
+    "artifact_paths": {
+      "anomaly_cohorts_json": "/fixture/anomaly_cohorts.json",
+      "replay_index_json": "/fixture/anomaly_replay_index.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
   "cases": [
     {
       "case_id": "healthy_autopilot",
@@ -533,6 +730,156 @@
         "required_panel_id": "required_operator_action",
         "required_panel_state": "healthy",
         "expected_top_action": "preserve_urgent_rch_slack"
+      }
+    },
+    {
+      "case_id": "healthy_warehouse_lifecycle_handoff",
+      "description": "Healthy warehouse lifecycle evidence must surface as a healthy warehouse lifecycle panel with exact artifact paths.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_panel_id": "warehouse_lifecycle",
+        "required_panel_state": "healthy",
+        "required_candidate_type": "promotion_candidate",
+        "expected_storage_pressure_state": "normal",
+        "expected_anomaly_availability": "available"
+      }
+    },
+    {
+      "case_id": "degraded_storage_pressure",
+      "description": "Critical storage pressure must degrade the operator surface without hiding retention and storage artifacts.",
+      "overrides": {
+        "warehouse_retention_plan_json": {
+          "decision": "degraded",
+          "storage_pressure_state": "critical",
+          "total_estimated_bytes": 310000,
+          "compaction_candidates": [
+            {
+              "source_id": "events_jsonl",
+              "retention_class": "audit_log",
+              "estimated_bytes": 96000,
+              "freshness": "fresh",
+              "decision": "pass",
+              "action": "archive_log_excerpt",
+              "reason_code": "archive_audit_log_pressure"
+            }
+          ]
+        },
+        "storage_budget_ledger_json": {
+          "decision": "degraded",
+          "storage_pressure_state": "critical",
+          "summary": {
+            "artifact_row_count": 6,
+            "total_estimated_bytes": 310000,
+            "replay_preserve_count": 2,
+            "compaction_candidate_count": 1
+          }
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_panel_id": "warehouse_lifecycle",
+        "required_panel_state": "degraded",
+        "required_candidate_type": "promotion_candidate",
+        "expected_storage_pressure_state": "critical",
+        "expected_anomaly_availability": "available"
+      }
+    },
+    {
+      "case_id": "blocked_contradictory_hindsight",
+      "description": "Contradictory promotion evidence must propagate fail-closed into operator status.",
+      "overrides": {
+        "promotion_candidates_json": {
+          "decision": "fail_closed",
+          "truth_state": "unknown",
+          "candidate_summary": {
+            "candidate_count": 0,
+            "promotion_candidate_count": 0,
+            "stable_non_promotion_count": 0,
+            "degraded_insufficient_evidence_count": 0,
+            "required_evidence_count": 2,
+            "warehouse_row_count": 4,
+            "scenario_count": 2
+          },
+          "candidates": [],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT",
+              "source_id": "source_material",
+              "detail": "contradictory warehouse or hindsight outcomes block promotion truth"
+            }
+          ]
+        },
+        "promotion_candidate_receipts_json": {
+          "decision": "fail_closed",
+          "receipts": [],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT",
+              "source_id": "source_material",
+              "detail": "contradictory warehouse or hindsight outcomes block promotion truth"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+      }
+    },
+    {
+      "case_id": "contaminated_local_fallback_propagation",
+      "description": "Local-fallback contaminated anomaly cohorts must propagate fail-closed into operator status.",
+      "overrides": {
+        "anomaly_cohorts_json": {
+          "decision": "fail_closed",
+          "cohort_summary": {
+            "total_cohort_count": 1,
+            "reference_count": 0,
+            "degraded_count": 0,
+            "blocked_count": 0,
+            "contaminated_count": 1
+          },
+          "cohorts": [
+            {
+              "cohort_id": "contaminated-fallback-a",
+              "classification": "contaminated",
+              "worker_ids": [
+                "rch-c"
+              ],
+              "toolchain_targets": [
+                "nightly-x86_64"
+              ],
+              "topology_classes": [
+                "unknown-topology"
+              ],
+              "failure_modes": [
+                "local_fallback_contamination"
+              ],
+              "source_ids": [
+                "queue_locality_json"
+              ],
+              "remediation_commands": [
+                "Discard contaminated local-fallback captures before treating this cohort as remote-only truth."
+              ]
+            }
+          ],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-COHORT-CONTAMINATED",
+              "source_id": "evidence_warehouse_json",
+              "detail": "warehouse is contaminated by local fallback evidence"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
       }
     }
   ]

@@ -1,9 +1,15 @@
 {
   "schema_version": "franken-engine.swarm-autopilot-operator-status-contract.v1",
   "bead_id": "bd-bhddc",
+  "extension_beads": [
+    "bd-gra1z.5"
+  ],
   "depends_on": [
     "bd-8e5cw",
-    "bd-09g6k"
+    "bd-09g6k",
+    "bd-gra1z.2",
+    "bd-gra1z.3",
+    "bd-gra1z.4"
   ],
   "script": "scripts/swarm_autopilot_operator_status_bundle.sh",
   "smoke_script": "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
@@ -59,6 +65,36 @@
       "argument": "--hindsight-chaos-replay-index-json",
       "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1",
       "required": true
+    },
+    {
+      "source_id": "warehouse_retention_plan_json",
+      "argument": "--warehouse-retention-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-warehouse-retention-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "storage_budget_ledger_json",
+      "argument": "--storage-budget-ledger-json",
+      "schema_version": "franken-engine.swarm-autopilot-storage-budget-ledger.v1",
+      "required": true
+    },
+    {
+      "source_id": "promotion_candidates_json",
+      "argument": "--promotion-candidates-json",
+      "schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+      "required": true
+    },
+    {
+      "source_id": "promotion_candidate_receipts_json",
+      "argument": "--promotion-candidate-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-promotion-candidate-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "anomaly_cohorts_json",
+      "argument": "--anomaly-cohorts-json",
+      "schema_version": "franken-engine.swarm-autopilot-anomaly-cohorts.v1",
+      "required": true
     }
   ],
   "optional_args": [
@@ -81,7 +117,8 @@
     "recommendation_rank",
     "safe_mode_state",
     "required_operator_action",
-    "chaos_replay_readiness"
+    "chaos_replay_readiness",
+    "warehouse_lifecycle"
   ],
   "required_panels": [
     "forecast_state",
@@ -90,7 +127,8 @@
     "recommendation_rank",
     "safe_mode_state",
     "required_operator_action",
-    "chaos_replay_readiness"
+    "chaos_replay_readiness",
+    "warehouse_lifecycle"
   ],
   "display_states": [
     "healthy",
@@ -113,6 +151,10 @@
     "summary.overall_state",
     "summary.top_action",
     "summary.safe_mode_active",
+    "summary.warehouse_lifecycle_state",
+    "summary.storage_pressure_state",
+    "summary.top_promotion_candidate_type",
+    "summary.anomaly_cohort_availability",
     "summary.degraded_panel_count",
     "summary.fail_closed_panel_count",
     "sections",
@@ -138,6 +180,8 @@
     "hidden panel state fails closed",
     "missing evidence links fail closed",
     "fail-closed upstream policy, forecast, lease plan, recommendation bundle, or chaos replay inputs fail closed",
+    "fail-closed warehouse retention, promotion, or anomaly cohort inputs fail closed",
+    "warehouse lifecycle artifact paths for retention plan, storage ledger, promotion receipts, and anomaly cohorts remain visible",
     "unsafe mutation-policy claims fail closed"
   ],
   "fixture_cases": [
@@ -169,6 +213,28 @@
       "expected_decision": "pass",
       "required_panel_id": "required_operator_action",
       "required_top_action": "preserve_urgent_rch_slack"
+    },
+    {
+      "case_id": "healthy_warehouse_lifecycle_handoff",
+      "expected_decision": "pass",
+      "required_panel_id": "warehouse_lifecycle",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "degraded_storage_pressure",
+      "expected_decision": "degraded",
+      "required_panel_id": "warehouse_lifecycle",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "blocked_contradictory_hindsight",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "contaminated_local_fallback_propagation",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
     }
   ],
   "mutation_policy": {

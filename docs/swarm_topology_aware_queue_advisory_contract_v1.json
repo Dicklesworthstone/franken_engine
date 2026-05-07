@@ -1,0 +1,143 @@
+{
+  "schema_version": "franken-engine.swarm-topology-aware-queue-advisory-contract.v1",
+  "bead_id": "bd-f3cmp",
+  "parent_bead_id": "bd-2pn2x",
+  "depends_on": [],
+  "docs": "docs/SWARM_TOPOLOGY_AWARE_QUEUE_ADVISORY_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh",
+  "rust_module": "crates/franken-engine/src/swarm_control_loop.rs",
+  "bridged_surfaces": [
+    "scripts/swarm_execution_queue_input_normalizer.sh",
+    "scripts/swarm_topology_placement_normalizer.sh",
+    "scripts/swarm_rch_stall_rehabilitation_ledger.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "required_preserved_inputs": [
+    {
+      "source_id": "execution_queue_input_json",
+      "required": true
+    },
+    {
+      "source_id": "topology_placement_input_json",
+      "required": true
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "required": true
+    },
+    {
+      "source_id": "queue_artifact_json",
+      "required": true
+    },
+    {
+      "source_id": "bottleneck_report_json",
+      "required": true
+    },
+    {
+      "source_id": "locality_outcome_samples_json",
+      "required": true
+    }
+  ],
+  "optional_preserved_inputs": [
+    {
+      "source_id": "placement_adoption_history_json"
+    },
+    {
+      "source_id": "operator_status_snapshot_json"
+    },
+    {
+      "source_id": "resource_envelope_json"
+    },
+    {
+      "source_id": "tail_latency_locality_json"
+    }
+  ],
+  "minimum_advisory_subject_fields": [
+    "task_id",
+    "rank",
+    "preferred_worker_ids",
+    "preferred_numa_nodes",
+    "worker_exclusion_state",
+    "hot_cache_reuse_confidence",
+    "queue_risk_budget_state",
+    "proof_transport_state",
+    "local_fallback_detected",
+    "reason_codes"
+  ],
+  "future_bundle_fields": [
+    "queue_advisory_id",
+    "truth_state",
+    "decision",
+    "source_artifacts",
+    "reason_codes",
+    "worker_exclusions",
+    "locality_bias_summary",
+    "risk_budget_summary",
+    "artifact_paths"
+  ],
+  "future_artifacts": [
+    "queue_advisory_bundle.json",
+    "events.jsonl",
+    "commands.txt",
+    "summary.md"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "required_reason_codes": [
+    "hot_cache_reuse_preferred",
+    "numa_locality_preferred",
+    "drained_worker_excluded",
+    "probe_required_worker_excluded",
+    "contradictory_locality",
+    "telemetry_gap",
+    "local_fallback_contaminated",
+    "cache_reuse_outcome_confirmed",
+    "cache_reuse_outcome_missed"
+  ],
+  "fail_closed_rules": [
+    "missing required preserved inputs fail closed",
+    "contradictory queue locality or rehabilitation evidence fails closed",
+    "local fallback contamination fails closed",
+    "drained or probe required workers must not be promoted as preferred locality advice",
+    "the advisory must not claim it changed the live queue or pinned workers"
+  ],
+  "mutation_policy": {
+    "contract_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false
+  },
+  "proof_cases": [
+    "healthy_confirmed",
+    "degraded_missing_locality_support",
+    "blocked_contradictory_locality",
+    "contaminated_local_fallback",
+    "drained_worker_exclusion",
+    "cache_reuse_feedback"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_topology_aware_queue_advisory_contract_v1.json",
+    "bash -n scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh",
+    "bash scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_TOPOLOGY_AWARE_QUEUE_ADVISORY_CONTRACT.md docs/swarm_topology_aware_queue_advisory_contract_v1.json scripts/e2e/swarm_topology_aware_queue_advisory_contract_smoke.sh"
+  ]
+}

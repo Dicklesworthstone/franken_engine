@@ -1,0 +1,194 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-drift-gate-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_reviewed_catalog",
+      "expected": {"decision": "pass", "exit_code": 0},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"},
+        {"path": "scripts/catalog_beta.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_beta_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh", "scripts/catalog_beta.sh", "scripts/e2e/catalog_beta_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "closed"}, {"id": "bd-beta", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["alpha"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": ["catalog_beta"],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          },
+          {
+            "surface_id": "catalog_beta",
+            "intent_tags": ["beta"],
+            "implementation_script": "scripts/catalog_beta.sh",
+            "smoke_script": "scripts/e2e/catalog_beta_smoke.sh",
+            "owning_bead_id": "bd-beta",
+            "upstream_surface_ids": ["catalog_alpha"],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_beta_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "uncataloged_new_script",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-UNCATALOGED-SCRIPT"},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"},
+        {"path": "scripts/uncataloged_surface.sh", "kind": "shell"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh", "scripts/uncataloged_surface.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["alpha"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "duplicate_intent_without_relationship",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-DUPLICATE-INTENT"},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"},
+        {"path": "scripts/catalog_beta.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_beta_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh", "scripts/catalog_beta.sh", "scripts/e2e/catalog_beta_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "closed"}, {"id": "bd-beta", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["shared"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          },
+          {
+            "surface_id": "catalog_beta",
+            "intent_tags": ["shared"],
+            "implementation_script": "scripts/catalog_beta.sh",
+            "smoke_script": "scripts/e2e/catalog_beta_smoke.sh",
+            "owning_bead_id": "bd-beta",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_beta_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "stale_owner_bead",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-STALE-OWNER-BEAD"},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "open"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["alpha"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "mutation_policy_contradiction",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-MUTATION-POLICY-CONTRADICTION"},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["alpha"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": false, "mutates_br": true, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "bare_cargo_command",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-BARE-HEAVY-CARGO"},
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/catalog_alpha.sh", "scripts/e2e/catalog_alpha_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-alpha", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "catalog_alpha",
+            "intent_tags": ["alpha"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "validation_commands": ["cargo test -p frankenengine-engine --lib"]
+          }
+        ]
+      }
+    }
+  ]
+}

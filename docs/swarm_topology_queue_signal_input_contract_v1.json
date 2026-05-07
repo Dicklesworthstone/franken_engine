@@ -1,0 +1,132 @@
+{
+  "schema_version": "franken-engine.swarm-topology-queue-signal-normalizer-contract.v1",
+  "bead_id": "bd-t58g5",
+  "parent_bead_id": "bd-2pn2x",
+  "depends_on": [
+    "bd-f3cmp",
+    "bd-zp0m5"
+  ],
+  "script": "scripts/swarm_topology_queue_signal_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh",
+  "docs": "docs/SWARM_TOPOLOGY_QUEUE_SIGNAL_NORMALIZER.md",
+  "parent_contract": "docs/swarm_topology_aware_queue_advisory_contract_v1.json",
+  "fixture_bundle": "scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json",
+  "input_schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+  "source_schema_version": "franken-engine.swarm-topology-queue-signal-sources.v1",
+  "event_schema_version": "franken-engine.swarm-topology-queue-signal-normalizer.event.v1",
+  "required_inputs": [
+    {
+      "source_id": "execution_queue_input_json",
+      "argument": "--execution-queue-input-json",
+      "required": true
+    },
+    {
+      "source_id": "topology_placement_input_json",
+      "argument": "--topology-placement-input-json",
+      "required": true
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "argument": "--rehabilitation-ledger-json",
+      "required": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "placement_adoption_history_json",
+      "argument": "--placement-adoption-history-json"
+    },
+    {
+      "source_id": "operator_status_snapshot_json",
+      "argument": "--operator-status-snapshot-json"
+    }
+  ],
+  "artifacts": {
+    "input_json": "swarm_topology_queue_signal_input.json",
+    "sources_json": "swarm_topology_queue_signal_sources.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "normalized_input_fields": [
+    "schema_version",
+    "source_revision",
+    "truth_state",
+    "decision",
+    "queue_context",
+    "locality_context",
+    "rehabilitation_context",
+    "queue_signal_hints",
+    "degraded_reasons",
+    "blocked_reasons",
+    "fail_closed_reasons",
+    "source_artifacts",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "required_source_fields": [
+    "source_id",
+    "required",
+    "provided",
+    "artifact_path",
+    "schema_version",
+    "trust_state"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decision_mapping": {
+    "pass": "queue topology and rehabilitation evidence agree and can safely bias advisory ranking",
+    "degraded": "required evidence is coherent but optional support or worker exclusions reduce confidence",
+    "blocked": "locality contradictions prevent confident ranking bias",
+    "fail_closed": "required evidence is malformed or local fallback contamination invalidates remote-only queue locality truth"
+  },
+  "fail_closed_rules": [
+    "required queue topology and rehabilitation snapshots must be present and parseable",
+    "queue proof transport local fallback contamination fails closed",
+    "topology fail_closed or contaminated truth fails closed",
+    "rehabilitation fail_closed decisions fail closed"
+  ],
+  "blocked_rules": [
+    "blocked topology locality remains blocked queue advice",
+    "contradictory locality evidence must not be promoted into queue bias"
+  ],
+  "degraded_rules": [
+    "missing placement adoption history degrades confidence",
+    "missing operator status snapshot degrades confidence",
+    "drain probe or drained worker exclusions degrade confidence instead of silently preserving the original preferred set"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false
+  },
+  "selftest_scenarios": [
+    "healthy_hot_cache",
+    "degraded_missing_optional_support",
+    "blocked_contradictory_locality",
+    "contaminated_local_fallback",
+    "drain_exclusion"
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_topology_queue_signal_normalizer.sh",
+    "bash -n scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh",
+    "shellcheck -x scripts/swarm_topology_queue_signal_normalizer.sh scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh",
+    "jq empty docs/swarm_topology_queue_signal_input_contract_v1.json scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json",
+    "bash scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_TOPOLOGY_QUEUE_SIGNAL_NORMALIZER.md docs/swarm_topology_queue_signal_input_contract_v1.json scripts/swarm_topology_queue_signal_normalizer.sh scripts/e2e/swarm_topology_queue_signal_normalizer_smoke.sh scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json"
+  ]
+}

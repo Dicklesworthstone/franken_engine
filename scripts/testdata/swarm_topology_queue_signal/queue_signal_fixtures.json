@@ -1,0 +1,269 @@
+{
+  "schema_version": "franken-engine.swarm-topology-queue-signal-normalizer-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_hot_cache",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "expected_rank_bias_mode": "prefer_hot_cache_locality",
+      "expected_usable_preferred_worker_ids": ["rch-a"],
+      "expected_excluded_worker_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-ready-a",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_placement_input_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "warm_cache_residency": {
+            "state": "hot"
+          },
+          "placement_hints": {
+            "recommended_topology_class": "numa_local_hot_cache",
+            "preferred_numa_nodes": [0],
+            "preferred_worker_ids": ["rch-a"]
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "placement_adoption_history_json": {
+          "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+          "receipts": []
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_optional_support",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "expected_rank_bias_mode": "prefer_numa_locality",
+      "expected_usable_preferred_worker_ids": ["rch-b"],
+      "expected_excluded_worker_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-ready-b",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_placement_input_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "warm_cache_residency": {
+            "state": "cold"
+          },
+          "placement_hints": {
+            "recommended_topology_class": "numa_local",
+            "preferred_numa_nodes": [0],
+            "preferred_worker_ids": ["rch-b"]
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "placement_adoption_history_json": null,
+        "operator_status_snapshot_json": null
+      }
+    },
+    {
+      "scenario_id": "blocked_contradictory_locality",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_rank_bias_mode": "blocked_contradictory_locality",
+      "expected_usable_preferred_worker_ids": ["rch-c"],
+      "expected_excluded_worker_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-ready-c",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_placement_input_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+          "truth_state": "blocked",
+          "decision": "blocked",
+          "warm_cache_residency": {
+            "state": "hot"
+          },
+          "placement_hints": {
+            "recommended_topology_class": "contradictory_locality",
+            "preferred_numa_nodes": [0],
+            "preferred_worker_ids": ["rch-c"]
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "placement_adoption_history_json": {
+          "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+          "receipts": []
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "degraded"
+        }
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "expected_rank_bias_mode": "fail_closed",
+      "expected_usable_preferred_worker_ids": ["rch-d"],
+      "expected_excluded_worker_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-ready-d",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": true
+              }
+            }
+          ]
+        },
+        "topology_placement_input_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "warm_cache_residency": {
+            "state": "hot"
+          },
+          "placement_hints": {
+            "recommended_topology_class": "numa_local_hot_cache",
+            "preferred_numa_nodes": [0],
+            "preferred_worker_ids": ["rch-d"]
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "placement_adoption_history_json": {
+          "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+          "receipts": []
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    },
+    {
+      "scenario_id": "drain_exclusion",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "expected_rank_bias_mode": "portable_fallback",
+      "expected_usable_preferred_worker_ids": [],
+      "expected_excluded_worker_ids": ["rch-e"],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-ready-e",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_placement_input_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "warm_cache_residency": {
+            "state": "hot"
+          },
+          "placement_hints": {
+            "recommended_topology_class": "hot_cache_preferring",
+            "preferred_numa_nodes": [1],
+            "preferred_worker_ids": ["rch-e"]
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "degraded",
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "classification": "drain_recommended"
+            }
+          ]
+        },
+        "placement_adoption_history_json": {
+          "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+          "receipts": []
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "degraded"
+        }
+      }
+    }
+  ]
+}

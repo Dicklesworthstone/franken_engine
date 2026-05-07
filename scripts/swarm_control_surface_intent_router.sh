@@ -17,7 +17,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: ./scripts/swarm_control_surface_intent_router.sh --catalog-json FILE --intent-json FILE [OPTIONS]
 
-Route explicit operator intent and symptom tags to ranked SWARM-CTRL-XVII
+Route explicit operator intent and symptom tags to ranked SWARM-CTRL-XVII/XVIII
 control surfaces. The router is advisory-only and does not query live br,
 Agent Mail, rch, cargo, git, or workers.
 
@@ -164,9 +164,33 @@ jq -n \
   '
   def arr($x): if $x == null then [] else $x end;
   def intersect($a; $b): [$a[] as $x | select($b | index($x))];
+  def expanded_for($tag):
+    if ((["remote-proof-residency", "resident-remote-proof", "remote-proof-bundle"] | index($tag)) != null) then
+      ["resident-proof", "remote-proof", "bundle-executor", "proof-reuse"]
+    elif ((["artifact-retrieval", "remote-proof-artifact-retrieval", "mirror-retrieval"] | index($tag)) != null) then
+      ["artifact-mirror", "remote-proof", "handoff"]
+    elif ((["archive-export", "remote-proof-archive-export"] | index($tag)) != null) then
+      ["archive-export", "remote-proof", "handoff"]
+    elif ((["proof-cost-pressure", "proof-reuse-uncertainty", "proof-cost"] | index($tag)) != null) then
+      ["proof-economy", "policy", "cost", "admission", "replay-trace"]
+    elif ((["counterfactual-proof-cost", "scheduler-what-if"] | index($tag)) != null) then
+      ["proof-economy", "counterfactual", "what-if", "operator-report"]
+    elif ((["build-storm", "build-storm-qos", "qos-resource-pressure", "toolchain-mismatch"] | index($tag)) != null) then
+      ["worker-capability", "toolchain", "proof-routing", "resource-pressure", "admission"]
+    elif ((["sticky-worker-reuse", "warm-target-roi", "warm-target-reuse", "prefetch-roi"] | index($tag)) != null) then
+      ["warm-target", "roi", "eviction", "prefetch", "locality"]
+    elif ((["local-fallback-contamination", "remote-proof-validation-contaminated", "rch-local-fallback"] | index($tag)) != null) then
+      ["rch", "stall", "local-fallback", "remote-proof"]
+    else
+      []
+    end;
+  def expand_tags($tags):
+    ($tags // []) as $base
+    | ($base + ([$base[]? as $tag | expanded_for($tag)[]?]))
+    | unique;
   ($catalog[0].surfaces // []) as $surfaces
-  | ($intent[0].intent_tags // []) as $intent_tags
-  | ($intent[0].symptom_tags // []) as $symptom_tags
+  | (expand_tags($intent[0].intent_tags // [])) as $intent_tags
+  | (expand_tags($intent[0].symptom_tags // [])) as $symptom_tags
   | [
       $surfaces[]
       | . as $surface

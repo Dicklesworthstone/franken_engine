@@ -85,7 +85,7 @@ run_check() {
   bash -n "$router"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$fixtures_path"
-  jq -e '.cases | length >= 9' "$fixtures_path" >/dev/null
+  jq -e '.cases | length >= 16' "$fixtures_path" >/dev/null
   grep -Fq 'The router is artifact-fed.' "$docs_path" \
     || record_failure "missing artifact-fed docs wording"
   record_pass "check"

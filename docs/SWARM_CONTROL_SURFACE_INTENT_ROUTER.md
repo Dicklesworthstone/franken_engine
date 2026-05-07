@@ -1,7 +1,9 @@
 # SWARM_CONTROL_SURFACE_INTENT_ROUTER
 
 `bd-gkzuc` adds the SWARM-CTRL-XVII intent router over the normalized
-control-surface catalog. The router turns operator symptoms into ranked,
+control-surface catalog. `bd-g3ffl` extends its operator language for the
+SWARM-CTRL-XVIII remote-proof, proof-economy, warm-target, build-storm, and
+worker-toolchain family. The router turns operator symptoms into ranked,
 advisory-only surface recommendations so agents do not create duplicate control
 planes or start from the wrong script.
 
@@ -21,7 +23,22 @@ workers.
 
 ## Routing
 
-The router scores each catalog row by exact tag overlap:
+The router expands common operator phrases into canonical catalog tags, then
+scores each catalog row by tag overlap:
+
+- remote proof residency and artifact retrieval route toward resident
+  remote-proof, artifact mirror, and archive export surfaces
+- proof-cost pressure and reuse uncertainty route toward proof-economy policy
+  and replay surfaces
+- build-storm, QoS, and toolchain-pressure language routes toward worker
+  capability/toolchain normalization when no complete build-storm catalog row is
+  available
+- sticky worker, warm-target ROI, and prefetch language route toward warm-target
+  ROI and prefetch surfaces
+- local-fallback contamination routes toward RCH rehabilitation or remote-proof
+  surfaces instead of creating a duplicate proof lane
+
+After expansion, scoring is deterministic:
 
 - matching intent tag: 10 points
 - matching symptom tag: 5 points

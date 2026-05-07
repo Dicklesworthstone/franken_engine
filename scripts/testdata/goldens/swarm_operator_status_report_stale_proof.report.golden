@@ -10,6 +10,7 @@
 - Admission budget: `balanced` with `0` deferred
 - Resource envelope: `ready` / `admit` with `3` admitted and `0` deferred
 - Topology placement: `ready` class=`numa_hot_cache_preferred` cache=`hot` adoption=`adopted`
+- Capability affinity: `ready` mode=`capability_affinity_confirmed` preferred=`2` mismatch=`0` gap=`0` drift=`0`
 - Lease exchange posture: `retain_current_assignments`
 - Prefetch advisory: `prefetch_recommended`
 - Starvation rescue escalation: `ready` via `reopen_stale_claim_then_rebalance`
@@ -32,6 +33,8 @@
 - Swarm topology placement plan: `[SMOKE_ROOT]/stale_proof-fixtures/swarm_topology_placement_plan.json`
 - Swarm topology placement receipt: `[SMOKE_ROOT]/stale_proof-fixtures/swarm_topology_placement_receipt.json`
 - Swarm topology placement evidence ledger: `[SMOKE_ROOT]/stale_proof-fixtures/swarm_topology_placement_evidence_ledger.json`
+- Swarm capability-affinity routing advisory: `[SMOKE_ROOT]/stale_proof-fixtures/swarm_capability_affinity_routing_advisory.json`
+- Swarm capability-affinity routing outcome ledger: `[SMOKE_ROOT]/stale_proof-fixtures/swarm_capability_affinity_routing_outcome_ledger.json`
 - Lease exchange salvage simulation: `[SMOKE_ROOT]/stale_proof-fixtures/lease_exchange_salvage_simulation.json`
 - Warm target prefetch ROI advisory: `[SMOKE_ROOT]/stale_proof-fixtures/warm_target_prefetch_roi_advisory.json`
 - Starvation rescue plan: `[SMOKE_ROOT]/stale_proof-fixtures/starvation_rescue_plan.json`

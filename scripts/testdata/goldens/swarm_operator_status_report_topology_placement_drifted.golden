@@ -55,6 +55,15 @@
     "topology_placement_warm_cache_opportunity_count": 1,
     "topology_placement_adoption_status": "drifted",
     "topology_placement_drift_reason_count": 2,
+    "capability_affinity_readiness": "ready",
+    "capability_affinity_advisory_decision": "pass",
+    "capability_affinity_outcome_ledger_decision": "pass",
+    "capability_affinity_routing_mode": "capability_affinity_confirmed",
+    "capability_affinity_topology_class": "numa_hot_cache_preferred",
+    "capability_affinity_preferred_worker_count": 2,
+    "capability_affinity_mismatch_count": 0,
+    "capability_affinity_capability_gap_count": 0,
+    "capability_affinity_toolchain_drift_count": 0,
     "lease_exchange_decision": "retain_current_assignments",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -627,6 +636,78 @@
         "placement_evidence_ledger_json": "[SMOKE_ROOT]/topology_placement_drifted-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
+    "swarm_capability_affinity_routing": {
+      "artifact_statuses": {
+        "routing_advisory": "provided",
+        "outcome_ledger": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "advisory_decision": "pass",
+      "outcome_ledger_decision": "pass",
+      "routing_mode": "capability_affinity_confirmed",
+      "recommended_topology_class": "numa_hot_cache_preferred",
+      "preferred_worker_ids": [
+        "rch-a",
+        "rch-b"
+      ],
+      "advised_worker_ids": [
+        "rch-a"
+      ],
+      "preferred_worker_count": 2,
+      "advised_worker_count": 1,
+      "required_capabilities": [
+        "cargo-check",
+        "clippy",
+        "rustfmt"
+      ],
+      "required_capability_count": 3,
+      "required_toolchain_fingerprints": [
+        "nightly-2026-05-06-x86_64-unknown-linux-gnu"
+      ],
+      "required_toolchain_fingerprint_count": 1,
+      "matched_task_ids": [
+        "task-cap-aff-1",
+        "task-cap-aff-2"
+      ],
+      "mismatch_task_ids": [],
+      "capability_gap_task_ids": [],
+      "toolchain_drift_task_ids": [],
+      "contamination_task_ids": [],
+      "matched_task_count": 2,
+      "mismatch_task_count": 0,
+      "capability_gap_task_count": 0,
+      "toolchain_drift_task_count": 0,
+      "contamination_task_count": 0,
+      "capability_coverage_score": 100,
+      "toolchain_parity_score": 100,
+      "confidence_score": 91,
+      "supporting_evidence_summary": {
+        "routing_outcome_samples_present": true,
+        "routing_outcome_sample_count": 2
+      },
+      "reason_codes": [
+        "capability_coverage_confirmed",
+        "preferred_cohort_confirmed",
+        "route_match_confirmed",
+        "toolchain_parity_confirmed"
+      ],
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "reroutes_tasks_automatically": false
+      },
+      "artifact_paths": {
+        "routing_advisory_json": "[SMOKE_ROOT]/topology_placement_drifted-fixtures/swarm_capability_affinity_routing_advisory.json",
+        "outcome_ledger_json": "[SMOKE_ROOT]/topology_placement_drifted-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
+      }
+    },
     "lease_exchange_salvage": {
       "artifact_status": "provided",
       "severity": "ok",
@@ -1026,7 +1107,10 @@
         "topology_placement_healthy",
         "topology_placement_drifted",
         "topology_placement_expired",
-        "topology_placement_blocked"
+        "topology_placement_blocked",
+        "capability_affinity_healthy",
+        "capability_affinity_degraded",
+        "capability_affinity_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

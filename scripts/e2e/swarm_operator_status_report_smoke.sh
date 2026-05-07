@@ -427,6 +427,301 @@ write_topology_placement_fixtures() {
     }' >"${fixture_dir}/swarm_topology_placement_evidence_ledger.json"
 }
 
+write_capability_affinity_fixtures() {
+  local fixture_dir="$1"
+  local mode="${2:-healthy}"
+  local advisory_decision="pass"
+  local advisory_truth_state="confirmed"
+  local outcome_decision="pass"
+  local outcome_truth_state="confirmed"
+  local routing_mode="capability_affinity_confirmed"
+  local topology_class="numa_hot_cache_preferred"
+  local advisory_degraded_reasons='[]'
+  local advisory_blocked_reasons='[]'
+  local ledger_degraded_reasons='[]'
+  local ledger_blocked_reasons='[]'
+  local reason_codes='["capability_coverage_confirmed","toolchain_parity_confirmed","preferred_cohort_confirmed","route_match_confirmed"]'
+  local matched_task_ids='["task-cap-aff-1","task-cap-aff-2"]'
+  local mismatched_task_ids='[]'
+  local capability_gap_task_ids='[]'
+  local toolchain_drift_task_ids='[]'
+  local contamination_task_ids='[]'
+  local preferred_worker_ids='["rch-a","rch-b"]'
+  local advised_worker_ids='["rch-a"]'
+  local required_capabilities='["cargo-check","clippy","rustfmt"]'
+  local required_toolchain_fingerprints='["nightly-2026-05-06-x86_64-unknown-linux-gnu"]'
+  local coverage_confirmed_task_ids='["task-cap-aff-1","task-cap-aff-2"]'
+  local missing_required_capability_task_ids='[]'
+  local toolchain_mismatch_task_ids='[]'
+  local broader_fallback_task_ids='[]'
+  local preferred_worker_count=2
+  local advised_worker_count=1
+  local preferred_total_score=93
+  local advisory_total_score=90
+  local confidence_score=91
+  local outcome_rows='[
+    {
+      "task_id":"task-cap-aff-1",
+      "recommended_worker_ids":["rch-a"],
+      "observed_worker_ids":["rch-a"],
+      "outcome_classification":"match",
+      "observed_outcome":"match"
+    },
+    {
+      "task_id":"task-cap-aff-2",
+      "recommended_worker_ids":["rch-b"],
+      "observed_worker_ids":["rch-b"],
+      "outcome_classification":"match",
+      "observed_outcome":"match"
+    }
+  ]'
+
+  case "$mode" in
+    healthy)
+      ;;
+    degraded)
+      advisory_decision="degraded"
+      advisory_truth_state="degraded"
+      outcome_decision="degraded"
+      outcome_truth_state="degraded"
+      routing_mode="broader_cohort_fallback"
+      topology_class="mixed_capability_degraded"
+      advisory_degraded_reasons='[{"code":"broader_cohort_fallback","source_id":"routing_mode","detail":"preferred cohort lacked enough clean evidence so a broader advisory cohort remained visible"},{"code":"watch_workers_present","source_id":"worker_affinity_summary","detail":"watch-state workers reduced routing confidence"}]'
+      ledger_degraded_reasons='[{"code":"route_mismatch_observed","source_id":"routing_outcome_samples_json","detail":"one observed task landed outside the preferred advised worker set"}]'
+      reason_codes='["broader_cohort_fallback","watch_workers_present","route_mismatch_observed"]'
+      matched_task_ids='["task-cap-aff-1"]'
+      mismatched_task_ids='["task-cap-aff-3"]'
+      preferred_worker_ids='["rch-a"]'
+      advised_worker_ids='["rch-a","rch-c"]'
+      broader_fallback_task_ids='["task-cap-aff-3"]'
+      preferred_worker_count=1
+      advised_worker_count=2
+      preferred_total_score=78
+      advisory_total_score=82
+      confidence_score=71
+      outcome_rows='[
+        {
+          "task_id":"task-cap-aff-1",
+          "recommended_worker_ids":["rch-a"],
+          "observed_worker_ids":["rch-a"],
+          "outcome_classification":"match",
+          "observed_outcome":"match"
+        },
+        {
+          "task_id":"task-cap-aff-3",
+          "recommended_worker_ids":["rch-a"],
+          "observed_worker_ids":["rch-c"],
+          "outcome_classification":"mismatch",
+          "observed_outcome":"broader_match"
+        }
+      ]'
+      ;;
+    blocked)
+      advisory_decision="blocked"
+      advisory_truth_state="blocked"
+      outcome_decision="blocked"
+      outcome_truth_state="blocked"
+      topology_class="blocked_toolchain_parity"
+      advisory_blocked_reasons='[{"code":"required_toolchain_fingerprint_mismatch","source_id":"toolchain_parity_summary","detail":"required remote toolchain fingerprint is not present across the preferred cohort"}]'
+      ledger_blocked_reasons='[{"code":"observed_capability_gap","source_id":"routing_outcome_samples_json","detail":"observed routing recorded a missing required capability"},{"code":"observed_toolchain_drift","source_id":"routing_outcome_samples_json","detail":"observed routing recorded a toolchain drift receipt"}]'
+      reason_codes='["required_toolchain_fingerprint_mismatch","observed_capability_gap","observed_toolchain_drift"]'
+      matched_task_ids='[]'
+      capability_gap_task_ids='["task-cap-aff-5"]'
+      toolchain_drift_task_ids='["task-cap-aff-4"]'
+      toolchain_mismatch_task_ids='["task-cap-aff-4"]'
+      coverage_confirmed_task_ids='["task-cap-aff-6"]'
+      missing_required_capability_task_ids='["task-cap-aff-5"]'
+      preferred_worker_ids='["rch-a"]'
+      advised_worker_ids='["rch-a"]'
+      preferred_worker_count=1
+      advised_worker_count=1
+      preferred_total_score=34
+      advisory_total_score=34
+      confidence_score=22
+      outcome_rows='[
+        {
+          "task_id":"task-cap-aff-4",
+          "recommended_worker_ids":["rch-a"],
+          "observed_worker_ids":["rch-b"],
+          "outcome_classification":"toolchain_drift",
+          "observed_outcome":"toolchain_drift"
+        },
+        {
+          "task_id":"task-cap-aff-5",
+          "recommended_worker_ids":["rch-a"],
+          "observed_worker_ids":["rch-a"],
+          "outcome_classification":"capability_gap",
+          "observed_outcome":"capability_gap"
+        }
+      ]'
+      ;;
+    *)
+      record_failure "unknown capability affinity mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg advisory_path "${fixture_dir}/swarm_capability_affinity_routing_advisory.json" \
+    --arg decision "$advisory_decision" \
+    --arg truth_state "$advisory_truth_state" \
+    --arg routing_mode "$routing_mode" \
+    --arg topology_class "$topology_class" \
+    --argjson reason_codes "$reason_codes" \
+    --argjson preferred_worker_ids "$preferred_worker_ids" \
+    --argjson advised_worker_ids "$advised_worker_ids" \
+    --argjson required_capabilities "$required_capabilities" \
+    --argjson required_toolchain_fingerprints "$required_toolchain_fingerprints" \
+    --argjson coverage_confirmed_task_ids "$coverage_confirmed_task_ids" \
+    --argjson missing_required_capability_task_ids "$missing_required_capability_task_ids" \
+    --argjson toolchain_mismatch_task_ids "$toolchain_mismatch_task_ids" \
+    --argjson broader_fallback_task_ids "$broader_fallback_task_ids" \
+    --argjson advisory_degraded_reasons "$advisory_degraded_reasons" \
+    --argjson advisory_blocked_reasons "$advisory_blocked_reasons" \
+    --argjson preferred_worker_count "$preferred_worker_count" \
+    --argjson advised_worker_count "$advised_worker_count" \
+    --argjson preferred_total_score "$preferred_total_score" \
+    --argjson advisory_total_score "$advisory_total_score" \
+    --argjson confidence_score "$confidence_score" \
+    '{
+      schema_version:"franken-engine.capability-affinity-queue-routing-advisory.v1",
+      source_schema_version:"franken-engine.capability-affinity-queue-routing-sources.v1",
+      routing_advisory_id:"car-smoke-capability-affinity",
+      source_revision:"smoke-rev",
+      truth_state:$truth_state,
+      decision:$decision,
+      reason_codes:$reason_codes,
+      worker_affinity_summary:{
+        task_count:3,
+        routing_mode:$routing_mode,
+        recommended_topology_class:$topology_class,
+        preferred_worker_ids:$preferred_worker_ids,
+        advised_worker_ids:$advised_worker_ids,
+        excluded_worker_ids:(if $routing_mode == "broader_cohort_fallback" then ["rch-d"] else [] end),
+        watch_worker_ids:(if $routing_mode == "broader_cohort_fallback" then ["rch-c"] else [] end),
+        rehab_candidate_worker_ids:[],
+        broader_fallback_task_ids:$broader_fallback_task_ids,
+        preferred_cohort_score:{
+          capability_coverage_score:(if ($missing_required_capability_task_ids | length) == 0 then 100 else 0 end),
+          toolchain_parity_score:(if ($toolchain_mismatch_task_ids | length) == 0 then 100 else 0 end),
+          locality_compatibility_score:(if $decision == "blocked" then 40 else 90 end),
+          rehabilitation_exclusion_score:85,
+          total_score:$preferred_total_score
+        },
+        advisory_cohort_score:{
+          capability_coverage_score:(if ($missing_required_capability_task_ids | length) == 0 then 100 else 0 end),
+          toolchain_parity_score:(if ($toolchain_mismatch_task_ids | length) == 0 then 100 else 0 end),
+          locality_compatibility_score:(if $routing_mode == "broader_cohort_fallback" then 88 else 90 end),
+          rehabilitation_exclusion_score:88,
+          total_score:$advisory_total_score
+        },
+        confidence_score:$confidence_score
+      },
+      capability_coverage_summary:{
+        required_capabilities:$required_capabilities,
+        coverage_confirmed_task_ids:$coverage_confirmed_task_ids,
+        missing_required_capability_task_ids:$missing_required_capability_task_ids,
+        score:(if ($missing_required_capability_task_ids | length) == 0 then 100 else 0 end)
+      },
+      toolchain_parity_summary:{
+        required_toolchain_fingerprints:$required_toolchain_fingerprints,
+        toolchain_mismatch_task_ids:$toolchain_mismatch_task_ids,
+        score:(if ($toolchain_mismatch_task_ids | length) == 0 then 100 else 0 end)
+      },
+      supporting_evidence_summary:{
+        routing_outcome_samples_present:true,
+        routing_outcome_sample_count:2
+      },
+      degraded_reasons:$advisory_degraded_reasons,
+      blocked_reasons:$advisory_blocked_reasons,
+      fail_closed_reasons:[],
+      source_artifacts:[],
+      artifact_paths:{
+        advisory_json:$advisory_path,
+        sources_json:"capability_affinity_sources.json",
+        events_jsonl:"capability_affinity_events.jsonl",
+        commands_txt:"capability_affinity_commands.txt",
+        summary_md:"capability_affinity_summary.md"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        reassigns_beads:false,
+        releases_reservations:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false,
+        reroutes_tasks_automatically:false
+      }
+    }' >"${fixture_dir}/swarm_capability_affinity_routing_advisory.json"
+
+  jq -n \
+    --arg ledger_path "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json" \
+    --arg decision "$outcome_decision" \
+    --arg truth_state "$outcome_truth_state" \
+    --arg routing_mode "$routing_mode" \
+    --argjson reason_codes "$reason_codes" \
+    --argjson advised_worker_ids "$advised_worker_ids" \
+    --argjson matched_task_ids "$matched_task_ids" \
+    --argjson mismatched_task_ids "$mismatched_task_ids" \
+    --argjson capability_gap_task_ids "$capability_gap_task_ids" \
+    --argjson toolchain_drift_task_ids "$toolchain_drift_task_ids" \
+    --argjson contamination_task_ids "$contamination_task_ids" \
+    --argjson ledger_degraded_reasons "$ledger_degraded_reasons" \
+    --argjson ledger_blocked_reasons "$ledger_blocked_reasons" \
+    --argjson missing_required_capability_task_ids "$missing_required_capability_task_ids" \
+    --argjson toolchain_mismatch_task_ids "$toolchain_mismatch_task_ids" \
+    --argjson outcome_rows "$outcome_rows" \
+    '{
+      schema_version:"franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1",
+      source_schema_version:"franken-engine.swarm-capability-affinity-routing-outcome-sources.v1",
+      outcome_ledger_id:"cal-smoke-capability-affinity",
+      source_revision:"smoke-rev",
+      truth_state:$truth_state,
+      decision:$decision,
+      routing_mode:$routing_mode,
+      reason_codes:$reason_codes,
+      planned_advised_worker_ids:$advised_worker_ids,
+      upstream_missing_required_capability_task_ids:$missing_required_capability_task_ids,
+      upstream_toolchain_mismatch_task_ids:$toolchain_mismatch_task_ids,
+      matched_task_ids:$matched_task_ids,
+      mismatched_task_ids:$mismatched_task_ids,
+      capability_gap_task_ids:$capability_gap_task_ids,
+      toolchain_drift_task_ids:$toolchain_drift_task_ids,
+      contamination_task_ids:$contamination_task_ids,
+      degraded_reasons:$ledger_degraded_reasons,
+      blocked_reasons:$ledger_blocked_reasons,
+      fail_closed_reasons:[],
+      task_outcomes:$outcome_rows,
+      source_artifacts:[],
+      artifact_paths:{
+        outcome_ledger_json:$ledger_path,
+        sources_json:"capability_affinity_outcome_sources.json",
+        events_jsonl:"capability_affinity_outcome_events.jsonl",
+        commands_txt:"capability_affinity_outcome_commands.txt",
+        summary_md:"capability_affinity_outcome_summary.md"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        reassigns_beads:false,
+        releases_reservations:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false,
+        reroutes_tasks_automatically:false
+      }
+    }' >"${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json"
+}
+
 write_starvation_rescue_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -1542,6 +1837,7 @@ write_healthy_fixtures() {
   write_causal_trace_fixtures "$fixture_dir" "complete"
   write_resource_envelope_fixtures "$fixture_dir" "healthy"
   write_topology_placement_fixtures "$fixture_dir" "healthy"
+  write_capability_affinity_fixtures "$fixture_dir" "healthy"
 }
 
 write_degraded_fixtures() {
@@ -1914,6 +2210,18 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_topology_placement_fixtures "$fixture_dir" "blocked"
       ;;
+    capability_affinity_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_capability_affinity_fixtures "$fixture_dir" "healthy"
+      ;;
+    capability_affinity_degraded)
+      write_healthy_fixtures "$fixture_dir"
+      write_capability_affinity_fixtures "$fixture_dir" "degraded"
+      ;;
+    capability_affinity_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_capability_affinity_fixtures "$fixture_dir" "blocked"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -1961,6 +2269,8 @@ run_case() {
   [[ -f "${fixture_dir}/swarm_topology_placement_plan.json" ]] && extra_args+=(--swarm-topology-placement-plan-json "${fixture_dir}/swarm_topology_placement_plan.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_receipt.json" ]] && extra_args+=(--swarm-topology-placement-receipt-json "${fixture_dir}/swarm_topology_placement_receipt.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" ]] && extra_args+=(--swarm-topology-placement-evidence-ledger-json "${fixture_dir}/swarm_topology_placement_evidence_ledger.json")
+  [[ -f "${fixture_dir}/swarm_capability_affinity_routing_advisory.json" ]] && extra_args+=(--swarm-capability-affinity-routing-advisory-json "${fixture_dir}/swarm_capability_affinity_routing_advisory.json")
+  [[ -f "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json" ]] && extra_args+=(--swarm-capability-affinity-routing-outcome-ledger-json "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -2085,6 +2395,22 @@ run_case() {
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_br == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_remote_workers == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.changes_live_queue_policy == false)
+    and (.predictive_dashboard.swarm_capability_affinity_routing.readiness | type == "string")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.advisory_decision | type == "string")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision | type == "string")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.routing_mode | type == "string")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class | type == "string")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.preferred_worker_ids | type == "array")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.advised_worker_ids | type == "array")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.required_capabilities | type == "array")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.required_toolchain_fingerprints | type == "array")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | type == "array")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.artifact_paths | type == "object")
+    and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.advisory_only == true)
+    and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.mutates_br == false)
+    and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.mutates_remote_workers == false)
+    and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.changes_live_queue_policy == false)
+    and (.predictive_dashboard.swarm_capability_affinity_routing.mutation_policy.reroutes_tasks_automatically == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.pins_workers_automatically == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.enforces_placement_automatically == false)
     and (.predictive_dashboard.staged_contamination.decision | type == "string")
@@ -2550,6 +2876,63 @@ run_case() {
         and any(.degraded[]; .component == "swarm_topology_placement")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    capability_affinity_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_capability_affinity_routing.artifact_statuses.routing_advisory == "provided"
+        and .predictive_dashboard.swarm_capability_affinity_routing.artifact_statuses.outcome_ledger == "provided"
+        and .predictive_dashboard.swarm_capability_affinity_routing.readiness == "ready"
+        and .predictive_dashboard.swarm_capability_affinity_routing.severity == "ok"
+        and .predictive_dashboard.swarm_capability_affinity_routing.advisory_decision == "pass"
+        and .predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision == "pass"
+        and .predictive_dashboard.swarm_capability_affinity_routing.routing_mode == "capability_affinity_confirmed"
+        and .predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class == "numa_hot_cache_preferred"
+        and .predictive_dashboard.swarm_capability_affinity_routing.preferred_worker_count == 2
+        and .predictive_dashboard.swarm_capability_affinity_routing.mismatch_task_count == 0
+        and .predictive_dashboard.swarm_capability_affinity_routing.capability_gap_task_count == 0
+        and .predictive_dashboard.swarm_capability_affinity_routing.toolchain_drift_task_count == 0
+        and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | index("preferred_cohort_confirmed"))
+        and .summary.capability_affinity_readiness == "ready"
+        and .summary.capability_affinity_preferred_worker_count == 2
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    capability_affinity_degraded)
+      jq -e '
+        .predictive_dashboard.swarm_capability_affinity_routing.readiness == "degraded"
+        and .predictive_dashboard.swarm_capability_affinity_routing.severity == "warning"
+        and .predictive_dashboard.swarm_capability_affinity_routing.advisory_decision == "degraded"
+        and .predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision == "degraded"
+        and .predictive_dashboard.swarm_capability_affinity_routing.routing_mode == "broader_cohort_fallback"
+        and .predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class == "mixed_capability_degraded"
+        and .predictive_dashboard.swarm_capability_affinity_routing.mismatch_task_count == 1
+        and .predictive_dashboard.swarm_capability_affinity_routing.capability_gap_task_count == 0
+        and .predictive_dashboard.swarm_capability_affinity_routing.toolchain_drift_task_count == 0
+        and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | index("broader_cohort_fallback"))
+        and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | index("route_mismatch_observed"))
+        and .summary.capability_affinity_readiness == "degraded"
+        and .summary.capability_affinity_mismatch_count == 1
+        and .recommendations[0].action == "review_capability_affinity_advisory"
+        and any(.degraded[]; .component == "swarm_capability_affinity_routing")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    capability_affinity_blocked)
+      jq -e '
+        .predictive_dashboard.swarm_capability_affinity_routing.readiness == "blocked"
+        and .predictive_dashboard.swarm_capability_affinity_routing.severity == "warning"
+        and .predictive_dashboard.swarm_capability_affinity_routing.advisory_decision == "blocked"
+        and .predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision == "blocked"
+        and .predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class == "blocked_toolchain_parity"
+        and .predictive_dashboard.swarm_capability_affinity_routing.mismatch_task_count == 0
+        and .predictive_dashboard.swarm_capability_affinity_routing.capability_gap_task_count == 1
+        and .predictive_dashboard.swarm_capability_affinity_routing.toolchain_drift_task_count == 1
+        and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | index("required_toolchain_fingerprint_mismatch"))
+        and (.predictive_dashboard.swarm_capability_affinity_routing.reason_codes | index("observed_capability_gap"))
+        and .summary.capability_affinity_readiness == "blocked"
+        and .summary.capability_affinity_capability_gap_count == 1
+        and .summary.capability_affinity_toolchain_drift_count == 1
+        and .recommendations[0].action == "respect_capability_affinity_block"
+        and any(.degraded[]; .component == "swarm_capability_affinity_routing")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -2600,6 +2983,9 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("topology_placement_drifted"))
     and (.golden_fixture_cases | index("topology_placement_expired"))
     and (.golden_fixture_cases | index("topology_placement_blocked"))
+    and (.golden_fixture_cases | index("capability_affinity_healthy"))
+    and (.golden_fixture_cases | index("capability_affinity_degraded"))
+    and (.golden_fixture_cases | index("capability_affinity_blocked"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -2655,6 +3041,18 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.expiry"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.advisory_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.routing_mode"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.preferred_worker_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.mismatch_task_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.capability_gap_task_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.toolchain_drift_task_count"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.artifact_paths"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -2694,6 +3092,8 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_resource_envelope_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_topology_placement_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_topology_placement_receipt_ledger.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_capability_affinity_queue_routing_planner.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_capability_affinity_routing_outcome_ledger.sh' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
   grep -Fq 'queue_fidelity' "$contract_doc"
   grep -Fq 'queue_tuning_promotion' "$contract_doc"
@@ -2701,6 +3101,7 @@ assert_dashboard_contract_truth() {
   grep -Fq 'swarm_agent_causal_trace' "$contract_doc"
   grep -Fq 'swarm_resource_envelope' "$contract_doc"
   grep -Fq 'swarm_topology_placement' "$contract_doc"
+  grep -Fq 'swarm_capability_affinity_routing' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
   if grep -Eiq 'franken_engine ships[[:space:]].*TUI|FrankenEngine ships[[:space:]].*TUI|ships a local TUI|local_renderer[[:space:]]*:[[:space:]]*true|shipped_in_franken_engine[[:space:]]*:[[:space:]]*true' "$contract_doc" "$contract_json"; then
@@ -2745,6 +3146,9 @@ run_selftest() {
   run_case "topology_placement_drifted" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "topology_placement_expired" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "topology_placement_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "capability_affinity_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "capability_affinity_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "capability_affinity_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
 
   printf 'swarm_operator_status_report_smoke_artifacts=%s\n' "$tmp_root"
 }

@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 28,
+    "degraded_count": 29,
     "planned_command_count": 0,
     "predictive_cost_command_count": 0,
     "high_cost_command_count": 0,
@@ -55,6 +55,15 @@
     "topology_placement_warm_cache_opportunity_count": 0,
     "topology_placement_adoption_status": "missing",
     "topology_placement_drift_reason_count": 0,
+    "capability_affinity_readiness": "degraded",
+    "capability_affinity_advisory_decision": "missing",
+    "capability_affinity_outcome_ledger_decision": "missing",
+    "capability_affinity_routing_mode": "missing",
+    "capability_affinity_topology_class": "missing",
+    "capability_affinity_preferred_worker_count": 0,
+    "capability_affinity_mismatch_count": 0,
+    "capability_affinity_capability_gap_count": 0,
+    "capability_affinity_toolchain_drift_count": 0,
     "lease_exchange_decision": "missing",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -453,6 +462,59 @@
         "placement_evidence_ledger_json": ""
       }
     },
+    "swarm_capability_affinity_routing": {
+      "artifact_statuses": {
+        "routing_advisory": "missing",
+        "outcome_ledger": "missing"
+      },
+      "readiness": "degraded",
+      "severity": "warning",
+      "advisory_decision": "missing",
+      "outcome_ledger_decision": "missing",
+      "routing_mode": "missing",
+      "recommended_topology_class": "missing",
+      "preferred_worker_ids": [],
+      "advised_worker_ids": [],
+      "preferred_worker_count": 0,
+      "advised_worker_count": 0,
+      "required_capabilities": [],
+      "required_capability_count": 0,
+      "required_toolchain_fingerprints": [],
+      "required_toolchain_fingerprint_count": 0,
+      "matched_task_ids": [],
+      "mismatch_task_ids": [],
+      "capability_gap_task_ids": [],
+      "toolchain_drift_task_ids": [],
+      "contamination_task_ids": [],
+      "matched_task_count": 0,
+      "mismatch_task_count": 0,
+      "capability_gap_task_count": 0,
+      "toolchain_drift_task_count": 0,
+      "contamination_task_count": 0,
+      "capability_coverage_score": 0,
+      "toolchain_parity_score": 0,
+      "confidence_score": 0,
+      "supporting_evidence_summary": {
+        "routing_outcome_samples_present": false,
+        "routing_outcome_sample_count": 0
+      },
+      "reason_codes": [],
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "reroutes_tasks_automatically": false
+      },
+      "artifact_paths": {
+        "routing_advisory_json": "",
+        "outcome_ledger_json": ""
+      }
+    },
     "lease_exchange_salvage": {
       "artifact_status": "missing",
       "severity": "warning",
@@ -761,7 +823,10 @@
         "topology_placement_healthy",
         "topology_placement_drifted",
         "topology_placement_expired",
-        "topology_placement_blocked"
+        "topology_placement_blocked",
+        "capability_affinity_healthy",
+        "capability_affinity_degraded",
+        "capability_affinity_blocked"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false
@@ -875,6 +940,12 @@
       "status": "missing",
       "impact": "topology placement plan, receipt, or evidence ledger is missing",
       "remediation": "Provide topology placement planner and receipt ledger artifacts before publishing locality and cache-residency advice."
+    },
+    {
+      "component": "swarm_capability_affinity_routing",
+      "status": "missing",
+      "impact": "capability-affinity routing advisory or outcome ledger is missing",
+      "remediation": "Provide capability-affinity advisory and outcome-ledger artifacts before publishing worker-cohort or toolchain-safe routing advice."
     },
     {
       "component": "lease_exchange_salvage",

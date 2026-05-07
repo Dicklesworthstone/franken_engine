@@ -202,6 +202,22 @@
     },
     "handoff_note": "The operator status report integrates topology placement plan, receipt, and evidence-ledger artifacts as advisory-only locality and cache-residency evidence. It must not be described as live queue mutation, automatic worker pinning, automatic host rebinding, automatic target-dir repair, automatic placement enforcement, RCH or Cargo execution, or worker mutation."
   },
+  "swarm_capability_affinity_routing_handoff": {
+    "planner_script": "scripts/swarm_capability_affinity_queue_routing_planner.sh",
+    "outcome_ledger_script": "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
+    "routing_advisory_schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+    "outcome_ledger_schema_version": "franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1",
+    "operator_status_section": "swarm_capability_affinity_routing",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "ready": "capability-affinity advisory and outcome ledger agree on a safe worker cohort with no mismatch, capability-gap, or toolchain-drift findings",
+      "degraded": "routing evidence remains coherent but broader-cohort fallback, mismatches, or degraded supporting evidence reduce confidence",
+      "blocked": "required capability coverage or toolchain parity is insufficient for safe routing",
+      "contaminated": "fail-closed or unsafe mutation claims invalidate remote-only capability-affinity advice"
+    },
+    "handoff_note": "The operator status report integrates capability-affinity routing advisory and outcome-ledger artifacts as advisory-only worker-cohort and toolchain-safe routing evidence. It must not be described as live queue mutation, automatic task rerouting, automatic worker mutation, RCH execution, Cargo execution, or worker mutation."
+  },
   "required_dashboard_fields": [
     "predictive_dashboard.schema_version",
     "predictive_dashboard.renderer_contract.provider",
@@ -306,6 +322,18 @@
     "predictive_dashboard.swarm_topology_placement.expiry",
     "predictive_dashboard.swarm_topology_placement.artifact_paths",
     "predictive_dashboard.swarm_topology_placement.mutation_policy",
+    "predictive_dashboard.swarm_capability_affinity_routing.readiness",
+    "predictive_dashboard.swarm_capability_affinity_routing.advisory_decision",
+    "predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision",
+    "predictive_dashboard.swarm_capability_affinity_routing.routing_mode",
+    "predictive_dashboard.swarm_capability_affinity_routing.recommended_topology_class",
+    "predictive_dashboard.swarm_capability_affinity_routing.preferred_worker_count",
+    "predictive_dashboard.swarm_capability_affinity_routing.mismatch_task_count",
+    "predictive_dashboard.swarm_capability_affinity_routing.capability_gap_task_count",
+    "predictive_dashboard.swarm_capability_affinity_routing.toolchain_drift_task_count",
+    "predictive_dashboard.swarm_capability_affinity_routing.reason_codes",
+    "predictive_dashboard.swarm_capability_affinity_routing.artifact_paths",
+    "predictive_dashboard.swarm_capability_affinity_routing.mutation_policy",
     "predictive_dashboard.staged_contamination.decision",
     "predictive_dashboard.staged_contamination.offending_paths"
   ],
@@ -349,6 +377,8 @@
     "franken-engine.swarm-topology-placement-plan.v1",
     "franken-engine.swarm-topology-placement-receipt.v1",
     "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+    "franken-engine.capability-affinity-queue-routing-advisory.v1",
+    "franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -384,7 +414,10 @@
     "topology_placement_healthy",
     "topology_placement_drifted",
     "topology_placement_expired",
-    "topology_placement_blocked"
+    "topology_placement_blocked",
+    "capability_affinity_healthy",
+    "capability_affinity_degraded",
+    "capability_affinity_blocked"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -425,6 +458,7 @@
     "The queue policy adoption section is advisory lifecycle evidence backed by docs/swarm_execution_queue_policy_adoption_receipt_contract_v1.json, docs/swarm_execution_queue_policy_sustained_gain_scorer_contract_v1.json, and docs/swarm_execution_queue_policy_expiry_supersession_planner_contract_v1.json; it must not be described as live queue retuning, automatic scheduler mutation, automatic retirement, automatic supersession, or proof that retirement already executed.",
     "The causal trace section is advisory handoff evidence backed by scripts/swarm_agent_causal_trace_graph.sh and docs/swarm_agent_causal_trace_spine_contract_v1.json; it must not be described as live Agent Mail querying, automatic reservation release, automatic bead repair, rch execution, Cargo execution, or queue mutation.",
     "The topology placement section is advisory locality and cache-residency evidence backed by scripts/swarm_topology_placement_planner.sh and scripts/swarm_topology_placement_receipt_ledger.sh; it must not be described as live worker pinning, host rebinding, queue mutation, placement enforcement, target-dir repair, RCH execution, Cargo execution, or worker mutation.",
+    "The capability-affinity routing section is advisory worker-cohort and toolchain-safe routing evidence backed by scripts/swarm_capability_affinity_queue_routing_planner.sh and scripts/swarm_capability_affinity_routing_outcome_ledger.sh; it must not be described as live queue mutation, automatic task rerouting, automatic worker mutation, RCH execution, Cargo execution, or worker mutation.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

@@ -256,6 +256,25 @@ execution, or live queue mutation. The operator status section reports
 present, `blocked` when an in-progress bead is missing required handoff edges,
 and `contaminated` when fail-closed anomaly evidence invalidates closeout trust.
 
+The same operator report now also integrates the SWARM-SCALE-IV
+capability-affinity routing handoff:
+
+- Planner script: `scripts/swarm_capability_affinity_queue_routing_planner.sh`
+- Advisory schema: `franken-engine.capability-affinity-queue-routing-advisory.v1`
+- Planner contract: `docs/swarm_capability_affinity_queue_routing_planner_contract_v1.json`
+
+- Outcome ledger script: `scripts/swarm_capability_affinity_routing_outcome_ledger.sh`
+- Outcome ledger schema: `franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1`
+- Outcome ledger contract: `docs/swarm_capability_affinity_routing_outcome_ledger_contract_v1.json`
+
+That handoff carries routing readiness, preferred worker-cohort counts,
+toolchain-safe routing mode, mismatch counts, capability-gap counts, drift
+counts, and artifact links into the existing
+`scripts/swarm_operator_status_report.sh` producer. It is advisory-only. It
+must not be described as live queue mutation, automatic task rerouting,
+automatic worker mutation, `rch` execution, Cargo execution, or a second
+dashboard producer.
+
 The SWARM-CTRL-VIII no-mock composition surface is also proof-only:
 
 - Script: `scripts/e2e/swarm_predictive_admission_no_mock_drill.sh`
@@ -298,6 +317,7 @@ consumption:
 | `swarm_agent_causal_trace` | `swarm-agent-causal-trace-graph.v1` plus `swarm-agent-causal-trace-anomaly-report.v1` | Show handoff readiness, required causal-edge coverage, and fail-closed coordination anomalies without querying live services or mutating ownership state. |
 | `swarm_resource_envelope` | `swarm-resource-envelope.v1` plus `swarm-fair-share-batch-plan.v1` from `scripts/swarm_resource_envelope_normalizer.sh` and `scripts/swarm_fair_share_batch_planner.sh` | Show host resource-envelope readiness, capacity summaries, admitted/deferred fair-share counts, and contaminated capacity classes without running Cargo, RCH, queue mutation, or worker mutation. |
 | `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
+| `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 The resource-envelope input contract is fixed by
@@ -306,6 +326,10 @@ The resource-envelope input contract is fixed by
 The topology placement handoff is fixed by the planner and receipt-ledger
 schemas emitted by `scripts/swarm_topology_placement_planner.sh` and
 `scripts/swarm_topology_placement_receipt_ledger.sh`.
+The capability-affinity routing handoff is fixed by the advisory and
+outcome-ledger schemas emitted by
+`scripts/swarm_capability_affinity_queue_routing_planner.sh` and
+`scripts/swarm_capability_affinity_routing_outcome_ledger.sh`.
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
 adding a parallel TUI framework inside `franken_engine`.
@@ -348,6 +372,9 @@ The smoke test publishes deterministic goldens for:
 - `topology_placement_drifted`
 - `topology_placement_expired`
 - `topology_placement_blocked`
+- `capability_affinity_healthy`
+- `capability_affinity_degraded`
+- `capability_affinity_blocked`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.

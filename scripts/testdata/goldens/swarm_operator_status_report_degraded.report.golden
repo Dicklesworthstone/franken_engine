@@ -3,13 +3,14 @@
 - Status: `degraded`
 - Ready beads: `1`
 - In progress: `1`
-- Degraded fields: `28`
+- Degraded fields: `29`
 
 - Dashboard contract: `franken-engine.swarm-predictive-dashboard.v1` via `/dp/frankentui`
 - Forecast confidence: `low` / `unknown`
 - Admission budget: `unknown` with `0` deferred
 - Resource envelope: `degraded` / `missing` with `0` admitted and `0` deferred
 - Topology placement: `degraded` class=`missing` cache=`missing` adoption=`missing`
+- Capability affinity: `degraded` mode=`missing` preferred=`0` mismatch=`0` gap=`0` drift=`0`
 - Lease exchange posture: `missing`
 - Prefetch advisory: `missing`
 - Starvation rescue escalation: `unknown` via `null`
@@ -32,6 +33,8 @@
 - Swarm topology placement plan: ``
 - Swarm topology placement receipt: ``
 - Swarm topology placement evidence ledger: ``
+- Swarm capability-affinity routing advisory: ``
+- Swarm capability-affinity routing outcome ledger: ``
 - Lease exchange salvage simulation: `missing`
 - Warm target prefetch ROI advisory: `missing`
 - Starvation rescue plan: `missing`
@@ -83,6 +86,7 @@
 - `admission_budgets` `missing`: admission budget plan artifact is missing. Provide --admission-budget-plan-json before summarizing budget posture.
 - `swarm_resource_envelope` `missing`: resource envelope and fair-share artifacts are missing. Provide --swarm-resource-envelope-json and --swarm-fair-share-batch-plan-json before publishing host envelope readiness.
 - `swarm_topology_placement` `missing`: topology placement plan, receipt, or evidence ledger is missing. Provide topology placement planner and receipt ledger artifacts before publishing locality and cache-residency advice.
+- `swarm_capability_affinity_routing` `missing`: capability-affinity routing advisory or outcome ledger is missing. Provide capability-affinity advisory and outcome-ledger artifacts before publishing worker-cohort or toolchain-safe routing advice.
 - `lease_exchange_salvage` `missing`: lease-exchange salvage simulation artifact is missing. Provide --lease-exchange-salvage-simulation-json before recommending ownership reshuffles.
 - `prefetch_roi` `missing`: warm-target prefetch ROI advisory artifact is missing. Provide --warm-target-prefetch-roi-advisory-json before recommending prefetch.
 - `starvation_rescue_handoff` `missing`: starvation rescue handoff artifacts are incomplete. Provide both --starvation-rescue-plan-json and --starvation-rescue-conformance-report-json before trusting rescue readiness.

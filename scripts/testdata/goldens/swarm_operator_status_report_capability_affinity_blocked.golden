@@ -40,13 +40,13 @@
     "telemetry_missing_input_count": 0,
     "admission_budget_profile": "balanced",
     "admission_deferred_count": 0,
-    "resource_envelope_readiness": "degraded",
-    "resource_envelope_decision": "degraded",
-    "resource_envelope_severity": "warning",
-    "fair_share_decision": "admit_narrow",
-    "fair_share_admitted_count": 2,
-    "fair_share_deferred_count": 1,
-    "fair_share_heavy_admitted_count": 1,
+    "resource_envelope_readiness": "ready",
+    "resource_envelope_decision": "pass",
+    "resource_envelope_severity": "ok",
+    "fair_share_decision": "admit",
+    "fair_share_admitted_count": 3,
+    "fair_share_deferred_count": 0,
+    "fair_share_heavy_admitted_count": 2,
     "topology_placement_readiness": "ready",
     "topology_placement_plan_decision": "pass",
     "topology_placement_receipt_decision": "pass",
@@ -55,15 +55,15 @@
     "topology_placement_warm_cache_opportunity_count": 1,
     "topology_placement_adoption_status": "adopted",
     "topology_placement_drift_reason_count": 0,
-    "capability_affinity_readiness": "ready",
-    "capability_affinity_advisory_decision": "pass",
-    "capability_affinity_outcome_ledger_decision": "pass",
+    "capability_affinity_readiness": "blocked",
+    "capability_affinity_advisory_decision": "blocked",
+    "capability_affinity_outcome_ledger_decision": "blocked",
     "capability_affinity_routing_mode": "capability_affinity_confirmed",
-    "capability_affinity_topology_class": "numa_hot_cache_preferred",
-    "capability_affinity_preferred_worker_count": 2,
+    "capability_affinity_topology_class": "blocked_toolchain_parity",
+    "capability_affinity_preferred_worker_count": 1,
     "capability_affinity_mismatch_count": 0,
-    "capability_affinity_capability_gap_count": 0,
-    "capability_affinity_toolchain_drift_count": 0,
+    "capability_affinity_capability_gap_count": 1,
+    "capability_affinity_toolchain_drift_count": 1,
     "lease_exchange_decision": "retain_current_assignments",
     "lease_exchange_candidate_count": 0,
     "salvage_promotion_candidate_count": 0,
@@ -380,7 +380,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -406,7 +406,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -427,17 +427,17 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/admission_budget_plan.json"
     },
     "swarm_resource_envelope": {
       "artifact_statuses": {
         "resource_envelope": "provided",
         "fair_share_batch_plan": "provided"
       },
-      "readiness": "degraded",
-      "severity": "warning",
-      "decision": "degraded",
-      "fair_share_decision": "admit_narrow",
+      "readiness": "ready",
+      "severity": "ok",
+      "decision": "pass",
+      "fair_share_decision": "admit",
       "host_id": "host-64c-256g",
       "capacity_budget": {
         "script_lane_limit": 12,
@@ -460,21 +460,21 @@
       },
       "fair_share": {
         "requested_count": 3,
-        "admitted_count": 2,
-        "deferred_count": 1,
-        "heavy_admitted_count": 1,
+        "admitted_count": 3,
+        "deferred_count": 0,
+        "heavy_admitted_count": 2,
         "rch_slots_used": 2,
         "fairness_rationale": [
           "fixture fair-share rationale"
         ]
       },
       "contaminating_classes": [],
-      "degraded_reason_count": 1,
+      "degraded_reason_count": 0,
       "blocked_reason_count": 0,
       "fail_closed_reason_count": 0,
       "artifact_paths": {
-        "resource_envelope_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_resource_envelope.json",
-        "fair_share_batch_plan_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_fair_share_batch_plan.json"
+        "resource_envelope_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
     "swarm_topology_placement": {
@@ -620,9 +620,9 @@
         "enforces_placement_automatically": false
       },
       "artifact_paths": {
-        "placement_plan_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_topology_placement_plan.json",
-        "placement_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_topology_placement_receipt.json",
-        "placement_evidence_ledger_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_topology_placement_evidence_ledger.json"
+        "placement_plan_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
     "swarm_capability_affinity_routing": {
@@ -630,20 +630,19 @@
         "routing_advisory": "provided",
         "outcome_ledger": "provided"
       },
-      "readiness": "ready",
-      "severity": "ok",
-      "advisory_decision": "pass",
-      "outcome_ledger_decision": "pass",
+      "readiness": "blocked",
+      "severity": "warning",
+      "advisory_decision": "blocked",
+      "outcome_ledger_decision": "blocked",
       "routing_mode": "capability_affinity_confirmed",
-      "recommended_topology_class": "numa_hot_cache_preferred",
+      "recommended_topology_class": "blocked_toolchain_parity",
       "preferred_worker_ids": [
-        "rch-a",
-        "rch-b"
+        "rch-a"
       ],
       "advised_worker_ids": [
         "rch-a"
       ],
-      "preferred_worker_count": 2,
+      "preferred_worker_count": 1,
       "advised_worker_count": 1,
       "required_capabilities": [
         "cargo-check",
@@ -655,35 +654,51 @@
         "nightly-2026-05-06-x86_64-unknown-linux-gnu"
       ],
       "required_toolchain_fingerprint_count": 1,
-      "matched_task_ids": [
-        "task-cap-aff-1",
-        "task-cap-aff-2"
-      ],
+      "matched_task_ids": [],
       "mismatch_task_ids": [],
-      "capability_gap_task_ids": [],
-      "toolchain_drift_task_ids": [],
+      "capability_gap_task_ids": [
+        "task-cap-aff-5"
+      ],
+      "toolchain_drift_task_ids": [
+        "task-cap-aff-4"
+      ],
       "contamination_task_ids": [],
-      "matched_task_count": 2,
+      "matched_task_count": 0,
       "mismatch_task_count": 0,
-      "capability_gap_task_count": 0,
-      "toolchain_drift_task_count": 0,
+      "capability_gap_task_count": 1,
+      "toolchain_drift_task_count": 1,
       "contamination_task_count": 0,
-      "capability_coverage_score": 100,
-      "toolchain_parity_score": 100,
-      "confidence_score": 91,
+      "capability_coverage_score": 0,
+      "toolchain_parity_score": 0,
+      "confidence_score": 22,
       "supporting_evidence_summary": {
         "routing_outcome_samples_present": true,
         "routing_outcome_sample_count": 2
       },
       "reason_codes": [
-        "capability_coverage_confirmed",
-        "preferred_cohort_confirmed",
-        "route_match_confirmed",
-        "toolchain_parity_confirmed"
+        "observed_capability_gap",
+        "observed_toolchain_drift",
+        "required_toolchain_fingerprint_mismatch"
       ],
-      "warnings": [],
+      "warnings": [
+        {
+          "code": "observed_capability_gap",
+          "source_id": "routing_outcome_samples_json",
+          "detail": "observed routing recorded a missing required capability"
+        },
+        {
+          "code": "observed_toolchain_drift",
+          "source_id": "routing_outcome_samples_json",
+          "detail": "observed routing recorded a toolchain drift receipt"
+        },
+        {
+          "code": "required_toolchain_fingerprint_mismatch",
+          "source_id": "toolchain_parity_summary",
+          "detail": "required remote toolchain fingerprint is not present across the preferred cohort"
+        }
+      ],
       "fail_closed_reason_count": 0,
-      "blocked_reason_count": 0,
+      "blocked_reason_count": 3,
       "degraded_reason_count": 0,
       "mutation_policy": {
         "advisory_only": true,
@@ -693,8 +708,8 @@
         "reroutes_tasks_automatically": false
       },
       "artifact_paths": {
-        "routing_advisory_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_capability_affinity_routing_advisory.json",
-        "outcome_ledger_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
+        "routing_advisory_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_capability_affinity_routing_advisory.json",
+        "outcome_ledger_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
       }
     },
     "lease_exchange_salvage": {
@@ -707,7 +722,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -723,7 +738,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -755,8 +770,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -775,9 +790,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -820,10 +835,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -862,11 +877,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -906,11 +921,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -991,10 +1006,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -1052,8 +1067,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/resource_envelope_degraded-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/capability_affinity_blocked-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {
@@ -1107,17 +1122,17 @@
   },
   "degraded": [
     {
-      "component": "swarm_resource_envelope",
-      "status": "degraded",
-      "impact": "host resource envelope or fair-share admission is degraded, blocked, or contaminated",
-      "remediation": "Refresh the resource envelope and respect the fair-share plan before admitting more work."
+      "component": "swarm_capability_affinity_routing",
+      "status": "blocked",
+      "impact": "capability-affinity routing evidence is degraded, blocked, or contaminated",
+      "remediation": "Refresh routing advisory evidence or respect mismatch, capability-gap, toolchain-drift, and contamination warnings before using worker-affinity advice."
     }
   ],
   "recommendations": [
     {
-      "action": "refresh_resource_envelope",
+      "action": "respect_capability_affinity_block",
       "bead_id": null,
-      "reason": "resource envelope or fair-share plan is missing or degraded"
+      "reason": "capability-affinity routing evidence is blocked by unsupported capability coverage or toolchain drift"
     }
   ]
 }

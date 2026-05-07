@@ -1,0 +1,706 @@
+{
+  "schema_version": "franken-engine.swarm-benchmark-workload-catalog-normalizer-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_mixed_catalog",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/benchmark_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/benchmark_alpha_replay.sh", "kind": "shell"},
+        {"path": "docs/BENCHMARK_ALPHA.md", "kind": "markdown"},
+        {"path": "docs/benchmark_alpha_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/benchmark_beta.sh", "kind": "shell"},
+        {"path": "scripts/e2e/benchmark_beta_replay.sh", "kind": "shell"},
+        {"path": "docs/BENCHMARK_BETA.md", "kind": "markdown"},
+        {"path": "docs/benchmark_beta_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "benchmark_alpha",
+            "benchmark_class": "throughput",
+            "purpose": "alpha benchmark",
+            "intent_tags": ["alpha"],
+            "symptom_tags": ["healthy"],
+            "required_inputs": ["alpha_manifest_json"],
+            "artifact_paths": ["artifacts/alpha/run_manifest.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/benchmark_alpha.sh"
+            },
+            "benchmark_entrypoint": "scripts/benchmark_alpha.sh",
+            "replay_entrypoint": "scripts/e2e/benchmark_alpha_replay.sh",
+            "runbook_doc": "docs/BENCHMARK_ALPHA.md",
+            "contract_json": "docs/benchmark_alpha_contract_v1.json",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.alpha.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["alpha?"],
+            "owning_bead_id": "bd-alpha",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": ["benchmark_beta"],
+            "failure_reason_codes": ["FE-SWARM-BENCH-MISSING-BENCHMARK"],
+            "validation_commands": ["./scripts/benchmark_alpha.sh check"]
+          },
+          {
+            "workload_id": "benchmark_beta",
+            "benchmark_class": "latency",
+            "purpose": "beta benchmark",
+            "intent_tags": ["beta"],
+            "symptom_tags": ["healthy"],
+            "required_inputs": ["beta_manifest_json"],
+            "artifact_paths": ["artifacts/beta/run_manifest.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/benchmark_beta.sh"
+            },
+            "benchmark_entrypoint": "scripts/benchmark_beta.sh",
+            "replay_entrypoint": "scripts/e2e/benchmark_beta_replay.sh",
+            "runbook_doc": "docs/BENCHMARK_BETA.md",
+            "contract_json": "docs/benchmark_beta_contract_v1.json",
+            "resource_profile": {
+              "cpu_intensive": false,
+              "expected_execution_mode": "prebuilt_only",
+              "cache_temperature": "cold"
+            },
+            "cold_warm_expectation": "cold",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": false
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.beta.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["beta?"],
+            "owning_bead_id": "bd-beta",
+            "upstream_workload_ids": ["benchmark_alpha"],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-MISSING-BENCHMARK"],
+            "validation_commands": ["./scripts/benchmark_beta.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_benchmark_script",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-MISSING-BENCHMARK"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "missing_benchmark",
+            "benchmark_class": "throughput",
+            "purpose": "missing benchmark script",
+            "intent_tags": ["missing"],
+            "symptom_tags": ["missing"],
+            "required_inputs": ["missing_manifest_json"],
+            "artifact_paths": ["artifacts/missing/run_manifest.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/missing_benchmark.sh"
+            },
+            "benchmark_entrypoint": "scripts/missing_benchmark.sh",
+            "replay_entrypoint": "scripts/e2e/missing_benchmark_replay.sh",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.missing.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["missing?"],
+            "owning_bead_id": "bd-missing",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-MISSING-BENCHMARK"],
+            "validation_commands": ["./scripts/missing_benchmark.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_doc",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-MISSING-DOC"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/missing_doc.sh", "kind": "shell"},
+        {"path": "scripts/e2e/missing_doc_replay.sh", "kind": "shell"},
+        {"path": "docs/missing_doc_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "missing_doc",
+            "benchmark_class": "latency",
+            "purpose": "missing row doc",
+            "intent_tags": ["missing-doc"],
+            "symptom_tags": ["missing-doc"],
+            "required_inputs": ["doc_manifest_json"],
+            "artifact_paths": ["artifacts/doc/run_manifest.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/missing_doc.sh"
+            },
+            "benchmark_entrypoint": "scripts/missing_doc.sh",
+            "replay_entrypoint": "scripts/e2e/missing_doc_replay.sh",
+            "runbook_doc": "docs/MISSING_DOC.md",
+            "contract_json": "docs/missing_doc_contract_v1.json",
+            "resource_profile": {
+              "cpu_intensive": false,
+              "expected_execution_mode": "prebuilt_only",
+              "cache_temperature": "cold"
+            },
+            "cold_warm_expectation": "cold",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": false
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.missing-doc.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["doc?"],
+            "owning_bead_id": "bd-missing-doc",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-MISSING-DOC"],
+            "validation_commands": ["./scripts/missing_doc.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "malformed_contract_json",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-MALFORMED-CONTRACT"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/malformed_contract.sh", "kind": "shell"},
+        {"path": "scripts/e2e/malformed_contract_replay.sh", "kind": "shell"},
+        {"path": "docs/MALFORMED_CONTRACT.md", "kind": "markdown"},
+        {"path": "docs/malformed_contract_v1.json", "kind": "malformed_contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "malformed_contract",
+            "benchmark_class": "artifact",
+            "purpose": "malformed row contract",
+            "intent_tags": ["malformed"],
+            "symptom_tags": ["malformed"],
+            "required_inputs": ["contract_manifest_json"],
+            "artifact_paths": ["artifacts/contract/run_manifest.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/malformed_contract.sh"
+            },
+            "benchmark_entrypoint": "scripts/malformed_contract.sh",
+            "replay_entrypoint": "scripts/e2e/malformed_contract_replay.sh",
+            "runbook_doc": "docs/MALFORMED_CONTRACT.md",
+            "contract_json": "docs/malformed_contract_v1.json",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "cold"
+            },
+            "cold_warm_expectation": "cold",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.malformed-contract.v1",
+              "result_state": "observed_or_degraded_receipt"
+            },
+            "operator_questions": ["contract?"],
+            "owning_bead_id": "bd-malformed-contract",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-MALFORMED-CONTRACT"],
+            "validation_commands": ["./scripts/malformed_contract.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "duplicate_workload_id",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-DUPLICATE-WORKLOAD"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/duplicate_a.sh", "kind": "shell"},
+        {"path": "scripts/e2e/duplicate_a_replay.sh", "kind": "shell"},
+        {"path": "scripts/duplicate_b.sh", "kind": "shell"},
+        {"path": "scripts/e2e/duplicate_b_replay.sh", "kind": "shell"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "duplicate_workload",
+            "benchmark_class": "throughput",
+            "purpose": "duplicate A",
+            "intent_tags": ["dup"],
+            "symptom_tags": ["dup"],
+            "required_inputs": ["a_json"],
+            "artifact_paths": ["artifacts/a.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/duplicate_a.sh"
+            },
+            "benchmark_entrypoint": "scripts/duplicate_a.sh",
+            "replay_entrypoint": "scripts/e2e/duplicate_a_replay.sh",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.dup-a.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["dup a?"],
+            "owning_bead_id": "bd-dup-a",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-DUPLICATE-WORKLOAD"],
+            "validation_commands": ["./scripts/duplicate_a.sh check"]
+          },
+          {
+            "workload_id": "duplicate_workload",
+            "benchmark_class": "throughput",
+            "purpose": "duplicate B",
+            "intent_tags": ["dup"],
+            "symptom_tags": ["dup"],
+            "required_inputs": ["b_json"],
+            "artifact_paths": ["artifacts/b.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/duplicate_b.sh"
+            },
+            "benchmark_entrypoint": "scripts/duplicate_b.sh",
+            "replay_entrypoint": "scripts/e2e/duplicate_b_replay.sh",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.dup-b.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["dup b?"],
+            "owning_bead_id": "bd-dup-b",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-DUPLICATE-WORKLOAD"],
+            "validation_commands": ["./scripts/duplicate_b.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "unsafe_mutation_policy",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-UNSAFE-MUTATION"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/unsafe_mutation.sh", "kind": "shell"},
+        {"path": "scripts/e2e/unsafe_mutation_replay.sh", "kind": "shell"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "unsafe_mutation",
+            "benchmark_class": "throughput",
+            "purpose": "unsafe mutation",
+            "intent_tags": ["unsafe"],
+            "symptom_tags": ["unsafe"],
+            "required_inputs": ["unsafe_json"],
+            "artifact_paths": ["artifacts/unsafe.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/unsafe_mutation.sh"
+            },
+            "benchmark_entrypoint": "scripts/unsafe_mutation.sh",
+            "replay_entrypoint": "scripts/e2e/unsafe_mutation_replay.sh",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": true
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.unsafe.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["unsafe?"],
+            "owning_bead_id": "bd-unsafe",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-UNSAFE-MUTATION"],
+            "validation_commands": ["./scripts/unsafe_mutation.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "bare_heavy_cargo_validation",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BENCH-BARE-HEAVY-CARGO"
+      },
+      "workspace_files": [
+        {"path": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md", "kind": "markdown"},
+        {"path": "docs/swarm_benchmark_workload_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/bare_cargo.sh", "kind": "shell"},
+        {"path": "scripts/e2e/bare_cargo_replay.sh", "kind": "shell"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "required_workload_fields": [
+          "workload_id",
+          "benchmark_class",
+          "purpose",
+          "intent_tags",
+          "symptom_tags",
+          "required_inputs",
+          "artifact_paths",
+          "measurement_source",
+          "benchmark_entrypoint",
+          "replay_entrypoint",
+          "resource_profile",
+          "cold_warm_expectation",
+          "rch_policy",
+          "mutation_policy",
+          "result_schema",
+          "operator_questions",
+          "owning_bead_id",
+          "upstream_workload_ids",
+          "downstream_workload_ids",
+          "failure_reason_codes",
+          "validation_commands"
+        ],
+        "docs": {
+          "runbook": "docs/SWARM_BENCHMARK_WORKLOAD_CATALOG.md",
+          "contract": "docs/swarm_benchmark_workload_catalog_contract_v1.json"
+        },
+        "source_inventory": [
+          {
+            "workload_id": "bare_heavy_cargo",
+            "benchmark_class": "throughput",
+            "purpose": "bare cargo validation",
+            "intent_tags": ["cargo"],
+            "symptom_tags": ["cargo"],
+            "required_inputs": ["cargo_json"],
+            "artifact_paths": ["artifacts/cargo.json"],
+            "measurement_source": {
+              "kind": "fixture",
+              "path": "scripts/bare_cargo.sh"
+            },
+            "benchmark_entrypoint": "scripts/bare_cargo.sh",
+            "replay_entrypoint": "scripts/e2e/bare_cargo_replay.sh",
+            "resource_profile": {
+              "cpu_intensive": true,
+              "expected_execution_mode": "rch_only",
+              "cache_temperature": "warm"
+            },
+            "cold_warm_expectation": "warm",
+            "rch_policy": {
+              "heavy_validation_examples_allowed": true
+            },
+            "mutation_policy": {
+              "advisory_only": true,
+              "mutates_br": false,
+              "runs_cargo": false,
+              "runs_rch": false
+            },
+            "result_schema": {
+              "schema_version": "franken-engine.cargo.v1",
+              "result_state": "observed_only"
+            },
+            "operator_questions": ["cargo?"],
+            "owning_bead_id": "bd-cargo",
+            "upstream_workload_ids": [],
+            "downstream_workload_ids": [],
+            "failure_reason_codes": ["FE-SWARM-BENCH-BARE-HEAVY-CARGO"],
+            "validation_commands": [
+              "cargo test -p frankenengine-engine",
+              "./scripts/bare_cargo.sh check"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

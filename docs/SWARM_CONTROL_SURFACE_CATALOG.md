@@ -1,6 +1,9 @@
 # SWARM_CONTROL_SURFACE_CATALOG
 
 `bd-45vka` defines the V1 source contract for the SWARM-CTRL-XVII control-surface catalog.
+`bd-4obje` extends that inventory for the SWARM-CTRL-XVIII remote-proof,
+proof-economy, warm-target, and worker-toolchain surfaces that already have
+repo-local docs, scripts, smokes, and JSON contracts.
 The catalog exists because the repo now has many swarm-control, swarm-scale, and
 swarm-autopilot scripts with overlapping symptoms and operator entry points. The
 catalog is the stable inventory layer that future normalizers, routers, drift
@@ -66,6 +69,47 @@ surfaces instead of creating duplicate control planes:
 | checkpoint/restore | `swarm_checkpoint_restore_planner` | `scripts/swarm_checkpoint_restore_planner.sh` |
 | shadow daemon | `swarm_autopilot_shadow_daemon` | `scripts/swarm_autopilot_shadow_source_watchers.sh` |
 
+## Remote-Proof / Proof-Economy Expansion
+
+The SWARM-CTRL-XVIII expansion adds complete rows only where all required source
+evidence exists. These rows are still advisory inventory: they classify and
+route shipped control surfaces, but they do not execute proof commands or mutate
+workers.
+
+| Class | Representative surface | Primary entry point |
+| --- | --- | --- |
+| remote proof catalog | `remote_proof_contract_catalog_gate` | `scripts/remote_proof_contract_catalog_gate.sh` |
+| resident remote proof | `resident_remote_proof_bundle_executor` | `scripts/resident_remote_proof_bundle_executor.sh` |
+| artifact mirror | `remote_proof_artifact_mirror_packer` | `scripts/remote_proof_artifact_mirror_packer.sh` |
+| archive export | `remote_proof_archive_exporter` | `scripts/remote_proof_archive_exporter.sh` |
+| retention class | `remote_proof_retention_class_ledger` | `scripts/remote_proof_retention_class_ledger.sh` |
+| garbage collection guard | `remote_proof_gc_guard` | `scripts/remote_proof_gc_guard.sh` |
+| salvage receipt | `remote_proof_salvage_receipt` | `scripts/remote_proof_salvage_receipt.sh` |
+| archive pressure | `remote_proof_archive_pressure_scoreboard` | `scripts/remote_proof_archive_pressure_scoreboard.sh` |
+| compaction planning | `remote_proof_compaction_planner` | `scripts/remote_proof_compaction_planner.sh` |
+| locality-aware batch packing | `locality_aware_remote_proof_batch_packer` | `scripts/locality_aware_remote_proof_batch_packer.sh` |
+| proof economy policy | `proof_economy_policy_evaluator` | `scripts/proof_economy_policy_evaluator.sh` |
+| replay trace | `proof_economy_replay_trace_normalizer` | `scripts/proof_economy_replay_trace_normalizer.sh` |
+| counterfactual replay | `proof_economy_counterfactual_replay_runner` | `scripts/proof_economy_counterfactual_replay_runner.sh` |
+| operator what-if | `proof_economy_operator_what_if_report` | `scripts/proof_economy_operator_what_if_report.sh` |
+| scheduler replay | `proof_economy_scheduler_replay_drill` | `scripts/e2e/proof_economy_scheduler_replay_no_mock_drill.sh` |
+| warm-target ROI | `warm_target_roi_eviction_ledger` | `scripts/warm_target_roi_eviction_ledger.sh` |
+| warm-target prefetch | `swarm_warm_target_prefetch_roi_advisory` | `scripts/swarm_warm_target_prefetch_roi_advisory.sh` |
+| worker toolchain | `swarm_worker_capability_toolchain_normalizer` | `scripts/swarm_worker_capability_toolchain_normalizer.sh` |
+
+Three adjacent surfaces are intentionally deferred from the machine inventory
+until their source evidence is complete:
+
+- `rch_validation_remote_proof_classifier` has a doc, JSON contract, and smoke,
+  but no standalone implementation script.
+- `sticky_worker_warm_target_lease_planner` has a doc, implementation script,
+  and smoke, but no JSON contract.
+- `build_storm_qos_batch_planner` has a doc, implementation script, and smoke,
+  but no JSON contract.
+
+Consumers must treat those omissions as degraded source coverage, not as
+complete catalog evidence.
+
 ## RCH Policy
 
 Catalog rows may mention heavy Rust validation only as advisory command evidence.
@@ -106,6 +150,6 @@ For this contract-only bead:
 ```bash
 jq empty docs/swarm_control_surface_catalog_contract_v1.json
 jq -e '.required_surface_fields | index("surface_id") and index("validation_commands")' docs/swarm_control_surface_catalog_contract_v1.json
-jq -e '.source_inventory | length >= 13' docs/swarm_control_surface_catalog_contract_v1.json
+jq -e '.source_inventory | length >= 31' docs/swarm_control_surface_catalog_contract_v1.json
 git diff --check -- docs/SWARM_CONTROL_SURFACE_CATALOG.md docs/swarm_control_surface_catalog_contract_v1.json
 ```

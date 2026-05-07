@@ -2715,11 +2715,11 @@ impl InterpreterCore {
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
-        self.drain_microtasks();
+        self.drain_microtasks(Some(module));
 
         // Run the event loop until all pending work is complete
         // (macrotasks like timers, with microtask draining after each).
-        self.run_event_loop_until_idle();
+        self.run_event_loop_until_idle_with_module(Some(module));
 
         result
     }
@@ -3535,7 +3535,7 @@ impl InterpreterCore {
 
     fn run_nested_module_execution(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
         let result = self.run_loop(module);
-        self.drain_microtasks();
+        self.drain_microtasks(Some(module));
         match result {
             Ok(_) | Err(InterpreterError::Halted) => Ok(()),
             Err(err) => Err(err),
@@ -5493,7 +5493,7 @@ impl InterpreterCore {
                     // Dispatch promise hostcalls to the promise subsystem.
                     let is_promise_cap = capability.0.starts_with("promise:");
                     let result = if is_promise_cap {
-                        self.dispatch_promise_hostcall(&capability.0, args)?
+                        self.dispatch_promise_hostcall(&capability.0, args, Some(module))?
                     } else if capability.0 == "module:require" {
                         let spec_val = if args.count > 0 {
                             self.read_reg(args.start)?
@@ -8767,6 +8767,69 @@ impl InterpreterCore {
         Ok(Value::Promise(result_promise.0))
     }
 
+    fn promise_reaction_handler_from_value(
+        &mut self,
+        value: Value,
+        role: &str,
+    ) -> Result<Option<crate::closure_model::ClosureHandle>, InterpreterError> {
+        match value {
+            Value::Undefined | Value::Null => Ok(None),
+            Value::Closure(closure_id) => {
+                self.closures.get(closure_id as usize).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: format!("valid Promise reaction {role} closure"),
+                        got: format!("closure#{closure_id} not found"),
+                    }
+                })?;
+                Ok(Some(crate::closure_model::ClosureHandle(closure_id)))
+            }
+            Value::Function(function_index) => {
+                let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
+                    InterpreterError::TypeError {
+                        expected: "closure table capacity".to_string(),
+                        got: format!("exceeded u32::MAX ({})", self.closures.len()),
+                    }
+                })?;
+                self.closures.push(ClosureValue {
+                    function_index,
+                    captured_env: Vec::new(),
+                });
+                if let Err(err) = self.sync_estimated_memory_bytes() {
+                    self.closures.pop();
+                    self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+                    return Err(err);
+                }
+                Ok(Some(crate::closure_model::ClosureHandle(closure_id)))
+            }
+            Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => Err(InterpreterError::TypeError {
+                expected: format!("closure-backed Promise reaction {role} handler"),
+                got: "callable handler without schedulable closure state".to_string(),
+            }),
+            _ => Ok(None),
+        }
+    }
+
+    fn promise_reaction_arg(
+        &self,
+        args: RegRange,
+        offset: u32,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if args.count <= offset {
+            return Ok(None);
+        }
+        let register =
+            args.start
+                .checked_add(offset)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+        Ok(Some(self.read_reg(register)?))
+    }
+
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
     ///
     /// Supported capabilities:
@@ -8789,6 +8852,7 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
+        _module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let label = crate::ifc_artifacts::Label::Public;
         match cap {
@@ -8886,11 +8950,25 @@ impl InterpreterCore {
                         });
                     }
                 };
-                // In the baseline interpreter, .then() callbacks are simplified:
-                // we register reactions with no closure handlers (identity propagation).
+                let on_fulfilled = match self.promise_reaction_arg(args, 1)? {
+                    Some(value) => {
+                        self.promise_reaction_handler_from_value(value, "onFulfilled")?
+                    }
+                    None => None,
+                };
+                let on_rejected = match self.promise_reaction_arg(args, 2)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
+                    None => None,
+                };
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        on_fulfilled,
+                        on_rejected,
+                        label,
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
@@ -8916,9 +8994,19 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let on_rejected = match self.promise_reaction_arg(args, 1)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
+                    None => None,
+                };
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        None,
+                        on_rejected,
+                        label,
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
@@ -8944,9 +9032,19 @@ impl InterpreterCore {
                         });
                     }
                 };
+                let on_finally = match self.promise_reaction_arg(args, 1)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onFinally")?,
+                    None => None,
+                };
                 let result = self
                     .promise_store
-                    .then(handle, None, None, label, &mut self.event_loop.microtasks)
+                    .then(
+                        handle,
+                        on_finally,
+                        on_finally,
+                        label,
+                        &mut self.event_loop.microtasks,
+                    )
                     .map_err(|e| InterpreterError::TypeError {
                         expected: "valid promise handle".to_string(),
                         got: e.to_string(),
@@ -8975,7 +9073,13 @@ impl InterpreterCore {
     ///
     /// This is called after top-level script evaluation to handle any
     /// pending timers or other async work before the interpreter exits.
+    #[cfg(test)]
+    #[allow(dead_code)]
     fn run_event_loop_until_idle(&mut self) {
+        self.run_event_loop_until_idle_with_module(None);
+    }
+
+    fn run_event_loop_until_idle_with_module(&mut self, module: Option<&Ir3Module>) {
         const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
         let mut turns = 0;
 
@@ -8994,7 +9098,36 @@ impl InterpreterCore {
             }
 
             // Phase 2: Drain all microtasks enqueued during macrotask execution
-            self.drain_microtasks();
+            self.drain_microtasks(module);
+        }
+    }
+
+    fn execute_promise_reaction_handler(
+        &mut self,
+        module: Option<&Ir3Module>,
+        handler: crate::closure_model::ClosureHandle,
+        argument: crate::object_model::JsValue,
+    ) -> Result<crate::object_model::JsValue, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Promise reaction handler dispatch".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let argument = Self::js_value_to_value(&argument);
+        let result = self.invoke_inline_method_call(
+            Some(module),
+            Value::Closure(handler.0),
+            Value::Undefined,
+            vec![argument],
+        )?;
+        Ok(Self::value_to_js_value(&result))
+    }
+
+    fn promise_rejection_from_error(error: &InterpreterError) -> crate::object_model::JsValue {
+        match error {
+            InterpreterError::UncaughtException { value } => {
+                crate::object_model::JsValue::Str(value.clone())
+            }
+            other => crate::object_model::JsValue::Str(other.to_string()),
         }
     }
 
@@ -9003,10 +9136,9 @@ impl InterpreterCore {
     /// Each microtask may enqueue additional microtasks; the drain continues
     /// until the queue is empty, matching ES2020 semantics (microtask checkpoint).
     /// A safety bound prevents infinite loops from pathological promise chains.
-    fn drain_microtasks(&mut self) {
+    fn drain_microtasks(&mut self, module: Option<&Ir3Module>) {
         let max_drain = 10_000u32;
         let mut drained = 0u32;
-        let label = crate::ifc_artifacts::Label::Public;
 
         while let Some(task) = self.event_loop.microtasks.dequeue() {
             drained += 1;
@@ -9018,7 +9150,7 @@ impl InterpreterCore {
                     handler,
                     argument,
                     result_promise,
-                    label: _task_label,
+                    label: task_label,
                 } => {
                     // Check if this is an async function resumption
                     if handler.is_none() {
@@ -9039,7 +9171,7 @@ impl InterpreterCore {
                                 let _ = self.fulfill_promise(
                                     *result_promise,
                                     argument.clone(),
-                                    label.clone(),
+                                    task_label.clone(),
                                 );
                             }
                         } else {
@@ -9048,15 +9180,43 @@ impl InterpreterCore {
                             let _ = self.fulfill_promise(
                                 *result_promise,
                                 argument.clone(),
-                                label.clone(),
+                                task_label.clone(),
                             );
                         }
                     } else {
-                        // Regular promise reaction with a closure handler
-                        // TODO: Implement closure execution for promise reactions
-                        let _ =
-                            self.fulfill_promise(*result_promise, argument.clone(), label.clone());
+                        let Some(handler) = *handler else {
+                            unreachable!("handler.is_some() checked above");
+                        };
+                        match self.execute_promise_reaction_handler(
+                            module,
+                            handler,
+                            argument.clone(),
+                        ) {
+                            Ok(result) => {
+                                let _ = self.fulfill_promise(
+                                    *result_promise,
+                                    result,
+                                    task_label.clone(),
+                                );
+                            }
+                            Err(err) => {
+                                let reason = Self::promise_rejection_from_error(&err);
+                                let _ = self.reject_promise(
+                                    *result_promise,
+                                    reason,
+                                    task_label.clone(),
+                                );
+                            }
+                        }
                     }
+                }
+                crate::promise_model::Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label: task_label,
+                } => {
+                    let _ =
+                        self.reject_promise(*result_promise, reason.clone(), task_label.clone());
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
@@ -9070,7 +9230,7 @@ impl InterpreterCore {
                     let _ = self.fulfill_promise(
                         *promise,
                         crate::object_model::JsValue::Undefined,
-                        label.clone(),
+                        _task_label.clone(),
                     );
                 }
             }
@@ -20810,7 +20970,9 @@ mod execution_engine_contract_tests {
 #[cfg(test)]
 mod async_runtime_tests_current {
     use super::*;
-    use crate::ir_contract::{Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange};
+    use crate::ir_contract::{
+        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+    };
 
     fn test_module_with_functions(
         instructions: Vec<Ir3Instruction>,
@@ -20838,6 +21000,23 @@ mod async_runtime_tests_current {
             RuntimeCapability::HeapAllocate,
         ]);
         InterpreterCore::new(config, "async-runtime-test")
+    }
+
+    fn promise_state_for_register(
+        core: &InterpreterCore,
+        register: usize,
+    ) -> crate::promise_model::PromiseState {
+        let promise_id = match &core.registers[register] {
+            Value::Promise(promise_id) => *promise_id,
+            other => {
+                panic!("expected promise in r{register}, got {other:?}");
+            }
+        };
+        core.promise_store
+            .get(crate::promise_model::PromiseHandle(promise_id))
+            .expect("promise should exist")
+            .state
+            .clone()
     }
 
     #[test]
@@ -21419,6 +21598,213 @@ mod async_runtime_tests_current {
         assert_eq!(
             promise.state,
             crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(99))
+        );
+    }
+
+    #[test]
+    fn promise_then_fulfillment_handler_transforms_value() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:resolve".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:then".to_string()),
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 1, value: 5 },
+                Ir3Instruction::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 3,
+                arity: 1,
+                frame_size: 2,
+                name: Some("plus_five".to_string()),
+                is_generator: false,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.registers[0] = Value::Int(7);
+        core.registers[2] = Value::Closure(0);
+
+        core.execute(&module)
+            .expect("promise handler should execute during microtask drain");
+
+        assert_eq!(
+            promise_state_for_register(&core, 4),
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(12))
+        );
+    }
+
+    #[test]
+    fn promise_then_rejection_handler_recovers_value() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:reject".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:then".to_string()),
+                    args: RegRange { start: 1, count: 3 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 3,
+                arity: 1,
+                frame_size: 1,
+                name: Some("recover".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("recovered".to_string());
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.registers[0] = Value::Str("bad".to_string());
+        core.registers[2] = Value::Undefined;
+        core.registers[3] = Value::Closure(0);
+
+        core.execute(&module)
+            .expect("rejection handler should execute during microtask drain");
+
+        assert_eq!(
+            promise_state_for_register(&core, 4),
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                "recovered".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn promise_then_throwing_handler_rejects_result_promise() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:resolve".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:then".to_string()),
+                    args: RegRange { start: 1, count: 2 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadStr {
+                    dst: 0,
+                    pool_index: 0,
+                },
+                Ir3Instruction::Throw { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 3,
+                arity: 1,
+                frame_size: 1,
+                name: Some("throws".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("boom".to_string());
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        core.registers[0] = Value::Int(7);
+        core.registers[2] = Value::Closure(0);
+
+        core.execute(&module)
+            .expect("throwing promise handler should reject result promise");
+
+        assert_eq!(
+            promise_state_for_register(&core, 4),
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                "boom".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn promise_then_absent_handlers_preserve_identity_and_rejection() {
+        let fulfilled_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:resolve".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:then".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut fulfilled_core = test_interpreter();
+        fulfilled_core.registers[0] = Value::Int(7);
+        fulfilled_core
+            .execute(&fulfilled_module)
+            .expect("absent fulfill handler should apply identity");
+        assert_eq!(
+            promise_state_for_register(&fulfilled_core, 4),
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(7))
+        );
+
+        let rejected_module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:reject".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:then".to_string()),
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 4,
+                },
+                Ir3Instruction::Halt,
+            ],
+            Vec::new(),
+        );
+        let mut rejected_core = test_interpreter();
+        rejected_core.registers[0] = Value::Str("bad".to_string());
+        rejected_core
+            .execute(&rejected_module)
+            .expect("absent rejection handler should propagate rejection");
+        assert_eq!(
+            promise_state_for_register(&rejected_core, 4),
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                "bad".to_string()
+            ))
         );
     }
 }

@@ -162,6 +162,16 @@ pub enum Microtask {
         /// IFC label of the argument.
         label: Label,
     },
+    /// PromiseReactionJob with no rejection handler: propagate the rejection
+    /// reason to the result promise instead of applying fulfillment identity.
+    PromiseRejection {
+        /// The rejection reason to propagate.
+        reason: JsValue,
+        /// The promise that receives the propagated rejection.
+        result_promise: PromiseHandle,
+        /// IFC label of the reason.
+        label: Label,
+    },
     /// PromiseResolveThenableJob: resolve a promise with a thenable.
     ResolveThenable {
         /// Promise being resolved.
@@ -403,20 +413,11 @@ impl PromiseStore {
             label: label.clone(),
         });
 
-        // Enqueue fulfill reactions.
+        // Enqueue only the fulfill reactions for a fulfilled promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Fulfill {
                 queue.enqueue(Microtask::PromiseReaction {
                     handler: reaction.handler,
-                    argument: value.clone(),
-                    result_promise: reaction.result_promise,
-                    label: label.clone(),
-                });
-            } else {
-                // onRejected reactions for a fulfilled promise: resolve result
-                // promise with the fulfilled value (identity transform).
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: None,
                     argument: value.clone(),
                     result_promise: reaction.result_promise,
                     label: label.clone(),
@@ -455,23 +456,23 @@ impl PromiseStore {
             label: label.clone(),
         });
 
-        // Enqueue reject reactions.
+        // Enqueue only the reject reactions for a rejected promise.
         for reaction in reactions {
             if reaction.kind == ReactionKind::Reject {
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: reaction.handler,
-                    argument: reason.clone(),
-                    result_promise: reaction.result_promise,
-                    label: label.clone(),
-                });
-            } else {
-                // onFulfilled reactions for a rejected promise: propagate rejection.
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: None,
-                    argument: reason.clone(),
-                    result_promise: reaction.result_promise,
-                    label: label.clone(),
-                });
+                if reaction.handler.is_some() {
+                    queue.enqueue(Microtask::PromiseReaction {
+                        handler: reaction.handler,
+                        argument: reason.clone(),
+                        result_promise: reaction.result_promise,
+                        label: label.clone(),
+                    });
+                } else {
+                    queue.enqueue(Microtask::PromiseRejection {
+                        reason: reason.clone(),
+                        result_promise: reaction.result_promise,
+                        label: label.clone(),
+                    });
+                }
             }
         }
 
@@ -524,12 +525,20 @@ impl PromiseStore {
                     let record = self.get_mut(handle)?;
                     record.rejection_handled = true;
                 }
-                queue.enqueue(Microtask::PromiseReaction {
-                    handler: on_rejected,
-                    argument: reason,
-                    result_promise,
-                    label,
-                });
+                if on_rejected.is_some() {
+                    queue.enqueue(Microtask::PromiseReaction {
+                        handler: on_rejected,
+                        argument: reason,
+                        result_promise,
+                        label,
+                    });
+                } else {
+                    queue.enqueue(Microtask::PromiseRejection {
+                        reason,
+                        result_promise,
+                        label,
+                    });
+                }
             }
         }
 
@@ -1522,8 +1531,8 @@ mod tests {
         store
             .fulfill(h, js_int(99), Label::Public, &mut queue)
             .expect("serde deserialization should succeed");
-        // Two reactions registered (fulfill + reject), both become microtasks.
-        assert_eq!(queue.pending_count(), 2);
+        // The promise settled fulfilled, so only the fulfill reaction is scheduled.
+        assert_eq!(queue.pending_count(), 1);
     }
 
     // ----- Promise.resolve / Promise.reject -----

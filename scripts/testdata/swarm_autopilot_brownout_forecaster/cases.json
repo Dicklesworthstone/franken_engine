@@ -338,6 +338,29 @@
         "required_error_code": "FE-SWARM-AUTOPILOT-BROWNOUT-CONTRADICTORY-EVIDENCE",
         "expected_match_count": 0
       }
+    },
+    {
+      "case_id": "warehouse_fail_closed_propagates",
+      "description": "An upstream fail-closed evidence warehouse must stay fail-closed in the forecast instead of being reinterpreted as healthy advisory state.",
+      "overrides": {
+        "evidence_warehouse_json": {
+          "decision": "fail_closed",
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED",
+              "source_id": "truth_gate_report_json",
+              "detail": "truth gate records stale RCH progress that remained degraded instead of being upgraded",
+              "remediation_command": "# operator: probe or drain the affected worker, then rerun the SWARM-OPS bundle before warehouse ingestion"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED",
+        "expected_match_count": 0
+      }
     }
   ]
 }

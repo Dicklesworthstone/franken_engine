@@ -36,7 +36,7 @@
       ]
     },
     "recovery_receipts_json": {
-      "schema_version": "franken-engine.swarm-stale-recovery-receipts.v1",
+      "schema_version": "franken-engine.swarm-ops-stale-recovery-receipts.v1",
       "decision": "pass",
       "receipts": []
     },

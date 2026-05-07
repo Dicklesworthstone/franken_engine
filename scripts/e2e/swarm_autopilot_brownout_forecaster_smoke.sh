@@ -34,13 +34,14 @@ fixtures_shape_ok() {
     and .base_queue_signal_input_json.schema_version == "franken-engine.swarm-topology-queue-signal-input.v1"
     and .base_queue_fidelity_receipt_json.schema_version == "franken-engine.swarm-topology-aware-queue-fidelity-receipt.v1"
     and .base_hindsight_bundle_json.schema_version == "franken-engine.swarm-autopilot-brownout-hindsight-bundle.v1"
-    and (.cases | length) == 5
-    and ([.cases[].case_id] | unique | length) == 5
+    and (.cases | length) == 6
+    and ([.cases[].case_id] | unique | length) == 6
     and any(.cases[]; .case_id == "green_low_pressure" and .expected.decision == "pass")
     and any(.cases[]; .case_id == "imminent_rch_slot_brownout" and .expected.required_category == "rch_slot_exhaustion" and .expected.required_state == "brownout")
     and any(.cases[]; .case_id == "proof_cache_pressure_escalation" and .expected.required_category == "proof_cache_pressure" and .expected.required_state == "brownout")
     and any(.cases[]; .case_id == "stale_progress_risk" and .expected.required_category == "stale_progress_risk" and .expected.required_state == "brownout")
     and any(.cases[]; .case_id == "contradictory_evidence_fail_closed" and .expected.required_error_code == "FE-SWARM-AUTOPILOT-BROWNOUT-CONTRADICTORY-EVIDENCE")
+    and any(.cases[]; .case_id == "warehouse_fail_closed_propagates" and .expected.required_error_code == "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED")
   ' "$fixtures_path" >/dev/null
 }
 

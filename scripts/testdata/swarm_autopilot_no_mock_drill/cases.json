@@ -1,0 +1,156 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-no-mock-drill-fixtures.v1",
+  "primary_scenario_id": "healthy_autopilot",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_autopilot",
+      "swarm_ops_fixture_case_id": "green",
+      "signal_fixture_scenario": "healthy_hot_cache",
+      "scorer_fixture_scenario": "healthy_confirmed",
+      "fidelity_fixture_scenario": "healthy_locality_match",
+      "forecaster_fixture_case_id": "green_low_pressure",
+      "operator_intent_fixture_case_id": "valid_policy_compilation",
+      "recommendation_fixture_case_id": "normal_admit_defer_mix",
+      "hindsight_chaos_fixture_case_id": "minimal_perturbation_generation",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "forecast_truth_state": "confirmed",
+        "policy_decision": "pass",
+        "lease_decision": "pass",
+        "recommendation_decision": "pass",
+        "dashboard_decision": "pass",
+        "dashboard_top_action": "admit_lane"
+      }
+    },
+    {
+      "scenario_id": "forecast_brownout",
+      "swarm_ops_fixture_case_id": "green",
+      "signal_fixture_scenario": "healthy_hot_cache",
+      "scorer_fixture_scenario": "healthy_confirmed",
+      "fidelity_fixture_scenario": "healthy_locality_match",
+      "forecaster_fixture_case_id": "imminent_rch_slot_brownout",
+      "operator_intent_fixture_case_id": "valid_policy_compilation",
+      "recommendation_fixture_case_id": "operator_dashboard_projection",
+      "hindsight_chaos_fixture_case_id": "brownout_chaos",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "forecast_truth_state": "confirmed",
+        "policy_decision": "pass",
+        "lease_decision": "pass",
+        "recommendation_decision": "pass",
+        "dashboard_decision": "pass",
+        "dashboard_top_action": "preserve_urgent_rch_slack"
+      }
+    },
+    {
+      "scenario_id": "policy_conflict",
+      "swarm_ops_fixture_case_id": "green",
+      "signal_fixture_scenario": "healthy_hot_cache",
+      "scorer_fixture_scenario": "healthy_confirmed",
+      "fidelity_fixture_scenario": "healthy_locality_match",
+      "forecaster_fixture_case_id": "green_low_pressure",
+      "operator_intent_fixture_case_id": "conflicting_latency_vs_utilization",
+      "recommendation_fixture_case_id": "normal_admit_defer_mix",
+      "hindsight_chaos_fixture_case_id": "minimal_perturbation_generation",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "forecast_truth_state": "confirmed",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-AUTOPILOT-POLICY-CONFLICT"
+      }
+    },
+    {
+      "scenario_id": "stale_rch_progress_not_upgraded",
+      "swarm_ops_fixture_case_id": "rch_stale_progress",
+      "signal_fixture_scenario": "healthy_hot_cache",
+      "scorer_fixture_scenario": "healthy_confirmed",
+      "fidelity_fixture_scenario": "healthy_locality_match",
+      "forecaster_fixture_case_id": "stale_progress_risk",
+      "operator_intent_fixture_case_id": "valid_policy_compilation",
+      "recommendation_fixture_case_id": "normal_admit_defer_mix",
+      "hindsight_chaos_fixture_case_id": "stale_ownership_chaos",
+      "expected": {
+        "warehouse_decision": "fail_closed",
+        "forecast_decision": "fail_closed",
+        "forecast_truth_state": "unknown",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED"
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "swarm_ops_fixture_case_id": "green",
+      "swarm_ops_bundle_overrides": {
+        "saturation_replay_report_json": {
+          "decision": "fail_closed",
+          "contamination_report": {
+            "local_fallback_observed": true
+          }
+        },
+        "slo_gate_report_json": {
+          "decision": "fail_closed",
+          "fail_closed_reasons": [
+            {
+              "code": "local_fallback_contamination",
+              "source_id": "saturation_replay_report_json",
+              "detail": "local fallback evidence invalidates the SLO gate"
+            }
+          ]
+        },
+        "truth_gate_report_json": {
+          "decision": "fail_closed",
+          "truth_gate_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK",
+              "source_id": "saturation_replay_report_json",
+              "detail": "local fallback contamination was observed"
+            }
+          ],
+          "stage_decisions": [
+            {
+              "stage": "saturation_replay_report",
+              "decision": "fail_closed"
+            }
+          ]
+        }
+      },
+      "signal_fixture_scenario": "contaminated_local_fallback",
+      "scorer_fixture_scenario": "contaminated_local_fallback",
+      "fidelity_fixture_scenario": "contaminated_local_fallback",
+      "forecaster_fixture_case_id": "contradictory_evidence_fail_closed",
+      "operator_intent_fixture_case_id": "valid_policy_compilation",
+      "recommendation_fixture_case_id": "fail_closed_contaminated_evidence",
+      "hindsight_chaos_fixture_case_id": "local_fallback_chaos",
+      "expected": {
+        "warehouse_decision": "fail_closed",
+        "forecast_decision": "fail_closed",
+        "forecast_truth_state": "unknown",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK"
+      }
+    }
+  ],
+  "replay_expectation": {
+    "scenario_id": "replay_verification",
+    "source_scenario_id": "healthy_autopilot",
+    "expected": {
+      "decision": "pass",
+      "replay_verified": true
+    }
+  }
+}

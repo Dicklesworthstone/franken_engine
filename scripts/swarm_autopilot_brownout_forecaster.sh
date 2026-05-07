@@ -425,6 +425,22 @@ if is_int "$hindsight_supported_horizon" && (( validated_horizon_seconds > hinds
     "Reduce the requested horizon or regenerate a hindsight bundle with a wider validated window."
 fi
 
+if jq -e '.decision == "fail_closed"' "$warehouse_normalized" >/dev/null 2>&1; then
+  if jq -e '(.fail_closed_reasons // []) | length > 0' "$warehouse_normalized" >/dev/null 2>&1; then
+    while IFS= read -r reason; do
+      append_failure \
+        "$(jq -r '.code // "FE-SWARM-AUTOPILOT-BROWNOUT-UPSTREAM-FAIL-CLOSED"' <<<"$reason")" \
+        "$(jq -r '.source_id // "evidence_warehouse_json"' <<<"$reason")" \
+        "$(jq -r '.detail // "evidence warehouse is already fail_closed and cannot be promoted into a forecast"' <<<"$reason")" \
+        "$(jq -r '.remediation_command // "Refresh the autopilot evidence warehouse before forecasting."' <<<"$reason")"
+    done < <(jq -c '.fail_closed_reasons[]' "$warehouse_normalized")
+  else
+    append_failure "FE-SWARM-AUTOPILOT-BROWNOUT-UPSTREAM-FAIL-CLOSED" "evidence_warehouse_json" \
+      "evidence warehouse is already fail_closed and cannot be promoted into a forecast" \
+      "Refresh the autopilot evidence warehouse before forecasting."
+  fi
+fi
+
 if jq -e '
   (.decision == "fail_closed" and ([.fail_closed_reasons[]?.code?, .fail_closed_reasons[]?.detail?] | map(tostring) | any(test("LOCAL-FALLBACK|local fallback|contaminated"; "i"))))
 ' "$warehouse_normalized" >/dev/null 2>&1 \

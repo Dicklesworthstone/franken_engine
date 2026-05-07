@@ -262,7 +262,7 @@ normalize_text_artifact "commands_txt" "$(bundle_path_for commands.txt)" "audit_
 normalize_json_artifact "trace_ids_json" "$(bundle_path_for trace_ids.json)" "${normalized_dir}/trace_ids.normalized.json" "franken-engine.swarm-ops-no-mock-drill-trace-ids.v1" "long_lived_replay_evidence" "$missing_bundle_remediation"
 normalize_json_artifact "state_snapshot_json" "$(bundle_path_for state_snapshot.json)" "${normalized_dir}/state_snapshot.normalized.json" "franken-engine.swarm-ops-state-snapshot.v1" "short_lived_raw_capture" "$schema_remediation"
 normalize_json_artifact "admission_plan_json" "$(bundle_path_for admission_plan.json)" "${normalized_dir}/admission_plan.normalized.json" "franken-engine.swarm-admission-budget-plan.v1" "long_lived_replay_evidence" "$schema_remediation"
-normalize_json_artifact "recovery_receipts_json" "$(bundle_path_for recovery_receipts.json)" "${normalized_dir}/recovery_receipts.normalized.json" "franken-engine.swarm-stale-recovery-receipts.v1" "long_lived_replay_evidence" "$schema_remediation"
+normalize_json_artifact "recovery_receipts_json" "$(bundle_path_for recovery_receipts.json)" "${normalized_dir}/recovery_receipts.normalized.json" "franken-engine.swarm-ops-stale-recovery-receipts.v1" "long_lived_replay_evidence" "$schema_remediation"
 normalize_json_artifact "rch_rehab_ledger_json" "$(bundle_path_for rch_rehab_ledger.json)" "${normalized_dir}/rch_rehab_ledger.normalized.json" "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1" "long_lived_replay_evidence" "$schema_remediation"
 normalize_json_artifact "locality_plan_json" "$(bundle_path_for locality_plan.json)" "${normalized_dir}/locality_plan.normalized.json" "franken-engine.swarm-proof-cache-locality-plan.v1" "long_lived_replay_evidence" "$schema_remediation"
 normalize_json_artifact "dashboard_bundle_json" "$(bundle_path_for dashboard_bundle.json)" "${normalized_dir}/dashboard_bundle.normalized.json" "franken-engine.swarm-frankentui-dashboard-bundle.v1" "short_lived_raw_capture" "$schema_remediation"
@@ -328,6 +328,12 @@ if [[ -s "$truth_gate_normalized" ]] && jq -e '
   [.truth_gate_reasons[]?.code?, .reason_codes[]?, .fail_closed_reasons[]?.code?] | any(. == "FE-SWARM-OPS-STALE-BV" or . == "stale_bv_due_to_br_sync")
 ' "$truth_gate_normalized" >/dev/null; then
   append_reason "stale_swarm_ops_state" "FE-SWARM-AUTOPILOT-STALE-SWARM-OPS" "truth_gate_report_json" "truth gate records stale br/bv sync state" "# operator: br sync --flush-only && bv --recipe actionable --robot-plan"
+fi
+
+if [[ -s "$truth_gate_normalized" ]] && jq -e '
+  [.truth_gate_reasons[]?.code?, .reason_codes[]?, .fail_closed_reasons[]?.code?] | any(. == "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED")
+' "$truth_gate_normalized" >/dev/null; then
+  append_reason "stale_rch_progress_not_upgraded" "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED" "truth_gate_report_json" "truth gate records stale RCH progress that remained degraded instead of being upgraded" "# operator: probe or drain the affected worker, then rerun the SWARM-OPS bundle before warehouse ingestion"
 fi
 
 if { [[ -s "$saturation_normalized" ]] && jq -e '(.contamination_report.local_fallback_observed // false) == true' "$saturation_normalized" >/dev/null; } \

@@ -1,0 +1,204 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-no-mock-drill-contract.v1",
+  "bead_id": "bd-khg2d",
+  "parent_bead_id": "bd-8pzsu",
+  "depends_on": [
+    "bd-8e5cw",
+    "bd-bhddc",
+    "bd-09g6k",
+    "bd-o9pr3"
+  ],
+  "drill_script": "scripts/e2e/swarm_autopilot_no_mock_drill.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh",
+  "operator_docs": "docs/SWARM_AUTOPILOT_NO_MOCK_DRILL.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_no_mock_drill/cases.json",
+  "modes": [
+    "live",
+    "fixture",
+    "replay"
+  ],
+  "composed_scripts": [
+    "scripts/e2e/swarm_ops_no_mock_drill.sh",
+    "scripts/swarm_topology_queue_signal_normalizer.sh",
+    "scripts/swarm_topology_aware_queue_scorer.sh",
+    "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+    "scripts/swarm_autopilot_evidence_warehouse.sh",
+    "scripts/swarm_autopilot_brownout_forecaster.sh",
+    "scripts/swarm_autopilot_operator_intent_policy.sh",
+    "scripts/swarm_autopilot_resource_lease_allocator.sh",
+    "scripts/swarm_autopilot_recommendation_bundle.sh",
+    "scripts/swarm_autopilot_hindsight_chaos.sh"
+  ],
+  "fixture_bundles": [
+    "scripts/testdata/swarm_autopilot_no_mock_drill/cases.json",
+    "scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json",
+    "scripts/testdata/swarm_topology_aware_queue_scorer/cases.json",
+    "scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json",
+    "scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json",
+    "scripts/testdata/swarm_autopilot_operator_intent_policy/cases.json",
+    "scripts/testdata/swarm_autopilot_resource_lease_allocator/cases.json",
+    "scripts/testdata/swarm_autopilot_recommendation_bundle/cases.json",
+    "scripts/testdata/swarm_autopilot_hindsight_chaos/cases.json",
+    "scripts/testdata/swarm_ops_no_mock_drill/cases.json"
+  ],
+  "required_repo_paths": [
+    "docs/swarm_autopilot_no_mock_drill_contract_v1.json",
+    "docs/SWARM_AUTOPILOT_NO_MOCK_DRILL.md",
+    "scripts/e2e/swarm_autopilot_no_mock_drill.sh",
+    "scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh",
+    "scripts/testdata/swarm_autopilot_no_mock_drill/cases.json",
+    "scripts/e2e/swarm_ops_no_mock_drill.sh",
+    "scripts/swarm_topology_queue_signal_normalizer.sh",
+    "scripts/swarm_topology_aware_queue_scorer.sh",
+    "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+    "scripts/swarm_autopilot_evidence_warehouse.sh",
+    "scripts/swarm_autopilot_brownout_forecaster.sh",
+    "scripts/swarm_autopilot_operator_intent_policy.sh",
+    "scripts/swarm_autopilot_resource_lease_allocator.sh",
+    "scripts/swarm_autopilot_recommendation_bundle.sh",
+    "scripts/swarm_autopilot_hindsight_chaos.sh"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "evidence_warehouse.json",
+    "forecast.json",
+    "policy.json",
+    "lease_receipts.json",
+    "recommendations.json",
+    "chaos_scenarios.json",
+    "dashboard_projection.json",
+    "chaos_replay_index.json",
+    "truth_gate_report.json"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_autopilot",
+      "proves": "healthy preserved evidence keeps the full autopilot lifecycle confirmed and advisory-only",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "policy_decision": "pass",
+        "lease_decision": "pass",
+        "recommendation_decision": "pass",
+        "dashboard_decision": "pass",
+        "dashboard_top_action": "admit_lane"
+      }
+    },
+    {
+      "scenario_id": "forecast_brownout",
+      "proves": "brownout pressure remains degraded and preserves urgent slack instead of silently upgrading to green",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "policy_decision": "pass",
+        "lease_decision": "pass",
+        "recommendation_decision": "pass",
+        "dashboard_decision": "pass",
+        "dashboard_top_action": "preserve_urgent_rch_slack"
+      }
+    },
+    {
+      "scenario_id": "policy_conflict",
+      "proves": "conflicting operator intents fail closed and prevent downstream lease or recommendation trust",
+      "expected": {
+        "warehouse_decision": "pass",
+        "forecast_decision": "pass",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-AUTOPILOT-POLICY-CONFLICT"
+      }
+    },
+    {
+      "scenario_id": "stale_rch_progress_not_upgraded",
+      "proves": "stale RCH progress from SWARM-OPS remains fail-closed instead of being upgraded into healthy autopilot evidence",
+      "expected": {
+        "warehouse_decision": "fail_closed",
+        "forecast_decision": "fail_closed",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-OPS-RCH-STALL-NOT-UPGRADED"
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "proves": "local fallback contamination fails closed through warehouse, forecast, recommendation, dashboard projection, and replay handoff",
+      "expected": {
+        "warehouse_decision": "fail_closed",
+        "forecast_decision": "fail_closed",
+        "policy_decision": "fail_closed",
+        "lease_decision": "fail_closed",
+        "recommendation_decision": "fail_closed",
+        "dashboard_decision": "fail_closed",
+        "dashboard_top_action": "refresh_evidence",
+        "required_truth_gate_reason_code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK"
+      }
+    },
+    {
+      "scenario_id": "replay_verification",
+      "proves": "replay mode verifies a pinned or latest healthy bundle without re-running live capture",
+      "expected": {
+        "decision": "pass",
+        "replay_verified": true,
+        "source_scenario_id": "healthy_autopilot"
+      }
+    }
+  ],
+  "operator_truth_claims": [
+    "The drill supports live, fixture, and replay modes.",
+    "Live mode runs the real SWARM-OPS capture and autopilot evidence warehouse path against the local repository state.",
+    "Fixture mode composes the shipped producers against preserved upstream inputs and preserves raw and normalized stage inputs for every stage.",
+    "Replay mode verifies a pinned bundle or the latest complete bundle without re-running live capture.",
+    "The drill does not run Cargo or RCH work directly.",
+    "Stale SWARM-OPS sync, stale RCH progress, local fallback contamination, contradictory queue or locality evidence, and bare Cargo contamination fail closed."
+  ],
+  "required_truth_gate_rejections": [
+    "heavy_cargo_or_rch_claim",
+    "live_queue_or_worker_mutation_claim",
+    "automatic_reassignment_or_reservation_release_claim",
+    "stale_rch_progress_healthy_claim",
+    "local_fallback_non_fail_closed_claim",
+    "contradictory_queue_or_locality_healthy_claim",
+    "replay_reruns_live_capture_claim"
+  ],
+  "mutation_policy": {
+    "live_capture_allowed": true,
+    "fixture_mode_deterministic": true,
+    "replay_verification_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch_heavy_commands": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false,
+    "treats_stale_rch_progress_as_healthy": false,
+    "treats_local_fallback_as_non_fail_closed": false,
+    "treats_contradictory_queue_or_locality_as_healthy": false,
+    "reruns_live_capture_during_replay": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_autopilot_no_mock_drill.sh scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_no_mock_drill.sh scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh",
+    "jq empty docs/swarm_autopilot_no_mock_drill_contract_v1.json scripts/testdata/swarm_autopilot_no_mock_drill/cases.json",
+    "bash scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- docs/swarm_autopilot_no_mock_drill_contract_v1.json docs/SWARM_AUTOPILOT_NO_MOCK_DRILL.md scripts/e2e/swarm_autopilot_no_mock_drill.sh scripts/e2e/swarm_autopilot_no_mock_drill_smoke.sh scripts/testdata/swarm_autopilot_no_mock_drill/cases.json"
+  ],
+  "artifact_retention_notes": [
+    "Each scenario keeps a scenario directory with per-stage raw inputs, normalized inputs, stdout logs, and stderr logs.",
+    "The top-level bundle copies the primary scenario outputs into the required artifact names and keeps the multi-scenario truth gate report beside them.",
+    "Replay verification writes a fresh manifest and truth gate report while preserving the pinned source bundle untouched."
+  ]
+}

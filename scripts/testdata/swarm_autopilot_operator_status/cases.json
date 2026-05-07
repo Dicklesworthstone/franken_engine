@@ -1,0 +1,539 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-operator-status-fixtures.v1",
+  "base_operator_intent_policy_json": {
+    "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+    "source_revision": "fixture-policy-base",
+    "generated_epoch_seconds": 1778123300,
+    "decision": "pass",
+    "precedence_order": [
+      "reserve_urgent_rch_slack",
+      "bound_per_agent_fairness_skew",
+      "prefer_warm_cache_reuse"
+    ],
+    "fallback_behavior": {
+      "mode": "normal",
+      "actions": [
+        "apply_compiled_thresholds"
+      ],
+      "deterministic": true
+    },
+    "verification_summary": {
+      "safe_mode_active": false
+    },
+    "artifact_paths": {
+      "policy_json": "/fixture/operator_intent_policy.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_brownout_forecaster_json": {
+    "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+    "source_revision": "fixture-forecast-base",
+    "generated_epoch_seconds": 1778123320,
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "summary": {
+      "overall_state": "green",
+      "brownout_state": "green"
+    },
+    "artifact_paths": {
+      "swarm_autopilot_brownout_forecast_json": "/fixture/brownout_forecaster.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_resource_lease_plan_json": {
+    "schema_version": "franken-engine.swarm-autopilot-resource-lease-plan.v1",
+    "source_revision": "fixture-lease-plan-base",
+    "generated_epoch_seconds": 1778123340,
+    "allocation_id": "lease-plan-fixture0002",
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "summary": {
+      "overall_state": "balanced",
+      "reserve_count": 1,
+      "defer_count": 1,
+      "admit_count": 1,
+      "rebalance_count": 0,
+      "cool_count": 0
+    },
+    "lease_allocations": [
+      {
+        "lane_id": "bd-reserve-c",
+        "decision": "reserve",
+        "resource_class": "rch_slots",
+        "reason_codes": [
+          "urgent_rch_slack_protected"
+        ],
+        "evidence_paths": [
+          "/fixture/resource_lease_plan.json"
+        ],
+        "rollback_command": "# operator: release reserved urgent slack after pressure cools",
+        "remediation_command": "Preserve urgent slack until the next green forecast."
+      },
+      {
+        "lane_id": "bd-defer-b",
+        "decision": "defer",
+        "resource_class": "rch_slots",
+        "reason_codes": [
+          "brownout_deferral"
+        ],
+        "evidence_paths": [
+          "/fixture/resource_lease_plan.json"
+        ],
+        "rollback_command": "# operator: re-admit the lane when pressure returns to green",
+        "remediation_command": "Wait for pressure to cool before running the lane."
+      }
+    ],
+    "artifact_paths": {
+      "plan_json": "/fixture/resource_lease_plan.json",
+      "receipts_json": "/fixture/resource_scarcity_receipts.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_resource_scarcity_receipts_json": {
+    "schema_version": "franken-engine.swarm-autopilot-resource-scarcity-receipts.v1",
+    "source_revision": "fixture-lease-receipts-base",
+    "generated_epoch_seconds": 1778123360,
+    "allocation_id": "lease-plan-fixture0002",
+    "receipt_bundle_id": "lease-receipts-fixture0002",
+    "receipts": [
+      {
+        "receipt_id": "lease-receipt-1",
+        "lane_id": "bd-reserve-c",
+        "decision": "reserve",
+        "reason_codes": [
+          "urgent_rch_slack_protected"
+        ],
+        "evidence_paths": [
+          "/fixture/resource_lease_plan.json"
+        ],
+        "rollback_command": "# operator: release reserved urgent slack after pressure cools",
+        "remediation_command": "Preserve urgent slack until the next green forecast."
+      },
+      {
+        "receipt_id": "lease-receipt-2",
+        "lane_id": "bd-defer-b",
+        "decision": "defer",
+        "reason_codes": [
+          "brownout_deferral"
+        ],
+        "evidence_paths": [
+          "/fixture/resource_lease_plan.json"
+        ],
+        "rollback_command": "# operator: re-admit the lane when pressure returns to green",
+        "remediation_command": "Wait for pressure to cool before running the lane."
+      }
+    ]
+  },
+  "base_recommendation_bundle_json": {
+    "schema_version": "franken-engine.swarm-autopilot-recommendation-bundle.v1",
+    "source_revision": "fixture-recommendation-base",
+    "generated_epoch_seconds": 1778123380,
+    "recommendation_bundle_id": "recommendation-bundle-fixture0002",
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "summary": {
+      "overall_state": "normal",
+      "top_action": "preserve_urgent_rch_slack",
+      "recommendation_count": 3,
+      "safe_mode_active": false,
+      "human_review_required": false
+    },
+    "recommendations": [
+      {
+        "recommendation_id": "recommendation-1",
+        "priority": 100,
+        "action": "preserve_urgent_rch_slack",
+        "lane_id": "bd-reserve-c",
+        "summary": "Preserve urgent RCH slack for bd-reserve-c.",
+        "deterministic_decision_id": "decision-fixture-1",
+        "reason_codes": [
+          "urgent_rch_slack_protected"
+        ],
+        "evidence_paths": [
+          "/fixture/recommendation_bundle.json",
+          "/fixture/resource_scarcity_receipts.json"
+        ],
+        "rollback_command": "# operator: release reserved urgent slack after pressure cools",
+        "remediation_command": "Preserve urgent slack until the next green forecast."
+      },
+      {
+        "recommendation_id": "recommendation-2",
+        "priority": 80,
+        "action": "defer_lane",
+        "lane_id": "bd-defer-b",
+        "summary": "Defer bd-defer-b until pressure cools.",
+        "deterministic_decision_id": "decision-fixture-2",
+        "reason_codes": [
+          "brownout_deferral"
+        ],
+        "evidence_paths": [
+          "/fixture/recommendation_bundle.json"
+        ],
+        "rollback_command": "# operator: re-admit the lane when pressure returns to green",
+        "remediation_command": "Wait for pressure to cool before running the lane."
+      },
+      {
+        "recommendation_id": "recommendation-3",
+        "priority": 50,
+        "action": "admit_lane",
+        "lane_id": "bd-admit-a",
+        "summary": "Admit bd-admit-a under current bounded evidence.",
+        "deterministic_decision_id": "decision-fixture-3",
+        "reason_codes": [
+          "balanced_capacity"
+        ],
+        "evidence_paths": [
+          "/fixture/recommendation_bundle.json"
+        ],
+        "rollback_command": "# operator: omit the lane from the next recommendation pass",
+        "remediation_command": "Re-run the recommendation bundle if forecast pressure changes."
+      }
+    ],
+    "artifact_paths": {
+      "bundle_json": "/fixture/recommendation_bundle.json",
+      "dashboard_projection_json": "/fixture/dashboard_projection.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_dashboard_projection_json": {
+    "schema_version": "franken-engine.swarm-autopilot-dashboard-projection.v1",
+    "source_revision": "fixture-dashboard-base",
+    "generated_epoch_seconds": 1778123400,
+    "dashboard_projection_id": "dashboard-projection-fixture0002",
+    "decision": "pass",
+    "truth_state": "confirmed",
+    "overall_state": "normal",
+    "top_action": {
+      "action": "preserve_urgent_rch_slack",
+      "lane_id": "bd-reserve-c"
+    },
+    "summary_cards": [
+      {
+        "card_id": "decision",
+        "value": "pass"
+      },
+      {
+        "card_id": "overall_state",
+        "value": "normal"
+      },
+      {
+        "card_id": "brownout_state",
+        "value": "green"
+      },
+      {
+        "card_id": "top_action",
+        "value": "preserve_urgent_rch_slack"
+      }
+    ],
+    "top_recommendations": [
+      {
+        "action": "preserve_urgent_rch_slack",
+        "lane_id": "bd-reserve-c"
+      }
+    ],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_hindsight_chaos_scenarios_json": {
+    "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+    "source_revision": "fixture-chaos-scenarios-base",
+    "generated_epoch_seconds": 1778123420,
+    "decision": "pass",
+    "scenario_bundle_id": "chaos-scenarios-fixture0002",
+    "scenarios": [
+      {
+        "scenario_id": "scenario-1",
+        "scenario_hash": "hash-1",
+        "perturbation_type": "brownout_chaos",
+        "replay_ready": true,
+        "stress_targets": [
+          "recommendation_bundle"
+        ],
+        "reason_codes": [
+          "brownout_chaos"
+        ],
+        "replay_command": "./scripts/replay brownout"
+      }
+    ],
+    "artifact_paths": {
+      "scenarios_json": "/fixture/hindsight_chaos_scenarios.json",
+      "replay_index_json": "/fixture/hindsight_chaos_replay_index.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_hindsight_chaos_replay_index_json": {
+    "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1",
+    "source_revision": "fixture-chaos-replay-base",
+    "generated_epoch_seconds": 1778123440,
+    "decision": "pass",
+    "replay_index_id": "chaos-replay-index-fixture0002",
+    "replay_entries": [
+      {
+        "scenario_id": "scenario-1",
+        "replay_ready": true,
+        "classification_expectation": "brownout",
+        "replay_command": "./scripts/replay brownout"
+      }
+    ],
+    "artifact_paths": {
+      "replay_index_json": "/fixture/hindsight_chaos_replay_index.json"
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_autopilot",
+      "description": "Healthy autopilot evidence must project healthy forecast and action panels.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_panel_id": "forecast_state",
+        "required_panel_state": "healthy",
+        "expected_top_action": "preserve_urgent_rch_slack"
+      }
+    },
+    {
+      "case_id": "degraded_forecast",
+      "description": "A degraded forecast must stay visibly degraded in operator status panels.",
+      "overrides": {
+        "brownout_forecaster_json": {
+          "truth_state": "degraded",
+          "summary": {
+            "overall_state": "watch",
+            "brownout_state": "watch"
+          }
+        },
+        "dashboard_projection_json": {
+          "decision": "degraded",
+          "truth_state": "degraded",
+          "summary_cards": [
+            {
+              "card_id": "decision",
+              "value": "degraded"
+            },
+            {
+              "card_id": "overall_state",
+              "value": "degraded"
+            },
+            {
+              "card_id": "brownout_state",
+              "value": "watch"
+            },
+            {
+              "card_id": "top_action",
+              "value": "preserve_urgent_rch_slack"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_panel_id": "forecast_state",
+        "required_panel_state": "degraded",
+        "expected_top_action": "preserve_urgent_rch_slack"
+      }
+    },
+    {
+      "case_id": "fail_closed_policy_conflict",
+      "description": "Fail-closed policy conflict must keep the operator surface fail-closed.",
+      "overrides": {
+        "operator_intent_policy_json": {
+          "decision": "fail_closed"
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+      }
+    },
+    {
+      "case_id": "safe_mode_recommendation",
+      "description": "Safe-mode recommendation bundles must stay visible as degraded conservative guidance.",
+      "overrides": {
+        "operator_intent_policy_json": {
+          "decision": "safe_mode",
+          "fallback_behavior": {
+            "mode": "safe_mode",
+            "actions": [
+              "defer_nonurgent_heavy_lanes",
+              "preserve_urgent_rch_slack",
+              "require_remote_only_evidence"
+            ],
+            "deterministic": true
+          },
+          "verification_summary": {
+            "safe_mode_active": true
+          }
+        },
+        "recommendation_bundle_json": {
+          "decision": "safe_mode",
+          "truth_state": "degraded",
+          "summary": {
+            "overall_state": "safe_mode",
+            "top_action": "refresh_evidence",
+            "recommendation_count": 3,
+            "safe_mode_active": true,
+            "human_review_required": false
+          },
+          "recommendations": [
+            {
+              "recommendation_id": "recommendation-1",
+              "priority": 115,
+              "action": "refresh_evidence",
+              "lane_id": null,
+              "summary": "Refresh telemetry and coordination evidence before promoting normal admission advice.",
+              "deterministic_decision_id": "decision-safe-mode-1",
+              "reason_codes": [
+                "safe_mode_active",
+                "refresh_control_plane_evidence"
+              ],
+              "evidence_paths": [
+                "/fixture/recommendation_bundle.json"
+              ],
+              "rollback_command": "# operator: clear safe mode after telemetry and coordination recover",
+              "remediation_command": "Re-run the recommendation bundle after telemetry freshness and coordination evidence return to confirmed."
+            }
+          ]
+        },
+        "dashboard_projection_json": {
+          "decision": "safe_mode",
+          "truth_state": "degraded",
+          "overall_state": "safe_mode",
+          "top_action": {
+            "action": "refresh_evidence",
+            "lane_id": null
+          },
+          "summary_cards": [
+            {
+              "card_id": "decision",
+              "value": "safe_mode"
+            },
+            {
+              "card_id": "overall_state",
+              "value": "safe_mode"
+            },
+            {
+              "card_id": "brownout_state",
+              "value": "watch"
+            },
+            {
+              "card_id": "top_action",
+              "value": "refresh_evidence"
+            }
+          ],
+          "top_recommendations": [
+            {
+              "action": "refresh_evidence",
+              "lane_id": null
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "safe_mode",
+        "expected_exit_code": 0,
+        "required_panel_id": "safe_mode_state",
+        "required_panel_state": "degraded",
+        "expected_top_action": "refresh_evidence"
+      }
+    },
+    {
+      "case_id": "frankentui_panel_projection",
+      "description": "The panel projection must keep the future renderer external and preserve the top action.",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_panel_id": "required_operator_action",
+        "required_panel_state": "healthy",
+        "expected_top_action": "preserve_urgent_rch_slack"
+      }
+    }
+  ]
+}

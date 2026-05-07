@@ -1,0 +1,197 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-operator-status-contract.v1",
+  "bead_id": "bd-bhddc",
+  "depends_on": [
+    "bd-8e5cw",
+    "bd-09g6k"
+  ],
+  "script": "scripts/swarm_autopilot_operator_status_bundle.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_operator_status/cases.json",
+  "operator_status_schema_version": "franken-engine.swarm-autopilot-operator-status.v1",
+  "panel_bundle_schema_version": "franken-engine.swarm-autopilot-frankentui-panels.v1",
+  "required_inputs": [
+    {
+      "source_id": "operator_intent_policy_json",
+      "argument": "--operator-intent-policy-json",
+      "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+      "required": true
+    },
+    {
+      "source_id": "brownout_forecaster_json",
+      "argument": "--brownout-forecaster-json",
+      "schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_lease_plan_json",
+      "argument": "--resource-lease-plan-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-lease-plan.v1",
+      "required": true
+    },
+    {
+      "source_id": "resource_scarcity_receipts_json",
+      "argument": "--resource-scarcity-receipts-json",
+      "schema_version": "franken-engine.swarm-autopilot-resource-scarcity-receipts.v1",
+      "required": true
+    },
+    {
+      "source_id": "recommendation_bundle_json",
+      "argument": "--recommendation-bundle-json",
+      "schema_version": "franken-engine.swarm-autopilot-recommendation-bundle.v1",
+      "required": true
+    },
+    {
+      "source_id": "dashboard_projection_json",
+      "argument": "--dashboard-projection-json",
+      "schema_version": "franken-engine.swarm-autopilot-dashboard-projection.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_chaos_scenarios_json",
+      "argument": "--hindsight-chaos-scenarios-json",
+      "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+      "required": true
+    },
+    {
+      "source_id": "hindsight_chaos_replay_index_json",
+      "argument": "--hindsight-chaos-replay-index-json",
+      "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-replay-index.v1",
+      "required": true
+    }
+  ],
+  "optional_args": [
+    "--source-revision",
+    "--now-epoch-seconds",
+    "--stale-after-seconds",
+    "--output-dir"
+  ],
+  "artifacts": {
+    "operator_status_json": "swarm_autopilot_operator_status.json",
+    "panel_bundle_json": "swarm_autopilot_frankentui_panels.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "required_sections": [
+    "forecast_state",
+    "policy_state",
+    "lease_scarcity",
+    "recommendation_rank",
+    "safe_mode_state",
+    "required_operator_action",
+    "chaos_replay_readiness"
+  ],
+  "required_panels": [
+    "forecast_state",
+    "policy_state",
+    "lease_scarcity",
+    "recommendation_rank",
+    "safe_mode_state",
+    "required_operator_action",
+    "chaos_replay_readiness"
+  ],
+  "display_states": [
+    "healthy",
+    "degraded",
+    "missing",
+    "stale",
+    "blocked",
+    "fail_closed"
+  ],
+  "renderer_contract": {
+    "provider": "/dp/frankentui",
+    "shipped_in_franken_engine": false,
+    "local_renderer": false,
+    "no_local_tui_runtime": true
+  },
+  "required_status_fields": [
+    "operator_status_id",
+    "decision",
+    "truth_state",
+    "summary.overall_state",
+    "summary.top_action",
+    "summary.safe_mode_active",
+    "summary.degraded_panel_count",
+    "summary.fail_closed_panel_count",
+    "sections",
+    "artifact_paths.operator_status_json",
+    "artifact_paths.panel_bundle_json"
+  ],
+  "required_panel_bundle_fields": [
+    "panel_bundle_id",
+    "decision",
+    "renderer_contract.provider",
+    "renderer_contract.no_local_tui_runtime",
+    "status_bar.summary.panel_count",
+    "panels[].panel_id",
+    "panels[].display_state",
+    "panels[].semantic_theme_token",
+    "panels[].focus_order",
+    "panels[].aria_label",
+    "panels[].supports_tiny_layout",
+    "panels[].visible_reasons",
+    "mutation_policy.local_renderer"
+  ],
+  "fail_closed_rules": [
+    "hidden panel state fails closed",
+    "missing evidence links fail closed",
+    "fail-closed upstream policy, forecast, lease plan, recommendation bundle, or chaos replay inputs fail closed",
+    "unsafe mutation-policy claims fail closed"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "healthy_autopilot",
+      "expected_decision": "pass",
+      "required_panel_id": "forecast_state",
+      "required_panel_state": "healthy"
+    },
+    {
+      "case_id": "degraded_forecast",
+      "expected_decision": "degraded",
+      "required_panel_id": "forecast_state",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "fail_closed_policy_conflict",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STATUS-UPSTREAM-UNTRUSTED"
+    },
+    {
+      "case_id": "safe_mode_recommendation",
+      "expected_decision": "safe_mode",
+      "required_panel_id": "safe_mode_state",
+      "required_panel_state": "degraded"
+    },
+    {
+      "case_id": "frankentui_panel_projection",
+      "expected_decision": "pass",
+      "required_panel_id": "required_operator_action",
+      "required_top_action": "preserve_urgent_rch_slack"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "local_renderer": false
+  },
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_operator_status_bundle.sh",
+    "bash -n scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_operator_status_bundle.sh scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh",
+    "jq empty docs/swarm_autopilot_operator_status_contract_v1.json scripts/testdata/swarm_autopilot_operator_status/cases.json",
+    "bash scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_OPERATOR_STATUS.md docs/swarm_autopilot_operator_status_contract_v1.json scripts/swarm_autopilot_operator_status_bundle.sh scripts/e2e/swarm_autopilot_operator_status_bundle_smoke.sh scripts/testdata/swarm_autopilot_operator_status/cases.json"
+  ]
+}

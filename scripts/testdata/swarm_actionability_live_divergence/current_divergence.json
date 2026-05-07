@@ -1,0 +1,285 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-live-divergence-fixture.v1",
+  "bead_id": "bd-30x14",
+  "contract_bead_id": "bd-1tsvb",
+  "contract_schema_version": "franken-engine.swarm-actionability-truth-gate-contract.v1",
+  "captured_at": "2026-05-07T05:37:51Z",
+  "capture_context": {
+    "repository": "/data/projects/franken_engine",
+    "branch": "main",
+    "source": "normalized live command output",
+    "commands": [
+      "br ready --json",
+      "br list --status=in_progress --json",
+      "br list --status=blocked --json",
+      "br sync --status --json",
+      "git status --short",
+      "bv --recipe actionable --robot-plan"
+    ],
+    "notes": [
+      "br ready was empty while bv emitted in-progress and blocked tracks as actionable.",
+      "The fixture is replay evidence only and must not mutate br, Agent Mail, git, Cargo, RCH, workers, or queue policy."
+    ]
+  },
+  "source_freshness_json": {
+    "dirty_count": 0,
+    "last_export_time": "2026-05-07T05:37:10.173864928+00:00",
+    "last_import_time": "2026-05-02T11:36:22.570501161+00:00",
+    "jsonl_content_hash": "b95f8168fa3d6b7f7cf5955f728dfa354c589d5722063a71ef553200a2a533ae",
+    "jsonl_exists": true,
+    "jsonl_newer": false,
+    "db_newer": false
+  },
+  "sources": {
+    "br_ready_json": [],
+    "br_in_progress_json": [
+      {
+        "id": "bd-30x14",
+        "title": "[SWARM-ACTIONABILITY-P1-F] Preserve live br/bv divergence replay fixtures",
+        "status": "in_progress",
+        "priority": 1,
+        "assignee": "BrownCreek",
+        "updated_at": "2026-05-07T05:37:09.852618053Z",
+        "labels": [
+          "actionability",
+          "bv",
+          "fixtures",
+          "swarm-control",
+          "testing"
+        ]
+      },
+      {
+        "id": "bd-l4mya",
+        "title": "[SWARM-ACTIONABILITY-P1-B] Implement lightweight br/bv actionability guard",
+        "status": "in_progress",
+        "priority": 1,
+        "assignee": "LavenderElk",
+        "updated_at": "2026-05-07T05:34:37.582624372Z",
+        "labels": [
+          "actionability",
+          "agent-mail",
+          "bv",
+          "swarm-control",
+          "testing"
+        ]
+      }
+    ],
+    "br_blocked_json": [
+      {
+        "id": "bd-djejh.2",
+        "title": "[SWARM-AUTOPILOT-P0-B] Implement frankensqlite-backed shadow evidence journal",
+        "status": "blocked",
+        "priority": 1,
+        "assignee": "LavenderElk",
+        "updated_at": "2026-05-07T05:33:50.657181773Z",
+        "labels": [
+          "autopilot",
+          "evidence",
+          "frankensqlite",
+          "replay",
+          "shadow-daemon"
+        ]
+      },
+      {
+        "id": "bd-5oef0",
+        "title": "[BV] Exclude blocked parent tracks from actionable plans",
+        "status": "blocked",
+        "priority": 2,
+        "assignee": null,
+        "updated_at": "2026-05-06T11:45:44.663058472Z",
+        "labels": [
+          "bug",
+          "bv",
+          "triage",
+          "workflow"
+        ]
+      }
+    ],
+    "bv_robot_plan_json": {
+      "generated_at": "2026-05-07T05:37:51Z",
+      "data_hash": "a91d96e43e0b3ae0",
+      "plan": {
+        "tracks": [
+          {
+            "track_id": "track-A",
+            "reason": "Single actionable item",
+            "items": [
+              {
+                "id": "bd-l4mya",
+                "title": "[SWARM-ACTIONABILITY-P1-B] Implement lightweight br/bv actionability guard",
+                "priority": 1,
+                "status": "in_progress",
+                "unblocks": [
+                  "bd-fi6kq"
+                ]
+              }
+            ]
+          },
+          {
+            "track_id": "track-B",
+            "reason": "Single actionable item",
+            "items": [
+              {
+                "id": "bd-30x14",
+                "title": "[SWARM-ACTIONABILITY-P1-F] Preserve live br/bv divergence replay fixtures",
+                "priority": 1,
+                "status": "in_progress",
+                "unblocks": null
+              }
+            ]
+          },
+          {
+            "track_id": "track-C",
+            "reason": "Single actionable item",
+            "items": [
+              {
+                "id": "bd-5oef0",
+                "title": "[BV] Exclude blocked parent tracks from actionable plans",
+                "priority": 2,
+                "status": "blocked",
+                "unblocks": null
+              }
+            ]
+          },
+          {
+            "track_id": "track-D",
+            "reason": "Single actionable item",
+            "items": [
+              {
+                "id": "bd-djejh.2",
+                "title": "[SWARM-AUTOPILOT-P0-B] Implement frankensqlite-backed shadow evidence journal",
+                "priority": 1,
+                "status": "blocked",
+                "unblocks": [
+                  "bd-djejh.4"
+                ]
+              }
+            ]
+          }
+        ],
+        "total_actionable": 4,
+        "total_blocked": 10,
+        "summary": {
+          "highest_impact": "bd-djejh.2",
+          "impact_reason": "Unblocks 1 task",
+          "unblocks_count": 1
+        }
+      }
+    },
+    "git_status_snapshot_json": {
+      "dirty_paths": [
+        {
+          "xy": "M",
+          "path": ".beads/issues.jsonl",
+          "owner": "BrownCreek",
+          "reason": "bd-30x14 claim and fixture bead state"
+        },
+        {
+          "xy": "M",
+          "path": "crates/franken-engine/src/cross_repo_contract.rs",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        },
+        {
+          "xy": "M",
+          "path": "crates/franken-engine/src/lib.rs",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        },
+        {
+          "xy": "M",
+          "path": "crates/franken-engine/src/storage_adapter.rs",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        },
+        {
+          "xy": "M",
+          "path": "crates/franken-engine/src/typed_persistence_models.rs",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        },
+        {
+          "xy": "M",
+          "path": "docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        },
+        {
+          "xy": "??",
+          "path": "crates/franken-engine/src/shadow_evidence_journal.rs",
+          "owner": "other-agent",
+          "reason": "pre-existing unrelated dirty worktree state"
+        }
+      ]
+    }
+  },
+  "expected_report": {
+    "decision": "fail_closed",
+    "reason_codes": [
+      "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE",
+      "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"
+    ],
+    "candidate_reports": [
+      {
+        "id": "bd-l4mya",
+        "source_status": "in_progress",
+        "decision": "defer",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE",
+        "assignee": "LavenderElk",
+        "evidence_paths": [
+          "sources.br_in_progress_json[1]",
+          "sources.bv_robot_plan_json.plan.tracks[0].items[0]"
+        ]
+      },
+      {
+        "id": "bd-30x14",
+        "source_status": "in_progress",
+        "decision": "defer",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE",
+        "assignee": "BrownCreek",
+        "evidence_paths": [
+          "sources.br_in_progress_json[0]",
+          "sources.bv_robot_plan_json.plan.tracks[1].items[0]"
+        ]
+      },
+      {
+        "id": "bd-5oef0",
+        "source_status": "blocked",
+        "decision": "fail_closed",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE",
+        "assignee": null,
+        "evidence_paths": [
+          "sources.br_blocked_json[1]",
+          "sources.bv_robot_plan_json.plan.tracks[2].items[0]"
+        ]
+      },
+      {
+        "id": "bd-djejh.2",
+        "source_status": "blocked",
+        "decision": "fail_closed",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE",
+        "assignee": "LavenderElk",
+        "evidence_paths": [
+          "sources.br_blocked_json[0]",
+          "sources.bv_robot_plan_json.plan.tracks[3].items[0]"
+        ]
+      }
+    ],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "mutates_br": false,
+      "claims_beads": false,
+      "reopens_beads": false,
+      "closes_beads": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "mutates_git": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  }
+}

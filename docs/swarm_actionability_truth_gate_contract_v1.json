@@ -1,0 +1,129 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-truth-gate-contract.v1",
+  "bead_id": "bd-1tsvb",
+  "parent_bead_id": "bd-l09xv",
+  "contract_doc": "docs/SWARM_ACTIONABILITY_TRUTH_GATE_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh",
+  "fixtures": "scripts/testdata/swarm_actionability_truth_gate_contract/cases.json",
+  "implementation_script": "scripts/swarm_actionability_truth_gate.sh",
+  "required_sources": [
+    {
+      "source_id": "br_ready_json",
+      "command_shape": "br ready --json",
+      "required": true
+    },
+    {
+      "source_id": "br_open_json",
+      "command_shape": "br list --status=open --json",
+      "required": true
+    },
+    {
+      "source_id": "br_in_progress_json",
+      "command_shape": "br list --status=in_progress --json",
+      "required": true
+    },
+    {
+      "source_id": "br_blocked_json",
+      "command_shape": "br list --status=blocked --json",
+      "required": true
+    },
+    {
+      "source_id": "bv_robot_plan_json",
+      "command_shape": "bv --recipe actionable --robot-plan",
+      "required": true
+    },
+    {
+      "source_id": "agent_mail_snapshot_json",
+      "command_shape": "Agent Mail list_agents plus file reservations when available",
+      "required": false
+    },
+    {
+      "source_id": "git_status_snapshot_json",
+      "command_shape": "git status --short --branch",
+      "required": true
+    },
+    {
+      "source_id": "source_freshness_json",
+      "command_shape": "collector-generated freshness metadata",
+      "required": true
+    }
+  ],
+  "decisions": [
+    "safe_to_claim",
+    "defer",
+    "fail_closed",
+    "observe_only"
+  ],
+  "candidate_states": [
+    "ready",
+    "open_blocked",
+    "in_progress",
+    "blocked",
+    "reserved",
+    "dirty_overlap",
+    "stale_source",
+    "missing_source",
+    "malformed_source"
+  ],
+  "fail_closed_reason_codes": [
+    "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE",
+    "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE",
+    "FE-SWARM-ACTIONABILITY-BR-BV-DIVERGENCE",
+    "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE",
+    "FE-SWARM-ACTIONABILITY-ACTIVE-RESERVATION",
+    "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP",
+    "FE-SWARM-ACTIONABILITY-MISSING-SOURCE",
+    "FE-SWARM-ACTIONABILITY-MALFORMED-SOURCE",
+    "FE-SWARM-ACTIONABILITY-UNSUPPORTED-MUTATION"
+  ],
+  "required_outputs": [
+    "actionability_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "report_required_fields": [
+    "schema_version",
+    "source_revision",
+    "decision",
+    "candidate_summary",
+    "candidate_reports",
+    "fail_closed_reasons",
+    "remediation_commands",
+    "source_freshness",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "required_fixture_scenarios": [
+    "healthy_ready_safe_to_claim",
+    "bv_blocked_track_fail_closed",
+    "in_progress_owned_defer",
+    "stale_export_fail_closed",
+    "dirty_overlap_defer",
+    "missing_optional_mail_observe_only"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_actionability_truth_gate_contract_v1.json scripts/testdata/swarm_actionability_truth_gate_contract/cases.json",
+    "bash -n scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh",
+    "bash scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_ACTIONABILITY_TRUTH_GATE_CONTRACT.md docs/swarm_actionability_truth_gate_contract_v1.json scripts/e2e/swarm_actionability_truth_gate_contract_smoke.sh scripts/testdata/swarm_actionability_truth_gate_contract/cases.json"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reopens_beads": false,
+    "closes_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

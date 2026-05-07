@@ -1,0 +1,337 @@
+{
+  "schema_version": "franken-engine.swarm-actionability-truth-gate-contract-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_ready_safe_to_claim",
+      "expected": {
+        "decision": "safe_to_claim",
+        "candidate_id": "bd-ready1",
+        "required_state": "ready"
+      },
+      "sources": {
+        "br_ready_json": [
+          {
+            "id": "bd-ready1",
+            "title": "Ready isolated bead",
+            "status": "open",
+            "priority": 1
+          }
+        ],
+        "br_open_json": {
+          "issues": [
+            {
+              "id": "bd-ready1",
+              "status": "open",
+              "assignee": null,
+              "dependency_count": 0
+            }
+          ]
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": [
+              {
+                "track_id": "track-A",
+                "items": [
+                  {
+                    "id": "bd-ready1",
+                    "status": "open",
+                    "priority": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [],
+          "active_reservations": []
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": []
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true
+        }
+      }
+    },
+    {
+      "case_id": "bv_blocked_track_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "candidate_id": "bd-5oef0",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE"
+      },
+      "sources": {
+        "br_ready_json": [],
+        "br_open_json": {
+          "issues": []
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": [
+            {
+              "id": "bd-5oef0",
+              "status": "blocked",
+              "assignee": null
+            }
+          ]
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": [
+              {
+                "track_id": "track-A",
+                "items": [
+                  {
+                    "id": "bd-5oef0",
+                    "status": "blocked",
+                    "priority": 2
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [],
+          "active_reservations": []
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": []
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true
+        }
+      }
+    },
+    {
+      "case_id": "in_progress_owned_defer",
+      "expected": {
+        "decision": "defer",
+        "candidate_id": "bd-djejh.2",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE"
+      },
+      "sources": {
+        "br_ready_json": [],
+        "br_open_json": {
+          "issues": []
+        },
+        "br_in_progress_json": {
+          "issues": [
+            {
+              "id": "bd-djejh.2",
+              "status": "in_progress",
+              "assignee": "LavenderElk"
+            }
+          ]
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": [
+              {
+                "track_id": "track-C",
+                "items": [
+                  {
+                    "id": "bd-djejh.2",
+                    "status": "in_progress",
+                    "priority": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [
+            {
+              "name": "LavenderElk",
+              "last_active_ts": "2026-05-07T04:44:44Z"
+            }
+          ],
+          "active_reservations": []
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": [
+            "crates/franken-engine/src/typed_persistence_models.rs"
+          ]
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true
+        }
+      }
+    },
+    {
+      "case_id": "stale_export_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "candidate_id": "bd-parent",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE"
+      },
+      "sources": {
+        "br_ready_json": [],
+        "br_open_json": {
+          "issues": [
+            {
+              "id": "bd-parent",
+              "status": "open"
+            }
+          ]
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": [
+              {
+                "track_id": "track-A",
+                "items": [
+                  {
+                    "id": "bd-parent",
+                    "status": "open"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [],
+          "active_reservations": []
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": []
+        },
+        "source_freshness_json": {
+          "db_newer": true,
+          "all_sources_fresh": false,
+          "detail": "issues.jsonl older than beads.db"
+        }
+      }
+    },
+    {
+      "case_id": "dirty_overlap_defer",
+      "expected": {
+        "decision": "defer",
+        "candidate_id": "bd-ready-dirty",
+        "required_error_code": "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP"
+      },
+      "sources": {
+        "br_ready_json": [
+          {
+            "id": "bd-ready-dirty",
+            "status": "open"
+          }
+        ],
+        "br_open_json": {
+          "issues": [
+            {
+              "id": "bd-ready-dirty",
+              "status": "open"
+            }
+          ]
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": [
+              {
+                "track_id": "track-A",
+                "items": [
+                  {
+                    "id": "bd-ready-dirty",
+                    "status": "open"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [],
+          "active_reservations": [
+            {
+              "holder": "OtherAgent",
+              "path_pattern": "scripts/swarm_actionability_truth_gate.sh",
+              "exclusive": true
+            }
+          ]
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": [
+            "scripts/swarm_actionability_truth_gate.sh"
+          ]
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true
+        }
+      }
+    },
+    {
+      "case_id": "missing_optional_mail_observe_only",
+      "expected": {
+        "decision": "observe_only",
+        "candidate_id": null,
+        "required_error_code": "FE-SWARM-ACTIONABILITY-MISSING-SOURCE"
+      },
+      "sources": {
+        "br_ready_json": [],
+        "br_open_json": {
+          "issues": []
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "plan": {
+            "tracks": []
+          }
+        },
+        "agent_mail_snapshot_json": null,
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": []
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true,
+          "missing_optional_sources": [
+            "agent_mail_snapshot_json"
+          ]
+        }
+      }
+    }
+  ]
+}

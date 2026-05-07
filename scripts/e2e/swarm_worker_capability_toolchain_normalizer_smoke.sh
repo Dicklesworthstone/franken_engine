@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+normalizer="${root_dir}/scripts/swarm_worker_capability_toolchain_normalizer.sh"
+docs_path="${root_dir}/docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md"
+contract_path="${root_dir}/docs/swarm_worker_capability_toolchain_input_contract_v1.json"
+fixture_bundle_path="${root_dir}/scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json"
+failures=0
+
+record_pass() {
+  printf 'PASS swarm-worker-capability-toolchain-normalizer %s\n' "$1"
+}
+
+record_failure() {
+  printf 'FAIL swarm-worker-capability-toolchain-normalizer %s\n' "$1" >&2
+  failures=$((failures + 1))
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: ./scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh [check|selftest]
+EOF
+}
+
+extract_fixture_input() {
+  local scenario="$1"
+  local input_id="$2"
+  local output_path="$3"
+  local is_null
+  is_null="$(jq -r --arg scenario "$scenario" --arg input_id "$input_id" '
+    .scenarios[] | select(.scenario_id == $scenario) | (.inputs[$input_id] == null)
+  ' "$fixture_bundle_path")"
+  if [[ "$is_null" == "true" ]]; then
+    return 1
+  fi
+  jq --arg scenario "$scenario" --arg input_id "$input_id" '
+    .scenarios[] | select(.scenario_id == $scenario) | .inputs[$input_id]
+  ' "$fixture_bundle_path" >"$output_path"
+}
+
+materialize_fixture_dir() {
+  local scenario="$1"
+  local dir="$2"
+  mkdir -p "$dir"
+  extract_fixture_input "$scenario" "execution_queue_input_json" "${dir}/execution_queue_input.json" || return 1
+  extract_fixture_input "$scenario" "topology_queue_signal_input_json" "${dir}/topology_queue_signal_input.json" || return 1
+  extract_fixture_input "$scenario" "rehabilitation_ledger_json" "${dir}/rehabilitation_ledger.json" || return 1
+  extract_fixture_input "$scenario" "rch_remote_compile_stall_bundle_json" "${dir}/rch_remote_compile_stall_bundle.json" || return 1
+  extract_fixture_input "$scenario" "worker_capability_snapshot_json" "${dir}/worker_capability_snapshot.json" || return 1
+  extract_fixture_input "$scenario" "worker_toolchain_snapshot_json" "${dir}/worker_toolchain_snapshot.json" || return 1
+  extract_fixture_input "$scenario" "resource_envelope_json" "${dir}/resource_envelope.json" || true
+  extract_fixture_input "$scenario" "operator_status_snapshot_json" "${dir}/operator_status_snapshot.json" || true
+}
+
+check_no_mutation_claims() {
+  local path="$1"
+  if grep -Eiq 'mutates remote workers|changes live queue policy automatically|updates beads automatically|releases reservations automatically|sends Agent Mail automatically|runs Cargo automatically|runs RCH automatically|reroutes tasks automatically|repairs workers automatically' "$path"; then
+    record_failure "${path#"$root_dir"/} contains forbidden mutation wording"
+  fi
+}
+
+check_no_bare_heavy_cargo() {
+  local path="$1"
+  while IFS= read -r command; do
+    if [[ "$command" =~ (^|[[:space:]])cargo[[:space:]]+(build|check|test|clippy|bench|run)([[:space:]]|$) ]]; then
+      if [[ "$command" != *"rch exec --"* || "$command" != *"CARGO_TARGET_DIR="* ]]; then
+        record_failure "${path#"$root_dir"/} has bare heavy Cargo command: ${command}"
+      fi
+    fi
+  done < <(jq -r '.. | strings' "$path" 2>/dev/null || sed -n '1,240p' "$path")
+}
+
+contract_shape_ok() {
+  jq -e '
+    .schema_version == "franken-engine.swarm-worker-capability-toolchain-normalizer-contract.v1"
+    and .bead_id == "bd-wplun"
+    and .parent_bead_id == "bd-lg2qn"
+    and (.depends_on | index("bd-7h4ek") != null)
+    and (.upstream_support_beads | index("bd-t58g5") != null)
+    and (.upstream_support_beads | index("bd-7ayfz") != null)
+    and (.upstream_support_beads | index("bd-ywibz") != null)
+    and .script == "scripts/swarm_worker_capability_toolchain_normalizer.sh"
+    and .smoke_script == "scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh"
+    and .docs == "docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md"
+    and .fixture_bundle == "scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json"
+    and .input_schema_version == "franken-engine.swarm-worker-capability-toolchain-input.v1"
+    and .source_schema_version == "franken-engine.swarm-worker-capability-toolchain-sources.v1"
+    and (.required_inputs | length == 6)
+    and (.optional_inputs | length == 2)
+    and (.normalized_input_fields | index("capability_context") != null)
+    and (.normalized_input_fields | index("toolchain_context") != null)
+    and (.normalized_input_fields | index("routing_hints") != null)
+    and (.truth_states | index("contaminated") != null)
+    and (.fail_closed_rules | map(test("local fallback contamination"; "i")) | any)
+    and (.blocked_rules | map(test("toolchain fingerprint mismatch"; "i")) | any)
+    and .mutation_policy.advisory_only == true
+    and .mutation_policy.runs_cargo == false
+    and .mutation_policy.runs_rch == false
+    and .mutation_policy.reroutes_tasks_automatically == false
+    and (.selftest_scenarios | index("blocked_missing_required_capability") != null)
+  ' "$contract_path" >/dev/null
+}
+
+fixtures_shape_ok() {
+  jq -e '
+    .schema_version == "franken-engine.swarm-worker-capability-toolchain-normalizer-fixtures.v1"
+    and (.scenarios | length) == 5
+    and any(.scenarios[]; .scenario_id == "healthy_capability_parity" and .expected_routing_mode == "capability_affinity_confirmed")
+    and any(.scenarios[]; .scenario_id == "degraded_missing_optional_telemetry" and .expected_routing_mode == "broader_cohort_fallback")
+    and any(.scenarios[]; .scenario_id == "blocked_toolchain_mismatch" and .expected_exit_code == 75)
+    and any(.scenarios[]; .scenario_id == "blocked_missing_required_capability" and .expected_exit_code == 75)
+    and any(.scenarios[]; .scenario_id == "contaminated_local_fallback" and .expected_exit_code == 42)
+  ' "$fixture_bundle_path" >/dev/null
+}
+
+run_case() {
+  local scenario="$1"
+  local input_dir="$2"
+  local output_dir="$3"
+  local expected_decision expected_truth_state expected_exit_code expected_routing_mode
+  expected_decision="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_decision' "$fixture_bundle_path")"
+  expected_truth_state="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_truth_state' "$fixture_bundle_path")"
+  expected_exit_code="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_exit_code' "$fixture_bundle_path")"
+  expected_routing_mode="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_routing_mode' "$fixture_bundle_path")"
+  mkdir -p "$output_dir"
+  local args=(
+    --source-revision fixture-rev
+    --execution-queue-input-json "${input_dir}/execution_queue_input.json"
+    --topology-queue-signal-input-json "${input_dir}/topology_queue_signal_input.json"
+    --rehabilitation-ledger-json "${input_dir}/rehabilitation_ledger.json"
+    --rch-remote-compile-stall-bundle-json "${input_dir}/rch_remote_compile_stall_bundle.json"
+    --worker-capability-snapshot-json "${input_dir}/worker_capability_snapshot.json"
+    --worker-toolchain-snapshot-json "${input_dir}/worker_toolchain_snapshot.json"
+    --output-dir "$output_dir"
+  )
+  [[ -f "${input_dir}/resource_envelope.json" ]] && args+=(--resource-envelope-json "${input_dir}/resource_envelope.json")
+  [[ -f "${input_dir}/operator_status_snapshot.json" ]] && args+=(--operator-status-snapshot-json "${input_dir}/operator_status_snapshot.json")
+
+  local code=0
+  set +e
+  bash "$normalizer" "${args[@]}" >/dev/null
+  code=$?
+  set -e
+  if [[ "$code" -ne "$expected_exit_code" ]]; then
+    record_failure "${scenario} expected exit ${expected_exit_code}, got ${code}"
+    return 1
+  fi
+  jq -e --arg decision "$expected_decision" --arg truth_state "$expected_truth_state" --arg routing_mode "$expected_routing_mode" '
+    .decision == $decision and .truth_state == $truth_state and .routing_hints.routing_mode == $routing_mode
+  ' "${output_dir}/swarm_worker_capability_toolchain_input.json" >/dev/null || {
+    record_failure "${scenario} decision, truth state, or routing mode mismatch"
+    return 1
+  }
+}
+
+run_check() {
+  bash -n "$normalizer"
+  bash -n "${BASH_SOURCE[0]}"
+  jq empty "$contract_path" "$fixture_bundle_path"
+
+  if contract_shape_ok; then
+    record_pass "contract shape"
+  else
+    record_failure "contract shape mismatch"
+  fi
+  if fixtures_shape_ok; then
+    record_pass "fixture bundle shape"
+  else
+    record_failure "fixture bundle shape mismatch"
+  fi
+
+  grep -Fq 'advisory-only' "$docs_path" || record_failure "docs must say advisory-only"
+  grep -Fq 'local fallback contamination fails closed' "$docs_path" || record_failure "docs must mention local fallback contamination"
+  grep -Fq 'toolchain fingerprint mismatch blocks routing advice' "$docs_path" || record_failure "docs must mention toolchain mismatch blocking"
+  grep -Fq 'rch workers capabilities --refresh --json' "$docs_path" || record_failure "docs must mention worker capability refresh evidence"
+
+  check_no_mutation_claims "$docs_path"
+  check_no_mutation_claims "$contract_path"
+  check_no_bare_heavy_cargo "$docs_path"
+  check_no_bare_heavy_cargo "$contract_path"
+}
+
+run_selftest() {
+  local tmp_root scenario input_dir output_dir
+  tmp_root="${TMPDIR:-/tmp}/swarm-worker-capability-toolchain-smoke/$USER-$$-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$tmp_root"
+  while IFS= read -r scenario; do
+    input_dir="${tmp_root}/${scenario}/in"
+    output_dir="${tmp_root}/${scenario}/out"
+    materialize_fixture_dir "$scenario" "$input_dir" || {
+      record_failure "could not materialize fixture ${scenario}"
+      continue
+    }
+    run_case "$scenario" "$input_dir" "$output_dir" || continue
+
+    jq -e \
+      --argjson expected_advised "$(jq -c --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_advised_worker_ids' "$fixture_bundle_path")" \
+      --argjson expected_blocked "$(jq -c --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_blocked_task_ids' "$fixture_bundle_path")" \
+      '.routing_hints.advised_worker_ids == $expected_advised and ((.capability_context.missing_required_capability_task_ids + .toolchain_context.toolchain_mismatch_task_ids) | unique) == $expected_blocked' \
+      "${output_dir}/swarm_worker_capability_toolchain_input.json" >/dev/null || {
+        record_failure "${scenario} advised or blocked task sets mismatch"
+        continue
+      }
+    record_pass "selftest ${scenario}"
+  done < <(jq -r '.scenarios[].scenario_id' "$fixture_bundle_path")
+}
+
+case "${1:-check}" in
+  check)
+    run_check
+    ;;
+  selftest)
+    run_check
+    if [[ "$failures" -eq 0 ]]; then
+      run_selftest
+    fi
+    ;;
+  -h|--help)
+    usage
+    ;;
+  *)
+    usage
+    record_failure "unknown mode: ${1:-}"
+    exit 64
+    ;;
+esac
+
+if [[ "$failures" -ne 0 ]]; then
+  exit 1
+fi

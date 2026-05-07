@@ -1,0 +1,521 @@
+{
+  "schema_version": "franken-engine.swarm-worker-capability-toolchain-normalizer-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_capability_parity",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "expected_routing_mode": "capability_affinity_confirmed",
+      "expected_advised_worker_ids": [
+        "rch-a"
+      ],
+      "expected_blocked_task_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-cap-a",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_queue_signal_input_json": {
+          "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_signal_hints": {
+            "rank_bias_mode": "prefer_hot_cache_locality",
+            "usable_preferred_worker_ids": [
+              "rch-a"
+            ]
+          },
+          "locality_context": {
+            "recommended_topology_class": "numa_local_hot_cache"
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "rch_remote_compile_stall_bundle_json": {
+          "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+          "truth_state": "confirmed",
+          "local_fallback_observed": false,
+          "stall_subject": {
+            "worker_id": "rch-a",
+            "build_id": "build-a"
+          }
+        },
+        "worker_capability_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "observed_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-a",
+              "required_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ]
+        },
+        "worker_toolchain_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "observed_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-a",
+              "required_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ]
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass"
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_optional_telemetry",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "expected_routing_mode": "broader_cohort_fallback",
+      "expected_advised_worker_ids": [
+        "rch-b2"
+      ],
+      "expected_blocked_task_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-cap-b",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_queue_signal_input_json": {
+          "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_signal_hints": {
+            "rank_bias_mode": "prefer_hot_cache_locality",
+            "usable_preferred_worker_ids": [
+              "rch-b"
+            ]
+          },
+          "locality_context": {
+            "recommended_topology_class": "numa_local_hot_cache"
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "degraded",
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "classification": "drain_recommended"
+            },
+            {
+              "worker_id": "rch-b2",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "rch_remote_compile_stall_bundle_json": {
+          "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+          "truth_state": "confirmed",
+          "local_fallback_observed": false,
+          "stall_subject": {
+            "worker_id": "rch-b",
+            "build_id": "build-b"
+          }
+        },
+        "worker_capability_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "observed_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            },
+            {
+              "worker_id": "rch-b2",
+              "observed_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-b",
+              "required_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ]
+        },
+        "worker_toolchain_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-b",
+              "observed_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            },
+            {
+              "worker_id": "rch-b2",
+              "observed_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-b",
+              "required_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ]
+        },
+        "resource_envelope_json": null,
+        "operator_status_snapshot_json": null
+      }
+    },
+    {
+      "scenario_id": "blocked_toolchain_mismatch",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_routing_mode": "blocked_toolchain_mismatch",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [
+        "bd-cap-c"
+      ],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-cap-c",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_queue_signal_input_json": {
+          "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_signal_hints": {
+            "rank_bias_mode": "capability_affinity_confirmed",
+            "usable_preferred_worker_ids": [
+              "rch-c"
+            ]
+          },
+          "locality_context": {
+            "recommended_topology_class": "numa_local"
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "rch_remote_compile_stall_bundle_json": {
+          "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+          "truth_state": "confirmed",
+          "local_fallback_observed": false,
+          "stall_subject": {
+            "worker_id": "rch-c",
+            "build_id": "build-c"
+          }
+        },
+        "worker_capability_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "observed_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-c",
+              "required_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ]
+        },
+        "worker_toolchain_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-c",
+              "observed_toolchain_fingerprint": "stable|rustc:1.88.0|cargo:1.88.0"
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-c",
+              "required_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ]
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass"
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    },
+    {
+      "scenario_id": "blocked_missing_required_capability",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_routing_mode": "blocked_missing_required_capability",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [
+        "bd-cap-d"
+      ],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-cap-d",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_queue_signal_input_json": {
+          "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_signal_hints": {
+            "rank_bias_mode": "capability_affinity_confirmed",
+            "usable_preferred_worker_ids": [
+              "rch-d"
+            ]
+          },
+          "locality_context": {
+            "recommended_topology_class": "numa_local"
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "rch_remote_compile_stall_bundle_json": {
+          "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+          "truth_state": "confirmed",
+          "local_fallback_observed": false,
+          "stall_subject": {
+            "worker_id": "rch-d",
+            "build_id": "build-d"
+          }
+        },
+        "worker_capability_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "observed_capabilities": [
+                "rch.exec"
+              ]
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-d",
+              "required_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ]
+        },
+        "worker_toolchain_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-d",
+              "observed_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-d",
+              "required_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ]
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass"
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "expected_routing_mode": "fail_closed",
+      "expected_advised_worker_ids": [],
+      "expected_blocked_task_ids": [],
+      "inputs": {
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "tasks": [
+            {
+              "task_id": "bd-cap-e",
+              "proof_transport": {
+                "state": "remote_only_ok",
+                "local_fallback_detected": false
+              }
+            }
+          ]
+        },
+        "topology_queue_signal_input_json": {
+          "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "queue_signal_hints": {
+            "rank_bias_mode": "capability_affinity_confirmed",
+            "usable_preferred_worker_ids": [
+              "rch-e"
+            ]
+          },
+          "locality_context": {
+            "recommended_topology_class": "numa_local_hot_cache"
+          }
+        },
+        "rehabilitation_ledger_json": {
+          "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+          "decision": "pass",
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "classification": "healthy"
+            }
+          ]
+        },
+        "rch_remote_compile_stall_bundle_json": {
+          "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+          "truth_state": "contaminated",
+          "local_fallback_observed": true,
+          "stall_subject": {
+            "worker_id": "rch-e",
+            "build_id": "build-e"
+          }
+        },
+        "worker_capability_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "observed_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-e",
+              "required_capabilities": [
+                "rch.exec",
+                "cargo.check"
+              ]
+            }
+          ]
+        },
+        "worker_toolchain_snapshot_json": {
+          "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+          "workers": [
+            {
+              "worker_id": "rch-e",
+              "observed_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ],
+          "task_requirements": [
+            {
+              "task_id": "bd-cap-e",
+              "required_toolchain_fingerprint": "nightly|rustc:1.90.0|cargo:1.90.0"
+            }
+          ]
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass"
+        },
+        "operator_status_snapshot_json": {
+          "schema_version": "franken-engine.swarm-operator-status.v1",
+          "status": "healthy"
+        }
+      }
+    }
+  ]
+}

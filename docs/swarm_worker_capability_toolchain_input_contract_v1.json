@@ -1,0 +1,150 @@
+{
+  "schema_version": "franken-engine.swarm-worker-capability-toolchain-normalizer-contract.v1",
+  "bead_id": "bd-wplun",
+  "parent_bead_id": "bd-lg2qn",
+  "depends_on": [
+    "bd-7h4ek"
+  ],
+  "upstream_support_beads": [
+    "bd-t58g5",
+    "bd-7ayfz",
+    "bd-ywibz"
+  ],
+  "script": "scripts/swarm_worker_capability_toolchain_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh",
+  "docs": "docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md",
+  "fixture_bundle": "scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json",
+  "input_schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+  "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+  "required_inputs": [
+    {
+      "source_id": "execution_queue_input_json",
+      "argument": "--execution-queue-input-json",
+      "required": true
+    },
+    {
+      "source_id": "topology_queue_signal_input_json",
+      "argument": "--topology-queue-signal-input-json",
+      "required": true
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "argument": "--rehabilitation-ledger-json",
+      "required": true
+    },
+    {
+      "source_id": "rch_remote_compile_stall_bundle_json",
+      "argument": "--rch-remote-compile-stall-bundle-json",
+      "required": true
+    },
+    {
+      "source_id": "worker_capability_snapshot_json",
+      "argument": "--worker-capability-snapshot-json",
+      "required": true
+    },
+    {
+      "source_id": "worker_toolchain_snapshot_json",
+      "argument": "--worker-toolchain-snapshot-json",
+      "required": true
+    }
+  ],
+  "optional_inputs": [
+    {
+      "source_id": "resource_envelope_json",
+      "argument": "--resource-envelope-json"
+    },
+    {
+      "source_id": "operator_status_snapshot_json",
+      "argument": "--operator-status-snapshot-json"
+    }
+  ],
+  "normalized_input_fields": [
+    "schema_version",
+    "source_revision",
+    "truth_state",
+    "decision",
+    "queue_context",
+    "topology_context",
+    "rehabilitation_context",
+    "capability_context",
+    "toolchain_context",
+    "routing_hints",
+    "degraded_reasons",
+    "blocked_reasons",
+    "fail_closed_reasons",
+    "source_artifacts",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decision_mapping": {
+    "pass": "required evidence is coherent and the preferred worker cohort is capability and toolchain safe",
+    "degraded": "required evidence is coherent but optional support or broader-cohort fallback reduced confidence",
+    "blocked": "required evidence is coherent enough to explain a capability or toolchain failure",
+    "fail_closed": "local fallback contamination or malformed required evidence invalidates the routing advice"
+  },
+  "required_input_fields": [
+    "task_id",
+    "proof_transport.state",
+    "proof_transport.local_fallback_detected",
+    "queue_signal_hints.usable_preferred_worker_ids",
+    "workers[].worker_id",
+    "workers[].classification",
+    "local_fallback_observed",
+    "task_requirements[].required_capabilities",
+    "task_requirements[].required_toolchain_fingerprint",
+    "workers[].observed_capabilities",
+    "workers[].observed_toolchain_fingerprint"
+  ],
+  "fail_closed_rules": [
+    "required queue topology rehabilitation stall capability and toolchain snapshots must be present and parseable",
+    "queue proof transport local fallback contamination fails closed",
+    "contaminated remote stall truth fails closed",
+    "contradictory worker capability or toolchain snapshots fail closed"
+  ],
+  "blocked_rules": [
+    "missing required capability coverage blocks routing advice",
+    "toolchain fingerprint mismatch blocks routing advice",
+    "drained or probe-required workers remain excluded from preferred routing"
+  ],
+  "degraded_rules": [
+    "missing optional resource envelope degrades confidence",
+    "missing optional operator status snapshot degrades confidence",
+    "broader-cohort fallback remains degraded instead of being silently promoted"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "selftest_scenarios": [
+    "healthy_capability_parity",
+    "degraded_missing_optional_telemetry",
+    "blocked_toolchain_mismatch",
+    "blocked_missing_required_capability",
+    "contaminated_local_fallback"
+  ],
+  "validation_commands": [
+    "bash -n scripts/swarm_worker_capability_toolchain_normalizer.sh",
+    "bash -n scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh",
+    "shellcheck -x scripts/swarm_worker_capability_toolchain_normalizer.sh scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh",
+    "jq empty docs/swarm_worker_capability_toolchain_input_contract_v1.json scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json",
+    "bash scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md docs/swarm_worker_capability_toolchain_input_contract_v1.json scripts/swarm_worker_capability_toolchain_normalizer.sh scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json"
+  ]
+}

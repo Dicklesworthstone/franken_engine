@@ -1,0 +1,134 @@
+{
+  "schema_version": "franken-engine.swarm-topology-aware-queue-no-mock-drill-cases.v1",
+  "primary_scenario_id": "healthy_hot_cache_reuse",
+  "scenarios": [
+    {
+      "scenario_id": "healthy_hot_cache_reuse",
+      "proves": "healthy balanced host with hot-cache reuse preference and confirmed locality/cache reuse outcome",
+      "signal_fixture_scenario": "healthy_hot_cache",
+      "scorer_fixture_scenario": "healthy_confirmed",
+      "fidelity_fixture_scenario": "healthy_locality_match",
+      "expected": {
+        "signal_decision": "pass",
+        "signal_truth_state": "confirmed",
+        "scorer_decision": "pass",
+        "scorer_truth_state": "confirmed",
+        "fidelity_decision": "pass",
+        "fidelity_truth_state": "confirmed",
+        "operator_readiness": "ready",
+        "operator_advisory_decision": "pass",
+        "operator_truth_state": "confirmed",
+        "operator_rank_bias_mode": "prefer_hot_cache_locality",
+        "required_advisory_reason_code": "hot_cache_reuse_preferred",
+        "required_fidelity_reason_code": "matched_locality_advisory"
+      }
+    },
+    {
+      "scenario_id": "degraded_missing_locality_adoption",
+      "proves": "missing locality/adoption evidence stays degraded and cache-reuse misses do not silently publish healthy advice",
+      "signal_fixture_scenario": "degraded_missing_optional_support",
+      "scorer_fixture_scenario": "degraded_missing_locality_support",
+      "fidelity_fixture_scenario": "cache_cold_fallback_no_false_reuse_credit",
+      "expected": {
+        "signal_decision": "degraded",
+        "signal_truth_state": "degraded",
+        "scorer_decision": "degraded",
+        "scorer_truth_state": "degraded",
+        "fidelity_decision": "degraded",
+        "fidelity_truth_state": "degraded",
+        "operator_readiness": "degraded",
+        "operator_advisory_decision": "degraded",
+        "operator_truth_state": "degraded",
+        "operator_rank_bias_mode": "prefer_numa_locality",
+        "required_advisory_reason_code": "telemetry_gap",
+        "required_fidelity_reason_code": "cache_reuse_outcome_missed"
+      }
+    },
+    {
+      "scenario_id": "blocked_contradictory_locality",
+      "proves": "contradictory locality blocks queue-ranking advice and remains blocked in fidelity evidence",
+      "signal_fixture_scenario": "blocked_contradictory_locality",
+      "scorer_fixture_scenario": "blocked_contradictory_locality",
+      "fidelity_fixture_scenario": "blocked_locality_drift",
+      "expected": {
+        "signal_decision": "blocked",
+        "signal_truth_state": "blocked",
+        "scorer_decision": "blocked",
+        "scorer_truth_state": "blocked",
+        "fidelity_decision": "blocked",
+        "fidelity_truth_state": "blocked",
+        "operator_readiness": "blocked",
+        "operator_advisory_decision": "blocked",
+        "operator_truth_state": "blocked",
+        "operator_rank_bias_mode": "blocked_contradictory_locality",
+        "required_advisory_reason_code": "contradictory_locality",
+        "required_fidelity_reason_code": "locality_drift_observed"
+      }
+    },
+    {
+      "scenario_id": "drain_recommended_worker_exclusion",
+      "proves": "drain-recommended or probe-required workers are excluded from preferred advice and downgrade locality ranking",
+      "signal_fixture_scenario": "drain_exclusion",
+      "scorer_fixture_scenario": "drained_worker_exclusion",
+      "fidelity_fixture_scenario": "degraded_drained_worker_avoidance_success",
+      "expected": {
+        "signal_decision": "degraded",
+        "signal_truth_state": "degraded",
+        "scorer_decision": "degraded",
+        "scorer_truth_state": "degraded",
+        "fidelity_decision": "degraded",
+        "fidelity_truth_state": "degraded",
+        "operator_readiness": "degraded",
+        "operator_advisory_decision": "degraded",
+        "operator_truth_state": "degraded",
+        "operator_rank_bias_mode": "portable_fallback",
+        "required_advisory_reason_code": "drained_worker_excluded",
+        "required_fidelity_reason_code": "drained_worker_avoidance_confirmed",
+        "expected_excluded_worker_id": "rch-e"
+      }
+    },
+    {
+      "scenario_id": "unstable_worker_downgrade",
+      "proves": "repeated unstable-worker evidence downgrades locality-aware queue advice and the fidelity ledger blocks excluded-worker reuse",
+      "signal_fixture_scenario": "drain_exclusion",
+      "scorer_fixture_scenario": "drained_worker_exclusion",
+      "fidelity_fixture_scenario": "blocked_drained_worker_avoidance_failure",
+      "expected": {
+        "signal_decision": "degraded",
+        "signal_truth_state": "degraded",
+        "scorer_decision": "degraded",
+        "scorer_truth_state": "degraded",
+        "fidelity_decision": "blocked",
+        "fidelity_truth_state": "blocked",
+        "operator_readiness": "degraded",
+        "operator_advisory_decision": "degraded",
+        "operator_truth_state": "degraded",
+        "operator_rank_bias_mode": "portable_fallback",
+        "required_advisory_reason_code": "drained_worker_excluded",
+        "required_fidelity_reason_code": "observed_excluded_worker_used",
+        "expected_excluded_worker_id": "rch-e"
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "proves": "local fallback contamination fails closed through signal normalization, scoring, fidelity, and operator status",
+      "signal_fixture_scenario": "contaminated_local_fallback",
+      "scorer_fixture_scenario": "contaminated_local_fallback",
+      "fidelity_fixture_scenario": "contaminated_local_fallback",
+      "expected": {
+        "signal_decision": "fail_closed",
+        "signal_truth_state": "contaminated",
+        "scorer_decision": "fail_closed",
+        "scorer_truth_state": "contaminated",
+        "fidelity_decision": "fail_closed",
+        "fidelity_truth_state": "contaminated",
+        "operator_readiness": "contaminated",
+        "operator_advisory_decision": "fail_closed",
+        "operator_truth_state": "contaminated",
+        "operator_rank_bias_mode": "fail_closed",
+        "required_advisory_reason_code": "local_fallback_contaminated",
+        "required_fidelity_reason_code": "local_fallback_contaminated"
+      }
+    }
+  ]
+}

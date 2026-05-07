@@ -1,0 +1,147 @@
+{
+  "schema_version": "franken-engine.swarm-topology-aware-queue-no-mock-drill-contract.v1",
+  "bead_id": "bd-o9pr3",
+  "parent_bead_id": "bd-2pn2x",
+  "depends_on": [
+    "bd-utk1x",
+    "bd-q1zfn",
+    "bd-zvd0e",
+    "bd-2r3eq"
+  ],
+  "track_contract_path": "docs/swarm_topology_aware_queue_advisory_contract_v1.json",
+  "drill_script": "scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh",
+  "truth_gate_script": "scripts/e2e/swarm_topology_aware_queue_truth_gate.sh",
+  "docs": "docs/SWARM_TOPOLOGY_AWARE_QUEUE_NO_MOCK_DRILL.md",
+  "composed_scripts": [
+    "scripts/swarm_topology_queue_signal_normalizer.sh",
+    "scripts/swarm_topology_aware_queue_scorer.sh",
+    "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "fixture_bundles": [
+    "scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json",
+    "scripts/testdata/swarm_topology_aware_queue_scorer/cases.json",
+    "scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json",
+    "scripts/testdata/swarm_topology_aware_queue_no_mock_drill/cases.json"
+  ],
+  "required_repo_paths": [
+    "docs/swarm_topology_aware_queue_advisory_contract_v1.json",
+    "docs/swarm_topology_queue_signal_input_contract_v1.json",
+    "docs/swarm_topology_aware_queue_scorer_contract_v1.json",
+    "docs/swarm_topology_aware_queue_fidelity_ledger_contract_v1.json",
+    "docs/swarm_topology_aware_queue_no_mock_drill_contract_v1.json",
+    "docs/SWARM_TOPOLOGY_AWARE_QUEUE_NO_MOCK_DRILL.md",
+    "scripts/swarm_topology_queue_signal_normalizer.sh",
+    "scripts/swarm_topology_aware_queue_scorer.sh",
+    "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
+    "scripts/swarm_operator_status_report.sh",
+    "scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh",
+    "scripts/e2e/swarm_topology_aware_queue_truth_gate.sh",
+    "scripts/testdata/swarm_topology_queue_signal/queue_signal_fixtures.json",
+    "scripts/testdata/swarm_topology_aware_queue_scorer/cases.json",
+    "scripts/testdata/swarm_topology_aware_queue_fidelity_ledger/fixtures.json",
+    "scripts/testdata/swarm_topology_aware_queue_no_mock_drill/cases.json"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "healthy_hot_cache_reuse",
+      "expected_readiness": "ready",
+      "required_advisory_reason_code": "hot_cache_reuse_preferred",
+      "required_fidelity_reason_code": "matched_locality_advisory"
+    },
+    {
+      "scenario_id": "degraded_missing_locality_adoption",
+      "expected_readiness": "degraded",
+      "required_advisory_reason_code": "telemetry_gap",
+      "required_fidelity_reason_code": "cache_reuse_outcome_missed"
+    },
+    {
+      "scenario_id": "blocked_contradictory_locality",
+      "expected_readiness": "blocked",
+      "required_advisory_reason_code": "contradictory_locality",
+      "required_fidelity_reason_code": "locality_drift_observed"
+    },
+    {
+      "scenario_id": "drain_recommended_worker_exclusion",
+      "expected_readiness": "degraded",
+      "required_advisory_reason_code": "drained_worker_excluded",
+      "required_fidelity_reason_code": "drained_worker_avoidance_confirmed"
+    },
+    {
+      "scenario_id": "unstable_worker_downgrade",
+      "expected_readiness": "degraded",
+      "required_advisory_reason_code": "drained_worker_excluded",
+      "required_fidelity_reason_code": "observed_excluded_worker_used"
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_readiness": "contaminated",
+      "required_advisory_reason_code": "local_fallback_contaminated",
+      "required_fidelity_reason_code": "local_fallback_contaminated"
+    }
+  ],
+  "required_artifact_references": [
+    "swarm_topology_queue_signal_input.json",
+    "queue_advisory_bundle.json",
+    "swarm_topology_aware_queue_fidelity_receipt.json",
+    "swarm_topology_aware_queue_drift_ledger.json",
+    "status.json",
+    "swarm_topology_aware_queue_no_mock_drill_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "operator_truth_claims": [
+    "The drill is fixture-fed, proof-only, and advisory-only.",
+    "The drill runs the real topology queue signal normalizer, queue scorer, fidelity ledger, and operator-status reporter against checked-in fixtures.",
+    "The drill does not run Cargo or RCH work.",
+    "The drill does not mutate live workers, pin workers automatically, change live queue policy, reroute tasks automatically, edit br, release reservations, or send Agent Mail.",
+    "Missing locality or adoption evidence must stay degraded instead of healthy by default.",
+    "Contradictory locality must block queue-ranking advice.",
+    "Drain-recommended and probe-required workers must be excluded from preferred advice.",
+    "Repeated unstable-worker evidence must downgrade or block locality-aware queue advice.",
+    "Local fallback contamination must fail closed before topology-aware queue advice is trusted."
+  ],
+  "required_truth_gate_rejections": [
+    "heavy_cargo_or_rch_claim",
+    "live_worker_or_queue_mutation_claim",
+    "automatic_reroute_or_worker_pin_claim",
+    "degraded_optional_evidence_healthy_claim",
+    "contradictory_locality_healthy_claim",
+    "unstable_worker_not_downgraded_claim",
+    "contamination_non_fail_closed_claim"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_live_workers": false,
+    "pins_workers_automatically": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false,
+    "edits_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "treats_degraded_optional_evidence_as_healthy": false,
+    "treats_contradictory_locality_as_healthy": false,
+    "treats_unstable_worker_evidence_as_healthy": false,
+    "treats_contamination_as_non_fail_closed": false
+  },
+  "verification_commands": [
+    "bash -n scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh scripts/e2e/swarm_topology_aware_queue_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh scripts/e2e/swarm_topology_aware_queue_truth_gate.sh",
+    "jq empty docs/swarm_topology_aware_queue_no_mock_drill_contract_v1.json scripts/testdata/swarm_topology_aware_queue_no_mock_drill/cases.json",
+    "bash scripts/e2e/swarm_topology_aware_queue_truth_gate.sh check",
+    "bash scripts/e2e/swarm_topology_aware_queue_truth_gate.sh selftest",
+    "bash scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh check",
+    "bash scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh selftest",
+    "git diff --check -- docs/SWARM_TOPOLOGY_AWARE_QUEUE_NO_MOCK_DRILL.md docs/swarm_topology_aware_queue_no_mock_drill_contract_v1.json scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh scripts/e2e/swarm_topology_aware_queue_truth_gate.sh scripts/testdata/swarm_topology_aware_queue_no_mock_drill/cases.json"
+  ],
+  "artifact_retention_notes": [
+    "The drill emits one scenario directory per proof case under the selected output directory.",
+    "Each scenario retains normalizer, scorer, fidelity-ledger, and operator-status stdout and stderr logs.",
+    "The top-level report records stable artifact paths for the primary healthy case plus every scenario result."
+  ]
+}

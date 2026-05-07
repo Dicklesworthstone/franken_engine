@@ -1,0 +1,117 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-routing-contract.v1",
+  "bead_id": "bd-7h4ek",
+  "parent_bead_id": "bd-lg2qn",
+  "docs": "docs/SWARM_CAPABILITY_AFFINITY_ROUTING_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh",
+  "rust_module": "crates/franken-engine/src/swarm_control_loop.rs",
+  "toolchain_surface": "crates/franken-engine/src/seqlock_candidate_inventory.rs",
+  "bridged_surfaces": [
+    "scripts/swarm_execution_queue_input_normalizer.sh",
+    "scripts/swarm_topology_queue_signal_normalizer.sh",
+    "scripts/swarm_rch_stall_rehabilitation_ledger.sh",
+    "scripts/rch_remote_compile_stall_bundle_capture.sh",
+    "scripts/swarm_operator_status_report.sh"
+  ],
+  "required_preserved_inputs": [
+    "execution_queue_input_json",
+    "topology_queue_signal_input_json",
+    "rehabilitation_ledger_json",
+    "rch_remote_compile_stall_bundle_json",
+    "worker_capability_snapshot_json",
+    "worker_toolchain_snapshot_json"
+  ],
+  "optional_preserved_inputs": [
+    "resource_envelope_json",
+    "operator_status_snapshot_json",
+    "routing_outcome_samples_json"
+  ],
+  "minimum_advisory_subject_fields": [
+    "task_id",
+    "candidate_worker_ids",
+    "required_capabilities",
+    "observed_capabilities",
+    "required_toolchain_fingerprint",
+    "observed_toolchain_fingerprint",
+    "rehabilitation_state",
+    "proof_transport_state",
+    "local_fallback_detected",
+    "reason_codes"
+  ],
+  "future_artifacts": [
+    "capability_affinity_routing_advisory.json",
+    "events.jsonl",
+    "commands.txt",
+    "summary.md"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "required_reason_codes": [
+    "capability_coverage_confirmed",
+    "missing_required_capability",
+    "toolchain_parity_confirmed",
+    "toolchain_fingerprint_mismatch",
+    "rehabilitation_excluded_worker",
+    "broader_cohort_fallback",
+    "remote_stall_contaminated",
+    "local_fallback_contaminated",
+    "unsupported_toolchain"
+  ],
+  "fail_closed_rules": [
+    "missing required preserved inputs fail closed",
+    "contradictory worker capability or toolchain snapshots fail closed",
+    "local fallback contamination fails closed",
+    "contaminated remote stall truth fails closed",
+    "the contract must not claim it changed the live queue or repaired workers automatically"
+  ],
+  "blocked_rules": [
+    "missing required capability coverage blocks routing advice",
+    "toolchain fingerprint mismatch blocks routing advice",
+    "drained or probe-required workers remain excluded from preferred routing"
+  ],
+  "degraded_rules": [
+    "missing optional resource envelope degrades confidence",
+    "missing operator status snapshot degrades confidence",
+    "watch or rehab_candidate classifications degrade confidence instead of upgrading routing"
+  ],
+  "mutation_policy": {
+    "contract_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "proof_cases": [
+    "healthy_confirmed",
+    "degraded_missing_optional_support",
+    "blocked_missing_required_capability",
+    "blocked_toolchain_fingerprint_mismatch",
+    "contaminated_local_fallback",
+    "rehabilitation_excluded_cohort"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_capability_affinity_routing_contract_v1.json",
+    "bash -n scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh",
+    "bash scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_CAPABILITY_AFFINITY_ROUTING_CONTRACT.md docs/swarm_capability_affinity_routing_contract_v1.json scripts/e2e/swarm_capability_affinity_routing_contract_smoke.sh"
+  ]
+}

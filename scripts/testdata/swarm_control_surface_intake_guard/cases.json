@@ -1,0 +1,82 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intake-guard-fixtures.v1",
+  "catalog": {
+    "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+    "decision": "pass",
+    "surfaces": [
+      {"surface_id": "swarm_rch_stall_rehabilitation_ledger", "owning_bead_id": "bd-7ayfz", "intent_tags": ["rch", "remote-proof"], "symptom_tags": ["rch-stall", "local-fallback"], "validation_commands": ["bash scripts/e2e/swarm_rch_stall_rehabilitation_ledger_smoke.sh check"]},
+      {"surface_id": "swarm_agent_causal_trace_spine", "owning_bead_id": "bd-crcrp", "intent_tags": ["causal-trace", "ownership"], "symptom_tags": ["stale-owner", "reservation-drift"], "validation_commands": ["bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check"]},
+      {"surface_id": "swarm_autopilot_shadow_daemon", "owning_bead_id": "bd-djejh.1", "intent_tags": ["shadow-daemon", "source-watchers"], "symptom_tags": ["agent-mail-degraded", "rch-local-fallback"], "validation_commands": ["bash scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh check"]}
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "truly_new_idea",
+      "proposal": {
+        "title": "Add wasm lane pressure estimator",
+        "description": "New estimator for wasm-specific queue pressure.",
+        "intent_tags": ["wasm-pressure"],
+        "symptom_tags": ["wasm-backlog"],
+        "acceptance_criteria": ["fixture-fed estimator", "smoke coverage"]
+      },
+      "expected": {"recommended_action": "create_new", "exit_code": 0}
+    },
+    {
+      "case_id": "duplicate_remote_proof_catalog_idea",
+      "proposal": {
+        "title": "Add another RCH stall rehabilitation ledger",
+        "description": "Duplicate remote proof stall catalog idea.",
+        "intent_tags": ["rch", "remote-proof"],
+        "symptom_tags": ["rch-stall"],
+        "acceptance_criteria": ["route rch stalls"]
+      },
+      "expected": {"recommended_action": "duplicate_reject", "exit_code": 42}
+    },
+    {
+      "case_id": "successor_to_causal_trace",
+      "proposal": {
+        "title": "Add causal trace retention scoring",
+        "description": "Successor to causal trace surface.",
+        "intent_tags": ["causal-trace"],
+        "symptom_tags": ["reservation-drift"],
+        "relationship_hint": "successor",
+        "acceptance_criteria": ["consume causal trace graph", "emit retention score"]
+      },
+      "expected": {"recommended_action": "extend_existing", "exit_code": 0}
+    },
+    {
+      "case_id": "shadow_daemon_child_extension",
+      "proposal": {
+        "title": "Add shadow daemon stale source child",
+        "description": "Child extension under shadow daemon.",
+        "intent_tags": ["shadow-daemon"],
+        "symptom_tags": ["agent-mail-degraded"],
+        "parent_hint": "bd-djejh.1",
+        "acceptance_criteria": ["consume shadow source snapshots"]
+      },
+      "expected": {"recommended_action": "make_child_of", "exit_code": 0}
+    },
+    {
+      "case_id": "missing_acceptance_criteria",
+      "proposal": {
+        "title": "Maybe add another queue thing",
+        "description": "Ambiguous queue idea.",
+        "intent_tags": ["queue"],
+        "symptom_tags": ["unknown"]
+      },
+      "expected": {"recommended_action": "needs_manual_review", "exit_code": 0}
+    },
+    {
+      "case_id": "unsafe_live_mutation_proposal",
+      "proposal": {
+        "title": "Automatically release stale reservations",
+        "description": "Would release reservations and send Agent Mail automatically.",
+        "intent_tags": ["shadow-daemon"],
+        "symptom_tags": ["agent-mail-degraded"],
+        "mutation_claims": ["release reservations", "send Agent Mail"],
+        "acceptance_criteria": ["mutate live reservations"]
+      },
+      "expected": {"recommended_action": "duplicate_reject", "exit_code": 42}
+    }
+  ]
+}

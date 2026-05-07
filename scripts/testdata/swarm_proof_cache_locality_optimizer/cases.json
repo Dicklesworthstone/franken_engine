@@ -1,0 +1,1082 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-optimizer-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "high_roi_reuse",
+      "expected": {
+        "decision": "pass",
+        "required_action": "reuse_warm_target",
+        "required_reason_code": "",
+        "expected_exit_code": 0
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit",
+          "budget_profile": "large_host_protected",
+          "recommendations": [
+            {
+              "request_id": "proof-a",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "reuse_hot_cache",
+          "recommended_action": "retain_target_and_reuse_cache",
+          "warm_target_summary": {
+            "worker_id": "rch-a",
+            "target_dir": "/mnt/rch/target-a",
+            "roi": {
+              "expected_reuse_score": 800000,
+              "realized_reuse_score": 930000,
+              "reuse_delta": 130000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "archive_pressure_summary": {
+            "advisory": "retain",
+            "pressure_level": "low"
+          },
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "cache_hit",
+          "cache_hit_artifacts": [
+            {
+              "artifact_id": "proof-cache-a",
+              "artifact_path": "/proof/archive/proof-cache-a.json",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "required_refreshes": [],
+          "refresh_commands": []
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "retain",
+          "pressure_level": "low",
+          "recommended_action": "retain_hot_archive",
+          "policy_findings": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-a",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 16,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 16,
+            "memory_bytes_budget": 171798691840
+          },
+          "active_target_locks": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+          "decision": "pass",
+          "placement_readiness": "ready",
+          "recommended_topology_class": "numa_hot_cache_preferred",
+          "recommended_worker_targets": [
+            {
+              "rank": 1,
+              "lane_class": "heavy",
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "shard_hint": "heavy-numa-0-shard-0",
+              "cache_reuse": true,
+              "target_dir": "/mnt/rch/target-a",
+              "certainty": "confirmed"
+            }
+          ],
+          "warm_cache_residency_state": "hot",
+          "warm_cache_opportunities": [
+            {
+              "opportunity_id": "reuse_hot_cache",
+              "certainty": "confirmed",
+              "worker_ids": [
+                "rch-a"
+              ]
+            }
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false
+          }
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+          "receipt_id": "receipt-high-roi",
+          "decision": "pass",
+          "adoption_status": "adopted",
+          "recommended_worker_ids": [
+            "rch-a"
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+          "decision": "pass",
+          "receipts": [],
+          "adoption_history": [
+            {
+              "receipt_id": "receipt-high-roi",
+              "adoption_status": "adopted"
+            }
+          ],
+          "summary": {
+            "receipt_count": 1,
+            "adopted_count": 1
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "cold_fresh_target",
+      "expected": {
+        "decision": "degraded",
+        "required_action": "allocate_fresh_target",
+        "required_reason_code": "proof_cache_refresh_required",
+        "expected_exit_code": 0
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "proof-b",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "defer",
+          "recommended_action": "no_safe_prefetch",
+          "warm_target_summary": {
+            "worker_id": "rch-b",
+            "target_dir": null,
+            "roi": {
+              "expected_reuse_score": 200000,
+              "realized_reuse_score": 190000,
+              "reuse_delta": -10000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "refresh_required"
+          },
+          "archive_pressure_summary": {
+            "advisory": "retain",
+            "pressure_level": "low"
+          },
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "refresh_required",
+          "cache_hit_artifacts": [],
+          "required_refreshes": [
+            {
+              "artifact_id": "proof-cache-b",
+              "artifact_path": "/proof/archive/proof-cache-b.json"
+            }
+          ],
+          "refresh_commands": []
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "retain",
+          "pressure_level": "low",
+          "recommended_action": "retain_archive",
+          "policy_findings": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-b",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "small_host",
+          "memory_pressure": {
+            "total_bytes": 68719476736,
+            "available_bytes": 42949672960
+          },
+          "rch_slots": {
+            "available": 4,
+            "total": 4
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 4,
+            "memory_bytes_budget": 34359738368
+          },
+          "active_target_locks": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+          "decision": "pass",
+          "placement_readiness": "ready",
+          "recommended_topology_class": "numa_cache_cold_fallback",
+          "recommended_worker_targets": [
+            {
+              "rank": 1,
+              "lane_class": "heavy",
+              "worker_id": "rch-b",
+              "numa_node": 0,
+              "shard_hint": "heavy-numa-0-shard-0",
+              "cache_reuse": false,
+              "target_dir": null,
+              "certainty": "bounded_uncertain"
+            }
+          ],
+          "warm_cache_residency_state": "cold",
+          "warm_cache_opportunities": [
+            {
+              "opportunity_id": "cache_cold_fallback",
+              "certainty": "bounded_uncertain",
+              "worker_ids": [
+                "rch-b"
+              ]
+            }
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false
+          }
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+          "receipt_id": "receipt-cold",
+          "decision": "pass",
+          "adoption_status": "adopted",
+          "recommended_worker_ids": [
+            "rch-b"
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+          "decision": "pass",
+          "receipts": [],
+          "adoption_history": [
+            {
+              "receipt_id": "receipt-cold",
+              "adoption_status": "adopted"
+            }
+          ],
+          "summary": {
+            "receipt_count": 1,
+            "adopted_count": 1
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "disk_pressure_cooling",
+      "expected": {
+        "decision": "degraded",
+        "required_action": "cool_target",
+        "required_reason_code": "target_pressure_requires_cooling",
+        "expected_exit_code": 0
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit_narrow",
+          "budget_profile": "pressure",
+          "recommendations": [
+            {
+              "request_id": "proof-pressure",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "reuse_hot_cache",
+          "recommended_action": "retain_target_and_reuse_cache",
+          "warm_target_summary": {
+            "worker_id": "rch-a",
+            "target_dir": "/mnt/rch/target-pressure",
+            "roi": {
+              "expected_reuse_score": 700000,
+              "realized_reuse_score": 720000,
+              "reuse_delta": 20000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "archive_pressure_summary": {
+            "advisory": "retain",
+            "pressure_level": "high"
+          },
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "cache_hit",
+          "cache_hit_artifacts": [
+            {
+              "artifact_id": "proof-cache-pressure",
+              "artifact_path": "/proof/archive/proof-cache-pressure.json"
+            }
+          ],
+          "required_refreshes": [],
+          "refresh_commands": []
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "retain",
+          "pressure_level": "critical",
+          "recommended_action": "cool_archive",
+          "policy_findings": [
+            "critical_pressure_forced_eviction"
+          ]
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-a",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "blocked",
+          "readiness": "defer",
+          "host_profile": "64c_256g",
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 25769803776
+          },
+          "rch_slots": {
+            "available": 12,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12,
+            "memory_bytes_budget": 171798691840
+          },
+          "active_target_locks": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+          "decision": "pass",
+          "placement_readiness": "ready",
+          "recommended_topology_class": "numa_hot_cache_preferred",
+          "recommended_worker_targets": [
+            {
+              "rank": 1,
+              "lane_class": "heavy",
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "shard_hint": "heavy-numa-0-shard-0",
+              "cache_reuse": true,
+              "target_dir": "/mnt/rch/target-pressure",
+              "certainty": "confirmed"
+            }
+          ],
+          "warm_cache_residency_state": "hot",
+          "warm_cache_opportunities": [],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false
+          }
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+          "receipt_id": "receipt-pressure",
+          "decision": "pass",
+          "adoption_status": "adopted",
+          "recommended_worker_ids": [
+            "rch-a"
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+          "decision": "pass",
+          "receipts": [],
+          "adoption_history": [
+            {
+              "receipt_id": "receipt-pressure",
+              "adoption_status": "adopted"
+            }
+          ],
+          "summary": {
+            "receipt_count": 1,
+            "adopted_count": 1
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "active_target_pinned",
+      "expected": {
+        "decision": "blocked",
+        "required_action": "preserve_active_target",
+        "required_reason_code": "active_target_pinned",
+        "expected_exit_code": 75
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "proof-pinned",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "reuse_hot_cache",
+          "recommended_action": "retain_target_and_reuse_cache",
+          "warm_target_summary": {
+            "worker_id": "rch-c",
+            "target_dir": "/mnt/rch/active-target",
+            "roi": {
+              "expected_reuse_score": 600000,
+              "realized_reuse_score": 610000,
+              "reuse_delta": 10000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "archive_pressure_summary": {
+            "advisory": "retain",
+            "pressure_level": "low"
+          },
+          "active_target_locks": [
+            {
+              "target_dir": "/mnt/rch/active-target",
+              "reason": "live_remote_compile"
+            }
+          ],
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "cache_hit",
+          "cache_hit_artifacts": [
+            {
+              "artifact_id": "proof-cache-pinned",
+              "artifact_path": "/proof/archive/proof-cache-pinned.json"
+            }
+          ],
+          "required_refreshes": [],
+          "refresh_commands": [],
+          "active_target_locks": [
+            {
+              "target_dir": "/mnt/rch/active-target",
+              "reason": "active_build"
+            }
+          ]
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "retain",
+          "pressure_level": "low",
+          "recommended_action": "preserve_active_target",
+          "policy_findings": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-c",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 12,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12,
+            "memory_bytes_budget": 171798691840
+          },
+          "active_target_locks": [
+            {
+              "target_dir": "/mnt/rch/active-target",
+              "reason": "active_build"
+            }
+          ],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+          "decision": "pass",
+          "placement_readiness": "ready",
+          "recommended_topology_class": "numa_hot_cache_preferred",
+          "recommended_worker_targets": [
+            {
+              "rank": 1,
+              "lane_class": "heavy",
+              "worker_id": "rch-c",
+              "numa_node": 1,
+              "shard_hint": "heavy-numa-1-shard-0",
+              "cache_reuse": true,
+              "target_dir": "/mnt/rch/active-target",
+              "certainty": "confirmed"
+            }
+          ],
+          "warm_cache_residency_state": "hot",
+          "warm_cache_opportunities": [],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false
+          }
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+          "receipt_id": "receipt-pinned",
+          "decision": "pass",
+          "adoption_status": "adopted",
+          "recommended_worker_ids": [
+            "rch-c"
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+          "decision": "pass",
+          "receipts": [],
+          "adoption_history": [
+            {
+              "receipt_id": "receipt-pinned",
+              "adoption_status": "adopted"
+            }
+          ],
+          "summary": {
+            "receipt_count": 1,
+            "adopted_count": 1
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stale_archive_evidence",
+      "expected": {
+        "decision": "degraded",
+        "required_action": "refresh_archive_evidence",
+        "required_reason_code": "stale_archive_evidence",
+        "expected_exit_code": 0
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "proof-stale",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "reuse_hot_cache",
+          "recommended_action": "retain_target_and_reuse_cache",
+          "warm_target_summary": {
+            "worker_id": "rch-d",
+            "target_dir": "/mnt/rch/target-stale",
+            "roi": {
+              "expected_reuse_score": 600000,
+              "realized_reuse_score": 700000,
+              "reuse_delta": 100000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "archive_pressure_summary": {
+            "advisory": "compaction_first",
+            "pressure_level": "medium"
+          },
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "cache_hit",
+          "cache_hit_artifacts": [
+            {
+              "artifact_id": "proof-cache-stale",
+              "artifact_path": "/proof/archive/proof-cache-stale.json"
+            }
+          ],
+          "required_refreshes": [],
+          "refresh_commands": []
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "compaction_first",
+          "pressure_level": "medium",
+          "recommended_action": "compact_before_reuse",
+          "policy_findings": [
+            "archive_index_stale"
+          ]
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-d",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 12,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12,
+            "memory_bytes_budget": 171798691840
+          },
+          "active_target_locks": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-plan.v1",
+          "decision": "pass",
+          "placement_readiness": "ready",
+          "recommended_topology_class": "numa_hot_cache_preferred",
+          "recommended_worker_targets": [
+            {
+              "rank": 1,
+              "lane_class": "heavy",
+              "worker_id": "rch-d",
+              "numa_node": 0,
+              "shard_hint": "heavy-numa-0-shard-0",
+              "cache_reuse": true,
+              "target_dir": "/mnt/rch/target-stale",
+              "certainty": "confirmed"
+            }
+          ],
+          "warm_cache_residency_state": "hot",
+          "warm_cache_opportunities": [],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false
+          }
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-receipt.v1",
+          "receipt_id": "receipt-stale",
+          "decision": "pass",
+          "adoption_status": "adopted",
+          "recommended_worker_ids": [
+            "rch-d"
+          ],
+          "degraded_reasons": [],
+          "blocked_reasons": [],
+          "fail_closed_reasons": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "franken-engine.swarm-topology-placement-evidence-ledger.v1",
+          "decision": "pass",
+          "receipts": [],
+          "adoption_history": [
+            {
+              "receipt_id": "receipt-stale",
+              "adoption_status": "adopted"
+            }
+          ],
+          "summary": {
+            "receipt_count": 1,
+            "adopted_count": 1
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false,
+            "pins_workers_automatically": false,
+            "rebinds_hosts_automatically": false,
+            "enforces_placement_automatically": false
+          }
+        }
+      }
+    },
+    {
+      "case_id": "missing_swarm_scale_ii_evidence",
+      "expected": {
+        "decision": "fail_closed",
+        "required_action": "manual_review",
+        "required_reason_code": "missing_swarm_scale_ii_evidence",
+        "expected_exit_code": 42
+      },
+      "inputs": {
+        "admission_budget_plan_json": {
+          "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+          "decision": "admit",
+          "budget_profile": "balanced",
+          "recommendations": [
+            {
+              "request_id": "proof-missing",
+              "decision": "admit",
+              "budget_class": "protected",
+              "proof_obligation": true
+            }
+          ]
+        },
+        "warm_target_prefetch_roi_advisory_json": {
+          "schema_version": "franken-engine.swarm-warm-target-prefetch-roi-advisory.v1",
+          "advisory": "reuse_hot_cache",
+          "recommended_action": "retain_target_and_reuse_cache",
+          "warm_target_summary": {
+            "worker_id": "rch-e",
+            "target_dir": "/mnt/rch/target-missing",
+            "roi": {
+              "expected_reuse_score": 600000,
+              "realized_reuse_score": 700000,
+              "reuse_delta": 100000
+            }
+          },
+          "proof_cache_summary": {
+            "proof_cache_decision": "cache_hit"
+          },
+          "archive_pressure_summary": {
+            "advisory": "retain",
+            "pressure_level": "low"
+          },
+          "policy_findings": []
+        },
+        "proof_cache_plan_json": {
+          "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+          "proof_cache_decision": "cache_hit",
+          "cache_hit_artifacts": [
+            {
+              "artifact_id": "proof-cache-missing",
+              "artifact_path": "/proof/archive/proof-cache-missing.json"
+            }
+          ],
+          "required_refreshes": [],
+          "refresh_commands": []
+        },
+        "archive_pressure_scoreboard_json": {
+          "schema_version": "franken-engine.remote-proof-archive-pressure-scoreboard.v1",
+          "advisory": "retain",
+          "pressure_level": "low",
+          "recommended_action": "retain_archive",
+          "policy_findings": []
+        },
+        "worker_truth_report_json": {
+          "schema_version": "franken-engine.rch-worker-truth-parity-report.v1",
+          "decision": "pass",
+          "worker_rows": [
+            {
+              "worker_id": "rch-e",
+              "daemon_status": "idle",
+              "probe_schedulable": true,
+              "queue_schedulable": true
+            }
+          ],
+          "findings": []
+        },
+        "swarm_resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "readiness": "ready",
+          "host_profile": "64c_256g",
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
+          "rch_slots": {
+            "available": 12,
+            "total": 16
+          },
+          "capacity_budget": {
+            "remote_rch_slot_limit": 12,
+            "memory_bytes_budget": 171798691840
+          },
+          "active_target_locks": [],
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false,
+            "mutates_remote_workers": false,
+            "changes_live_queue_policy": false
+          }
+        },
+        "swarm_topology_placement_plan_json": {
+          "schema_version": "missing",
+          "decision": "missing",
+          "recommended_worker_targets": [],
+          "fail_closed_reasons": []
+        },
+        "swarm_topology_placement_receipt_json": {
+          "schema_version": "missing",
+          "decision": "missing",
+          "adoption_status": "missing",
+          "recommended_worker_ids": [],
+          "fail_closed_reasons": []
+        },
+        "swarm_topology_placement_evidence_ledger_json": {
+          "schema_version": "missing",
+          "decision": "missing",
+          "receipts": [],
+          "adoption_history": [],
+          "summary": {}
+        }
+      }
+    }
+  ]
+}

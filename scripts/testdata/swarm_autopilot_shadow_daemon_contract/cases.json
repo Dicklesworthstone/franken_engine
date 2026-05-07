@@ -1,0 +1,244 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-daemon-fixtures.v1",
+  "base_shadow_status": {
+    "schema_version": "franken-engine.swarm-autopilot-shadow-status.v1",
+    "shadow_run_id": "shadow-daemon-contract-smoke",
+    "truth_state": "confirmed",
+    "decision": "pass",
+    "source_snapshot_status": {
+      "br_queue": {
+        "source_id": "br-ready-healthy",
+        "source_kind": "br_queue_snapshot_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:brready000000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123000,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/br_ready.json",
+        "error_codes": []
+      },
+      "bv_robot_plan": {
+        "source_id": "bv-plan-healthy",
+        "source_kind": "bv_robot_plan_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:bvplan000000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123001,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/bv_robot_plan.json",
+        "error_codes": []
+      },
+      "agent_mail": {
+        "source_id": "agent-mail-healthy",
+        "source_kind": "agent_mail_snapshot_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:mail00000000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123002,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/agent_mail_snapshot.json",
+        "error_codes": []
+      },
+      "rch_status": {
+        "source_id": "rch-status-healthy",
+        "source_kind": "rch_status_snapshot_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:rch000000000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123003,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/rch_status.json",
+        "error_codes": []
+      },
+      "git_state": {
+        "source_id": "git-state-healthy",
+        "source_kind": "git_state_snapshot_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:git000000000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123004,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/git_state.json",
+        "error_codes": []
+      },
+      "artifact_bundles": {
+        "source_id": "artifact-bundles-healthy",
+        "source_kind": "artifact_bundle_snapshot_json",
+        "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+        "content_hash": "sha256:artifact0000000000000000000000000000000000000000000000000001",
+        "collected_epoch_seconds": 1778123005,
+        "freshness_window_seconds": 300,
+        "fresh": true,
+        "degraded": false,
+        "raw_payload_ref": "fixture/artifact_bundles.json",
+        "error_codes": []
+      }
+    },
+    "source_snapshot_ids": [
+      "br-ready-healthy",
+      "bv-plan-healthy",
+      "agent-mail-healthy",
+      "rch-status-healthy",
+      "git-state-healthy",
+      "artifact-bundles-healthy"
+    ],
+    "advisory_recommendations": [
+      {
+        "recommendation_id": "shadow-rec-observe-ready",
+        "action_class": "observe",
+        "command_text": "br ready --json | jq '.[0:15]'",
+        "executes_mutation": false,
+        "remediation_only": true,
+        "source_event_ids": [
+          "br-ready-healthy",
+          "bv-plan-healthy"
+        ],
+        "source_hashes": [
+          "sha256:brready000000000000000000000000000000000000000000000000000001",
+          "sha256:bvplan000000000000000000000000000000000000000000000000000001"
+        ],
+        "degradation_state": "none"
+      }
+    ],
+    "rejected_mutation_claims": [],
+    "error_codes": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_git": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false,
+      "writes_outside_output_dir": false
+    },
+    "sibling_reuse": {
+      "persistence": "/dp/frankensqlite",
+      "tui": "/dp/frankentui",
+      "service_api": "/dp/fastapi_rust"
+    },
+    "artifact_paths": {
+      "shadow_status_json": "artifacts/shadow_status.json",
+      "recommendations_json": "artifacts/recommendations.json",
+      "source_snapshots_jsonl": "artifacts/source_snapshots.jsonl"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_advisory_output",
+      "expected": {
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "expected_exit_code": 0
+      },
+      "status_overrides": {}
+    },
+    {
+      "case_id": "stale_source_refusal",
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 1,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+      },
+      "status_overrides": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "source_snapshot_status": {
+          "br_queue": {
+            "fresh": false,
+            "degraded": true,
+            "error_codes": [
+              "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+            ]
+          }
+        },
+        "error_codes": [
+          "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+        ]
+      }
+    },
+    {
+      "case_id": "unsupported_mutation_claim",
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 1,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION"
+      },
+      "status_overrides": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "rejected_mutation_claims": [
+          {
+            "claim_id": "reject-br-claim",
+            "command_text": "br update bd-example --claim",
+            "rejection_error_code": "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION",
+            "executed": false
+          }
+        ],
+        "error_codes": [
+          "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION"
+        ]
+      }
+    },
+    {
+      "case_id": "degraded_agent_mail_rch_sources",
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+      },
+      "status_overrides": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "source_snapshot_status": {
+          "agent_mail": {
+            "degraded": true,
+            "error_codes": [
+              "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+            ]
+          },
+          "rch_status": {
+            "degraded": true,
+            "error_codes": [
+              "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+            ]
+          }
+        },
+        "advisory_recommendations": [
+          {
+            "recommendation_id": "shadow-rec-degraded-refresh",
+            "action_class": "refresh_sources",
+            "command_text": "Re-run one-shot source collection after Agent Mail and rch status recover.",
+            "executes_mutation": false,
+            "remediation_only": true,
+            "source_event_ids": [
+              "agent-mail-healthy",
+              "rch-status-healthy"
+            ],
+            "source_hashes": [
+              "sha256:mail00000000000000000000000000000000000000000000000000000001",
+              "sha256:rch000000000000000000000000000000000000000000000000000000001"
+            ],
+            "degradation_state": "source_degraded"
+          }
+        ],
+        "error_codes": [
+          "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+        ]
+      }
+    }
+  ]
+}

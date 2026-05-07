@@ -1,0 +1,160 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-daemon-contract.v1",
+  "bead_id": "bd-djejh.1",
+  "parent_bead_id": "bd-djejh",
+  "follow_on_beads": {
+    "evidence_journal": "bd-djejh.2",
+    "source_watchers": "bd-djejh.3",
+    "decision_composer": "bd-djejh.4",
+    "replay_drift_verifier": "bd-djejh.5",
+    "no_mock_lifecycle_drill": "bd-djejh.6",
+    "ui_service_handoff": "bd-djejh.7",
+    "governance_gate": "bd-djejh.8"
+  },
+  "operator_docs": "docs/SWARM_AUTOPILOT_SHADOW_DAEMON_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_shadow_daemon_contract/cases.json",
+  "source_snapshot_schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+  "journal_event_schema_version": "franken-engine.swarm-autopilot-shadow-journal-event.v1",
+  "shadow_status_schema_version": "franken-engine.swarm-autopilot-shadow-status.v1",
+  "recommendation_bundle_schema_version": "franken-engine.swarm-autopilot-shadow-recommendations.v1",
+  "truth_gate_report_schema_version": "franken-engine.swarm-autopilot-shadow-truth-gate-report.v1",
+  "sibling_reuse": {
+    "persistence": "/dp/frankensqlite",
+    "tui": "/dp/frankentui",
+    "service_api": "/dp/fastapi_rust",
+    "local_sqlite_policy_stack_allowed": false,
+    "local_tui_replacement_allowed": false,
+    "local_api_framework_allowed": false
+  },
+  "required_sources": [
+    "br_queue_snapshot_json",
+    "bv_robot_plan_json",
+    "agent_mail_snapshot_json",
+    "rch_status_snapshot_json",
+    "git_state_snapshot_json",
+    "artifact_bundle_snapshot_json"
+  ],
+  "optional_sources": [
+    "operator_overrides_json"
+  ],
+  "source_snapshot_required_fields": [
+    "source_id",
+    "source_kind",
+    "schema_version",
+    "content_hash",
+    "collected_epoch_seconds",
+    "freshness_window_seconds",
+    "fresh",
+    "degraded",
+    "raw_payload_ref",
+    "error_codes"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "required_shadow_status_fields": [
+    "shadow_run_id",
+    "truth_state",
+    "decision",
+    "source_snapshot_status.br_queue",
+    "source_snapshot_status.bv_robot_plan",
+    "source_snapshot_status.agent_mail",
+    "source_snapshot_status.rch_status",
+    "source_snapshot_status.git_state",
+    "source_snapshot_status.artifact_bundles",
+    "source_snapshot_ids",
+    "advisory_recommendations",
+    "rejected_mutation_claims",
+    "error_codes",
+    "mutation_policy",
+    "sibling_reuse",
+    "artifact_paths"
+  ],
+  "recommendation_required_fields": [
+    "recommendation_id",
+    "action_class",
+    "command_text",
+    "executes_mutation",
+    "remediation_only",
+    "source_event_ids",
+    "source_hashes",
+    "degradation_state"
+  ],
+  "fail_closed_rules": [
+    "missing required snapshots fail closed",
+    "stale required snapshots fail closed",
+    "malformed snapshot payloads fail closed",
+    "contradictory bead ownership fails closed",
+    "unsupported mutation claims fail closed",
+    "local rch fallback contamination fails closed",
+    "dirty shared worktree ambiguity degrades or blocks according to source freshness",
+    "recommendations without source ids, hashes, timestamps, and degradation state fail closed"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-MALFORMED-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP",
+    "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION",
+    "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK",
+    "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "fixture_cases": [
+    {
+      "case_id": "healthy_advisory_output",
+      "expected_truth_state": "confirmed",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "stale_source_refusal",
+      "expected_truth_state": "blocked",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE"
+    },
+    {
+      "case_id": "unsupported_mutation_claim",
+      "expected_truth_state": "blocked",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION"
+    },
+    {
+      "case_id": "degraded_agent_mail_rch_sources",
+      "expected_truth_state": "degraded",
+      "expected_decision": "degraded",
+      "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+    }
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_shadow_daemon_contract_v1.json scripts/testdata/swarm_autopilot_shadow_daemon_contract/cases.json",
+    "bash -n scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_SHADOW_DAEMON_CONTRACT.md docs/swarm_autopilot_shadow_daemon_contract_v1.json scripts/e2e/swarm_autopilot_shadow_daemon_contract_smoke.sh scripts/testdata/swarm_autopilot_shadow_daemon_contract/cases.json"
+  ]
+}

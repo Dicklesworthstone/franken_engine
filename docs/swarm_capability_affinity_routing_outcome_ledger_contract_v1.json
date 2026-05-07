@@ -1,0 +1,86 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-routing-outcome-ledger-contract.v1",
+  "bead_id": "bd-wa7by",
+  "parent_bead_id": "bd-lg2qn",
+  "depends_on": [
+    "bd-vp44k"
+  ],
+  "script": "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
+  "smoke_script": "scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh",
+  "docs": "docs/SWARM_CAPABILITY_AFFINITY_ROUTING_OUTCOME_LEDGER.md",
+  "fixture_bundle": "scripts/testdata/swarm_capability_affinity_routing_outcome_ledger/fixtures.json",
+  "ledger_schema_version": "franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1",
+  "source_schema_version": "franken-engine.swarm-capability-affinity-routing-outcome-sources.v1",
+  "required_inputs": [
+    "capability_affinity_routing_advisory_json",
+    "routing_outcome_samples_json"
+  ],
+  "ledger_fields": [
+    "outcome_ledger_id",
+    "truth_state",
+    "decision",
+    "reason_codes",
+    "matched_task_ids",
+    "mismatched_task_ids",
+    "capability_gap_task_ids",
+    "toolchain_drift_task_ids",
+    "contamination_task_ids",
+    "task_outcomes",
+    "source_artifacts",
+    "artifact_paths",
+    "mutation_policy"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "blocked",
+    "fail_closed"
+  ],
+  "reason_codes": [
+    "matched_recommended_route",
+    "matched_broader_cohort",
+    "observed_route_mismatch",
+    "observed_capability_gap",
+    "observed_toolchain_drift",
+    "exclusion_reason_recorded",
+    "local_fallback_contaminated"
+  ],
+  "fail_closed_rules": [
+    "Missing required advisory or outcome samples fail closed.",
+    "Malformed advisory or outcome samples fail closed.",
+    "Local fallback contamination fails closed and invalidates remote-only routing truth.",
+    "The ledger must not claim that it changed the live queue, rerouted tasks, or repaired workers automatically."
+  ],
+  "blocked_rules": [
+    "Toolchain drift receipts block the outcome ledger.",
+    "Observed capability gaps block the outcome ledger.",
+    "Blocked upstream routing advice remains blocked in the outcome ledger."
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "selftest_scenarios": [
+    "successful_cohort_match",
+    "degraded_exclusion_reason_recorded",
+    "blocked_toolchain_drift_receipt",
+    "blocked_capability_gap_receipt",
+    "contaminated_local_fallback"
+  ]
+}

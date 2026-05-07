@@ -1,0 +1,265 @@
+{
+  "schema_version": "franken-engine.swarm-capability-affinity-routing-outcome-ledger-fixtures.v1",
+  "scenarios": [
+    {
+      "scenario_id": "successful_cohort_match",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "expected_matched_task_ids": [
+        "task-1"
+      ],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "matched_recommended_route"
+      ],
+      "inputs": {
+        "capability_affinity_routing_advisory_json": {
+          "schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "reason_codes": [
+            "capability_coverage_confirmed",
+            "toolchain_parity_confirmed",
+            "preferred_cohort_confirmed"
+          ],
+          "worker_affinity_summary": {
+            "routing_mode": "capability_affinity_confirmed",
+            "advised_worker_ids": [
+              "rch-a"
+            ]
+          },
+          "capability_coverage_summary": {
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_parity_summary": {
+            "toolchain_mismatch_task_ids": []
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-1",
+              "recommended_worker_id": "rch-a",
+              "observed_worker_id": "rch-a",
+              "observed_outcome": "matched_recommended_route"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "degraded_exclusion_reason_recorded",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "expected_matched_task_ids": [
+        "task-2"
+      ],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "matched_broader_cohort",
+        "exclusion_reason_recorded",
+        "broader_cohort_fallback"
+      ],
+      "inputs": {
+        "capability_affinity_routing_advisory_json": {
+          "schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+          "truth_state": "degraded",
+          "decision": "degraded",
+          "reason_codes": [
+            "broader_cohort_fallback",
+            "watch_workers_present"
+          ],
+          "worker_affinity_summary": {
+            "routing_mode": "broader_cohort_fallback",
+            "advised_worker_ids": [
+              "rch-c"
+            ]
+          },
+          "capability_coverage_summary": {
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_parity_summary": {
+            "toolchain_mismatch_task_ids": []
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-2",
+              "recommended_worker_id": "rch-c",
+              "observed_worker_id": "rch-c",
+              "observed_outcome": "matched_broader_cohort"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "blocked_toolchain_drift_receipt",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_matched_task_ids": [],
+      "expected_blocked_task_ids": [
+        "task-3"
+      ],
+      "expected_reason_codes": [
+        "toolchain_drift_observed",
+        "observed_toolchain_drift"
+      ],
+      "inputs": {
+        "capability_affinity_routing_advisory_json": {
+          "schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "reason_codes": [
+            "capability_coverage_confirmed",
+            "toolchain_parity_confirmed"
+          ],
+          "worker_affinity_summary": {
+            "routing_mode": "capability_affinity_confirmed",
+            "advised_worker_ids": [
+              "rch-d"
+            ]
+          },
+          "capability_coverage_summary": {
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_parity_summary": {
+            "toolchain_mismatch_task_ids": []
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-3",
+              "recommended_worker_id": "rch-d",
+              "observed_worker_id": "rch-d",
+              "observed_outcome": "toolchain_drift_observed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "blocked_capability_gap_receipt",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_matched_task_ids": [],
+      "expected_blocked_task_ids": [
+        "task-4"
+      ],
+      "expected_reason_codes": [
+        "capability_gap_observed",
+        "observed_capability_gap"
+      ],
+      "inputs": {
+        "capability_affinity_routing_advisory_json": {
+          "schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+          "truth_state": "confirmed",
+          "decision": "pass",
+          "reason_codes": [
+            "capability_coverage_confirmed",
+            "toolchain_parity_confirmed"
+          ],
+          "worker_affinity_summary": {
+            "routing_mode": "capability_affinity_confirmed",
+            "advised_worker_ids": [
+              "rch-e"
+            ]
+          },
+          "capability_coverage_summary": {
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_parity_summary": {
+            "toolchain_mismatch_task_ids": []
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-4",
+              "recommended_worker_id": "rch-e",
+              "observed_worker_id": "rch-e",
+              "observed_outcome": "capability_gap_observed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "contaminated_local_fallback",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "expected_matched_task_ids": [],
+      "expected_blocked_task_ids": [],
+      "expected_reason_codes": [
+        "local_fallback_contaminated"
+      ],
+      "inputs": {
+        "capability_affinity_routing_advisory_json": {
+          "schema_version": "franken-engine.capability-affinity-queue-routing-advisory.v1",
+          "truth_state": "contaminated",
+          "decision": "fail_closed",
+          "reason_codes": [
+            "local_fallback_contaminated"
+          ],
+          "worker_affinity_summary": {
+            "routing_mode": "fail_closed",
+            "advised_worker_ids": []
+          },
+          "capability_coverage_summary": {
+            "missing_required_capability_task_ids": []
+          },
+          "toolchain_parity_summary": {
+            "toolchain_mismatch_task_ids": []
+          },
+          "mutation_policy": {
+            "advisory_only": true,
+            "runs_cargo": false,
+            "runs_rch": false
+          }
+        },
+        "routing_outcome_samples_json": {
+          "schema_version": "franken-engine.swarm-capability-affinity-routing-outcomes.v1",
+          "samples": [
+            {
+              "task_id": "task-5",
+              "recommended_worker_id": "rch-f",
+              "observed_worker_id": "rch-f",
+              "observed_outcome": "local_fallback_contaminated"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

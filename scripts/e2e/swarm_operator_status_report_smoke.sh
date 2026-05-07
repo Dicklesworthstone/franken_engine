@@ -1302,6 +1302,138 @@ write_queue_fidelity_fixtures() {
   }' >"${fixture_dir}/frontier.json"
 }
 
+write_topology_queue_advisory_fixtures() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local decision="pass"
+  local truth_state="confirmed"
+  local rank_bias_mode="prefer_hot_cache_locality"
+  local reason_codes_json='["hot_cache_reuse_preferred","cache_reuse_outcome_confirmed"]'
+  local degraded_reasons_json='[]'
+  local blocked_reasons_json='[]'
+  local fail_closed_reasons_json='[]'
+  local excluded_worker_ids_json='[]'
+  local confirmed_task_ids_json='["bd-ready-a"]'
+  local missed_task_ids_json='[]'
+  local drift_task_ids_json='[]'
+  local contamination_task_ids_json='[]'
+  local proof_transport_state="remote_only_ok"
+
+  case "$mode" in
+    healthy)
+      ;;
+    degraded)
+      decision="degraded"
+      truth_state="degraded"
+      rank_bias_mode="prefer_numa_locality"
+      reason_codes_json='["telemetry_gap","cache_reuse_outcome_missed"]'
+      degraded_reasons_json='[{"code":"telemetry_gap","source_id":"operator_status_snapshot_json","detail":"optional locality support evidence is missing"}]'
+      confirmed_task_ids_json='[]'
+      missed_task_ids_json='["bd-ready-a"]'
+      ;;
+    blocked)
+      decision="blocked"
+      truth_state="blocked"
+      rank_bias_mode="blocked_contradictory_locality"
+      reason_codes_json='["contradictory_locality"]'
+      blocked_reasons_json='[{"code":"contradictory_locality","source_id":"locality_outcome_samples_json","detail":"outcome samples disagree on worker locality"}]'
+      confirmed_task_ids_json='[]'
+      drift_task_ids_json='["bd-ready-a"]'
+      ;;
+    contaminated)
+      decision="fail_closed"
+      truth_state="contaminated"
+      rank_bias_mode="fail_closed"
+      reason_codes_json='["local_fallback_contaminated"]'
+      fail_closed_reasons_json='[{"code":"local_fallback_contaminated","source_id":"topology_queue_signal_input_json","detail":"local fallback contamination invalidates queue-locality advice"}]'
+      excluded_worker_ids_json='["rch-local"]'
+      confirmed_task_ids_json='[]'
+      contamination_task_ids_json='["bd-ready-a"]'
+      proof_transport_state="local_fallback_detected"
+      ;;
+    *)
+      record_failure "unknown topology queue advisory fixture mode ${mode}"
+      return 1
+      ;;
+  esac
+
+  jq -n \
+    --arg decision "$decision" \
+    --arg truth_state "$truth_state" \
+    --arg rank_bias_mode "$rank_bias_mode" \
+    --arg proof_transport_state "$proof_transport_state" \
+    --arg advisory_path "${fixture_dir}/swarm_topology_aware_queue_advisory.json" \
+    --argjson reason_codes "$reason_codes_json" \
+    --argjson degraded_reasons "$degraded_reasons_json" \
+    --argjson blocked_reasons "$blocked_reasons_json" \
+    --argjson fail_closed_reasons "$fail_closed_reasons_json" \
+    --argjson excluded_worker_ids "$excluded_worker_ids_json" \
+    --argjson confirmed_task_ids "$confirmed_task_ids_json" \
+    --argjson missed_task_ids "$missed_task_ids_json" \
+    --argjson drift_task_ids "$drift_task_ids_json" \
+    --argjson contamination_task_ids "$contamination_task_ids_json" '
+    {
+      schema_version:"franken-engine.swarm-topology-aware-queue-advisory.v1",
+      source_schema_version:"franken-engine.swarm-topology-aware-queue-advisory-sources.v1",
+      queue_advisory_id:"tqa-operator-status-smoke",
+      source_revision:"smoke-rev",
+      truth_state:$truth_state,
+      decision:$decision,
+      reason_codes:$reason_codes,
+      worker_exclusions:{
+        excluded_worker_ids:$excluded_worker_ids,
+        excluded_worker_count:($excluded_worker_ids | length),
+        drained_avoided_task_ids:[],
+        probe_avoided_task_ids:[]
+      },
+      locality_bias_summary:{
+        rank_bias_mode:$rank_bias_mode,
+        preferred_worker_ids:["rch-a"],
+        usable_preferred_worker_ids:(if $decision == "fail_closed" then [] else ["rch-a"] end),
+        preferred_numa_nodes:[0],
+        hot_cache_reuse_confidence_millionths:(if $decision == "pass" then 940000 else 420000 end),
+        locality_confidence_millionths:(if $decision == "pass" then 900000 else 380000 end)
+      },
+      risk_budget_summary:{
+        task_count:1,
+        queue_row_count:1,
+        bottleneck_count:1,
+        critical_bottleneck_count:0,
+        proof_transport_state:$proof_transport_state
+      },
+      feedback_summary:{
+        locality_outcome_sample_count:1,
+        confirmed_task_ids:$confirmed_task_ids,
+        missed_cache_reuse_task_ids:$missed_task_ids,
+        drift_task_ids:$drift_task_ids,
+        contamination_task_ids:$contamination_task_ids
+      },
+      degraded_reasons:$degraded_reasons,
+      blocked_reasons:$blocked_reasons,
+      fail_closed_reasons:$fail_closed_reasons,
+      artifact_paths:{
+        advisory_bundle_json:$advisory_path,
+        sources_json:"swarm_topology_aware_queue_sources.json",
+        events_jsonl:"events.jsonl",
+        commands_txt:"commands.txt"
+      },
+      mutation_policy:{
+        advisory_only:true,
+        proof_only:true,
+        fixture_fed_only:true,
+        mutates_br:false,
+        reassigns_beads:false,
+        releases_reservations:false,
+        sends_agent_mail:false,
+        runs_cargo:false,
+        runs_rch:false,
+        mutates_remote_workers:false,
+        changes_live_queue_policy:false,
+        pins_workers_automatically:false
+      }
+    }' >"${fixture_dir}/swarm_topology_aware_queue_advisory.json"
+}
+
 write_queue_tuning_promotion_fixtures() {
   local fixture_dir="$1"
   local mode="$2"
@@ -2210,6 +2342,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_topology_placement_fixtures "$fixture_dir" "blocked"
       ;;
+    topology_queue_advisory_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_queue_advisory_fixtures "$fixture_dir" "healthy"
+      ;;
+    topology_queue_advisory_degraded)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_queue_advisory_fixtures "$fixture_dir" "degraded"
+      ;;
+    topology_queue_advisory_blocked)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_queue_advisory_fixtures "$fixture_dir" "blocked"
+      ;;
+    topology_queue_advisory_contaminated)
+      write_healthy_fixtures "$fixture_dir"
+      write_topology_queue_advisory_fixtures "$fixture_dir" "contaminated"
+      ;;
     capability_affinity_healthy)
       write_healthy_fixtures "$fixture_dir"
       write_capability_affinity_fixtures "$fixture_dir" "healthy"
@@ -2269,6 +2417,7 @@ run_case() {
   [[ -f "${fixture_dir}/swarm_topology_placement_plan.json" ]] && extra_args+=(--swarm-topology-placement-plan-json "${fixture_dir}/swarm_topology_placement_plan.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_receipt.json" ]] && extra_args+=(--swarm-topology-placement-receipt-json "${fixture_dir}/swarm_topology_placement_receipt.json")
   [[ -f "${fixture_dir}/swarm_topology_placement_evidence_ledger.json" ]] && extra_args+=(--swarm-topology-placement-evidence-ledger-json "${fixture_dir}/swarm_topology_placement_evidence_ledger.json")
+  [[ -f "${fixture_dir}/swarm_topology_aware_queue_advisory.json" ]] && extra_args+=(--swarm-topology-aware-queue-advisory-json "${fixture_dir}/swarm_topology_aware_queue_advisory.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_advisory.json" ]] && extra_args+=(--swarm-capability-affinity-routing-advisory-json "${fixture_dir}/swarm_capability_affinity_routing_advisory.json")
   [[ -f "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json" ]] && extra_args+=(--swarm-capability-affinity-routing-outcome-ledger-json "${fixture_dir}/swarm_capability_affinity_routing_outcome_ledger.json")
 
@@ -2395,6 +2544,26 @@ run_case() {
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_br == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.mutates_remote_workers == false)
     and (.predictive_dashboard.swarm_topology_placement.mutation_policy.changes_live_queue_policy == false)
+    and ((.predictive_dashboard | has("swarm_topology_aware_queue_advisory") | not) or (
+      (.predictive_dashboard.swarm_topology_aware_queue_advisory.readiness | type == "string")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision | type == "string")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.truth_state | type == "string")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode | type == "string")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.reason_codes | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.preferred_worker_ids | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.usable_preferred_worker_ids | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_ids | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.confirmed_task_ids | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.missed_cache_reuse_task_ids | type == "array")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.queue_counts.queue_row_count | type == "number")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.related_queue_fidelity.trust_level | type == "string")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.artifact_paths | type == "object")
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.advisory_only == true)
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.mutates_br == false)
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.mutates_remote_workers == false)
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.changes_live_queue_policy == false)
+      and (.predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy.pins_workers_automatically == false)
+    ))
     and (.predictive_dashboard.swarm_capability_affinity_routing.readiness | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.advisory_decision | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision | type == "string")
@@ -2876,6 +3045,49 @@ run_case() {
         and any(.degraded[]; .component == "swarm_topology_placement")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    topology_queue_advisory_healthy)
+      jq -e '
+        .predictive_dashboard.swarm_topology_aware_queue_advisory.readiness == "ready"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.severity == "ok"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision == "pass"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.truth_state == "confirmed"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode == "prefer_hot_cache_locality"
+        and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.confirmed_task_ids | index("bd-ready-a"))
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_count == 0
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_queue_advisory_degraded)
+      jq -e '
+        .predictive_dashboard.swarm_topology_aware_queue_advisory.readiness == "degraded"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.severity == "warning"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision == "degraded"
+        and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.missed_cache_reuse_task_ids | index("bd-ready-a"))
+        and .recommendations[0].action == "review_topology_queue_advisory"
+        and any(.degraded[]; .component == "swarm_topology_aware_queue_advisory")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_queue_advisory_blocked)
+      jq -e '
+        .predictive_dashboard.swarm_topology_aware_queue_advisory.readiness == "blocked"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.severity == "warning"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision == "blocked"
+        and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.drift_task_ids | index("bd-ready-a"))
+        and .recommendations[0].action == "respect_topology_queue_advisory_block"
+        and any(.degraded[]; .component == "swarm_topology_aware_queue_advisory")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    topology_queue_advisory_contaminated)
+      jq -e '
+        .predictive_dashboard.swarm_topology_aware_queue_advisory.readiness == "contaminated"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.severity == "critical"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision == "fail_closed"
+        and .predictive_dashboard.swarm_topology_aware_queue_advisory.truth_state == "contaminated"
+        and (.predictive_dashboard.swarm_topology_aware_queue_advisory.reason_codes | index("local_fallback_contaminated"))
+        and (.predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance.contamination_task_ids | index("bd-ready-a"))
+        and .recommendations[0].action == "respect_topology_queue_advisory_contamination"
+        and any(.degraded[]; .component == "swarm_topology_aware_queue_advisory")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
     capability_affinity_healthy)
       jq -e '
         .predictive_dashboard.swarm_capability_affinity_routing.artifact_statuses.routing_advisory == "provided"
@@ -2983,6 +3195,10 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("topology_placement_drifted"))
     and (.golden_fixture_cases | index("topology_placement_expired"))
     and (.golden_fixture_cases | index("topology_placement_blocked"))
+    and (.golden_fixture_cases | index("topology_queue_advisory_healthy"))
+    and (.golden_fixture_cases | index("topology_queue_advisory_degraded"))
+    and (.golden_fixture_cases | index("topology_queue_advisory_blocked"))
+    and (.golden_fixture_cases | index("topology_queue_advisory_contaminated"))
     and (.golden_fixture_cases | index("capability_affinity_healthy"))
     and (.golden_fixture_cases | index("capability_affinity_degraded"))
     and (.golden_fixture_cases | index("capability_affinity_blocked"))
@@ -3041,6 +3257,17 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.adoption_drift_reason_codes"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.expiry"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_placement.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.truth_state"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.preferred_worker_ids"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.usable_preferred_worker_ids"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.cache_reuse_guidance"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.related_queue_fidelity"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.artifact_paths"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_topology_aware_queue_advisory.mutation_policy"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.readiness"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.advisory_decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision"))
@@ -3092,6 +3319,8 @@ assert_dashboard_contract_truth() {
   grep -Fq 'docs/swarm_resource_envelope_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_topology_placement_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_topology_placement_receipt_ledger.sh' "$contract_doc"
+  grep -Fq 'scripts/swarm_topology_aware_queue_scorer.sh' "$contract_doc"
+  grep -Fq 'docs/swarm_topology_aware_queue_scorer_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_queue_routing_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_routing_outcome_ledger.sh' "$contract_doc"
   grep -Fq 'execution_queue_advisory' "$contract_doc"
@@ -3101,6 +3330,7 @@ assert_dashboard_contract_truth() {
   grep -Fq 'swarm_agent_causal_trace' "$contract_doc"
   grep -Fq 'swarm_resource_envelope' "$contract_doc"
   grep -Fq 'swarm_topology_placement' "$contract_doc"
+  grep -Fq 'swarm_topology_aware_queue_advisory' "$contract_doc"
   grep -Fq 'swarm_capability_affinity_routing' "$contract_doc"
   grep -Fq 'deterministic source artifact path' "$contract_doc"
 
@@ -3146,6 +3376,10 @@ run_selftest() {
   run_case "topology_placement_drifted" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "topology_placement_expired" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "topology_placement_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_queue_advisory_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_queue_advisory_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_queue_advisory_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "topology_queue_advisory_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_degraded" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "capability_affinity_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"

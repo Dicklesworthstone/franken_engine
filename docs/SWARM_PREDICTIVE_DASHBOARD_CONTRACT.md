@@ -256,6 +256,25 @@ execution, or live queue mutation. The operator status section reports
 present, `blocked` when an in-progress bead is missing required handoff edges,
 and `contaminated` when fail-closed anomaly evidence invalidates closeout trust.
 
+The same operator report now also integrates the SWARM-SCALE-III
+topology-aware queue advisory handoff:
+
+- Scorer script: `scripts/swarm_topology_aware_queue_scorer.sh`
+- Scorer contract: `docs/swarm_topology_aware_queue_scorer_contract_v1.json`
+- Advisory schema: `franken-engine.swarm-topology-aware-queue-advisory.v1`
+- Source schema: `franken-engine.swarm-topology-aware-queue-advisory-sources.v1`
+
+That handoff carries preferred-locality confidence, cache-reuse guidance,
+worker exclusion state, queue-locality truth state, and source artifact links
+into the existing `scripts/swarm_operator_status_report.sh` producer. It is
+advisory-only. It must not be described as live queue mutation, automatic task
+rerouting, automatic worker pinning, queue retuning, `rch` execution, Cargo
+execution, or worker mutation. The operator status section reports `ready`
+when queue-locality advice is confirmed, `degraded` when optional locality or
+cache-reuse evidence is missing, `blocked` when queue-locality evidence is
+contradictory, and `contaminated` when local fallback or fail-closed evidence
+invalidates the advice.
+
 The same operator report now also integrates the SWARM-SCALE-IV
 capability-affinity routing handoff:
 
@@ -317,6 +336,7 @@ consumption:
 | `swarm_agent_causal_trace` | `swarm-agent-causal-trace-graph.v1` plus `swarm-agent-causal-trace-anomaly-report.v1` | Show handoff readiness, required causal-edge coverage, and fail-closed coordination anomalies without querying live services or mutating ownership state. |
 | `swarm_resource_envelope` | `swarm-resource-envelope.v1` plus `swarm-fair-share-batch-plan.v1` from `scripts/swarm_resource_envelope_normalizer.sh` and `scripts/swarm_fair_share_batch_planner.sh` | Show host resource-envelope readiness, capacity summaries, admitted/deferred fair-share counts, and contaminated capacity classes without running Cargo, RCH, queue mutation, or worker mutation. |
 | `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
+| `swarm_topology_aware_queue_advisory` | `swarm-topology-aware-queue-advisory.v1` from `scripts/swarm_topology_aware_queue_scorer.sh` | Show preferred-locality confidence, cache-reuse guidance, worker exclusions, degraded/blocked/contaminated queue-locality advice, and source artifact links without mutating the live queue or pinning workers. |
 | `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
@@ -326,6 +346,9 @@ The resource-envelope input contract is fixed by
 The topology placement handoff is fixed by the planner and receipt-ledger
 schemas emitted by `scripts/swarm_topology_placement_planner.sh` and
 `scripts/swarm_topology_placement_receipt_ledger.sh`.
+The topology-aware queue advisory handoff is fixed by
+`docs/swarm_topology_aware_queue_scorer_contract_v1.json`; its advisory schema
+is emitted by `scripts/swarm_topology_aware_queue_scorer.sh`.
 The capability-affinity routing handoff is fixed by the advisory and
 outcome-ledger schemas emitted by
 `scripts/swarm_capability_affinity_queue_routing_planner.sh` and
@@ -372,6 +395,10 @@ The smoke test publishes deterministic goldens for:
 - `topology_placement_drifted`
 - `topology_placement_expired`
 - `topology_placement_blocked`
+- `topology_queue_advisory_healthy`
+- `topology_queue_advisory_degraded`
+- `topology_queue_advisory_blocked`
+- `topology_queue_advisory_contaminated`
 - `capability_affinity_healthy`
 - `capability_affinity_degraded`
 - `capability_affinity_blocked`

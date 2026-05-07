@@ -63,6 +63,7 @@ swarm_fair_share_batch_plan_json=""
 swarm_topology_placement_plan_json=""
 swarm_topology_placement_receipt_json=""
 swarm_topology_placement_evidence_ledger_json=""
+swarm_topology_aware_queue_advisory_json=""
 swarm_capability_affinity_routing_advisory_json=""
 swarm_capability_affinity_routing_outcome_ledger_json=""
 
@@ -135,6 +136,7 @@ Options:
   --swarm-topology-placement-plan-json FILE
   --swarm-topology-placement-receipt-json FILE
   --swarm-topology-placement-evidence-ledger-json FILE
+  --swarm-topology-aware-queue-advisory-json FILE
   --swarm-capability-affinity-routing-advisory-json FILE
   --swarm-capability-affinity-routing-outcome-ledger-json FILE
 EOF
@@ -390,6 +392,10 @@ while [[ "$#" -gt 0 ]]; do
       swarm_topology_placement_evidence_ledger_json="$2"
       shift 2
       ;;
+    --swarm-topology-aware-queue-advisory-json)
+      swarm_topology_aware_queue_advisory_json="$2"
+      shift 2
+      ;;
     --swarm-capability-affinity-routing-advisory-json)
       swarm_capability_affinity_routing_advisory_json="$2"
       shift 2
@@ -534,6 +540,7 @@ if [[ -n "$swarm_fair_share_batch_plan_json" ]]; then swarm_fair_share_batch_pla
 if [[ -n "$swarm_topology_placement_plan_json" ]]; then swarm_topology_placement_plan_status="provided"; fi
 if [[ -n "$swarm_topology_placement_receipt_json" ]]; then swarm_topology_placement_receipt_status="provided"; fi
 if [[ -n "$swarm_topology_placement_evidence_ledger_json" ]]; then swarm_topology_placement_evidence_ledger_status="provided"; fi
+if [[ -n "$swarm_topology_aware_queue_advisory_json" ]]; then swarm_topology_aware_queue_advisory_status="provided"; else swarm_topology_aware_queue_advisory_status="missing"; fi
 if [[ -n "$swarm_capability_affinity_routing_advisory_json" ]]; then swarm_capability_affinity_routing_advisory_status="provided"; fi
 if [[ -n "$swarm_capability_affinity_routing_outcome_ledger_json" ]]; then swarm_capability_affinity_routing_outcome_ledger_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
@@ -576,6 +583,7 @@ swarm_fair_share_batch_plan_data="$(json_or_default "$swarm_fair_share_batch_pla
 swarm_topology_placement_plan_data="$(json_or_default "$swarm_topology_placement_plan_json" '{"schema_version":"franken-engine.swarm-topology-placement-plan.v1","decision":"missing","placement_readiness":"missing","recommended_topology_class":"missing","recommended_worker_targets":[],"warm_cache_residency_state":"missing","warm_cache_opportunities":[],"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"locality_assumptions":[],"summary":{"target_count":0,"warm_cache_opportunity_count":0,"heavy_target_count":0,"latency_sensitive_target_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"repairs_target_dirs_automatically":false}}' 'swarm-topology-placement-plan')"
 swarm_topology_placement_receipt_data="$(json_or_default "$swarm_topology_placement_receipt_json" '{"schema_version":"franken-engine.swarm-topology-placement-receipt.v1","decision":"missing","adoption_status":"missing","recommended_placement_targets":[],"recommended_worker_ids":[],"topology_locality_assumptions":[],"cache_warmth_assumptions":{"state":"missing","opportunities":[]},"validity_window":{},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"adoption_drift_reason_codes":[],"adoption_drift_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-receipt')"
 swarm_topology_placement_evidence_ledger_data="$(json_or_default "$swarm_topology_placement_evidence_ledger_json" '{"schema_version":"franken-engine.swarm-topology-placement-evidence-ledger.v1","decision":"missing","receipts":[],"adoption_history":[],"summary":{"receipt_count":0,"adopted_count":0,"drifted_count":0,"expired_count":0,"blocked_count":0,"fail_closed_count":0},"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false,"rebinds_hosts_automatically":false,"enforces_placement_automatically":false}}' 'swarm-topology-placement-evidence-ledger')"
+swarm_topology_aware_queue_advisory_data="$(json_or_default "$swarm_topology_aware_queue_advisory_json" '{"schema_version":"franken-engine.swarm-topology-aware-queue-advisory.v1","decision":"missing","truth_state":"missing","reason_codes":[],"worker_exclusions":{"excluded_worker_ids":[],"excluded_worker_count":0},"locality_bias_summary":{"rank_bias_mode":"missing","usable_preferred_worker_ids":[],"preferred_worker_ids":[],"preferred_numa_nodes":[],"hot_cache_reuse_confidence_millionths":0,"locality_confidence_millionths":0},"risk_budget_summary":{"task_count":0,"queue_row_count":0,"bottleneck_count":0,"critical_bottleneck_count":0,"proof_transport_state":"missing"},"feedback_summary":{"locality_outcome_sample_count":0,"confirmed_task_ids":[],"missed_cache_reuse_task_ids":[],"drift_task_ids":[],"contamination_task_ids":[]},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"pins_workers_automatically":false}}' 'swarm-topology-aware-queue-advisory')"
 swarm_capability_affinity_routing_advisory_data="$(json_or_default "$swarm_capability_affinity_routing_advisory_json" '{"schema_version":"franken-engine.capability-affinity-queue-routing-advisory.v1","decision":"missing","truth_state":"missing","reason_codes":[],"worker_affinity_summary":{"task_count":0,"routing_mode":"missing","recommended_topology_class":"missing","preferred_worker_ids":[],"advised_worker_ids":[],"excluded_worker_ids":[],"watch_worker_ids":[],"rehab_candidate_worker_ids":[],"broader_fallback_task_ids":[],"preferred_cohort_score":{"capability_coverage_score":0,"toolchain_parity_score":0,"locality_compatibility_score":0,"rehabilitation_exclusion_score":0,"total_score":0},"advisory_cohort_score":{"capability_coverage_score":0,"toolchain_parity_score":0,"locality_compatibility_score":0,"rehabilitation_exclusion_score":0,"total_score":0},"confidence_score":0},"capability_coverage_summary":{"required_capabilities":[],"coverage_confirmed_task_ids":[],"missing_required_capability_task_ids":[],"score":0},"toolchain_parity_summary":{"required_toolchain_fingerprints":[],"toolchain_mismatch_task_ids":[],"score":0},"supporting_evidence_summary":{"routing_outcome_samples_present":false,"routing_outcome_sample_count":0},"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"reroutes_tasks_automatically":false}}' 'swarm-capability-affinity-routing-advisory')"
 swarm_capability_affinity_routing_outcome_ledger_data="$(json_or_default "$swarm_capability_affinity_routing_outcome_ledger_json" '{"schema_version":"franken-engine.swarm-capability-affinity-routing-outcome-ledger.v1","decision":"missing","truth_state":"missing","routing_mode":"missing","reason_codes":[],"planned_advised_worker_ids":[],"upstream_missing_required_capability_task_ids":[],"upstream_toolchain_mismatch_task_ids":[],"matched_task_ids":[],"mismatched_task_ids":[],"capability_gap_task_ids":[],"toolchain_drift_task_ids":[],"contamination_task_ids":[],"degraded_reasons":[],"blocked_reasons":[],"fail_closed_reasons":[],"task_outcomes":[],"artifact_paths":{},"mutation_policy":{"fixture_fed_only":true,"proof_only":true,"advisory_only":true,"mutates_br":false,"reassigns_beads":false,"releases_reservations":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false,"reroutes_tasks_automatically":false}}' 'swarm-capability-affinity-routing-outcome-ledger')"
 inputs_bundle_path="${run_dir}/inputs.bundle.json"
@@ -634,6 +642,7 @@ inputs_bundle_path="${run_dir}/inputs.bundle.json"
   printf '"swarm_topology_placement_plan":%s,\n' "$swarm_topology_placement_plan_data"
   printf '"swarm_topology_placement_receipt":%s,\n' "$swarm_topology_placement_receipt_data"
   printf '"swarm_topology_placement_evidence_ledger":%s,\n' "$swarm_topology_placement_evidence_ledger_data"
+  printf '"swarm_topology_aware_queue_advisory":%s,\n' "$swarm_topology_aware_queue_advisory_data"
   printf '"swarm_capability_affinity_routing_advisory":%s,\n' "$swarm_capability_affinity_routing_advisory_data"
   printf '"swarm_capability_affinity_routing_outcome_ledger":%s\n' "$swarm_capability_affinity_routing_outcome_ledger_data"
   printf '}\n'
@@ -687,6 +696,7 @@ jq -n \
   --arg swarm_topology_placement_plan_status "$swarm_topology_placement_plan_status" \
   --arg swarm_topology_placement_receipt_status "$swarm_topology_placement_receipt_status" \
   --arg swarm_topology_placement_evidence_ledger_status "$swarm_topology_placement_evidence_ledger_status" \
+  --arg swarm_topology_aware_queue_advisory_status "$swarm_topology_aware_queue_advisory_status" \
   --arg swarm_capability_affinity_routing_advisory_status "$swarm_capability_affinity_routing_advisory_status" \
   --arg swarm_capability_affinity_routing_outcome_ledger_status "$swarm_capability_affinity_routing_outcome_ledger_status" \
   --arg swarm_resource_envelope_json "$swarm_resource_envelope_json" \
@@ -694,6 +704,7 @@ jq -n \
   --arg swarm_topology_placement_plan_json "$swarm_topology_placement_plan_json" \
   --arg swarm_topology_placement_receipt_json "$swarm_topology_placement_receipt_json" \
   --arg swarm_topology_placement_evidence_ledger_json "$swarm_topology_placement_evidence_ledger_json" \
+  --arg swarm_topology_aware_queue_advisory_json "$swarm_topology_aware_queue_advisory_json" \
   --arg swarm_capability_affinity_routing_advisory_json "$swarm_capability_affinity_routing_advisory_json" \
   --arg swarm_capability_affinity_routing_outcome_ledger_json "$swarm_capability_affinity_routing_outcome_ledger_json" \
   --arg status_path "$status_path" \
@@ -782,6 +793,7 @@ jq -n \
   | $input.swarm_topology_placement_plan as $swarm_topology_placement_plan
   | $input.swarm_topology_placement_receipt as $swarm_topology_placement_receipt
   | $input.swarm_topology_placement_evidence_ledger as $swarm_topology_placement_evidence_ledger
+  | $input.swarm_topology_aware_queue_advisory as $swarm_topology_aware_queue_advisory
   | $input.swarm_capability_affinity_routing_advisory as $swarm_capability_affinity_routing_advisory
   | $input.swarm_capability_affinity_routing_outcome_ledger as $swarm_capability_affinity_routing_outcome_ledger
   | ($ready | map(bead_row) | sort_by(.priority // 999, .id)) as $ready_rows
@@ -1881,6 +1893,108 @@ jq -n \
       }
     }) as $topology_placement_summary
   | ([
+        $swarm_topology_aware_queue_advisory.mutation_policy
+      ]
+      | map(select(. != null))
+      | any(.[]; (.advisory_only != true)
+          or (.mutates_br == true)
+          or (.reassigns_beads == true)
+          or (.releases_reservations == true)
+          or (.sends_agent_mail == true)
+          or (.runs_cargo == true)
+          or (.runs_rch == true)
+          or (.mutates_remote_workers == true)
+          or (.changes_live_queue_policy == true)
+          or (.pins_workers_automatically == true))) as $topology_queue_unsafe_mutation_claim
+  | (($swarm_topology_aware_queue_advisory.fail_closed_reasons // [])
+      | unique_by([.code, .source_id, .detail])) as $topology_queue_fail_reasons
+  | (($swarm_topology_aware_queue_advisory.blocked_reasons // [])
+      | unique_by([.code, .source_id, .detail])) as $topology_queue_blocked_reasons
+  | (($swarm_topology_aware_queue_advisory.degraded_reasons // [])
+      | unique_by([.code, .source_id, .detail])) as $topology_queue_degraded_reasons
+  | (($swarm_topology_aware_queue_advisory.reason_codes // [])
+      | map(select(. == "local_fallback_contaminated" or . == "local_fallback_contamination"))
+      | unique | sort) as $topology_queue_contaminating_codes
+  | ({
+      artifact_status: $swarm_topology_aware_queue_advisory_status,
+      readiness: (
+        if $swarm_topology_aware_queue_advisory_status == "missing" then "degraded"
+        elif $topology_queue_unsafe_mutation_claim
+          or (($topology_queue_fail_reasons | length) > 0)
+          or (($topology_queue_contaminating_codes | length) > 0)
+          or (($swarm_topology_aware_queue_advisory.decision // "") == "fail_closed")
+          or (($swarm_topology_aware_queue_advisory.truth_state // "") == "contaminated") then "contaminated"
+        elif (($topology_queue_blocked_reasons | length) > 0)
+          or (($swarm_topology_aware_queue_advisory.decision // "") == "blocked")
+          or (($swarm_topology_aware_queue_advisory.truth_state // "") == "blocked") then "blocked"
+        elif (($topology_queue_degraded_reasons | length) > 0)
+          or (($swarm_topology_aware_queue_advisory.decision // "") == "degraded")
+          or (($swarm_topology_aware_queue_advisory.truth_state // "") == "degraded") then "degraded"
+        else "ready"
+        end
+      ),
+      severity: (
+        if $topology_queue_unsafe_mutation_claim
+          or (($topology_queue_fail_reasons | length) > 0)
+          or (($topology_queue_contaminating_codes | length) > 0)
+          or (($swarm_topology_aware_queue_advisory.decision // "") == "fail_closed")
+          or (($swarm_topology_aware_queue_advisory.truth_state // "") == "contaminated") then "critical"
+        elif $swarm_topology_aware_queue_advisory_status == "missing"
+          or (($topology_queue_blocked_reasons | length) > 0)
+          or (($topology_queue_degraded_reasons | length) > 0)
+          or (($swarm_topology_aware_queue_advisory.decision // "") | IN("blocked", "degraded"))
+          or (($swarm_topology_aware_queue_advisory.truth_state // "") | IN("blocked", "degraded")) then "warning"
+        else "ok"
+        end
+      ),
+      advisory_decision: ($swarm_topology_aware_queue_advisory.decision // "missing"),
+      truth_state: ($swarm_topology_aware_queue_advisory.truth_state // "missing"),
+      queue_advisory_id: ($swarm_topology_aware_queue_advisory.queue_advisory_id // null),
+      reason_codes: ($swarm_topology_aware_queue_advisory.reason_codes // []),
+      preferred_locality_confidence_millionths: ($swarm_topology_aware_queue_advisory.locality_bias_summary.locality_confidence_millionths // 0),
+      hot_cache_reuse_confidence_millionths: ($swarm_topology_aware_queue_advisory.locality_bias_summary.hot_cache_reuse_confidence_millionths // 0),
+      rank_bias_mode: ($swarm_topology_aware_queue_advisory.locality_bias_summary.rank_bias_mode // "missing"),
+      preferred_worker_ids: ($swarm_topology_aware_queue_advisory.locality_bias_summary.preferred_worker_ids // []),
+      usable_preferred_worker_ids: ($swarm_topology_aware_queue_advisory.locality_bias_summary.usable_preferred_worker_ids // []),
+      preferred_numa_nodes: ($swarm_topology_aware_queue_advisory.locality_bias_summary.preferred_numa_nodes // []),
+      worker_exclusions: {
+        excluded_worker_ids: ($swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_ids // []),
+        excluded_worker_count: ($swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_count // (($swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_ids // []) | length))
+      },
+      cache_reuse_guidance: {
+        proof_transport_state: ($swarm_topology_aware_queue_advisory.risk_budget_summary.proof_transport_state // "missing"),
+        confirmed_task_ids: ($swarm_topology_aware_queue_advisory.feedback_summary.confirmed_task_ids // []),
+        missed_cache_reuse_task_ids: ($swarm_topology_aware_queue_advisory.feedback_summary.missed_cache_reuse_task_ids // []),
+        drift_task_ids: ($swarm_topology_aware_queue_advisory.feedback_summary.drift_task_ids // []),
+        contamination_task_ids: ($swarm_topology_aware_queue_advisory.feedback_summary.contamination_task_ids // [])
+      },
+      queue_counts: {
+        task_count: ($swarm_topology_aware_queue_advisory.risk_budget_summary.task_count // 0),
+        queue_row_count: ($swarm_topology_aware_queue_advisory.risk_budget_summary.queue_row_count // 0),
+        bottleneck_count: ($swarm_topology_aware_queue_advisory.risk_budget_summary.bottleneck_count // 0),
+        critical_bottleneck_count: ($swarm_topology_aware_queue_advisory.risk_budget_summary.critical_bottleneck_count // 0)
+      },
+      related_queue_fidelity: {
+        trust_level: $queue_fidelity_summary.trust_level,
+        drift_class: $queue_fidelity_summary.drift_class,
+        top_tuning_recommendation: ($queue_fidelity_summary.top_tuning_recommendation.candidate_id // null)
+      },
+      warnings: bounded($topology_queue_fail_reasons + $topology_queue_blocked_reasons + $topology_queue_degraded_reasons),
+      mutation_policy: {
+        advisory_only: ($swarm_topology_aware_queue_advisory.mutation_policy.advisory_only // true),
+        mutates_br: ($swarm_topology_aware_queue_advisory.mutation_policy.mutates_br // false),
+        mutates_remote_workers: ($swarm_topology_aware_queue_advisory.mutation_policy.mutates_remote_workers // false),
+        changes_live_queue_policy: ($swarm_topology_aware_queue_advisory.mutation_policy.changes_live_queue_policy // false),
+        pins_workers_automatically: ($swarm_topology_aware_queue_advisory.mutation_policy.pins_workers_automatically // false)
+      },
+      artifact_paths: {
+        queue_advisory_bundle_json: ($swarm_topology_aware_queue_advisory.artifact_paths.advisory_bundle_json // $swarm_topology_aware_queue_advisory.artifact_paths.queue_advisory_bundle_json // $swarm_topology_aware_queue_advisory_json),
+        queue_advisory_sources_json: ($swarm_topology_aware_queue_advisory.artifact_paths.sources_json // null),
+        queue_advisory_events_jsonl: ($swarm_topology_aware_queue_advisory.artifact_paths.events_jsonl // null),
+        queue_advisory_commands_txt: ($swarm_topology_aware_queue_advisory.artifact_paths.commands_txt // null)
+      }
+    }) as $topology_queue_advisory_summary
+  | ([
         $swarm_capability_affinity_routing_advisory.mutation_policy,
         $swarm_capability_affinity_routing_outcome_ledger.mutation_policy
       ]
@@ -2063,6 +2177,9 @@ jq -n \
         [{component: "swarm_topology_placement", status: "missing", impact: "topology placement plan, receipt, or evidence ledger is missing", remediation: "Provide topology placement planner and receipt ledger artifacts before publishing locality and cache-residency advice."}]
       elif $topology_placement_summary.severity != "ok" then
         [{component: "swarm_topology_placement", status: $topology_placement_summary.readiness, impact: "topology placement or cache-residency adoption evidence is degraded, blocked, or contaminated", remediation: "Refresh placement evidence or respect blocked/drift/expiry warnings before using locality advice."}]
+      else [] end)
+    + (if $swarm_topology_aware_queue_advisory_status != "missing" and $topology_queue_advisory_summary.severity != "ok" then
+        [{component: "swarm_topology_aware_queue_advisory", status: $topology_queue_advisory_summary.readiness, impact: "topology-aware queue locality advice is degraded, blocked, or contaminated", remediation: "Refresh queue advisory evidence or respect degraded/blocked/local-fallback queue locality warnings before ranking work."}]
       else [] end)
     + (if $swarm_capability_affinity_routing_advisory_status == "missing"
           or $swarm_capability_affinity_routing_outcome_ledger_status == "missing" then
@@ -2287,7 +2404,7 @@ jq -n \
       proof_outcomes: ($proof_outcomes | sort_by(.bead_id // "", .artifact_id // "")),
       stale_evidence: ($stale_evidence | sort_by(.artifact_id // "")),
       dirty_files: ($dirty_files | sort_by(.path)),
-      predictive_dashboard: {
+      predictive_dashboard: ({
         schema_version: "franken-engine.swarm-predictive-dashboard.v1",
         renderer_contract: {
           provider: "/dp/frankentui",
@@ -2336,7 +2453,7 @@ jq -n \
           intended_renderer_repo: "/dp/frankentui",
           local_tui_renderer: false
         }
-      },
+      } + (if $swarm_topology_aware_queue_advisory_status != "missing" then {swarm_topology_aware_queue_advisory: $topology_queue_advisory_summary} else {} end)),
       degraded: $degraded,
       recommendations: (
         if $staged_contamination_summary.severity == "critical" then
@@ -2357,6 +2474,12 @@ jq -n \
           [recommendation("respect_topology_placement_block"; null; "topology placement evidence is blocked by contradictory locality or non-adoptable receipt state")]
         elif $topology_placement_summary.readiness == "degraded" then
           [recommendation("review_topology_placement_advisory"; null; "topology placement evidence has drift, expiry, pending observation, or degraded cache-residency assumptions")]
+        elif $swarm_topology_aware_queue_advisory_status != "missing" and $topology_queue_advisory_summary.readiness == "contaminated" then
+          [recommendation("respect_topology_queue_advisory_contamination"; null; "topology-aware queue advisory is contaminated by local fallback or unsafe mutation claims")]
+        elif $swarm_topology_aware_queue_advisory_status != "missing" and $topology_queue_advisory_summary.readiness == "blocked" then
+          [recommendation("respect_topology_queue_advisory_block"; null; "topology-aware queue advisory is blocked by contradictory locality evidence")]
+        elif $swarm_topology_aware_queue_advisory_status != "missing" and $topology_queue_advisory_summary.readiness == "degraded" then
+          [recommendation("review_topology_queue_advisory"; null; "topology-aware queue advisory has missing locality support, cache-miss feedback, or degraded queue evidence")]
         elif $capability_affinity_summary.readiness == "contaminated" then
           [recommendation("respect_capability_affinity_contamination"; null; "capability-affinity routing evidence is contaminated by fail-closed or unsafe mutation claims")]
         elif $capability_affinity_summary.readiness == "blocked" then
@@ -2496,6 +2619,9 @@ JQ
   printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
   printf -- "- Resource envelope: \`%s\` / \`%s\` with \`%s\` admitted and \`%s\` deferred\n" "$(jq -r '.summary.resource_envelope_readiness' "$status_path")" "$(jq -r '.summary.fair_share_decision' "$status_path")" "$(jq '.summary.fair_share_admitted_count' "$status_path")" "$(jq '.summary.fair_share_deferred_count' "$status_path")"
   printf -- "- Topology placement: \`%s\` class=\`%s\` cache=\`%s\` adoption=\`%s\`\n" "$(jq -r '.summary.topology_placement_readiness' "$status_path")" "$(jq -r '.summary.topology_placement_topology_class' "$status_path")" "$(jq -r '.summary.topology_placement_warm_cache_state' "$status_path")" "$(jq -r '.summary.topology_placement_adoption_status' "$status_path")"
+  if jq -e '.predictive_dashboard | has("swarm_topology_aware_queue_advisory")' "$status_path" >/dev/null; then
+    printf -- "- Topology queue advisory: \`%s\` decision=\`%s\` bias=\`%s\` excluded=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode' "$status_path")" "$(jq '.predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_count' "$status_path")"
+  fi
   printf -- "- Capability affinity: \`%s\` mode=\`%s\` preferred=\`%s\` mismatch=\`%s\` gap=\`%s\` drift=\`%s\`\n" "$(jq -r '.summary.capability_affinity_readiness' "$status_path")" "$(jq -r '.summary.capability_affinity_routing_mode' "$status_path")" "$(jq '.summary.capability_affinity_preferred_worker_count' "$status_path")" "$(jq '.summary.capability_affinity_mismatch_count' "$status_path")" "$(jq '.summary.capability_affinity_capability_gap_count' "$status_path")" "$(jq '.summary.capability_affinity_toolchain_drift_count' "$status_path")"
   printf -- "- Lease exchange posture: \`%s\`\n" "$(jq -r '.summary.lease_exchange_decision' "$status_path")"
   printf -- "- Prefetch advisory: \`%s\`\n" "$(jq -r '.summary.prefetch_advisory' "$status_path")"

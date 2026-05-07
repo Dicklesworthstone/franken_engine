@@ -1,0 +1,300 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-catalog-normalizer-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_mixed_catalog",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_alpha.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_alpha_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_ALPHA.md", "kind": "markdown"},
+        {"path": "docs/catalog_alpha_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/catalog_beta.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_beta_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_BETA.md", "kind": "markdown"},
+        {"path": "docs/catalog_beta_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_alpha",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "healthy alpha surface",
+            "intent_tags": ["alpha"],
+            "symptom_tags": ["healthy"],
+            "required_inputs": ["alpha_input_json"],
+            "emitted_artifacts": ["alpha_report.json"],
+            "implementation_script": "scripts/catalog_alpha.sh",
+            "smoke_script": "scripts/e2e/catalog_alpha_smoke.sh",
+            "runbook_doc": "docs/CATALOG_ALPHA.md",
+            "contract_json": "docs/catalog_alpha_contract_v1.json",
+            "owning_bead_id": "bd-alpha",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": ["catalog_beta"],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_alpha",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-STALE-SOURCE"],
+            "validation_commands": ["jq empty docs/catalog_alpha_contract_v1.json"]
+          },
+          {
+            "surface_id": "catalog_beta",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "healthy beta surface",
+            "intent_tags": ["beta"],
+            "symptom_tags": ["healthy"],
+            "required_inputs": ["beta_input_json"],
+            "emitted_artifacts": ["beta_report.json"],
+            "implementation_script": "scripts/catalog_beta.sh",
+            "smoke_script": "scripts/e2e/catalog_beta_smoke.sh",
+            "runbook_doc": "docs/CATALOG_BETA.md",
+            "contract_json": "docs/catalog_beta_contract_v1.json",
+            "owning_bead_id": "bd-beta",
+            "upstream_surface_ids": ["catalog_alpha"],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_beta",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-STALE-SOURCE"],
+            "validation_commands": ["jq empty docs/catalog_beta_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_smoke_script",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-CATALOG-MISSING-SMOKE"
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_missing_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_MISSING_SMOKE.md", "kind": "markdown"},
+        {"path": "docs/catalog_missing_smoke_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_missing_smoke",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "missing smoke surface",
+            "intent_tags": ["missing-smoke"],
+            "symptom_tags": ["missing-smoke"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_missing_smoke.sh",
+            "smoke_script": "scripts/e2e/catalog_missing_smoke_smoke.sh",
+            "runbook_doc": "docs/CATALOG_MISSING_SMOKE.md",
+            "contract_json": "docs/catalog_missing_smoke_contract_v1.json",
+            "owning_bead_id": "bd-missing-smoke",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_missing_smoke",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-MISSING-SMOKE"],
+            "validation_commands": ["jq empty docs/catalog_missing_smoke_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_docs",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-CATALOG-MISSING-DOC"
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_missing_doc.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_missing_doc_smoke.sh", "kind": "shell"},
+        {"path": "docs/catalog_missing_doc_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_missing_doc",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "missing docs surface",
+            "intent_tags": ["missing-doc"],
+            "symptom_tags": ["missing-doc"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_missing_doc.sh",
+            "smoke_script": "scripts/e2e/catalog_missing_doc_smoke.sh",
+            "runbook_doc": "docs/CATALOG_MISSING_DOC.md",
+            "contract_json": "docs/catalog_missing_doc_contract_v1.json",
+            "owning_bead_id": "bd-missing-doc",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_missing_doc",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-MISSING-DOC"],
+            "validation_commands": ["jq empty docs/catalog_missing_doc_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "malformed_contract_json",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-CATALOG-MALFORMED-CONTRACT"
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_malformed_contract.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_malformed_contract_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_MALFORMED_CONTRACT.md", "kind": "markdown"},
+        {"path": "docs/catalog_malformed_contract_v1.json", "kind": "malformed_contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_malformed_contract",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "malformed contract surface",
+            "intent_tags": ["malformed-contract"],
+            "symptom_tags": ["malformed-contract"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_malformed_contract.sh",
+            "smoke_script": "scripts/e2e/catalog_malformed_contract_smoke.sh",
+            "runbook_doc": "docs/CATALOG_MALFORMED_CONTRACT.md",
+            "contract_json": "docs/catalog_malformed_contract_v1.json",
+            "owning_bead_id": "bd-malformed-contract",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_malformed_contract",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-MALFORMED-CONTRACT"],
+            "validation_commands": ["jq empty docs/catalog_malformed_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "duplicate_surface_id",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-CATALOG-DUPLICATE-SURFACE"
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_dup_a.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_dup_a_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_DUP_A.md", "kind": "markdown"},
+        {"path": "docs/catalog_dup_a_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/catalog_dup_b.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_dup_b_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_DUP_B.md", "kind": "markdown"},
+        {"path": "docs/catalog_dup_b_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_duplicate",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "duplicate surface A",
+            "intent_tags": ["duplicate"],
+            "symptom_tags": ["duplicate"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_dup_a.sh",
+            "smoke_script": "scripts/e2e/catalog_dup_a_smoke.sh",
+            "runbook_doc": "docs/CATALOG_DUP_A.md",
+            "contract_json": "docs/catalog_dup_a_contract_v1.json",
+            "owning_bead_id": "bd-dup-a",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_duplicate",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-DUPLICATE-SURFACE"],
+            "validation_commands": ["jq empty docs/catalog_dup_a_contract_v1.json"]
+          },
+          {
+            "surface_id": "catalog_duplicate",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "duplicate surface B",
+            "intent_tags": ["duplicate"],
+            "symptom_tags": ["duplicate"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_dup_b.sh",
+            "smoke_script": "scripts/e2e/catalog_dup_b_smoke.sh",
+            "runbook_doc": "docs/CATALOG_DUP_B.md",
+            "contract_json": "docs/catalog_dup_b_contract_v1.json",
+            "owning_bead_id": "bd-dup-b",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_duplicate",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-DUPLICATE-SURFACE"],
+            "validation_commands": ["jq empty docs/catalog_dup_b_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "unsafe_mutation_policy",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-CATALOG-UNSAFE-MUTATION"
+      },
+      "workspace_files": [
+        {"path": "scripts/catalog_unsafe.sh", "kind": "shell"},
+        {"path": "scripts/e2e/catalog_unsafe_smoke.sh", "kind": "shell"},
+        {"path": "docs/CATALOG_UNSAFE.md", "kind": "markdown"},
+        {"path": "docs/catalog_unsafe_contract_v1.json", "kind": "contract"}
+      ],
+      "manifest": {
+        "schema_version": "franken-engine.swarm-control-surface-source-manifest.v1",
+        "source_inventory": [
+          {
+            "surface_id": "catalog_unsafe",
+            "track": "SWARM-CTRL-XVII",
+            "purpose": "unsafe mutation surface",
+            "intent_tags": ["unsafe"],
+            "symptom_tags": ["unsafe"],
+            "required_inputs": ["input_json"],
+            "emitted_artifacts": ["report.json"],
+            "implementation_script": "scripts/catalog_unsafe.sh",
+            "smoke_script": "scripts/e2e/catalog_unsafe_smoke.sh",
+            "runbook_doc": "docs/CATALOG_UNSAFE.md",
+            "contract_json": "docs/catalog_unsafe_contract_v1.json",
+            "owning_bead_id": "bd-unsafe",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": false, "mutates_br": true, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"heavy_cargo_examples_allowed": false},
+            "source_freshness_policy": {"required_sources_stale_decision": "fail_closed"},
+            "operator_status_section": "catalog_unsafe",
+            "failure_reason_codes": ["FE-SWARM-CATALOG-UNSAFE-MUTATION"],
+            "validation_commands": ["jq empty docs/catalog_unsafe_contract_v1.json"]
+          }
+        ]
+      }
+    }
+  ]
+}

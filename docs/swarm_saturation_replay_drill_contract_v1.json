@@ -1,0 +1,94 @@
+{
+  "schema_version": "franken-engine.swarm-saturation-replay-drill-contract.v1",
+  "bead_id": "bd-2zn02",
+  "track": "SWARM-OPS-P0",
+  "script": "scripts/swarm_saturation_replay_drill.sh",
+  "smoke_script": "scripts/e2e/swarm_saturation_replay_drill_smoke.sh",
+  "operator_docs": "docs/SWARM_SATURATION_REPLAY_DRILL.md",
+  "fixture_bundle": "scripts/testdata/swarm_saturation_replay_drill/cases.json",
+  "scenario_schema_version": "franken-engine.swarm-saturation-replay-scenario.v1",
+  "report_schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+  "run_manifest_schema_version": "franken-engine.swarm-saturation-replay-run-manifest.v1",
+  "trace_ids_schema_version": "franken-engine.swarm-saturation-replay-trace-ids.v1",
+  "required_inputs": [
+    "scenario_json"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "saturation_replay_report.json",
+    "trace_ids.json"
+  ],
+  "required_report_fields": [
+    "schema_version",
+    "bead_id",
+    "scenario_id",
+    "host_profile",
+    "decision",
+    "before_lane_decisions",
+    "after_lane_decisions",
+    "fairness_report.fairness_preserved",
+    "fanout_report.heavy_fanout_capped",
+    "fanout_report.urgent_slack_preserved",
+    "contamination_report.local_fallback_contamination_avoided",
+    "summary.deferred_reason_codes",
+    "hash_basis.replay_hash"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "large_64c_256gb",
+      "host_profile": "64c_256gb",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "mid_size_mixed_fairness",
+      "host_profile": "mid_size",
+      "expected_decision": "degraded",
+      "required_reason_code": "fairness_agent_cap"
+    },
+    {
+      "case_id": "constrained_stale_ownership",
+      "host_profile": "constrained",
+      "expected_decision": "degraded",
+      "required_reason_code": "stale_ownership_requires_contact"
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "host_profile": "64c_256gb",
+      "expected_decision": "fail_closed",
+      "required_reason_code": "local_fallback_contamination"
+    }
+  ],
+  "proof_obligations": [
+    "64-core/256GB hosts admit many concurrent lanes while preserving urgent slack",
+    "mid-size hosts preserve per-agent fairness before admitting repeated heavy lanes",
+    "constrained hosts cap heavy proof fanout and keep script/docs lanes visible",
+    "stale and blocked ownership lanes are deferred with explicit reason codes",
+    "local fallback contamination fails closed with zero admitted lanes",
+    "replay hash is stable across repeated fixture runs"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "replay_only": true,
+    "advisory_only": true,
+    "optional_live_mode_not_implemented": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "bash -n scripts/swarm_saturation_replay_drill.sh scripts/e2e/swarm_saturation_replay_drill_smoke.sh",
+    "shellcheck -x scripts/swarm_saturation_replay_drill.sh scripts/e2e/swarm_saturation_replay_drill_smoke.sh",
+    "jq empty docs/swarm_saturation_replay_drill_contract_v1.json scripts/testdata/swarm_saturation_replay_drill/cases.json",
+    "bash scripts/e2e/swarm_saturation_replay_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_saturation_replay_drill_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_SATURATION_REPLAY_DRILL.md docs/swarm_saturation_replay_drill_contract_v1.json scripts/swarm_saturation_replay_drill.sh scripts/e2e/swarm_saturation_replay_drill_smoke.sh scripts/testdata/swarm_saturation_replay_drill/cases.json"
+  ]
+}

@@ -1,0 +1,420 @@
+{
+  "schema_version": "franken-engine.swarm-saturation-replay-drill-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "large_64c_256gb",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "admitted_count": 10,
+        "deferred_count": 0,
+        "required_deferred_reason_code": "",
+        "expected_host_profile": "64c_256gb",
+        "fairness_preserved": true,
+        "fanout_capped": true,
+        "urgent_slack_preserved": true,
+        "local_fallback_avoided": true
+      },
+      "scenario": {
+        "schema_version": "franken-engine.swarm-saturation-replay-scenario.v1",
+        "scenario_id": "large_64c_256gb",
+        "host": {
+          "profile": "64c_256gb",
+          "cpu_logical_cores": 64,
+          "memory_bytes_total": 274877906944,
+          "remote_rch_slots": 16
+        },
+        "constraints": {
+          "heavy_fanout_cap": 8,
+          "urgent_slack_slots": 2,
+          "max_heavy_per_agent": 2
+        },
+        "evidence": {
+          "local_fallback_observed": false
+        },
+        "requests": [
+          {
+            "request_id": "large-a-check",
+            "agent_id": "agent-a",
+            "bead_id": "bd-large-a",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-a-clippy",
+            "agent_id": "agent-a",
+            "bead_id": "bd-large-b",
+            "priority": 2,
+            "command_class": "cargo_clippy",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-b-test",
+            "agent_id": "agent-b",
+            "bead_id": "bd-large-c",
+            "priority": 1,
+            "urgent": true,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-c-check",
+            "agent_id": "agent-c",
+            "bead_id": "bd-large-d",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-c-test",
+            "agent_id": "agent-c",
+            "bead_id": "bd-large-e",
+            "priority": 3,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-d-clippy",
+            "agent_id": "agent-d",
+            "bead_id": "bd-large-f",
+            "priority": 2,
+            "command_class": "cargo_clippy",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-e-check",
+            "agent_id": "agent-e",
+            "bead_id": "bd-large-g",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-f-script",
+            "agent_id": "agent-f",
+            "bead_id": "bd-large-h",
+            "priority": 2,
+            "command_class": "script_gate",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-g-docs",
+            "agent_id": "agent-g",
+            "bead_id": "bd-large-i",
+            "priority": 3,
+            "command_class": "docs_only",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "large-h-json",
+            "agent_id": "agent-h",
+            "bead_id": "bd-large-j",
+            "priority": 2,
+            "command_class": "json_gate",
+            "owner_state": "healthy"
+          }
+        ],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "replay_only": true,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "mutates_br": false
+        }
+      }
+    },
+    {
+      "case_id": "mid_size_mixed_fairness",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "admitted_count": 6,
+        "deferred_count": 2,
+        "required_deferred_reason_code": "fairness_agent_cap",
+        "expected_host_profile": "mid_size",
+        "fairness_preserved": true,
+        "fanout_capped": true,
+        "urgent_slack_preserved": true,
+        "local_fallback_avoided": true
+      },
+      "scenario": {
+        "schema_version": "franken-engine.swarm-saturation-replay-scenario.v1",
+        "scenario_id": "mid_size_mixed_fairness",
+        "host": {
+          "profile": "mid_size",
+          "cpu_logical_cores": 24,
+          "memory_bytes_total": 68719476736,
+          "remote_rch_slots": 6
+        },
+        "constraints": {
+          "heavy_fanout_cap": 3,
+          "urgent_slack_slots": 1,
+          "max_heavy_per_agent": 1
+        },
+        "evidence": {
+          "local_fallback_observed": false
+        },
+        "requests": [
+          {
+            "request_id": "mid-urgent-test",
+            "agent_id": "agent-gamma",
+            "bead_id": "bd-mid-a",
+            "priority": 1,
+            "urgent": true,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-alpha-check",
+            "agent_id": "agent-alpha",
+            "bead_id": "bd-mid-b",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-alpha-clippy",
+            "agent_id": "agent-alpha",
+            "bead_id": "bd-mid-c",
+            "priority": 2,
+            "command_class": "cargo_clippy",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-beta-check",
+            "agent_id": "agent-beta",
+            "bead_id": "bd-mid-d",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-delta-test",
+            "agent_id": "agent-delta",
+            "bead_id": "bd-mid-e",
+            "priority": 2,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-epsilon-check",
+            "agent_id": "agent-epsilon",
+            "bead_id": "bd-mid-f",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-script",
+            "agent_id": "agent-script",
+            "bead_id": "bd-mid-g",
+            "priority": 2,
+            "command_class": "script_gate",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "mid-docs",
+            "agent_id": "agent-docs",
+            "bead_id": "bd-mid-h",
+            "priority": 3,
+            "command_class": "docs_only",
+            "owner_state": "healthy"
+          }
+        ],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "replay_only": true,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "mutates_br": false
+        }
+      }
+    },
+    {
+      "case_id": "constrained_stale_ownership",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "admitted_count": 4,
+        "deferred_count": 3,
+        "required_deferred_reason_code": "stale_ownership_requires_contact",
+        "expected_host_profile": "constrained",
+        "fairness_preserved": true,
+        "fanout_capped": true,
+        "urgent_slack_preserved": true,
+        "local_fallback_avoided": true
+      },
+      "scenario": {
+        "schema_version": "franken-engine.swarm-saturation-replay-scenario.v1",
+        "scenario_id": "constrained_stale_ownership",
+        "host": {
+          "profile": "constrained",
+          "cpu_logical_cores": 8,
+          "memory_bytes_total": 17179869184,
+          "remote_rch_slots": 2
+        },
+        "constraints": {
+          "heavy_fanout_cap": 1,
+          "urgent_slack_slots": 1,
+          "max_heavy_per_agent": 1
+        },
+        "evidence": {
+          "local_fallback_observed": false
+        },
+        "requests": [
+          {
+            "request_id": "constrained-urgent",
+            "agent_id": "agent-urgent",
+            "bead_id": "bd-con-a",
+            "priority": 1,
+            "urgent": true,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "constrained-heavy",
+            "agent_id": "agent-a",
+            "bead_id": "bd-con-b",
+            "priority": 2,
+            "command_class": "cargo_clippy",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "constrained-heavy-defer",
+            "agent_id": "agent-b",
+            "bead_id": "bd-con-c",
+            "priority": 2,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "constrained-stale",
+            "agent_id": "agent-stale",
+            "bead_id": "bd-con-d",
+            "priority": 2,
+            "command_class": "cargo_check",
+            "owner_state": "stale"
+          },
+          {
+            "request_id": "constrained-blocked",
+            "agent_id": "agent-blocked",
+            "bead_id": "bd-con-e",
+            "priority": 2,
+            "command_class": "script_gate",
+            "owner_state": "blocked"
+          },
+          {
+            "request_id": "constrained-script",
+            "agent_id": "agent-script",
+            "bead_id": "bd-con-f",
+            "priority": 2,
+            "command_class": "script_gate",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "constrained-docs",
+            "agent_id": "agent-docs",
+            "bead_id": "bd-con-g",
+            "priority": 3,
+            "command_class": "docs_only",
+            "owner_state": "healthy"
+          }
+        ],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "replay_only": true,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "mutates_br": false
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "admitted_count": 0,
+        "deferred_count": 5,
+        "required_deferred_reason_code": "local_fallback_contamination",
+        "expected_host_profile": "64c_256gb",
+        "fairness_preserved": true,
+        "fanout_capped": true,
+        "urgent_slack_preserved": true,
+        "local_fallback_avoided": true
+      },
+      "scenario": {
+        "schema_version": "franken-engine.swarm-saturation-replay-scenario.v1",
+        "scenario_id": "local_fallback_contaminated",
+        "host": {
+          "profile": "64c_256gb",
+          "cpu_logical_cores": 64,
+          "memory_bytes_total": 274877906944,
+          "remote_rch_slots": 16
+        },
+        "constraints": {
+          "heavy_fanout_cap": 8,
+          "urgent_slack_slots": 2,
+          "max_heavy_per_agent": 2
+        },
+        "evidence": {
+          "local_fallback_observed": true
+        },
+        "requests": [
+          {
+            "request_id": "fallback-check",
+            "agent_id": "agent-a",
+            "bead_id": "bd-fallback-a",
+            "priority": 1,
+            "command_class": "cargo_check",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "fallback-clippy",
+            "agent_id": "agent-b",
+            "bead_id": "bd-fallback-b",
+            "priority": 2,
+            "command_class": "cargo_clippy",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "fallback-test",
+            "agent_id": "agent-c",
+            "bead_id": "bd-fallback-c",
+            "priority": 2,
+            "command_class": "cargo_test",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "fallback-script",
+            "agent_id": "agent-d",
+            "bead_id": "bd-fallback-d",
+            "priority": 2,
+            "command_class": "script_gate",
+            "owner_state": "healthy"
+          },
+          {
+            "request_id": "fallback-docs",
+            "agent_id": "agent-e",
+            "bead_id": "bd-fallback-e",
+            "priority": 3,
+            "command_class": "docs_only",
+            "owner_state": "healthy"
+          }
+        ],
+        "mutation_policy": {
+          "fixture_fed_only": true,
+          "replay_only": true,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "mutates_br": false
+        }
+      }
+    }
+  ]
+}

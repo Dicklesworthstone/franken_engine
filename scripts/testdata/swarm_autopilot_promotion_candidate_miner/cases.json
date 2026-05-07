@@ -1,0 +1,294 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-promotion-candidate-miner-fixtures.v1",
+  "base_evidence_warehouse_json": {
+    "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+    "bead_id": "bd-4t4oi",
+    "source_revision": "fixture-promotion-miner",
+    "source_freshness": "fresh",
+    "decision": "pass",
+    "artifact_rows": [
+      {
+        "source_id": "warehouse-advisory-a",
+        "decision": "pass",
+        "freshness": "fresh",
+        "artifact_path": "fixtures/warehouse/advisory-a.json",
+        "retention_class": "long_lived_replay_evidence"
+      },
+      {
+        "source_id": "warehouse-advisory-b",
+        "decision": "pass",
+        "freshness": "fresh",
+        "artifact_path": "fixtures/warehouse/advisory-b.json",
+        "retention_class": "long_lived_replay_evidence"
+      }
+    ],
+    "artifact_paths": {
+      "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json",
+      "run_manifest_json": "fixtures/warehouse/run_manifest.json",
+      "commands_txt": "fixtures/warehouse/commands.txt"
+    },
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_hindsight_chaos_scenarios_json": {
+    "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-scenarios.v1",
+    "bead_id": "bd-09g6k",
+    "source_revision": "fixture-promotion-miner",
+    "source_freshness": "fresh",
+    "decision": "pass",
+    "scenarios": [
+      {
+        "scenario_id": "hindsight-replay-a",
+        "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "perturbation_type": "minimal_perturbation",
+        "replay_ready": true,
+        "reason_codes": [
+          "deterministic_replay"
+        ],
+        "source_artifacts": {
+          "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+          "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+        }
+      },
+      {
+        "scenario_id": "hindsight-replay-b",
+        "scenario_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "perturbation_type": "brownout_chaos",
+        "replay_ready": true,
+        "reason_codes": [
+          "deterministic_replay",
+          "brownout_replayed"
+        ],
+        "source_artifacts": {
+          "recommendation_bundle_json": "fixtures/hindsight/recommendation-b.json",
+          "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+        }
+      }
+    ],
+    "artifact_paths": {
+      "hindsight_chaos_scenarios_json": "fixtures/hindsight/hindsight_chaos_scenarios.json",
+      "hindsight_replay_index_json": "fixtures/hindsight/replay_index.json"
+    },
+    "fail_closed_reasons": [],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "promotable_repeated_success",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_candidate_type": "promotion_candidate"
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "insufficient_evidence_degradation",
+      "expected": {
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_candidate_type": "degraded_insufficient_evidence"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "artifact_rows": [
+            {
+              "source_id": "warehouse-advisory-a",
+              "decision": "pass",
+              "freshness": "fresh",
+              "artifact_path": "fixtures/warehouse/advisory-a.json",
+              "retention_class": "long_lived_replay_evidence"
+            }
+          ]
+        },
+        "hindsight_chaos_scenarios_json": {
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-replay-a",
+              "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "perturbation_type": "minimal_perturbation",
+              "replay_ready": true,
+              "reason_codes": [
+                "deterministic_replay"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "contradictory_hindsight_block",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT"
+      },
+      "overrides": {
+        "hindsight_chaos_scenarios_json": {
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-replay-a",
+              "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "perturbation_type": "minimal_perturbation",
+              "replay_ready": true,
+              "reason_codes": [
+                "deterministic_replay"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            },
+            {
+              "scenario_id": "hindsight-contradictory-b",
+              "scenario_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "perturbation_type": "brownout_chaos",
+              "replay_ready": true,
+              "reason_codes": [
+                "contradictory_outcome"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-contradictory.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "contamination_refusal",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTAMINATED"
+      },
+      "overrides": {
+        "hindsight_chaos_scenarios_json": {
+          "decision": "fail_closed",
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-replay-a",
+              "scenario_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "perturbation_type": "minimal_perturbation",
+              "replay_ready": true,
+              "reason_codes": [
+                "deterministic_replay"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-a.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            },
+            {
+              "scenario_id": "hindsight-local-fallback-b",
+              "scenario_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "perturbation_type": "local_fallback_contamination",
+              "replay_ready": false,
+              "reason_codes": [
+                "local_fallback_contamination"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-local-fallback.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ],
+          "fail_closed_reasons": [
+            {
+              "code": "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-LOCAL-FALLBACK",
+              "source_id": "local_fallback_scenario",
+              "detail": "local fallback contamination was observed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "stable_non_promotion_recommendation",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_candidate_type": "stable_non_promotion"
+      },
+      "overrides": {
+        "evidence_warehouse_json": {
+          "artifact_rows": [
+            {
+              "source_id": "warehouse-advisory-a",
+              "decision": "pass",
+              "freshness": "fresh",
+              "artifact_path": "fixtures/warehouse/advisory-a.json",
+              "retention_class": "long_lived_replay_evidence"
+            },
+            {
+              "source_id": "warehouse-advisory-held",
+              "decision": "degraded",
+              "freshness": "fresh",
+              "artifact_path": "fixtures/warehouse/advisory-held.json",
+              "retention_class": "long_lived_replay_evidence"
+            }
+          ]
+        },
+        "hindsight_chaos_scenarios_json": {
+          "scenarios": [
+            {
+              "scenario_id": "hindsight-non-promotion-a",
+              "scenario_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "perturbation_type": "minimal_perturbation",
+              "replay_ready": true,
+              "reason_codes": [
+                "stable_non_promotion"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-non-promotion-a.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            },
+            {
+              "scenario_id": "hindsight-non-promotion-b",
+              "scenario_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+              "perturbation_type": "brownout_chaos",
+              "replay_ready": true,
+              "reason_codes": [
+                "stable_non_promotion"
+              ],
+              "source_artifacts": {
+                "recommendation_bundle_json": "fixtures/hindsight/recommendation-non-promotion-b.json",
+                "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

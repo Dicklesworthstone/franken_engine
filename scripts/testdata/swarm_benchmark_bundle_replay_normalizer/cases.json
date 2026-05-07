@@ -1,0 +1,260 @@
+{
+  "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "observed_denominator_results",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        { "path": "benchmark_denominator/run_manifest.json", "kind": "run_manifest_pass" },
+        { "path": "benchmark_denominator/events.jsonl", "kind": "events_jsonl" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "benchmark_denominator_suite",
+            "benchmark_class": "throughput_denominator",
+            "benchmark_entrypoint": "scripts/run_benchmark_denominator_suite.sh",
+            "replay_entrypoint": null,
+            "result_schema": { "result_state": "observed_only" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "benchmark_denominator_suite",
+            "evidence_kind": "run_manifest",
+            "primary_artifact_json": "benchmark_denominator/run_manifest.json",
+            "events_jsonl": "benchmark_denominator/events.jsonl",
+            "stall_bundle_json": null
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "blocked_throughput_measurement",
+      "expected": {
+        "decision": "degraded",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        { "path": "throughput_baseline_measurements_v1.json", "kind": "throughput_blocked" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "frankenengine_throughput_baseline_status",
+            "benchmark_class": "blocked_runtime_baseline",
+            "benchmark_entrypoint": "scripts/benchmarks/throughput_baselines.sh",
+            "replay_entrypoint": "scripts/e2e/throughput_baselines_placeholder_smoke.sh",
+            "result_schema": { "result_state": "observed_or_blocked" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "frankenengine_throughput_baseline_status",
+            "evidence_kind": "throughput_baselines",
+            "primary_artifact_json": "throughput_baseline_measurements_v1.json",
+            "events_jsonl": null,
+            "stall_bundle_json": null
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "extension_heavy_remote_pass",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        { "path": "extension_heavy/run_manifest.json", "kind": "run_manifest_pass" },
+        { "path": "extension_heavy/events.jsonl", "kind": "events_jsonl" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "extension_heavy_benchmark_spec",
+            "benchmark_class": "extension_heavy_workload_matrix",
+            "benchmark_entrypoint": "scripts/run_extension_heavy_benchmark_spec_suite.sh",
+            "replay_entrypoint": null,
+            "result_schema": { "result_state": "observed_only" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "extension_heavy_benchmark_spec",
+            "evidence_kind": "run_manifest",
+            "primary_artifact_json": "extension_heavy/run_manifest.json",
+            "events_jsonl": "extension_heavy/events.jsonl",
+            "stall_bundle_json": null
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "plas_retrieval_stall_recovered",
+      "expected": {
+        "decision": "degraded",
+        "exit_code": 0
+      },
+      "workspace_files": [
+        { "path": "plas/run_manifest.json", "kind": "run_manifest_fail" },
+        { "path": "plas/events.jsonl", "kind": "events_jsonl" },
+        { "path": "plas/stall_bundle.json", "kind": "stall_confirmed" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "plas_benchmark_bundle",
+            "benchmark_class": "constrained_ambient_bundle",
+            "benchmark_entrypoint": "scripts/run_plas_benchmark_bundle_suite.sh",
+            "replay_entrypoint": null,
+            "result_schema": { "result_state": "observed_or_recovered" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "plas_benchmark_bundle",
+            "evidence_kind": "run_manifest",
+            "primary_artifact_json": "plas/run_manifest.json",
+            "events_jsonl": "plas/events.jsonl",
+            "stall_bundle_json": "plas/stall_bundle.json"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "malformed_manifest",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BUNDLE-MALFORMED-MANIFEST"
+      },
+      "workspace_files": [
+        { "path": "malformed/run_manifest.json", "kind": "malformed_json" },
+        { "path": "malformed/events.jsonl", "kind": "events_jsonl" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "parser_phase0_artifact_contract",
+            "benchmark_class": "parser_baseline_artifact",
+            "benchmark_entrypoint": "scripts/run_parser_phase0_artifact_contract.sh",
+            "replay_entrypoint": "scripts/e2e/parser_phase0_artifact_contract_replay.sh",
+            "result_schema": { "result_state": "observed_or_degraded_receipt" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "parser_phase0_artifact_contract",
+            "evidence_kind": "run_manifest",
+            "primary_artifact_json": "malformed/run_manifest.json",
+            "events_jsonl": "malformed/events.jsonl",
+            "stall_bundle_json": null
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BUNDLE-LOCAL-FALLBACK-CONTAMINATION"
+      },
+      "workspace_files": [
+        { "path": "contaminated/run_manifest.json", "kind": "run_manifest_fail" },
+        { "path": "contaminated/events.jsonl", "kind": "events_jsonl" },
+        { "path": "contaminated/stall_bundle.json", "kind": "stall_contaminated" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "plas_benchmark_bundle",
+            "benchmark_class": "constrained_ambient_bundle",
+            "benchmark_entrypoint": "scripts/run_plas_benchmark_bundle_suite.sh",
+            "replay_entrypoint": null,
+            "result_schema": { "result_state": "observed_or_recovered" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "plas_benchmark_bundle",
+            "evidence_kind": "run_manifest",
+            "primary_artifact_json": "contaminated/run_manifest.json",
+            "events_jsonl": "contaminated/events.jsonl",
+            "stall_bundle_json": "contaminated/stall_bundle.json"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "placeholder_throughput_claim",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "reason_code": "FE-SWARM-BUNDLE-PLACEHOLDER-THROUGHPUT"
+      },
+      "workspace_files": [
+        { "path": "throughput_placeholder_measurements_v1.json", "kind": "throughput_placeholder" }
+      ],
+      "source_manifest": {
+        "schema_version": "franken-engine.swarm-benchmark-workload-catalog-contract.v1",
+        "source_inventory": [
+          {
+            "workload_id": "frankenengine_throughput_baseline_status",
+            "benchmark_class": "blocked_runtime_baseline",
+            "benchmark_entrypoint": "scripts/benchmarks/throughput_baselines.sh",
+            "replay_entrypoint": "scripts/e2e/throughput_baselines_placeholder_smoke.sh",
+            "result_schema": { "result_state": "observed_or_blocked" }
+          }
+        ]
+      },
+      "request": {
+        "schema_version": "franken-engine.swarm-benchmark-bundle-replay-normalizer.request.v1",
+        "source_manifest_json": "source_manifest.json",
+        "evidence_rows": [
+          {
+            "workload_id": "frankenengine_throughput_baseline_status",
+            "evidence_kind": "throughput_baselines",
+            "primary_artifact_json": "throughput_placeholder_measurements_v1.json",
+            "events_jsonl": null,
+            "stall_bundle_json": null
+          }
+        ]
+      }
+    }
+  ]
+}

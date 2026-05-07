@@ -53,7 +53,7 @@ contract_shape_ok() {
     and .smoke_script == "scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh"
     and .docs == "docs/SWARM_AUTOPILOT_BROWNOUT_FORECASTER.md"
     and .fixture_bundle == "scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json"
-    and .forecast_schema_version == "franken-engine.swarm-autopilot-brownout-forecast.v1"
+    and .forecast_schema_version == "franken-engine.swarm-autopilot-brownout-forecaster.v1"
     and .comparison_schema_version == "franken-engine.swarm-autopilot-brownout-hindsight-comparison.v1"
     and ((["admitted_heavy_lane_pressure","rch_slot_exhaustion","target_dir_pressure","stale_progress_risk","proof_cache_pressure","fairness_starvation_window"] - .forecast_categories) | length) == 0
     and .mutation_policy.advisory_only == true
@@ -116,7 +116,7 @@ validate_outputs() {
   local required_error required_category required_state expected_match_count
 
   jq -e --slurpfile expected "$expected_json" '
-    .schema_version == "franken-engine.swarm-autopilot-brownout-forecast.v1"
+    .schema_version == "franken-engine.swarm-autopilot-brownout-forecaster.v1"
     and .decision == $expected[0].decision
     and .validated_horizon_seconds == 1800
     and (.forecast_id | startswith("brownout-forecast-"))

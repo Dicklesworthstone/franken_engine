@@ -778,7 +778,7 @@ jq -n \
   end) as $forecasts |
   ($forecasts | [.[] | sev(.state)] | max) as $max_severity |
   {
-    schema_version: "franken-engine.swarm-autopilot-brownout-forecast.v1",
+    schema_version: "franken-engine.swarm-autopilot-brownout-forecaster.v1",
     source_revision: $source_revision,
     generated_epoch_seconds: $now_epoch_seconds,
     validated_horizon_seconds: $validated_horizon_seconds,

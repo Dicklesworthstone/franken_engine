@@ -9,7 +9,7 @@
   "smoke_script": "scripts/e2e/swarm_autopilot_brownout_forecaster_smoke.sh",
   "docs": "docs/SWARM_AUTOPILOT_BROWNOUT_FORECASTER.md",
   "fixture_bundle": "scripts/testdata/swarm_autopilot_brownout_forecaster/cases.json",
-  "forecast_schema_version": "franken-engine.swarm-autopilot-brownout-forecast.v1",
+  "forecast_schema_version": "franken-engine.swarm-autopilot-brownout-forecaster.v1",
   "comparison_schema_version": "franken-engine.swarm-autopilot-brownout-hindsight-comparison.v1",
   "required_inputs": [
     {

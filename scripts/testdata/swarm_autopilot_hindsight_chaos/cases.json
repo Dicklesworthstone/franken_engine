@@ -1,0 +1,200 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-hindsight-chaos-fixtures.v1",
+  "base_source_bundle_json": {
+    "schema_version": "franken-engine.swarm-autopilot-hindsight-source-bundle.v1",
+    "source_revision": "fixture-source-bundle",
+    "completed_bundle_id": "autopilot-source-bundle-fixture-a",
+    "source_freshness": "fresh",
+    "source_artifacts": {
+      "brownout_forecast_json": "fixtures/completed/brownout_forecast.json",
+      "resource_lease_plan_json": "fixtures/completed/resource_lease_plan.json",
+      "resource_scarcity_receipts_json": "fixtures/completed/resource_scarcity_receipts.json",
+      "operator_intent_policy_json": "fixtures/completed/operator_intent_policy.json",
+      "queue_advisory_bundle_json": "fixtures/completed/queue_advisory_bundle.json",
+      "recommendation_bundle_json": "fixtures/completed/recommendation_bundle.json"
+    },
+    "base_state": {
+      "rch_slots_available": 4,
+      "worker_stale_progress_count": 0,
+      "target_dir_pressure_millionths": 240000,
+      "proof_cache_pressure_millionths": 220000,
+      "fairness_skew_millionths": 160000,
+      "local_fallback_contaminated": false,
+      "br_state_fresh": true
+    },
+    "requested_perturbations": [
+      {
+        "perturbation_id": "minimal-rch-slot-minus-one",
+        "perturbation_type": "minimal_perturbation",
+        "stress_targets": [
+          "forecast",
+          "policy_compiler"
+        ],
+        "delta": {
+          "rch_slots_available": 3
+        },
+        "expected_invariant": "forecast remains deterministic and recommendation count is unchanged",
+        "replay_command": "bash scripts/e2e/swarm_autopilot_hindsight_chaos_smoke.sh selftest --case minimal_perturbation_generation",
+        "reason_codes": [
+          "minimal_delta",
+          "deterministic_replay"
+        ]
+      }
+    ],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_br": false,
+      "reassigns_beads": false,
+      "releases_reservations": false,
+      "sends_agent_mail": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "minimal_perturbation_generation",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_perturbation_type": "minimal_perturbation",
+        "required_stress_target": "forecast"
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "brownout_chaos",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_perturbation_type": "brownout_chaos",
+        "required_stress_target": "lease_allocator"
+      },
+      "overrides": {
+        "source_bundle_json": {
+          "requested_perturbations": [
+            {
+              "perturbation_id": "rch-target-proof-brownout",
+              "perturbation_type": "brownout_chaos",
+              "stress_targets": [
+                "forecast",
+                "lease_allocator",
+                "recommendation_bundle"
+              ],
+              "delta": {
+                "rch_slots_available": 0,
+                "target_dir_pressure_millionths": 920000,
+                "proof_cache_pressure_millionths": 880000
+              },
+              "expected_invariant": "nonurgent heavy lanes defer while urgent slack remains reserved",
+              "replay_command": "bash scripts/e2e/swarm_autopilot_hindsight_chaos_smoke.sh selftest --case brownout_chaos",
+              "reason_codes": [
+                "rch_slot_brownout",
+                "target_dir_pressure",
+                "proof_cache_pressure"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "stale_ownership_chaos",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_perturbation_type": "stale_ownership_chaos",
+        "required_stress_target": "recommendation_bundle"
+      },
+      "overrides": {
+        "source_bundle_json": {
+          "requested_perturbations": [
+            {
+              "perturbation_id": "stale-owner-human-review",
+              "perturbation_type": "stale_ownership_chaos",
+              "stress_targets": [
+                "policy_compiler",
+                "lease_allocator",
+                "recommendation_bundle"
+              ],
+              "delta": {
+                "worker_stale_progress_count": 3,
+                "br_state_fresh": false
+              },
+              "expected_invariant": "stale ownership forces human-review recommendation without reassignment",
+              "replay_command": "bash scripts/e2e/swarm_autopilot_hindsight_chaos_smoke.sh selftest --case stale_ownership_chaos",
+              "reason_codes": [
+                "stale_progress",
+                "human_review"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_chaos",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-LOCAL-FALLBACK",
+        "required_perturbation_type": "local_fallback_contamination"
+      },
+      "overrides": {
+        "source_bundle_json": {
+          "requested_perturbations": [
+            {
+              "perturbation_id": "local-fallback-quarantine",
+              "perturbation_type": "local_fallback_contamination",
+              "stress_targets": [
+                "forecast",
+                "recommendation_bundle"
+              ],
+              "delta": {
+                "local_fallback_contaminated": true
+              },
+              "expected_invariant": "local fallback evidence remains quarantined and no remote-only replay is approved",
+              "replay_command": "bash scripts/e2e/swarm_autopilot_hindsight_chaos_smoke.sh selftest --case local_fallback_chaos",
+              "reason_codes": [
+                "local_fallback_contamination"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "under_specified_replay_rejection",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-HINDSIGHT-CHAOS-UNDER-SPECIFIED",
+        "required_perturbation_type": "brownout_chaos"
+      },
+      "overrides": {
+        "source_bundle_json": {
+          "requested_perturbations": [
+            {
+              "perturbation_id": "missing-invariant",
+              "perturbation_type": "brownout_chaos",
+              "stress_targets": [
+                "forecast",
+                "lease_allocator"
+              ],
+              "delta": {
+                "rch_slots_available": 0
+              },
+              "reason_codes": [
+                "under_specified_replay"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

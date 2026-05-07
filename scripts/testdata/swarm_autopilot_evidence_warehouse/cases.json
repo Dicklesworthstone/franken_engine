@@ -1,0 +1,300 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse-fixtures.v1",
+  "base_swarm_ops_bundle": {
+    "run_manifest_json": {
+      "schema_version": "franken-engine.swarm-ops-no-mock-drill-run-manifest.v1",
+      "run_id": "fixture-green",
+      "source_revision": "fixture-revision",
+      "decision": "pass"
+    },
+    "events_jsonl": "{\"schema_version\":\"franken-engine.swarm-ops-no-mock-drill.event.v1\",\"event\":\"fixture.loaded\",\"outcome\":\"pass\"}\n",
+    "commands_txt": "bash scripts/e2e/swarm_ops_no_mock_drill.sh --fixtures-json scripts/testdata/swarm_ops_no_mock_drill/cases.json --case-id green\n",
+    "trace_ids_json": {
+      "schema_version": "franken-engine.swarm-ops-no-mock-drill-trace-ids.v1",
+      "trace_id": "trace-green",
+      "stage_trace_ids": {
+        "state_snapshot": "trace-state",
+        "slo_gate": "trace-slo"
+      }
+    },
+    "state_snapshot_json": {
+      "schema_version": "franken-engine.swarm-ops-state-snapshot.v1",
+      "decision": "pass",
+      "captured_at_epoch_seconds": 1778115600,
+      "br_sync_status_json": {
+        "db_newer": false,
+        "jsonl_newer": false,
+        "dirty_count": 0
+      },
+      "reason_codes": []
+    },
+    "admission_plan_json": {
+      "schema_version": "franken-engine.swarm-admission-budget-plan.v1",
+      "decision": "pass",
+      "admitted_lanes": [
+        "green-heavy"
+      ]
+    },
+    "recovery_receipts_json": {
+      "schema_version": "franken-engine.swarm-stale-recovery-receipts.v1",
+      "decision": "pass",
+      "receipts": []
+    },
+    "rch_rehab_ledger_json": {
+      "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+      "decision": "pass",
+      "summary": {
+        "total_workers": 1,
+        "stale_worker_count": 0
+      },
+      "workers": [
+        {
+          "worker_id": "rch-a",
+          "latest_progress_age_seconds": 0
+        }
+      ]
+    },
+    "locality_plan_json": {
+      "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+      "decision": "pass",
+      "worker_id": "rch-a",
+      "target_dir": "/mnt/rch/target-a",
+      "recommendations": [
+        {
+          "action": "reuse_warm_target",
+          "worker_id": "rch-a"
+        }
+      ]
+    },
+    "dashboard_bundle_json": {
+      "schema_version": "franken-engine.swarm-frankentui-dashboard-bundle.v1",
+      "decision": "pass",
+      "summary": {
+        "lanes": 1
+      }
+    },
+    "saturation_replay_report_json": {
+      "schema_version": "franken-engine.swarm-saturation-replay-report.v1",
+      "decision": "pass",
+      "summary": {
+        "heavy_admitted_count": 1
+      },
+      "contamination_report": {
+        "local_fallback_observed": false
+      },
+      "fanout_report": {
+        "remote_rch_slots": 8
+      }
+    },
+    "slo_gate_report_json": {
+      "schema_version": "franken-engine.swarm-slo-gate-report.v1",
+      "decision": "pass",
+      "reason_codes": [],
+      "slo_verdicts": []
+    },
+    "truth_gate_report_json": {
+      "schema_version": "franken-engine.swarm-ops-no-mock-drill-truth-gate.v1",
+      "decision": "pass",
+      "truth_gate_reasons": [],
+      "stage_decisions": [
+        {
+          "stage": "state_snapshot",
+          "decision": "pass"
+        },
+        {
+          "stage": "admission_plan",
+          "decision": "pass"
+        },
+        {
+          "stage": "recovery_receipts",
+          "decision": "pass"
+        },
+        {
+          "stage": "rch_rehab_ledger",
+          "decision": "pass"
+        },
+        {
+          "stage": "locality_plan",
+          "decision": "pass"
+        },
+        {
+          "stage": "dashboard_bundle",
+          "decision": "pass"
+        },
+        {
+          "stage": "saturation_replay_report",
+          "decision": "pass"
+        },
+        {
+          "stage": "slo_gate_report",
+          "decision": "pass"
+        }
+      ]
+    }
+  },
+  "base_queue_locality_json": {
+    "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v1",
+    "queue_advisory_id": "tqa-fixture-green",
+    "source_revision": "fixture-revision",
+    "truth_state": "confirmed",
+    "decision": "pass",
+    "reason_codes": [
+      "hot_cache_reuse_preferred"
+    ],
+    "locality_bias_summary": {
+      "rank_bias_mode": "prefer_hot_cache_locality",
+      "usable_preferred_worker_ids": [
+        "rch-a"
+      ]
+    },
+    "mutation_policy": {
+      "advisory_only": true,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "changes_live_queue_policy": false
+    }
+  },
+  "base_operator_intent_policy_json": {
+    "schema_version": "franken-engine.swarm-autopilot-operator-intent-policy.v1",
+    "decision": "provided",
+    "intents": [
+      {
+        "intent_id": "preserve-rch-slack",
+        "mode": "advisory"
+      }
+    ],
+    "mutation_policy": {
+      "advisory_only": true,
+      "mutates_br": false,
+      "runs_cargo": false,
+      "runs_rch": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "green",
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_error_code": ""
+      },
+      "overrides": {}
+    },
+    {
+      "case_id": "stale_swarm_ops",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-STALE-SWARM-OPS"
+      },
+      "overrides": {
+        "swarm_ops_bundle": {
+          "state_snapshot_json": {
+            "decision": "fail_closed",
+            "br_sync_status_json": {
+              "db_newer": true,
+              "jsonl_newer": false,
+              "dirty_count": 1
+            },
+            "reason_codes": [
+              "FE-SWARM-OPS-STALE-BV"
+            ]
+          },
+          "truth_gate_report_json": {
+            "decision": "fail_closed",
+            "truth_gate_reasons": [
+              {
+                "code": "FE-SWARM-OPS-STALE-BV",
+                "source_id": "state_snapshot_json",
+                "detail": "br/bv sync is stale"
+              }
+            ],
+            "stage_decisions": [
+              {
+                "stage": "state_snapshot",
+                "decision": "fail_closed"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "case_id": "missing_queue_locality",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-MISSING-QUEUE-LOCALITY"
+      },
+      "omit_queue_locality_json": true,
+      "overrides": {}
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK"
+      },
+      "overrides": {
+        "swarm_ops_bundle": {
+          "saturation_replay_report_json": {
+            "decision": "fail_closed",
+            "contamination_report": {
+              "local_fallback_observed": true
+            }
+          },
+          "slo_gate_report_json": {
+            "decision": "fail_closed",
+            "fail_closed_reasons": [
+              {
+                "code": "local_fallback_contamination",
+                "source_id": "saturation_replay_report_json",
+                "detail": "local fallback evidence invalidates brownout SLO gate"
+              }
+            ]
+          },
+          "truth_gate_report_json": {
+            "decision": "fail_closed",
+            "truth_gate_reasons": [
+              {
+                "code": "FE-SWARM-SLO-LOCAL-FALLBACK",
+                "source_id": "slo_gate_report_json",
+                "detail": "local fallback failed closed"
+              }
+            ],
+            "stage_decisions": [
+              {
+                "stage": "slo_gate_report",
+                "decision": "fail_closed"
+              }
+            ]
+          }
+        },
+        "queue_locality_json": {
+          "truth_state": "contaminated",
+          "decision": "fail_closed",
+          "reason_codes": [
+            "local_fallback_contaminated"
+          ]
+        }
+      }
+    },
+    {
+      "case_id": "schema_drift",
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-SWARM-AUTOPILOT-SCHEMA-DRIFT"
+      },
+      "overrides": {
+        "queue_locality_json": {
+          "schema_version": "franken-engine.swarm-topology-aware-queue-advisory.v0",
+          "queue_advisory_id": "tqa-schema-drift",
+          "decision": "pass"
+        }
+      }
+    }
+  ]
+}

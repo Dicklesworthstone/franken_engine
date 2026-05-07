@@ -1,0 +1,118 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-evidence-warehouse-contract.v1",
+  "bead_id": "bd-4t4oi",
+  "parent_bead_id": "bd-8pzsu",
+  "depends_on": [
+    "bd-3rebe"
+  ],
+  "script": "scripts/swarm_autopilot_evidence_warehouse.sh",
+  "smoke_script": "scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh",
+  "operator_docs": "docs/SWARM_AUTOPILOT_EVIDENCE_WAREHOUSE.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_evidence_warehouse/cases.json",
+  "warehouse_schema_version": "franken-engine.swarm-autopilot-evidence-warehouse.v1",
+  "required_inputs": [
+    "swarm_ops_bundle_dir",
+    "queue_locality_json"
+  ],
+  "optional_inputs": [
+    "operator_intent_policy_json"
+  ],
+  "required_swarm_ops_bundle_members": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "state_snapshot.json",
+    "admission_plan.json",
+    "recovery_receipts.json",
+    "rch_rehab_ledger.json",
+    "locality_plan.json",
+    "dashboard_bundle.json",
+    "saturation_replay_report.json",
+    "slo_gate_report.json",
+    "truth_gate_report.json"
+  ],
+  "output_artifacts": [
+    "evidence_warehouse.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "retention_classes": [
+    "short_lived_raw_capture",
+    "long_lived_replay_evidence",
+    "audit_log",
+    "policy_snapshot"
+  ],
+  "stable_hash_rules": [
+    "warehouse_hash is sha256 over normalized source ids, schemas, decisions, freshness markers, content hashes, retention classes, source revision, and fail-closed reasons",
+    "warehouse_hash excludes output paths, raw source paths, normalized temp paths, wall-clock run id, and generated artifact paths"
+  ],
+  "fail_closed_rules": [
+    "Missing SWARM-OPS bundle members fail closed with explicit remediation.",
+    "Malformed JSON or schema drift in required evidence fails closed.",
+    "Stale br/bv sync state from the SWARM-OPS state or truth gate fails closed.",
+    "Local fallback contamination in saturation, SLO, or queue evidence fails closed.",
+    "Contradictory truth-gate and stage decisions fail closed.",
+    "Missing topology-aware queue locality evidence fails closed.",
+    "Operator-intent policy schema drift fails closed when a policy is provided."
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-MISSING-BUNDLE-MEMBER",
+    "FE-SWARM-AUTOPILOT-SCHEMA-DRIFT",
+    "FE-SWARM-AUTOPILOT-STALE-SWARM-OPS",
+    "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK",
+    "FE-SWARM-AUTOPILOT-CONTRADICTORY-STAGE",
+    "FE-SWARM-AUTOPILOT-MISSING-QUEUE-LOCALITY"
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "green",
+      "expected_decision": "pass"
+    },
+    {
+      "case_id": "stale_swarm_ops",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-STALE-SWARM-OPS"
+    },
+    {
+      "case_id": "missing_queue_locality",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-MISSING-QUEUE-LOCALITY"
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-LOCAL-FALLBACK"
+    },
+    {
+      "case_id": "schema_drift",
+      "expected_decision": "fail_closed",
+      "required_error_code": "FE-SWARM-AUTOPILOT-SCHEMA-DRIFT"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "writes_outside_output_dir": false
+  },
+  "validation_commands": [
+    "bash -n scripts/swarm_autopilot_evidence_warehouse.sh scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_evidence_warehouse.sh scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh",
+    "jq empty docs/swarm_autopilot_evidence_warehouse_contract_v1.json scripts/testdata/swarm_autopilot_evidence_warehouse/cases.json",
+    "bash scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_EVIDENCE_WAREHOUSE.md docs/swarm_autopilot_evidence_warehouse_contract_v1.json scripts/swarm_autopilot_evidence_warehouse.sh scripts/e2e/swarm_autopilot_evidence_warehouse_smoke.sh scripts/testdata/swarm_autopilot_evidence_warehouse/cases.json"
+  ]
+}

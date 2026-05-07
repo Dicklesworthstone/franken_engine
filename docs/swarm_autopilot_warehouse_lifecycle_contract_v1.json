@@ -1,0 +1,182 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-warehouse-lifecycle-contract.v1",
+  "bead_id": "bd-gra1z.1",
+  "parent_bead_id": "bd-gra1z",
+  "depends_on": [
+    "bd-4t4oi"
+  ],
+  "upstream_contracts": [
+    "docs/swarm_autopilot_evidence_warehouse_contract_v1.json"
+  ],
+  "follow_on_beads": {
+    "retention_planner": "bd-gra1z.2",
+    "promotion_candidate_miner": "bd-gra1z.3",
+    "anomaly_cohort_packer": "bd-gra1z.4",
+    "operator_status_integration": "bd-gra1z.5",
+    "no_mock_drill": "bd-gra1z.6"
+  },
+  "planned_producer_scripts": [
+    "scripts/swarm_autopilot_warehouse_retention_planner.sh",
+    "scripts/swarm_autopilot_promotion_candidate_miner.sh",
+    "scripts/swarm_autopilot_anomaly_cohort_packer.sh",
+    "scripts/e2e/swarm_autopilot_warehouse_lifecycle_no_mock_drill.sh"
+  ],
+  "operator_docs": "docs/SWARM_AUTOPILOT_WAREHOUSE_LIFECYCLE_CONTRACT.md",
+  "smoke_script": "scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh",
+  "lifecycle_bundle_schema_version": "franken-engine.swarm-autopilot-warehouse-lifecycle-summary.v1",
+  "required_inputs": [
+    "evidence_warehouse_json"
+  ],
+  "optional_inputs": [
+    "historical_budget_baseline_json",
+    "operator_snapshot_json",
+    "hindsight_bundle_json"
+  ],
+  "recognized_retention_classes": [
+    "short_lived_raw_capture",
+    "long_lived_replay_evidence",
+    "audit_log",
+    "policy_snapshot"
+  ],
+  "required_bundle_fields": [
+    "warehouse_lifecycle_id",
+    "truth_state",
+    "retention_decision",
+    "promotion_decision",
+    "cohort_decision",
+    "storage_pressure_state",
+    "local_fallback_contamination",
+    "required_input_status.warehouse_rows_present",
+    "required_input_status.retention_classes_present",
+    "optional_snapshot_health.optional_snapshot_count",
+    "optional_snapshot_health.optional_present_count",
+    "optional_snapshot_health.optional_missing_count",
+    "contradiction_count",
+    "error_codes",
+    "retention_classes",
+    "artifact_paths.retention_plan_json",
+    "artifact_paths.storage_budget_ledger_json",
+    "artifact_paths.promotion_candidates_json",
+    "artifact_paths.anomaly_cohorts_json",
+    "artifact_paths.replay_index_json",
+    "artifact_paths.operator_summary_json"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "retention_decisions": [
+    "retain",
+    "compact_degraded",
+    "fail_closed"
+  ],
+  "promotion_decisions": [
+    "pending_review",
+    "degraded_insufficient_evidence",
+    "blocked_contradiction",
+    "contaminated"
+  ],
+  "cohort_decisions": [
+    "ready",
+    "degraded_missing_optional",
+    "blocked_missing_references",
+    "contaminated"
+  ],
+  "storage_pressure_states": [
+    "normal",
+    "elevated",
+    "critical"
+  ],
+  "degraded_semantics": [
+    "required warehouse input is present",
+    "no contradictions are observed",
+    "no local fallback contamination is present",
+    "one or more optional lifecycle snapshots are missing"
+  ],
+  "blocked_semantics": [
+    "required warehouse lifecycle evidence is missing",
+    "contradictory hindsight blocks promotion truth",
+    "missing replay-preserve artifact paths block cohort truth"
+  ],
+  "contaminated_semantics": [
+    "local fallback contamination is present",
+    "warehouse lifecycle truth must fail closed",
+    "automatic promotion or replay approval remains forbidden"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-MISSING-INPUT",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-CONTRADICTORY-HINDSIGHT",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-MISSING-REPLAY-PATH",
+    "FE-SWARM-AUTOPILOT-WAREHOUSE-LOCAL-FALLBACK"
+  ],
+  "fail_closed_rules": [
+    "missing required warehouse lifecycle evidence fails closed",
+    "contradictory hindsight fails closed",
+    "missing replay-preserve artifact paths fail closed",
+    "local fallback contamination fails closed",
+    "automatic promotion or replay approval claims fail closed",
+    "lifecycle surfaces must not claim they mutate beads, reservations, Agent Mail, workers, or live queue policy"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "automatic_promotion": false,
+    "automatic_replay_approval": false
+  },
+  "required_doc_text": [
+    "This contract is advisory only and proof only.",
+    "Missing optional warehouse lifecycle snapshots degrade trust.",
+    "Contradictory hindsight must fail closed.",
+    "Local fallback contamination must fail closed.",
+    "The lifecycle surfaces must not mutate beads, reservations, Agent Mail, workers, or live queue policy."
+  ],
+  "fixture_examples": [
+    {
+      "fixture_id": "healthy_lifecycle",
+      "expected_truth_state": "confirmed",
+      "expected_retention_decision": "retain",
+      "expected_promotion_decision": "pending_review",
+      "expected_cohort_decision": "ready"
+    },
+    {
+      "fixture_id": "degraded_missing_optional_snapshot",
+      "expected_truth_state": "degraded",
+      "expected_retention_decision": "compact_degraded",
+      "expected_promotion_decision": "degraded_insufficient_evidence",
+      "expected_cohort_decision": "degraded_missing_optional"
+    },
+    {
+      "fixture_id": "blocked_contradictory_hindsight",
+      "expected_truth_state": "blocked",
+      "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-CONTRADICTORY-HINDSIGHT",
+      "expected_retention_decision": "fail_closed",
+      "expected_promotion_decision": "blocked_contradiction",
+      "expected_cohort_decision": "blocked_missing_references"
+    },
+    {
+      "fixture_id": "contaminated_local_fallback",
+      "expected_truth_state": "contaminated",
+      "required_error_code": "FE-SWARM-AUTOPILOT-WAREHOUSE-LOCAL-FALLBACK",
+      "expected_retention_decision": "fail_closed",
+      "expected_promotion_decision": "contaminated",
+      "expected_cohort_decision": "contaminated"
+    }
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_warehouse_lifecycle_contract_v1.json",
+    "bash -n scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh",
+    "shellcheck -x scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_WAREHOUSE_LIFECYCLE_CONTRACT.md docs/swarm_autopilot_warehouse_lifecycle_contract_v1.json scripts/e2e/swarm_autopilot_warehouse_lifecycle_contract_smoke.sh"
+  ]
+}

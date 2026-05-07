@@ -131,12 +131,13 @@ docs_shape_ok() {
 fixture_shape_ok() {
   jq -e '
     .schema_version == "franken-engine.swarm-actionability-truth-gate-fixtures.v1"
-    and (.cases | length) == 6
+    and (.cases | length) == 7
     and any(.cases[]; .case_id == "healthy_ready_safe_to_claim" and .expected.decision == "safe_to_claim")
     and any(.cases[]; .case_id == "bv_blocked_track_fail_closed" and .expected.required_reason_code == "FE-SWARM-ACTIONABILITY-BV-BLOCKED-ACTIONABLE")
     and any(.cases[]; .case_id == "in_progress_owned_defer" and .expected.required_reason_code == "FE-SWARM-ACTIONABILITY-BV-IN-PROGRESS-ACTIONABLE")
     and any(.cases[]; .case_id == "stale_export_fail_closed" and .expected.required_reason_code == "FE-SWARM-ACTIONABILITY-STALE-EXPORTED-STATE")
     and any(.cases[]; .case_id == "dirty_overlap_defer" and .expected.required_reason_code == "FE-SWARM-ACTIONABILITY-DIRTY-OVERLAP")
+    and any(.cases[]; .case_id == "malformed_required_source_fail_closed" and .expected.required_reason_code == "FE-SWARM-ACTIONABILITY-MALFORMED-SOURCE")
     and any(.cases[]; .case_id == "missing_optional_mail_observe_only" and .expected.decision == "observe_only")
   ' "$fixtures_path" >/dev/null
 }

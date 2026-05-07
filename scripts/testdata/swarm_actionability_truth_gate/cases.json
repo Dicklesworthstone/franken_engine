@@ -297,6 +297,41 @@
       }
     },
     {
+      "case_id": "malformed_required_source_fail_closed",
+      "expected": {
+        "decision": "fail_closed",
+        "candidate_id": null,
+        "required_reason_code": "FE-SWARM-ACTIONABILITY-MALFORMED-SOURCE"
+      },
+      "sources": {
+        "br_ready_json": [],
+        "br_open_json": {
+          "issues": []
+        },
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "br_blocked_json": {
+          "issues": []
+        },
+        "bv_robot_plan_json": {
+          "not_plan": true
+        },
+        "agent_mail_snapshot_json": {
+          "agents": [],
+          "active_reservations": []
+        },
+        "git_status_snapshot_json": {
+          "branch": "main",
+          "dirty_paths": []
+        },
+        "source_freshness_json": {
+          "db_newer": false,
+          "all_sources_fresh": true
+        }
+      }
+    },
+    {
       "case_id": "missing_optional_mail_observe_only",
       "expected": {
         "decision": "observe_only",

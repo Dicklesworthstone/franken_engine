@@ -516,7 +516,8 @@ def candidate_decision($states; $reasons):
   ) as $all_reasons
 | ($all_reasons | unique_by(.code + "|" + .source_id + "|" + .detail)) as $deduped_reasons
 | (
-    if any($candidate_reports[]?; .decision == "fail_closed") then "fail_closed"
+    if any($deduped_reasons[]?; .code == "FE-SWARM-ACTIONABILITY-MALFORMED-SOURCE") then "fail_closed"
+    elif any($candidate_reports[]?; .decision == "fail_closed") then "fail_closed"
     elif any($candidate_reports[]?; .decision == "safe_to_claim") then "safe_to_claim"
     elif any($candidate_reports[]?; .decision == "defer") then "defer"
     elif (($freshness.missing_optional_sources // []) | index("agent_mail_snapshot_json")) != null then "observe_only"

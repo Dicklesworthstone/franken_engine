@@ -1134,6 +1134,7 @@ mod tests {
         let kinds = [
             StoreKind::ReplayIndex,
             StoreKind::EvidenceIndex,
+            StoreKind::ShadowEvidenceJournal,
             StoreKind::BenchmarkLedger,
             StoreKind::PolicyCache,
             StoreKind::PlasWitness,
@@ -1163,6 +1164,7 @@ mod tests {
         let kinds = [
             (StoreKind::ReplayIndex, "ReplayIndex"),
             (StoreKind::EvidenceIndex, "EvidenceIndex"),
+            (StoreKind::ShadowEvidenceJournal, "ShadowEvidenceJournal"),
             (StoreKind::BenchmarkLedger, "BenchmarkLedger"),
             (StoreKind::PolicyCache, "PolicyCache"),
             (StoreKind::PlasWitness, "PlasWitness"),

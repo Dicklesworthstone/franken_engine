@@ -34,6 +34,7 @@ const TYPED_RECORD_ID_KEY: &str = "typed_record_id";
 pub enum StoreKind {
     ReplayIndex,
     EvidenceIndex,
+    ShadowEvidenceJournal,
     BenchmarkLedger,
     PolicyCache,
     PlasWitness,
@@ -48,6 +49,7 @@ impl StoreKind {
         match self {
             Self::ReplayIndex => "replay_index",
             Self::EvidenceIndex => "evidence_index",
+            Self::ShadowEvidenceJournal => "shadow_evidence_journal",
             Self::BenchmarkLedger => "benchmark_ledger",
             Self::PolicyCache => "policy_cache",
             Self::PlasWitness => "plas_witness",
@@ -65,6 +67,7 @@ impl StoreKind {
         match self {
             Self::ReplayIndex => "frankensqlite::control_plane::replay_index",
             Self::EvidenceIndex => "frankensqlite::control_plane::evidence_index",
+            Self::ShadowEvidenceJournal => "sqlmodel_rust::ShadowEvidenceJournalEntry",
             Self::BenchmarkLedger => "frankensqlite::benchmark::ledger",
             Self::PolicyCache => "frankensqlite::control_plane::policy_cache",
             Self::PlasWitness => "frankensqlite::analysis::plas_witness",
@@ -92,7 +95,10 @@ pub(crate) fn mark_typed_heavy_generic_compat_metadata(metadata: &mut BTreeMap<S
 fn is_typed_heavy_store(store: StoreKind) -> bool {
     matches!(
         store,
-        StoreKind::ReplacementLineage | StoreKind::IfcProvenance | StoreKind::SpecializationIndex
+        StoreKind::ShadowEvidenceJournal
+            | StoreKind::ReplacementLineage
+            | StoreKind::IfcProvenance
+            | StoreKind::SpecializationIndex
     )
 }
 
@@ -116,6 +122,7 @@ fn typed_heavy_legacy_prefixes(store: StoreKind) -> &'static [&'static str] {
             "confinement_claim::",
         ],
         StoreKind::SpecializationIndex => &["receipt:", "benchmark:", "invalidation:"],
+        StoreKind::ShadowEvidenceJournal => &[],
         _ => &[],
     }
 }
@@ -821,8 +828,8 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
     backend: B,
     schema_version: u32,
     events: Vec<StorageEvent>,
-    /// Optional typed SQLModel session for ReplacementLineage, IfcProvenance,
-    /// EvidenceIndex, and SpecializationIndex stores.
+    /// Optional typed SQLModel session for ReplacementLineage, ShadowEvidenceJournal,
+    /// IfcProvenance, EvidenceIndex, and SpecializationIndex stores.
     /// When present, typed operations use SQLModel boundaries instead of generic record operations.
     typed_session: Option<TypedFrankenSqliteSession>,
 }
@@ -867,8 +874,8 @@ impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
 
     /// Create a new storage adapter with typed SQLModel session enabled for typed persistence operations.
     ///
-    /// This enables typed operations for ReplacementLineage, IfcProvenance,
-    /// EvidenceIndex, and SpecializationIndex stores
+    /// This enables typed operations for ReplacementLineage, ShadowEvidenceJournal,
+    /// IfcProvenance, EvidenceIndex, and SpecializationIndex stores
     /// using SQLModel boundaries instead of generic record operations. Uses in-memory typed session
     /// for development/testing; production callers should extend this to use file-backed sessions.
     pub fn new_with_typed_session(mut backend: B) -> Result<Self, StorageError> {
@@ -1452,6 +1459,7 @@ mod tests {
         let cases = [
             (StoreKind::ReplayIndex, "replay_index"),
             (StoreKind::EvidenceIndex, "evidence_index"),
+            (StoreKind::ShadowEvidenceJournal, "shadow_evidence_journal"),
             (StoreKind::BenchmarkLedger, "benchmark_ledger"),
             (StoreKind::PolicyCache, "policy_cache"),
             (StoreKind::PlasWitness, "plas_witness"),
@@ -1474,6 +1482,10 @@ mod tests {
             (
                 StoreKind::EvidenceIndex,
                 "frankensqlite::control_plane::evidence_index",
+            ),
+            (
+                StoreKind::ShadowEvidenceJournal,
+                "sqlmodel_rust::ShadowEvidenceJournalEntry",
             ),
             (
                 StoreKind::BenchmarkLedger,
@@ -1510,6 +1522,7 @@ mod tests {
         for kind in [
             StoreKind::ReplayIndex,
             StoreKind::EvidenceIndex,
+            StoreKind::ShadowEvidenceJournal,
             StoreKind::BenchmarkLedger,
             StoreKind::PolicyCache,
             StoreKind::PlasWitness,
@@ -2662,6 +2675,7 @@ mod tests {
         let kinds = [
             StoreKind::ReplayIndex,
             StoreKind::EvidenceIndex,
+            StoreKind::ShadowEvidenceJournal,
             StoreKind::BenchmarkLedger,
             StoreKind::PolicyCache,
             StoreKind::PlasWitness,
@@ -2688,6 +2702,7 @@ mod tests {
         for kind in [
             StoreKind::ReplayIndex,
             StoreKind::EvidenceIndex,
+            StoreKind::ShadowEvidenceJournal,
             StoreKind::BenchmarkLedger,
             StoreKind::PolicyCache,
             StoreKind::PlasWitness,

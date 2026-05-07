@@ -20,6 +20,7 @@ coupled to governance/replay operations:
 
 - replay index
 - evidence index
+- shadow evidence journal
 - policy artifact cache
 - IFC provenance index
 - specialization index
@@ -39,6 +40,7 @@ is materially different:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | replay index | raw frankensqlite | run metadata + artifact pointers keyed by `trace_id`/`run_id` | write-on-run, query by trace/time/status | strong consistency for append and lookup | long-lived (audit window) | `frankensqlite::control_plane::replay_index` | additive columns + versioned views | required; replay manifests must resolve deterministically |
 | evidence index | raw frankensqlite | evidence records keyed by `decision_id`/`policy_id`/`trace_id` | append-heavy, filtered reads for incident/audit | strong consistency and durable ordering | long-lived with legal/audit constraints | `frankensqlite::control_plane::evidence_index` | append-only schema evolution, no destructive rewrite | required; evidence linkage must replay identically |
+| shadow evidence journal | sqlmodel_rust on frankensqlite | normalized source snapshots + advisory events + replay checkpoints keyed by monotonic `sequence_id` | append-heavy, filtered reads by bead/source/retention class | strong consistency for replay-stable sequence ordering and parent-link integrity | bounded windowed retention with checkpoint/audit preservation | `sqlmodel_rust::ShadowEvidenceJournalEntry` | additive typed fields + fail-closed import/export invariants | required; shadow-daemon advisory replay must reconstruct exact event ordering and retained checkpoints |
 | benchmark ledger | raw frankensqlite | benchmark run summary + metric series + environment digest | bulk insert + range scans by profile/version | strong consistency for score publication | medium/long (release history + regression windows) | `frankensqlite::benchmark::ledger` | versioned metric columns + compatibility adapters | required for benchmark claim verification |
 | policy artifact cache | raw frankensqlite | compiled policy blobs + schema hashes + validation status | read-mostly with controlled refresh writes | read-after-write consistency for policy rollout | bounded LRU + minimum epoch floor | `frankensqlite::control_plane::policy_cache` | explicit cache-version bump + warmup migration | required when policy decisions are replayed |
 | PLAS witness store | sqlmodel_rust on frankensqlite | witness envelope + confidence bounds + artifact refs | append and query by subject/epoch | strong consistency on witness publication | medium/long, tied to calibration windows | `frankensqlite::analysis::plas_witness` | schema hash pinned, additive witness fields | required for capability decision replay |
@@ -75,6 +77,7 @@ Before implementing a new store:
 - Proof specialization workflows -> specialization index
 - Benchmark governance workflows -> benchmark ledger
 - Replay/evidence governance workflows -> replay index + evidence index
+- Shadow-daemon advisory workflows -> shadow evidence journal
 
 ## Operator Verification
 

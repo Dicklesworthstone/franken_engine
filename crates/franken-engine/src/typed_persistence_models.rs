@@ -1307,6 +1307,9 @@ pub fn typed_persistence_create_table_sql() -> Vec<String> {
         create_table::<ProofEvidenceIndexEntry>()
             .if_not_exists()
             .build(),
+        create_table::<ShadowEvidenceJournalEntry>()
+            .if_not_exists()
+            .build(),
         create_table::<SpecializationIndexEntry>()
             .if_not_exists()
             .build(),
@@ -1389,6 +1392,11 @@ impl<C: Connection> TypedSqlModelSession<C> {
 
     /// Add a proof-evidence-index row to the SQLModel unit of work.
     pub fn add_proof_evidence_index(&mut self, record: &ProofEvidenceIndexEntry) {
+        self.add_typed(record);
+    }
+
+    /// Add a shadow-evidence-journal row to the SQLModel unit of work.
+    pub fn add_shadow_evidence_journal(&mut self, record: &ShadowEvidenceJournalEntry) {
         self.add_typed(record);
     }
 
@@ -1869,6 +1877,275 @@ impl TypedStoreRecord for ProofEvidenceIndexEntry {
 }
 
 // ---------------------------------------------------------------------------
+// ShadowEvidenceJournal: sqlmodel_rust typed model
+// ---------------------------------------------------------------------------
+
+/// Typed model for advisory shadow-daemon journal events.
+///
+/// Persists normalized source snapshots, derived advisory events, and replay
+/// checkpoints through the typed shadow-journal boundary with deterministic
+/// sequence ordering and explicit retention classes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[sqlmodel(table = "shadow_evidence_journal")]
+pub struct ShadowEvidenceJournalEntry {
+    /// Stable typed row ID allocated from the journal natural key.
+    #[sqlmodel(primary_key)]
+    pub journal_event_id: i64,
+
+    /// Bead or track consuming this advisory evidence.
+    pub bead_id: String,
+
+    /// Event family persisted in the journal.
+    pub event_kind: String,
+
+    /// Snapshot or derived source family for the event.
+    pub source_kind: String,
+
+    /// Source command, API path, or synthetic advisory route for the event.
+    pub source_locator: String,
+
+    /// Unix timestamp (milliseconds) when the source was collected.
+    pub collected_timestamp_ms: i64,
+
+    /// Monotonic journal sequence for replay-stable ordering.
+    pub sequence_id: i64,
+
+    /// Content hash over the raw or canonical event payload bytes.
+    pub payload_content_hash: String,
+
+    /// Canonical repo-relative path to the normalized payload artifact, if any.
+    pub normalized_payload_path: Option<String>,
+
+    /// Canonical normalized payload persisted for replay and export.
+    pub normalized_payload_json: String,
+
+    /// Content hash over the normalized payload persisted for replay.
+    pub normalized_payload_hash: String,
+
+    /// JSON array of raw evidence hashes retained across compaction.
+    pub raw_evidence_hashes_json: String,
+
+    /// Freshness window in milliseconds from collection time.
+    pub freshness_window_ms: i64,
+
+    /// Unix timestamp (milliseconds) after which the event is stale.
+    pub freshness_deadline_ms: i64,
+
+    /// Truth/degradation state for this event.
+    pub degradation_state: String,
+
+    /// Retention policy class for bounded journal exports.
+    pub retention_class: String,
+
+    /// JSON array of parent journal sequence ids.
+    pub parent_event_ids_json: String,
+
+    /// Lossless structured metadata from the source or derived advisory.
+    pub metadata_json: String,
+}
+
+impl ShadowEvidenceJournalEntry {
+    /// Build a deterministic typed lookup for one journal event.
+    pub fn select_by_journal_event_id(journal_event_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("journal_event_id").eq(journal_event_id))
+    }
+
+    /// Build a deterministic typed lookup for all journal rows for one bead.
+    pub fn select_by_bead_id(bead_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("bead_id").eq(bead_id.into()))
+            .order_by(Expr::col("sequence_id").asc())
+            .order_by(Expr::col("journal_event_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for one source family.
+    pub fn select_by_source_kind(source_kind: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("source_kind").eq(source_kind.into()))
+            .order_by(Expr::col("sequence_id").asc())
+            .order_by(Expr::col("journal_event_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for replay checkpoints and later rows.
+    pub fn select_from_sequence(sequence_id: i64) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("sequence_id").ge(sequence_id))
+            .order_by(Expr::col("sequence_id").asc())
+            .order_by(Expr::col("journal_event_id").asc())
+    }
+}
+
+impl TypedStoreRecord for ShadowEvidenceJournalEntry {
+    const STORE_KIND: StoreKind = StoreKind::ShadowEvidenceJournal;
+    const MODEL_NAME: &'static str = "ShadowEvidenceJournalEntry";
+
+    fn typed_record_id(&self) -> i64 {
+        self.journal_event_id
+    }
+
+    fn typed_record_extra_metadata(&self) -> BTreeMap<String, String> {
+        let mut metadata = BTreeMap::from([
+            ("bead_id".to_string(), self.bead_id.clone()),
+            (
+                "degradation_state".to_string(),
+                self.degradation_state.clone(),
+            ),
+            ("event_kind".to_string(), self.event_kind.clone()),
+            ("retention_class".to_string(), self.retention_class.clone()),
+            ("sequence_id".to_string(), self.sequence_id.to_string()),
+            ("source_kind".to_string(), self.source_kind.clone()),
+            ("source_locator".to_string(), self.source_locator.clone()),
+        ]);
+        if let Some(path) = &self.normalized_payload_path {
+            metadata.insert("normalized_payload_path".to_string(), path.clone());
+        }
+        metadata
+    }
+
+    fn validate_typed_record(&self) -> StorageResult<()> {
+        require_non_negative_typed::<Self>("journal_event_id", self.journal_event_id)?;
+        require_non_empty_typed::<Self>("bead_id", &self.bead_id)?;
+        require_non_empty_typed::<Self>("event_kind", &self.event_kind)?;
+        require_allowed_typed::<Self>(
+            "event_kind",
+            &self.event_kind,
+            &["source_snapshot", "advisory_event", "replay_checkpoint"],
+        )?;
+        require_non_empty_typed::<Self>("source_kind", &self.source_kind)?;
+        require_non_empty_typed::<Self>("source_locator", &self.source_locator)?;
+        require_non_negative_typed::<Self>("collected_timestamp_ms", self.collected_timestamp_ms)?;
+        require_non_negative_typed::<Self>("sequence_id", self.sequence_id)?;
+        if self.sequence_id != self.journal_event_id {
+            return Err(typed_integrity_error::<Self>(
+                "`sequence_id` must match `journal_event_id` for deterministic replay ordering",
+            ));
+        }
+        require_sha256_typed::<Self>("payload_content_hash", &self.payload_content_hash)?;
+        if let Some(path) = &self.normalized_payload_path {
+            require_repo_relative_path_typed::<Self>("normalized_payload_path", path)?;
+        }
+        let normalized_payload: serde_json::Value =
+            serde_json::from_str(&self.normalized_payload_json).map_err(|err| {
+                typed_integrity_error::<Self>(format!(
+                    "`normalized_payload_json` must be valid JSON: {err}"
+                ))
+            })?;
+        if normalized_payload.is_null()
+            || !(normalized_payload.is_object() || normalized_payload.is_array())
+        {
+            return Err(typed_integrity_error::<Self>(
+                "`normalized_payload_json` must be a JSON object or array",
+            ));
+        }
+        require_sha256_typed::<Self>("normalized_payload_hash", &self.normalized_payload_hash)?;
+        let raw_evidence_hashes: Vec<String> = serde_json::from_str(&self.raw_evidence_hashes_json)
+            .map_err(|err| {
+                typed_integrity_error::<Self>(format!(
+                    "`raw_evidence_hashes_json` must be a JSON array of content hashes: {err}"
+                ))
+            })?;
+        if raw_evidence_hashes.is_empty() {
+            return Err(typed_integrity_error::<Self>(
+                "`raw_evidence_hashes_json` must preserve at least one raw evidence hash",
+            ));
+        }
+        if raw_evidence_hashes.len() > 64 {
+            return Err(typed_integrity_error::<Self>(
+                "`raw_evidence_hashes_json` exceeds the 64-hash cap",
+            ));
+        }
+        let mut previous_hash: Option<&str> = None;
+        for raw_hash in &raw_evidence_hashes {
+            require_sha256_typed::<Self>("raw_evidence_hash", raw_hash)?;
+            if let Some(previous_hash) = previous_hash
+                && raw_hash.as_str() <= previous_hash
+            {
+                return Err(typed_integrity_error::<Self>(
+                    "`raw_evidence_hashes_json` must be strictly ascending without duplicates",
+                ));
+            }
+            previous_hash = Some(raw_hash.as_str());
+        }
+        require_non_negative_typed::<Self>("freshness_window_ms", self.freshness_window_ms)?;
+        require_non_negative_typed::<Self>("freshness_deadline_ms", self.freshness_deadline_ms)?;
+        let expected_deadline = self
+            .collected_timestamp_ms
+            .checked_add(self.freshness_window_ms)
+            .ok_or_else(|| {
+                typed_integrity_error::<Self>(
+                    "`collected_timestamp_ms` + `freshness_window_ms` overflowed",
+                )
+            })?;
+        if self.freshness_deadline_ms != expected_deadline {
+            return Err(typed_integrity_error::<Self>(
+                "`freshness_deadline_ms` must equal `collected_timestamp_ms + freshness_window_ms`",
+            ));
+        }
+        require_allowed_typed::<Self>(
+            "degradation_state",
+            &self.degradation_state,
+            &["confirmed", "degraded", "blocked", "contaminated"],
+        )?;
+        require_allowed_typed::<Self>(
+            "retention_class",
+            &self.retention_class,
+            &["windowed", "checkpoint", "audit"],
+        )?;
+
+        let parent_event_ids: Vec<i64> = serde_json::from_str(&self.parent_event_ids_json)
+            .map_err(|err| {
+                typed_integrity_error::<Self>(format!(
+                    "`parent_event_ids_json` must be a JSON array of sequence ids: {err}"
+                ))
+            })?;
+        if parent_event_ids.len() > 64 {
+            return Err(typed_integrity_error::<Self>(
+                "`parent_event_ids_json` exceeds the 64-parent cap",
+            ));
+        }
+        if self.event_kind == "source_snapshot" && !parent_event_ids.is_empty() {
+            return Err(typed_integrity_error::<Self>(
+                "`source_snapshot` rows must not link parent events",
+            ));
+        }
+        if self.event_kind != "source_snapshot" && parent_event_ids.is_empty() {
+            return Err(typed_integrity_error::<Self>(
+                "derived journal rows must cite at least one parent event",
+            ));
+        }
+        if self.event_kind == "replay_checkpoint" && self.retention_class != "checkpoint" {
+            return Err(typed_integrity_error::<Self>(
+                "`replay_checkpoint` rows must use `checkpoint` retention",
+            ));
+        }
+        if self.event_kind != "replay_checkpoint" && self.retention_class == "checkpoint" {
+            return Err(typed_integrity_error::<Self>(
+                "only `replay_checkpoint` rows may use `checkpoint` retention",
+            ));
+        }
+        let mut last_parent = None;
+        for parent_id in parent_event_ids {
+            require_non_negative_typed::<Self>("parent_event_id", parent_id)?;
+            if parent_id >= self.sequence_id {
+                return Err(typed_integrity_error::<Self>(
+                    "parent event links must reference earlier journal sequence ids",
+                ));
+            }
+            if let Some(previous) = last_parent
+                && parent_id <= previous
+            {
+                return Err(typed_integrity_error::<Self>(
+                    "`parent_event_ids_json` must be strictly ascending without duplicates",
+                ));
+            }
+            last_parent = Some(parent_id);
+        }
+
+        require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SpecializationIndex: sqlmodel_rust typed model
 // ---------------------------------------------------------------------------
 
@@ -2132,6 +2409,35 @@ mod tests {
             generated_timestamp_ms: 1_700_000_000_019,
             freshness_deadline_ms: 1_700_086_400_019,
             metadata_json: r#"{"source":"test"}"#.to_string(),
+        }
+    }
+
+    fn shadow_evidence_entry(journal_event_id: i64) -> ShadowEvidenceJournalEntry {
+        ShadowEvidenceJournalEntry {
+            journal_event_id,
+            bead_id: "bd-shadow".to_string(),
+            event_kind: "source_snapshot".to_string(),
+            source_kind: "br_queue_snapshot_json".to_string(),
+            source_locator: "br ready --json".to_string(),
+            collected_timestamp_ms: 1_700_000_000_023,
+            sequence_id: journal_event_id,
+            payload_content_hash:
+                "sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216"
+                    .to_string(),
+            normalized_payload_path: Some("artifacts/shadow/br_queue_snapshot.json".to_string()),
+            normalized_payload_json: r#"[{"id":"bd-a","status":"ready"}]"#.to_string(),
+            normalized_payload_hash:
+                "sha256:60341f65f17dd7d05ce3d1206b6b8e7cbac12d171d9788e674bb317f1f1f34c1"
+                    .to_string(),
+            raw_evidence_hashes_json:
+                r#"["sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216"]"#
+                    .to_string(),
+            freshness_window_ms: 30_000,
+            freshness_deadline_ms: 1_700_000_030_023,
+            degradation_state: "confirmed".to_string(),
+            retention_class: "windowed".to_string(),
+            parent_event_ids_json: "[]".to_string(),
+            metadata_json: r#"{"source_id":"br_queue_snapshot_json"}"#.to_string(),
         }
     }
 
@@ -2442,6 +2748,7 @@ mod tests {
         });
 
         assert_round_trips(proof_evidence_entry(19));
+        assert_round_trips(shadow_evidence_entry(23));
 
         assert_round_trips(SpecializationIndexEntry {
             specialization_id: 13,
@@ -2525,12 +2832,25 @@ mod tests {
             r#"SELECT * FROM proof_evidence_index WHERE "bead_id" = $1 ORDER BY "source_revision" ASC, "artifact_path" ASC, "evidence_id" ASC LIMIT 25"#
         );
         assert_eq!(params, vec![Value::Text("bd-proof".to_string())]);
+
+        let (sql, params) =
+            ShadowEvidenceJournalEntry::select_by_source_kind("br_queue_snapshot_json")
+                .limit(10)
+                .build();
+        assert_eq!(
+            sql,
+            r#"SELECT * FROM shadow_evidence_journal WHERE "source_kind" = $1 ORDER BY "sequence_id" ASC, "journal_event_id" ASC LIMIT 10"#
+        );
+        assert_eq!(
+            params,
+            vec![Value::Text("br_queue_snapshot_json".to_string())]
+        );
     }
 
     #[test]
     fn typed_session_schema_sql_lists_all_typed_tables() {
         let sql = typed_persistence_create_table_sql();
-        assert_eq!(sql.len(), 4);
+        assert_eq!(sql.len(), 5);
         assert!(
             sql.iter()
                 .all(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS ")),
@@ -2558,11 +2878,18 @@ mod tests {
             sql[2]
         );
         assert!(
-            sql[3].contains("\"specialization_index\"")
-                && sql[3].contains("\"invalidation_reason\" TEXT")
-                && sql[3].contains("PRIMARY KEY (\"specialization_id\")"),
-            "specialization index DDL should expose nullable invalidation fields: {}",
+            sql[3].contains("\"shadow_evidence_journal\"")
+                && sql[3].contains("\"parent_event_ids_json\" TEXT NOT NULL")
+                && sql[3].contains("PRIMARY KEY (\"journal_event_id\")"),
+            "shadow evidence journal DDL should expose ordering and lineage fields: {}",
             sql[3]
+        );
+        assert!(
+            sql[4].contains("\"specialization_index\"")
+                && sql[4].contains("\"invalidation_reason\" TEXT")
+                && sql[4].contains("PRIMARY KEY (\"specialization_id\")"),
+            "specialization index DDL should expose nullable invalidation fields: {}",
+            sql[4]
         );
     }
 
@@ -2580,21 +2907,24 @@ mod tests {
         let replacement = replacement_entry(7);
         let ifc = ifc_entry(11, "trace-ifc");
         let proof_evidence = proof_evidence_entry(19);
+        let shadow_evidence = shadow_evidence_entry(23);
         let specialization = specialization_entry(13);
 
         session.add_replacement_lineage(&replacement);
         session.add_ifc_provenance(&ifc);
         session.add_proof_evidence_index(&proof_evidence);
+        session.add_shadow_evidence_journal(&shadow_evidence);
         session.add_specialization_index(&specialization);
 
         assert!(session.contains_typed(&replacement));
         assert!(session.contains_typed(&ifc));
         assert!(session.contains_typed(&proof_evidence));
+        assert!(session.contains_typed(&shadow_evidence));
         assert!(session.contains_typed(&specialization));
 
         let debug = session.debug_state();
-        assert_eq!(debug.tracked, 4);
-        assert_eq!(debug.pending_new, 4);
+        assert_eq!(debug.tracked, 5);
+        assert_eq!(debug.pending_new, 5);
         assert_eq!(debug.pending_delete, 0);
         assert_eq!(debug.pending_dirty, 0);
         assert!(!debug.in_transaction);
@@ -2613,6 +2943,7 @@ mod tests {
             ("replacement_lineage", "sequence_id"),
             ("ifc_provenance", "provenance_id"),
             ("proof_evidence_index", "evidence_id"),
+            ("shadow_evidence_journal", "journal_event_id"),
             ("specialization_index", "specialization_id"),
         ] {
             let sql = format!("PRAGMA table_info({table})");

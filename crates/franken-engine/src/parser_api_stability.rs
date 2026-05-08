@@ -62,6 +62,16 @@ pub enum EvolutionRule {
     Internal,
 }
 
+impl EvolutionRule {
+    const fn canonical_json_string(self) -> &'static str {
+        match self {
+            Self::AdditiveOnly => "\"AdditiveOnly\"",
+            Self::Frozen => "\"Frozen\"",
+            Self::Internal => "\"Internal\"",
+        }
+    }
+}
+
 /// One row of the public API stability manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiSurfaceEntry {
@@ -183,10 +193,7 @@ impl ApiStabilityManifest {
                 );
                 m.insert(
                     "evolution_rule".into(),
-                    CanonicalValue::String(
-                        serde_json::to_string(&e.evolution_rule)
-                            .expect("serde deserialization should succeed"),
-                    ),
+                    CanonicalValue::String(e.evolution_rule.canonical_json_string().to_string()),
                 );
                 m.insert(
                     "minimum_compatible_version".into(),
@@ -220,6 +227,16 @@ pub enum CheckVerdict {
     Pass,
     Fail,
     Skipped,
+}
+
+impl CheckVerdict {
+    const fn canonical_json_string(self) -> &'static str {
+        match self {
+            Self::Pass => "\"Pass\"",
+            Self::Fail => "\"Fail\"",
+            Self::Skipped => "\"Skipped\"",
+        }
+    }
 }
 
 /// One compatibility check result.
@@ -284,10 +301,7 @@ impl CompatibilityReport {
                 m.insert("detail".into(), CanonicalValue::String(r.detail.clone()));
                 m.insert(
                     "verdict".into(),
-                    CanonicalValue::String(
-                        serde_json::to_string(&r.verdict)
-                            .expect("serde deserialization should succeed"),
-                    ),
+                    CanonicalValue::String(r.verdict.canonical_json_string().to_string()),
                 );
                 CanonicalValue::Map(m)
             })
@@ -772,6 +786,17 @@ pub enum IntegrationOutcome {
     VersionMismatch,
 }
 
+impl IntegrationOutcome {
+    const fn canonical_json_string(self) -> &'static str {
+        match self {
+            Self::Success => "\"Success\"",
+            Self::ParseFailure => "\"ParseFailure\"",
+            Self::MaterializationFailure => "\"MaterializationFailure\"",
+            Self::VersionMismatch => "\"VersionMismatch\"",
+        }
+    }
+}
+
 impl IntegrationLogEntry {
     pub fn from_parse_success(
         source_label: &str,
@@ -848,9 +873,7 @@ impl IntegrationLogEntry {
         );
         map.insert(
             "outcome".into(),
-            CanonicalValue::String(
-                serde_json::to_string(&self.outcome).expect("serde deserialization should succeed"),
-            ),
+            CanonicalValue::String(self.outcome.canonical_json_string().to_string()),
         );
         map.insert(
             "source_label".into(),

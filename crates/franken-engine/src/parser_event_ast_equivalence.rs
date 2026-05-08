@@ -727,10 +727,11 @@ pub fn evaluate_specimen(specimen: &EquivalenceSpecimen) -> SpecimenEvidence {
             // Replay stability
             let (_second_parse, second_event_ir) =
                 parser.parse_with_event_ir(specimen.source.as_str(), specimen.goal, &options);
-            let second_mat = second_event_ir
-                .materialize_from_source(specimen.source.as_str(), &options)
-                .expect("second materialization should succeed for non-tampered");
-            let replay_stable = second_mat.syntax_tree.canonical_hash() == mat_hash;
+            let replay_stable =
+                match second_event_ir.materialize_from_source(specimen.source.as_str(), &options) {
+                    Ok(second_mat) => second_mat.syntax_tree.canonical_hash() == mat_hash,
+                    Err(_) => false,
+                };
 
             let parity_ok = if specimen.expect_parity {
                 hash_parity
@@ -768,10 +769,11 @@ pub fn evaluate_specimen(specimen: &EquivalenceSpecimen) -> SpecimenEvidence {
             let (_second_parse, mut second_event_ir) =
                 parser.parse_with_event_ir(specimen.source.as_str(), specimen.goal, &options);
             apply_tamper(specimen.tamper_kind, &mut second_event_ir);
-            let second_mat_err = second_event_ir
-                .materialize_from_source(specimen.source.as_str(), &options)
-                .expect_err("second tampered materialization should also fail");
-            let replay_stable = mat_err.code == second_mat_err.code;
+            let replay_stable =
+                match second_event_ir.materialize_from_source(specimen.source.as_str(), &options) {
+                    Ok(_) => false,
+                    Err(second_mat_err) => mat_err.code == second_mat_err.code,
+                };
 
             SpecimenEvidence {
                 specimen_id: specimen.specimen_id.clone(),

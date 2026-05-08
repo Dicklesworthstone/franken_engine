@@ -74,8 +74,12 @@ impl GovernanceContext {
     /// constructed via [`with_gc_collector`](Self::with_gc_collector) /
     /// [`with_lane_scheduler`](Self::with_lane_scheduler) observe the
     /// replacement immediately because they share the same live handle.
-    pub fn set_enforcer(&self, enforcer: BudgetEnforcer) {
-        self.enforcer.replace(enforcer);
+    ///
+    /// Returns an error if the enforcer is currently borrowed by read guards,
+    /// preventing deadlock scenarios where the same thread holds a read guard
+    /// and attempts replacement.
+    pub fn set_enforcer(&self, enforcer: BudgetEnforcer) -> Result<(), &'static str> {
+        self.enforcer.replace(enforcer)
     }
 
     /// Construct a [`GcCollector`] with the context's enforcer already
@@ -234,7 +238,8 @@ mod tests {
             .submit_for_extension("ext-a", ready_label(), 10, "payload-before-rotate", 0)
             .expect("initial admission should succeed");
 
-        ctx.set_enforcer(enforcer_with_extension("ext-a", 5, 1_000_000_000, 2));
+        ctx.set_enforcer(enforcer_with_extension("ext-a", 5, 1_000_000_000, 2))
+            .expect("enforcer replacement should succeed");
 
         let result =
             sched.submit_for_extension("ext-a", ready_label(), 10, "payload-after-rotate", 0);
@@ -259,7 +264,8 @@ mod tests {
         gc.allocate("ext-a", 25)
             .expect("initial allocation should succeed");
 
-        ctx.set_enforcer(enforcer_with_extension("ext-a", 1_000_000, 50, 2));
+        ctx.set_enforcer(enforcer_with_extension("ext-a", 1_000_000, 50, 2))
+            .expect("enforcer replacement should succeed");
 
         let result = gc.allocate("ext-a", 100);
         assert!(

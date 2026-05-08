@@ -1106,8 +1106,17 @@ impl SharedBudgetEnforcer {
 
     /// Replace the live enforcer in place so existing handle clones observe
     /// the new epoch/certificate state immediately.
-    pub fn replace(&self, enforcer: BudgetEnforcer) {
-        *self.write() = enforcer;
+    ///
+    /// Returns an error if the lock is currently held by read guards,
+    /// preventing potential deadlock scenarios.
+    pub fn replace(&self, enforcer: BudgetEnforcer) -> Result<(), &'static str> {
+        match self.inner.try_write() {
+            Ok(mut guard) => {
+                *guard = enforcer;
+                Ok(())
+            }
+            Err(_) => Err("cannot replace enforcer: lock is busy (held by read guards)")
+        }
     }
 }
 

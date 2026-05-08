@@ -14,6 +14,12 @@ libfuzzer-sys = "0.4"
 serde_json = "1.0"
 tempfile = "3"
 
+[patch.crates-io]
+fsqlite = { path = "/dp/frankensqlite/crates/fsqlite" }
+fsqlite-core = { path = "/dp/frankensqlite/crates/fsqlite-core" }
+fsqlite-types = { path = "/dp/frankensqlite/crates/fsqlite-types" }
+fsqlite-error = { path = "/dp/frankensqlite/crates/fsqlite-error" }
+
 [[bin]]
 name = "audit_markdown_parser"
 path = "fuzz_targets/audit_markdown_parser.rs"
@@ -85,8 +91,22 @@ doc = false
 bench = false
 
 [[bin]]
+name = "runtime_security_logs_jsonl"
+path = "fuzz_targets/runtime_security_logs_jsonl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parse_fixture_with_migration"
 path = "fuzz_targets/parse_fixture_with_migration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "capability_profile_deserialize"
+path = "fuzz_targets/capability_profile_deserialize.rs"
 test = false
 doc = false
 bench = false

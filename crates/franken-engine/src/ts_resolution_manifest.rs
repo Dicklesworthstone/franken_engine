@@ -102,10 +102,9 @@ impl TsconfigSnapshot {
         hasher.update(self.root_dir.as_bytes());
         hasher.update(self.base_url.as_bytes());
         hasher.update(
-            // SAFETY: ModuleResolution derives Serialize and has no non-serializable fields.
-            // to_string on derived Serialize types only fails on writer errors (impossible with String).
+            // ModuleResolution derives Serialize and has no non-serializable fields.
             serde_json::to_string(&self.module_resolution)
-                .expect("serde deserialization should succeed")
+                .unwrap_or_else(|e| panic!("failed to serialize module_resolution for hash: {}", e))
                 .as_bytes(),
         );
         for (k, vs) in &self.paths {
@@ -255,11 +254,10 @@ impl TsResolutionReplayIndex {
 
         let mut hasher = Sha256::new();
         hasher.update(tsconfig_hash.as_bytes());
-        // SAFETY: ResolutionMode derives Serialize and has no non-serializable fields.
-        // to_string on derived Serialize types only fails on writer errors (impossible with String).
+        // ResolutionMode derives Serialize and has no non-serializable fields.
         hasher.update(
             serde_json::to_string(&mode)
-                .expect("serde deserialization should succeed")
+                .unwrap_or_else(|e| panic!("failed to serialize resolution mode for hash: {}", e))
                 .as_bytes(),
         );
         for (k, v) in &map {

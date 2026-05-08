@@ -602,10 +602,9 @@ pub fn normalize_typescript_to_es2020(
         source_hash: sha256_hex(&normalized_newlines),
         normalized_hash: sha256_hex(&normalized_source),
         compiler_options_hash: sha256_hex(
-            // SAFETY: CompilerOptions derives Serialize and has no non-serializable fields.
-            // to_string on derived Serialize types only fails on writer errors (impossible with String).
+            // CompilerOptions derives Serialize and has no non-serializable fields.
             &serde_json::to_string(&config.compiler_options)
-                .expect("serde deserialization should succeed"),
+                .unwrap_or_else(|e| panic!("failed to serialize compiler_options: {}", e)),
         ),
         decisions,
         capability_intents: capability_intents.clone(),
@@ -1916,11 +1915,12 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
         let placeholder = format!("/*__namespace:{namespace_name}__*/");
         let namespace_block = render_namespace_block(
             &namespace_name,
-            // SAFETY: namespace_order contains only keys that exist in namespace_assignments
-            // (built together in the same parsing pass)
             &namespace_assignments
                 .remove(&namespace_name)
-                .expect("serde deserialization should succeed"),
+                .ok_or_else(|| TsNormalizationError {
+                    kind: "namespace_processing".to_string(),
+                    detail: format!("namespace '{}' not found in assignments map", namespace_name),
+                })?,
         )
         .join("\n");
         rendered = rendered.replacen(&placeholder, &namespace_block, 1);

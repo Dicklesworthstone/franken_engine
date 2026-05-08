@@ -325,7 +325,7 @@ impl DeterministicTsModuleResolver {
                 index_fingerprint,
                 fallback_packages,
             },
-        }
+        })
     }
 
     pub fn validate_resolution_index_bundle(
@@ -1699,8 +1699,9 @@ struct MutableArtNode {
 }
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
-    // SAFETY: serde_json::to_vec only fails on writer errors, not possible with Vec<u8>
-    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(value).unwrap_or_else(|e| {
+        panic!("stable_fingerprint failed on type {}: {}", std::any::type_name::<T>(), e)
+    });
     ContentHash::compute(&bytes).to_hex()
 }
 

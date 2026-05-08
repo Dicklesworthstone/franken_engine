@@ -512,8 +512,9 @@ pub fn write_shipped_path_evidence_bundle(
     let events_path = output_dir.join("ts_shipped_path_evidence_events.jsonl");
     let events_jsonl: String = events
         .iter()
-        .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
-        .collect::<Vec<_>>()
+        .map(|e| serde_json::to_string(e))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(std::io::Error::other)?
         .join("\n");
     fs::write(&events_path, &events_jsonl)?;
 

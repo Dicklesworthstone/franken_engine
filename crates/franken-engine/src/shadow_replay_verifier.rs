@@ -575,11 +575,10 @@ impl ShadowReplayVerifier {
             return Ok(None);
         }
 
-        // Compute hash of expected ordering (sorted by journal_event_id)
-        let mut expected_ids: Vec<i64> = export.rows.iter()
+        // Compute hash of expected ordering (preserve original export order)
+        let expected_ids: Vec<i64> = export.rows.iter()
             .map(|row| row.journal_event_id)
             .collect();
-        expected_ids.sort();
 
         let mut expected_ordering_bytes = Vec::new();
         for id in &expected_ids {
@@ -587,11 +586,10 @@ impl ShadowReplayVerifier {
         }
         let expected_hash = ContentHash::compute(&expected_ordering_bytes);
 
-        // Compute hash of actual ordering
-        let mut actual_ids: Vec<i64> = replay_result.event_ordering.iter()
+        // Compute hash of actual ordering (preserve replay result order)
+        let actual_ids: Vec<i64> = replay_result.event_ordering.iter()
             .filter_map(|id_str| id_str.parse().ok())
             .collect();
-        actual_ids.sort(); // Ensure deterministic ordering
 
         let mut actual_ordering_bytes = Vec::new();
         for id in &actual_ids {

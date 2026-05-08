@@ -201,7 +201,7 @@ where
         )));
     }
 
-    let mut imported = Vec::with_capacity(export.rows.len());
+    let mut staged = Vec::with_capacity(export.rows.len());
     let mut seen_sequences = existing_sequence_ids(storage, context)?;
     let mut previous_sequence = None;
 
@@ -218,7 +218,7 @@ where
         let entry = export_row_to_entry(row.clone())?;
         validate_parent_links(&entry, &seen_sequences)?;
 
-        if let Some(existing) = storage
+        let should_insert = if let Some(existing) = storage
             .get_typed_by_id::<ShadowEvidenceJournalEntry>(entry.journal_event_id, context)?
         {
             if existing != entry {
@@ -227,13 +227,21 @@ where
                     entry.journal_event_id
                 )));
             }
-            imported.push(existing);
+            false
         } else {
-            storage.put_typed(&entry, context)?;
-            imported.push(entry.clone());
-        }
+            true
+        };
 
         seen_sequences.insert(entry.sequence_id);
+        staged.push((entry, should_insert));
+    }
+
+    let mut imported = Vec::with_capacity(staged.len());
+    for (entry, should_insert) in staged {
+        if should_insert {
+            storage.put_typed(&entry, context)?;
+        }
+        imported.push(entry);
     }
 
     imported.sort_by(entry_order);
@@ -910,6 +918,12 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("strictly ascending by `sequence_id`")
+        );
+        assert!(
+            read_all_events(&mut adapter, &ctx())
+                .expect("failed import should leave readable storage")
+                .is_empty(),
+            "failed imports must not partially persist earlier rows"
         );
     }
 

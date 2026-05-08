@@ -5243,6 +5243,9 @@ pub fn lower_ir2_to_ir3(
         .map(CapabilityTag)
         .collect();
 
+    // Transfer optimized constant pool back to ir3 module
+    ir3.constant_pool = constant_pool.into_vec();
+
     verify_ir3_specialization(&ir3).map_err(lowering_error_from_ir_error)?;
 
     let source_hash_matches = ir3.header.source_hash.as_ref() == Some(&ir2_hash);

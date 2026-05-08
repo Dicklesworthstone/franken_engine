@@ -220,8 +220,6 @@ pub enum ReactCompileError {
     EmptyInput,
     /// Serialization failed.
     SerializationError(String),
-    /// Hash computation failed.
-    HashError(String),
 }
 
 impl fmt::Display for ReactCompileError {
@@ -234,7 +232,6 @@ impl fmt::Display for ReactCompileError {
             Self::InvalidConfig(msg) => write!(f, "Invalid config: {}", msg),
             Self::EmptyInput => f.write_str("Empty input provided"),
             Self::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
-            Self::HashError(msg) => write!(f, "Hash error: {}", msg),
         }
     }
 }

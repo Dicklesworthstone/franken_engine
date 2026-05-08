@@ -481,6 +481,57 @@ fn decode_typed_id_allocation<T: TypedStoreRecord>(
     Ok(allocation)
 }
 
+fn query_typed_id_allocations<T, S>(
+    storage: &mut S,
+    context: &EventContext,
+) -> StorageResult<Vec<TypedRecordIdAllocation>>
+where
+    T: TypedStoreRecord,
+    S: StorageAdapter,
+{
+    storage
+        .query(
+            StoreKind::PolicyCache,
+            &StoreQuery {
+                key_prefix: Some(format!("{}/", typed_id_allocation_prefix::<T>())),
+                metadata_filters: BTreeMap::new(),
+                limit: None,
+            },
+            context,
+        )?
+        .iter()
+        .map(decode_typed_id_allocation::<T>)
+        .collect()
+}
+
+fn ensure_unique_typed_id_allocations<T>(
+    allocations: &[TypedRecordIdAllocation],
+) -> StorageResult<()>
+where
+    T: TypedStoreRecord,
+{
+    let mut natural_key_by_id = BTreeMap::new();
+    for allocation in allocations {
+        if let Some(existing_natural_key) =
+            natural_key_by_id.insert(allocation.typed_record_id, allocation.natural_key.as_str())
+        {
+            if existing_natural_key != allocation.natural_key.as_str() {
+                return Err(StorageError::IntegrityViolation {
+                    store: StoreKind::PolicyCache,
+                    detail: format!(
+                        "typed id allocation for {} assigned id {} to multiple natural keys: `{}` and `{}`",
+                        T::MODEL_NAME,
+                        allocation.typed_record_id,
+                        existing_natural_key,
+                        allocation.natural_key
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Allocate or replay a stable typed integer id for a domain natural key.
 ///
 /// The allocator never derives ids by truncating a hash. It persists the
@@ -497,33 +548,29 @@ where
 {
     let allocation_key = typed_id_allocation_key::<T>(natural_key)?;
     if let Some(existing) = storage.get(StoreKind::PolicyCache, &allocation_key, context)? {
-        return Ok(decode_typed_id_allocation::<T>(&existing)?.typed_record_id);
+        let allocation = decode_typed_id_allocation::<T>(&existing)?;
+        let allocations = query_typed_id_allocations::<T, S>(storage, context)?;
+        ensure_unique_typed_id_allocations::<T>(&allocations)?;
+        return Ok(allocation.typed_record_id);
     }
 
-    let rows = storage.query(
-        StoreKind::PolicyCache,
-        &StoreQuery {
-            key_prefix: Some(format!("{}/", typed_id_allocation_prefix::<T>())),
-            metadata_filters: BTreeMap::new(),
-            limit: None,
-        },
-        context,
-    )?;
-    let mut max_id = -1_i64;
-    for row in rows {
-        let allocation = decode_typed_id_allocation::<T>(&row)?;
-        max_id = max_id.max(allocation.typed_record_id);
-    }
+    let allocations = query_typed_id_allocations::<T, S>(storage, context)?;
+    ensure_unique_typed_id_allocations::<T>(&allocations)?;
+    let max_id = allocations
+        .iter()
+        .map(|allocation| allocation.typed_record_id)
+        .max()
+        .unwrap_or(-1);
     let typed_record_id = max_id
         .checked_add(1)
         .ok_or_else(|| StorageError::InvalidKey {
             key: format!("{allocation_key}/overflow"),
         })?;
-    // SECURITY: Double-check for race condition before persisting allocation
-    // This prevents TOCTOU between max_id query and allocation persistence
     if let Some(existing) = storage.get(StoreKind::PolicyCache, &allocation_key, context)? {
-        // Race detected: another thread allocated this natural key between our check and now
-        return Ok(decode_typed_id_allocation::<T>(&existing)?.typed_record_id);
+        let allocation = decode_typed_id_allocation::<T>(&existing)?;
+        let allocations = query_typed_id_allocations::<T, S>(storage, context)?;
+        ensure_unique_typed_id_allocations::<T>(&allocations)?;
+        return Ok(allocation.typed_record_id);
     }
 
     let allocation = TypedRecordIdAllocation {
@@ -539,39 +586,18 @@ where
             detail: format!("failed to serialize typed id allocation `{allocation_key}`: {err}"),
         })?;
 
-    // DEBUG: Assert we're not about to create a duplicate (helps catch remaining races)
-    debug_assert!(
-        {
-            let check_rows = storage
-                .query(
-                    StoreKind::PolicyCache,
-                    &StoreQuery {
-                        key_prefix: Some(format!("{}/", typed_id_allocation_prefix::<T>())),
-                        metadata_filters: BTreeMap::new(),
-                        limit: None,
-                    },
-                    context,
-                )
-                .unwrap_or_default();
-            let current_max = check_rows
-                .iter()
-                .filter_map(|row| decode_typed_id_allocation::<T>(row).ok())
-                .map(|alloc| alloc.typed_record_id)
-                .max()
-                .unwrap_or(-1);
-            typed_record_id == current_max + 1
-        },
-        "Race condition detected: typed_record_id {} != current_max + 1",
-        typed_record_id
-    );
-
     storage.put(
         StoreKind::PolicyCache,
-        allocation_key,
+        allocation_key.clone(),
         value,
         typed_id_allocation_metadata::<T>(natural_key, typed_record_id),
         context,
     )?;
+    let allocations = query_typed_id_allocations::<T, S>(storage, context)?;
+    if let Err(err) = ensure_unique_typed_id_allocations::<T>(&allocations) {
+        storage.delete(StoreKind::PolicyCache, &allocation_key, context)?;
+        return Err(err);
+    }
     Ok(typed_record_id)
 }
 
@@ -3191,6 +3217,35 @@ mod tests {
         assert!(err.to_string().contains("invalidation_reason"));
     }
 
+    fn put_typed_id_allocation_fixture<T>(
+        adapter: &mut InMemoryStorageAdapter,
+        natural_key: &str,
+        typed_record_id: i64,
+        context: &EventContext,
+    ) where
+        T: TypedStoreRecord,
+    {
+        let allocation_key =
+            typed_id_allocation_key::<T>(natural_key).expect("test allocation key is valid");
+        let allocation = TypedRecordIdAllocation {
+            schema_version: TYPED_ID_ALLOCATION_FORMAT_VALUE.to_string(),
+            store: T::STORE_KIND,
+            model_name: T::MODEL_NAME.to_string(),
+            natural_key: natural_key.to_string(),
+            typed_record_id,
+        };
+        let value = serde_json::to_vec(&allocation).expect("test allocation serializes");
+        adapter
+            .put(
+                StoreKind::PolicyCache,
+                allocation_key,
+                value,
+                typed_id_allocation_metadata::<T>(natural_key, typed_record_id),
+                context,
+            )
+            .expect("test allocation fixture write succeeds");
+    }
+
     #[test]
     fn typed_id_allocator_replays_stable_monotonic_ids_by_model() {
         let context = EventContext::new("trace-alloc", "decision-alloc", "policy-alloc")
@@ -3298,6 +3353,50 @@ mod tests {
         .expect_err("corrupt allocation rows block new allocations");
         assert_eq!(err.code(), "FE-STOR-0007");
         assert!(err.to_string().contains("typed id allocation"));
+    }
+
+    #[test]
+    fn typed_id_allocator_fails_closed_on_duplicate_allocated_ids() {
+        let context = EventContext::new("trace-alloc", "decision-alloc", "policy-alloc")
+            .expect("context is valid");
+        let mut adapter = InMemoryStorageAdapter::new();
+
+        let first = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-alpha:receipt-1",
+            &context,
+        )
+        .expect("first allocation succeeds");
+        put_typed_id_allocation_fixture::<ReplacementLineageEntry>(
+            &mut adapter,
+            "replacement:slot-beta:receipt-raced",
+            first,
+            &context,
+        );
+
+        let err = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-alpha:receipt-1",
+            &context,
+        )
+        .expect_err("duplicate typed ids must block replay");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(
+            err.to_string()
+                .contains("assigned id 0 to multiple natural keys")
+        );
+
+        let err = allocate_typed_record_id::<ReplacementLineageEntry, _>(
+            &mut adapter,
+            "replacement:slot-gamma:receipt-new",
+            &context,
+        )
+        .expect_err("duplicate typed ids must block new allocations");
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(
+            err.to_string()
+                .contains("assigned id 0 to multiple natural keys")
+        );
     }
 
     #[test]

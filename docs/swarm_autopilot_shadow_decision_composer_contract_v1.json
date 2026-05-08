@@ -54,12 +54,14 @@
   "covered_operator_conditions": [
     "healthy_idle_queue",
     "active_owned_lane",
+    "stalled_agent_lane",
     "stale_reservation",
     "contradictory_ownership",
     "agent_mail_degraded",
     "dirty_worktree",
     "rch_fallback_contamination",
-    "missing_no_mock_proof"
+    "missing_no_mock_proof",
+    "bounded_recommendations"
   ],
   "required_error_codes": [
     "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE",
@@ -69,6 +71,7 @@
     "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK",
     "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE",
     "FE-SWARM-AUTOPILOT-SHADOW-DIRTY-WORKTREE",
+    "FE-SWARM-AUTOPILOT-SHADOW-STALED-BEAD",
     "FE-SWARM-AUTOPILOT-SHADOW-STALE-RESERVATION",
     "FE-SWARM-AUTOPILOT-SHADOW-MISSING-NO-MOCK-PROOF"
   ],

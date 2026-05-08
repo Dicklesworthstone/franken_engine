@@ -154,6 +154,32 @@
       }
     },
     {
+      "case_id": "stalled_agent_lane",
+      "source_overrides": {
+        "br_queue": {
+          "payload": {
+            "ready": [],
+            "in_progress": {
+              "issues": [
+                {
+                  "id": "bd-stalled",
+                  "assignee": "OldAgent",
+                  "updated_epoch_seconds": 1778115800
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_action": "review_stalled_bead",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-STALED-BEAD"
+      }
+    },
+    {
       "case_id": "stale_reservation",
       "source_overrides": {
         "agent_mail": {
@@ -270,6 +296,57 @@
         "expected_exit_code": 0,
         "required_action": "request_no_mock_proof",
         "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-MISSING-NO-MOCK-PROOF"
+      }
+    },
+    {
+      "case_id": "bounded_recommendations",
+      "source_overrides": {
+        "agent_mail": {
+          "degraded": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+          ],
+          "payload": {
+            "active_reservations": [
+              {
+                "path": "scripts/example.sh",
+                "holder": "OldAgent",
+                "stale": true
+              }
+            ]
+          }
+        },
+        "rch_status": {
+          "degraded": true,
+          "local_fallback_contamination": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+          ],
+          "payload": {
+            "local_fallback": true
+          }
+        },
+        "git_state": {
+          "payload": {
+            "dirty": true,
+            "lines": [
+              " M scripts/example.sh"
+            ]
+          }
+        },
+        "artifact_bundles": {
+          "payload": {
+            "no_mock_proof_artifacts": []
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "contaminated",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_action": "observe_idle_queue",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK",
+        "max_recommendations": 3
       }
     }
   ]

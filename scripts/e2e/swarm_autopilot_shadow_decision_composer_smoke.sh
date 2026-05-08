@@ -53,13 +53,27 @@ contract_shape_ok() {
     and (([
       "healthy_idle_queue",
       "active_owned_lane",
+      "stalled_agent_lane",
       "stale_reservation",
       "contradictory_ownership",
       "agent_mail_degraded",
       "dirty_worktree",
       "rch_fallback_contamination",
-      "missing_no_mock_proof"
+      "missing_no_mock_proof",
+      "bounded_recommendations"
     ] - .covered_operator_conditions) | length) == 0
+    and (([
+      "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE",
+      "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE",
+      "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP",
+      "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION",
+      "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK",
+      "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE",
+      "FE-SWARM-AUTOPILOT-SHADOW-DIRTY-WORKTREE",
+      "FE-SWARM-AUTOPILOT-SHADOW-STALED-BEAD",
+      "FE-SWARM-AUTOPILOT-SHADOW-STALE-RESERVATION",
+      "FE-SWARM-AUTOPILOT-SHADOW-MISSING-NO-MOCK-PROOF"
+    ] - .required_error_codes) | length) == 0
     and .mutation_policy.advisory_only == true
     and .mutation_policy.proof_only == true
     and .mutation_policy.mutates_br == false
@@ -79,16 +93,18 @@ fixtures_shape_ok() {
   jq -e '
     .schema_version == "franken-engine.swarm-autopilot-shadow-decision-composer-fixtures.v1"
     and (.base_journal_events | length) == 6
-    and (.cases | length) == 8
-    and ([.cases[].case_id] | unique | length) == 8
+    and (.cases | length) == 10
+    and ([.cases[].case_id] | unique | length) == 10
     and any(.cases[]; .case_id == "healthy_idle_queue" and .expected.required_action == "observe_idle_queue")
     and any(.cases[]; .case_id == "active_owned_lane" and .expected.required_action == "continue_owned_lane")
+    and any(.cases[]; .case_id == "stalled_agent_lane" and .expected.required_action == "review_stalled_bead" and .expected.required_error_code == "FE-SWARM-AUTOPILOT-SHADOW-STALED-BEAD")
     and any(.cases[]; .case_id == "stale_reservation" and .expected.required_action == "review_stale_reservation")
     and any(.cases[]; .case_id == "contradictory_ownership" and .expected.required_error_code == "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP")
     and any(.cases[]; .case_id == "agent_mail_degraded" and .expected.required_error_code == "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE")
     and any(.cases[]; .case_id == "dirty_worktree" and .expected.required_action == "inspect_dirty_worktree")
     and any(.cases[]; .case_id == "rch_fallback_contamination" and .expected.required_error_code == "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK")
     and any(.cases[]; .case_id == "missing_no_mock_proof" and .expected.required_action == "request_no_mock_proof")
+    and any(.cases[]; .case_id == "bounded_recommendations" and .expected.max_recommendations == 3 and .expected.required_action == "observe_idle_queue")
   ' "$fixtures_path" >/dev/null
 }
 
@@ -98,7 +114,8 @@ docs_shape_ok() {
     && grep -Fq 'reservations, rch, git, workers, or live queue policy' "$docs_path" \
     && grep -Fq 'Every recommendation preserves source event ids, content hashes' "$docs_path" \
     && grep -Fq 'timestamps, degradation state, and a separate operator command' "$docs_path" \
-    && grep -Fq 'rch local fallback contamination' "$docs_path"
+    && grep -Fq 'rch local fallback contamination' "$docs_path" \
+    && grep -Fq 'stalled in-progress beads' "$docs_path"
 }
 
 materialize_case() {
@@ -132,13 +149,15 @@ validate_outputs() {
   local expected_json="$3"
   local status_json="${output_dir}/shadow_status.json"
   local recommendations_json="${output_dir}/recommendations.json"
-  local expected_decision expected_truth required_action required_error
+  local expected_decision expected_truth expected_cap required_action required_error
 
   expected_decision="$(jq -r '.decision' "$expected_json")"
   expected_truth="$(jq -r '.truth_state' "$expected_json")"
+  expected_cap="$(jq -r '.max_recommendations // 16' "$expected_json")"
   jq -e \
     --arg expected_decision "$expected_decision" \
     --arg expected_truth "$expected_truth" \
+    --argjson expected_cap "$expected_cap" \
     --slurpfile contract "$contract_path" '
       . as $status
       |
@@ -149,6 +168,7 @@ validate_outputs() {
       and all($contract[0].required_sources[]; . as $source | ($status.source_snapshot_status[$source] != null))
       and (.source_snapshot_ids | length) >= 6
       and (.advisory_recommendations | length) > 0
+      and (.advisory_recommendations | length) <= $expected_cap
       and all(.advisory_recommendations[]; . as $recommendation |
         all($contract[0].recommendation_required_fields[]; $recommendation[.] != null)
         and $recommendation.executes_mutation == false
@@ -176,11 +196,13 @@ validate_outputs() {
 
   jq -e \
     --arg expected_decision "$expected_decision" \
-    --arg expected_truth "$expected_truth" '
+    --arg expected_truth "$expected_truth" \
+    --argjson expected_cap "$expected_cap" '
       .schema_version == "franken-engine.swarm-autopilot-shadow-recommendations.v1"
       and .truth_state == $expected_truth
       and .decision == $expected_decision
       and (.recommendations | length) > 0
+      and (.recommendations | length) <= $expected_cap
       and .mutation_policy.runs_cargo == false
       and .mutation_policy.runs_rch == false
     ' "$recommendations_json" >/dev/null || record_failure "${case_id} recommendations shape mismatch"
@@ -207,10 +229,11 @@ run_case() {
   local case_id="$1"
   local case_dir="$2"
   local output_dir="${case_dir}/output"
-  local rc expected_rc
+  local rc expected_rc max_recommendations
 
   mkdir -p "$case_dir" "$output_dir"
   materialize_case "$case_id" "$case_dir"
+  max_recommendations="$(jq -r '.max_recommendations // 16' "${case_dir}/expected.json")"
 
   set +e
   bash "$composer_script" \
@@ -219,6 +242,7 @@ run_case() {
     --source-revision "fixture-${case_id}" \
     --now-epoch-seconds "$fixed_now_epoch_seconds" \
     --freshness-window-seconds 300 \
+    --max-recommendations "$max_recommendations" \
     --output-dir "$output_dir"
   rc=$?
   set -e

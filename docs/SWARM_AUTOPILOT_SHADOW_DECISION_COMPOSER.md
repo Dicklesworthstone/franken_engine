@@ -36,6 +36,7 @@ not execute those commands.
 - unsupported mutation claims
 - rch local fallback contamination
 - dirty shared worktree ambiguity
+- stalled in-progress beads
 - stale reservations
 - missing no-mock proof artifacts
 

@@ -24,11 +24,9 @@
 //! Dependencies: 10.2 (IR2 flow labels), 10.5 (decision contracts),
 //!               10.10 (deterministic serialization).
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::ObjectDomain;
@@ -1084,7 +1082,17 @@ impl DeclassificationReceipt {
 
     /// Validate receipt linkage fields required for deterministic replay and
     /// decision-contract provenance.
+    ///
+    /// The default validation epoch is the receipt's own signed timestamp so
+    /// replay does not depend on the host wall clock. Boundary callers that need
+    /// observational freshness checks should use [`Self::validate_at`] with an
+    /// explicitly recorded evidence timestamp.
     pub fn validate(&self) -> Result<(), IfcValidationError> {
+        self.validate_at(self.timestamp_ms)
+    }
+
+    /// Validate receipt linkage fields at an explicit replay/evidence epoch.
+    pub fn validate_at(&self, validation_epoch_ms: u64) -> Result<(), IfcValidationError> {
         let artifact_id = trimmed_artifact_id(&self.receipt_id, "<empty-receipt-id>");
 
         validate_required_field(
@@ -1118,15 +1126,22 @@ impl DeclassificationReceipt {
             &self.replay_linkage,
         )?;
 
-        // Validate timestamp bounds
-        self.validate_timestamp_bounds()?;
+        self.validate_timestamp_bounds_at(validation_epoch_ms)?;
 
         Ok(())
     }
 
-    /// Validate that the receipt's timestamp bounds are consistent and the receipt
-    /// is currently within its validity window.
+    /// Validate that the receipt's timestamp bounds are consistent and that the
+    /// receipt's own timestamp is within its validity window.
     pub fn validate_timestamp_bounds(&self) -> Result<(), IfcValidationError> {
+        self.validate_timestamp_bounds_at(self.timestamp_ms)
+    }
+
+    /// Validate timestamp bounds at an explicit replay/evidence epoch.
+    pub fn validate_timestamp_bounds_at(
+        &self,
+        validation_epoch_ms: u64,
+    ) -> Result<(), IfcValidationError> {
         let artifact_id = trimmed_artifact_id(&self.receipt_id, "<empty-receipt-id>");
 
         // Check that not_before <= not_after
@@ -1139,30 +1154,20 @@ impl DeclassificationReceipt {
             });
         }
 
-        // Get current time
-        let current_time_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| IfcValidationError::SystemTimeError {
-                artifact_kind: "declassification_receipt".to_string(),
-                artifact_id: artifact_id.to_string(),
-            })?
-            .as_millis() as u64;
-
-        // Check if receipt is valid now (not expired and not pre-dated)
-        if current_time_ms < self.not_before_ms {
+        if validation_epoch_ms < self.not_before_ms {
             return Err(IfcValidationError::ReceiptNotYetValid {
                 artifact_kind: "declassification_receipt".to_string(),
                 artifact_id: artifact_id.to_string(),
-                current_time_ms,
+                current_time_ms: validation_epoch_ms,
                 not_before_ms: self.not_before_ms,
             });
         }
 
-        if current_time_ms > self.not_after_ms {
+        if validation_epoch_ms > self.not_after_ms {
             return Err(IfcValidationError::ReceiptExpired {
                 artifact_kind: "declassification_receipt".to_string(),
                 artifact_id: artifact_id.to_string(),
-                current_time_ms,
+                current_time_ms: validation_epoch_ms,
                 not_after_ms: self.not_after_ms,
             });
         }
@@ -1574,7 +1579,8 @@ impl std::error::Error for IfcValidationError {}
 mod tests {
     use super::*;
     use crate::signature_preimage::SignatureError;
-    use std::sync::OnceLock;
+
+    const RECEIPT_ANCHOR_MS: u64 = 1_700_000_000_000;
 
     fn test_key() -> SigningKey {
         SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
@@ -1582,18 +1588,6 @@ mod tests {
 
     fn sentinel_sig() -> Signature {
         Signature::from_bytes(SIGNATURE_SENTINEL)
-    }
-
-    fn current_unix_time_ms_for_tests() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time should be after Unix epoch")
-            .as_millis() as u64
-    }
-
-    fn receipt_anchor_ms() -> u64 {
-        static ANCHOR_MS: OnceLock<u64> = OnceLock::new();
-        *ANCHOR_MS.get_or_init(current_unix_time_ms_for_tests)
     }
 
     fn make_flow_policy() -> FlowPolicy {
@@ -1643,7 +1637,7 @@ mod tests {
     }
 
     fn make_receipt() -> DeclassificationReceipt {
-        let timestamp_ms = receipt_anchor_ms();
+        let timestamp_ms = RECEIPT_ANCHOR_MS;
         DeclassificationReceipt {
             receipt_id: "receipt-001".to_string(),
             source_label: Label::Secret,
@@ -2072,10 +2066,7 @@ mod tests {
 
     #[test]
     fn receipt_timestamp_bounds_valid_window() {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = RECEIPT_ANCHOR_MS;
 
         let mut receipt = make_receipt();
         // Set receipt to be valid for 1 hour before and after current time
@@ -2084,15 +2075,14 @@ mod tests {
 
         // Should validate successfully since we're in the valid window
         assert!(receipt.validate_timestamp_bounds().is_ok());
+        assert!(receipt.validate_timestamp_bounds_at(current_time).is_ok());
         assert!(receipt.validate().is_ok());
+        assert!(receipt.validate_at(current_time).is_ok());
     }
 
     #[test]
     fn receipt_timestamp_bounds_expired() {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = RECEIPT_ANCHOR_MS;
 
         let mut receipt = make_receipt();
         // Set receipt to have expired 1 hour ago
@@ -2100,20 +2090,19 @@ mod tests {
         receipt.not_after_ms = current_time - 3_600_000; // 1 hour ago
 
         // Should fail validation because receipt is expired
-        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        let err = receipt
+            .validate_timestamp_bounds_at(current_time)
+            .unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
 
         // Overall validation should also fail
-        let err = receipt.validate().unwrap_err();
+        let err = receipt.validate_at(current_time).unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
     }
 
     #[test]
     fn receipt_timestamp_bounds_not_yet_valid() {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = RECEIPT_ANCHOR_MS;
 
         let mut receipt = make_receipt();
         // Set receipt to be valid starting 1 hour in the future
@@ -2121,11 +2110,13 @@ mod tests {
         receipt.not_after_ms = current_time + 7_200_000; // 2 hours from now
 
         // Should fail validation because receipt is not yet valid
-        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        let err = receipt
+            .validate_timestamp_bounds_at(current_time)
+            .unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
 
         // Overall validation should also fail
-        let err = receipt.validate().unwrap_err();
+        let err = receipt.validate_at(current_time).unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
     }
 
@@ -2153,10 +2144,7 @@ mod tests {
 
     #[test]
     fn receipt_timestamp_bounds_edge_cases() {
-        let current_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let current_time = RECEIPT_ANCHOR_MS;
 
         // Test exact boundary cases
         let mut receipt = make_receipt();
@@ -2164,24 +2152,43 @@ mod tests {
         // At or after the not_before boundary (should be valid)
         receipt.not_before_ms = current_time.saturating_sub(1);
         receipt.not_after_ms = current_time + 3_600_000;
-        assert!(receipt.validate_timestamp_bounds().is_ok());
+        assert!(receipt.validate_timestamp_bounds_at(current_time).is_ok());
 
         // Before the not_after boundary (should be valid without racing wall clock)
         receipt.not_before_ms = current_time - 3_600_000;
         receipt.not_after_ms = current_time + 1_000;
-        assert!(receipt.validate_timestamp_bounds().is_ok());
+        assert!(receipt.validate_timestamp_bounds_at(current_time).is_ok());
 
         // Just before not_before (should fail)
         receipt.not_before_ms = current_time + 1;
         receipt.not_after_ms = current_time + 3_600_000;
-        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        let err = receipt
+            .validate_timestamp_bounds_at(current_time)
+            .unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
 
         // Just after not_after (should fail)
         receipt.not_before_ms = current_time - 3_600_000;
         receipt.not_after_ms = current_time - 1;
-        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        let err = receipt
+            .validate_timestamp_bounds_at(current_time)
+            .unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
+    }
+
+    #[test]
+    fn receipt_validation_defaults_to_signed_receipt_timestamp() {
+        let mut receipt = make_receipt();
+        receipt.timestamp_ms = RECEIPT_ANCHOR_MS + 10_000;
+        receipt.not_before_ms = RECEIPT_ANCHOR_MS + 5_000;
+        receipt.not_after_ms = RECEIPT_ANCHOR_MS + 15_000;
+
+        receipt
+            .validate()
+            .expect("signed receipt timestamp should be inside its validity window");
+
+        let err = receipt.validate_at(RECEIPT_ANCHOR_MS).unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
     }
 
     // -- ConfinementClaim tests --

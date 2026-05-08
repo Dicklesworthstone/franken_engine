@@ -49,7 +49,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "no_mock_drill".to_string(),
                     description: "No-mock shadow daemon lifecycle drill completion".to_string(),
-                    status: GateStatus::Green, // Completed in bd-djejh.6
+                    status: GateStatus::Red, // Fail-closed until verified from proof artifacts
                     required_for: vec![
                         "autonomous_live_mutation".to_string(),
                         "production_daemon_status".to_string(),
@@ -66,7 +66,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "replay_verification".to_string(),
                     description: "Shadow replay and drift verification".to_string(),
-                    status: GateStatus::Green, // Completed in bd-djejh.5
+                    status: GateStatus::Red, // Fail-closed until verified from proof artifacts
                     required_for: vec![
                         "deterministic_replay".to_string(),
                         "drift_detection".to_string(),
@@ -82,7 +82,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "advisory_contract".to_string(),
                     description: "Advisory-only contract enforcement".to_string(),
-                    status: GateStatus::Green, // Completed in bd-djejh.1
+                    status: GateStatus::Red, // Fail-closed until verified from proof artifacts
                     required_for: vec![
                         "safe_operator_ui".to_string(),
                         "bounded_advisory_mode".to_string(),
@@ -98,7 +98,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "handoff_contracts".to_string(),
                     description: "Frankentui and fastapi_rust handoff contracts".to_string(),
-                    status: GateStatus::Green, // Completed in bd-djejh.7
+                    status: GateStatus::Red, // Fail-closed until verified from proof artifacts
                     required_for: vec![
                         "ui_integration".to_string(),
                         "service_interface".to_string(),
@@ -114,7 +114,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "mutation_policy_enforcement".to_string(),
                     description: "Mutation policy enforcement and validation".to_string(),
-                    status: GateStatus::Green, // Implemented in this bead
+                    status: GateStatus::Red, // Fail-closed until verified from proof artifacts
                     required_for: vec![
                         "safe_operation".to_string(),
                         "governance_compliance".to_string(),
@@ -637,11 +637,9 @@ mod tests {
         assert!(gates.get_gate_status("replay_verification").is_some());
         assert!(gates.get_gate_status("advisory_contract").is_some());
         assert!(gates.get_gate_status("handoff_contracts").is_some());
-        assert!(
-            gates
-                .get_gate_status("mutation_policy_enforcement")
-                .is_some()
-        );
+        assert!(gates
+            .get_gate_status("mutation_policy_enforcement")
+            .is_some());
     }
 
     #[test]

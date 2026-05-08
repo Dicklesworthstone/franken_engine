@@ -1,4 +1,0 @@
-{"timestamp":"2026-05-08T00:50:10-04:00","event_type":"git_status","status":"success","message":"7 uncommitted changes","scenario":"dirty_shared_worktree","sequence":0}
-{"timestamp":"2026-05-08T00:50:10-04:00","event_type":"bead_list","status":"success","message":"bead listing completed","scenario":"dirty_shared_worktree","sequence":1}
-{"timestamp":"2026-05-08T00:50:10-04:00","event_type":"rch_status","status":"success","message":"rch status completed","scenario":"dirty_shared_worktree","sequence":2}
-{"timestamp":"2026-05-08T00:50:10-04:00","event_type":"ownership_contradiction","status":"fail_closed","message":"uncommitted changes may indicate conflicting ownership","scenario":"dirty_shared_worktree","sequence":3}

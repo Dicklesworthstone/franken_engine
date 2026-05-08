@@ -42,6 +42,9 @@ Thumbs.db
 /hierarchical-delta-review/
 /examples/*/examples/
 
+# Ephemeral test artifacts (shadow daemon lifecycle drills, etc.)
+tmp/
+
 # Golden artifact test outputs (transient diff files)
 tests/golden/*.actual
 crates/franken-engine/tests/goldens/**/*.actual

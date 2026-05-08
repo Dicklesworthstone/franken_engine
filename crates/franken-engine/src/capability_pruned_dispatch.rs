@@ -766,35 +766,22 @@ impl DispatchCompiler {
             }
         }
 
-        // Check IFC flow proofs if required
+        // Check IFC labels and flow proofs if required.
         let mut matched_flow_proofs = Vec::new();
-        if site.requires_flow_proof
-            && self.policy.require_ifc_proofs
-            && let (Some(src), Some(sink)) = (&site.source_label, &site.sink_clearance)
-        {
-            let matching = self.flow_proofs.iter().find(|fp| {
-                fp.source_label == *src && fp.sink_clearance == *sink && fp.epoch == self.epoch
-            });
-            if let Some(fp) = matching {
-                matched_flow_proofs.push(fp.clone());
-            } else {
-                // Check for stale proof
-                let stale = self
-                    .flow_proofs
-                    .iter()
-                    .find(|fp| fp.source_label == *src && fp.sink_clearance == *sink);
-                if let Some(stale_fp) = stale {
-                    return (
-                        DispatchRoute::Rejected {
-                            reason: DispatchRejection::FlowProofStale {
-                                proof_id: stale_fp.proof_id.clone(),
-                                proof_epoch: stale_fp.epoch.as_u64(),
-                            },
+        if site.requires_flow_proof {
+            let (Some(src), Some(sink)) = (&site.source_label, &site.sink_clearance) else {
+                return (
+                    DispatchRoute::Rejected {
+                        reason: DispatchRejection::MissingFlowProof {
+                            source_label: site.source_label.clone().unwrap_or_default(),
+                            sink_clearance: site.sink_clearance.clone().unwrap_or_default(),
                         },
-                        satisfied_proofs,
-                        Vec::new(),
-                    );
-                }
+                    },
+                    satisfied_proofs,
+                    Vec::new(),
+                );
+            };
+            if src.trim().is_empty() || sink.trim().is_empty() {
                 return (
                     DispatchRoute::Rejected {
                         reason: DispatchRejection::MissingFlowProof {
@@ -805,6 +792,43 @@ impl DispatchCompiler {
                     satisfied_proofs,
                     Vec::new(),
                 );
+            }
+
+            if self.policy.require_ifc_proofs {
+                let matching = self.flow_proofs.iter().find(|fp| {
+                    fp.source_label == *src && fp.sink_clearance == *sink && fp.epoch == self.epoch
+                });
+                if let Some(fp) = matching {
+                    matched_flow_proofs.push(fp.clone());
+                } else {
+                    // Check for stale proof
+                    let stale = self
+                        .flow_proofs
+                        .iter()
+                        .find(|fp| fp.source_label == *src && fp.sink_clearance == *sink);
+                    if let Some(stale_fp) = stale {
+                        return (
+                            DispatchRoute::Rejected {
+                                reason: DispatchRejection::FlowProofStale {
+                                    proof_id: stale_fp.proof_id.clone(),
+                                    proof_epoch: stale_fp.epoch.as_u64(),
+                                },
+                            },
+                            satisfied_proofs,
+                            Vec::new(),
+                        );
+                    }
+                    return (
+                        DispatchRoute::Rejected {
+                            reason: DispatchRejection::MissingFlowProof {
+                                source_label: src.clone(),
+                                sink_clearance: sink.clone(),
+                            },
+                        },
+                        satisfied_proofs,
+                        Vec::new(),
+                    );
+                }
             }
         }
 
@@ -1587,6 +1611,39 @@ mod tests {
     fn compiler_rejected_missing_flow_proof() {
         let compiler = DispatchCompiler::new(PruningPolicy::default(), test_epoch());
         let site = DispatchSite::new(0, "data.send").with_ifc_flow("Confidential", "Internal");
+        let decision = compiler.decide(&site);
+        assert!(decision.is_rejected());
+        if let DispatchRoute::Rejected { reason } = &decision.route {
+            assert!(matches!(reason, DispatchRejection::MissingFlowProof { .. }));
+        }
+    }
+
+    #[test]
+    fn compiler_rejects_ifc_site_missing_labels() {
+        let compiler = DispatchCompiler::new(PruningPolicy::default(), test_epoch());
+        let mut site = DispatchSite::new(0, "data.send");
+        site.requires_flow_proof = true;
+        site.source_label = Some("Confidential".to_string());
+
+        let decision = compiler.decide(&site);
+        assert!(decision.is_rejected());
+        if let DispatchRoute::Rejected { reason } = &decision.route {
+            assert!(matches!(reason, DispatchRejection::MissingFlowProof { .. }));
+        }
+    }
+
+    #[test]
+    fn compiler_rejects_ifc_site_empty_labels() {
+        let mut compiler = DispatchCompiler::new(PruningPolicy::default(), test_epoch());
+        compiler.register_flow_proofs(vec![FlowProofRef::new(
+            "fp-empty",
+            "",
+            "Internal",
+            "Lattice",
+            test_epoch(),
+        )]);
+
+        let site = DispatchSite::new(0, "data.send").with_ifc_flow("", "Internal");
         let decision = compiler.decide(&site);
         assert!(decision.is_rejected());
         if let DispatchRoute::Rejected { reason } = &decision.route {

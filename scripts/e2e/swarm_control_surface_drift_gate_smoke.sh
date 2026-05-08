@@ -138,7 +138,7 @@ run_check() {
   bash -n "$gate"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$fixtures_path"
-  jq -e '.cases | length == 13' "$fixtures_path" >/dev/null
+  jq -e '.cases | length == 14' "$fixtures_path" >/dev/null
   grep -Fq 'The gate is artifact-fed and advisory only.' "$docs_path" \
     || record_failure "missing advisory-only docs wording"
   record_pass "check"

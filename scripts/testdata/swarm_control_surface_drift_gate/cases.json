@@ -424,6 +424,37 @@
           }
         ]
       }
+    },
+    {
+      "case_id": "remote_proof_contract_path_escape",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-UNSAFE-WORKSPACE-PATH"},
+      "workspace_files": [
+        {"path": "scripts/remote_proof_contract_catalog_gate.sh", "kind": "shell"},
+        {"path": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh", "kind": "smoke"},
+        {"path": "../outside_contract.json", "kind": "contract"}
+      ],
+      "script_inventory": {"scripts": ["scripts/remote_proof_contract_catalog_gate.sh", "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "remote_proof_contract_catalog_gate",
+            "track": "REMOTE-PROOF",
+            "intent_tags": ["remote-proof", "contract-catalog"],
+            "implementation_script": "scripts/remote_proof_contract_catalog_gate.sh",
+            "smoke_script": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+            "contract_json": "../outside_contract.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty ../outside_contract.json"]
+          }
+        ]
+      }
     }
   ]
 }

@@ -173,6 +173,20 @@ requires_remote_proof_family_contracts() {
   esac
 }
 
+workspace_relative_path() {
+  local path="$1"
+  local segment
+  local -a segments
+
+  [[ -n "$path" ]] || return 1
+  [[ "$path" != /* ]] || return 1
+  IFS='/' read -r -a segments <<<"$path"
+  for segment in "${segments[@]}"; do
+    [[ "$segment" != ".." ]] || return 1
+  done
+  printf '%s/%s\n' "$workspace_root" "$path"
+}
+
 append_finding() {
   local code="$1"
   local surface_id="$2"
@@ -284,6 +298,31 @@ for ((idx = 0; idx < surface_count; idx++)); do
   row="$(jq -c ".surfaces[$idx]" "$catalog_json")"
   surface_id="$(jq -r '.surface_id // "unknown"' <<<"$row")"
   family_basis="$(catalog_family_basis "$row")"
+  implementation_script="$(jq -r '.implementation_script // empty' <<<"$row")"
+  smoke_script="$(jq -r '.smoke_script // empty' <<<"$row")"
+  contract_json="$(jq -r '.contract_json // empty' <<<"$row")"
+  smoke_script_path=""
+  contract_json_path=""
+  smoke_script_path_safe=1
+  contract_json_path_safe=1
+
+  if [[ -n "$implementation_script" ]] && ! workspace_relative_path "$implementation_script" >/dev/null; then
+    append_finding "FE-SWARM-DRIFT-UNSAFE-WORKSPACE-PATH" "$surface_id" "implementation_script escapes workspace root: ${implementation_script}" "Keep catalog paths relative to the workspace root without absolute paths or .. segments."
+  fi
+  if [[ -n "$smoke_script" ]]; then
+    if smoke_script_path="$(workspace_relative_path "$smoke_script")"; then
+      smoke_script_path_safe=0
+    else
+      append_finding "FE-SWARM-DRIFT-UNSAFE-WORKSPACE-PATH" "$surface_id" "smoke_script escapes workspace root: ${smoke_script}" "Keep catalog paths relative to the workspace root without absolute paths or .. segments."
+    fi
+  fi
+  if [[ -n "$contract_json" ]]; then
+    if contract_json_path="$(workspace_relative_path "$contract_json")"; then
+      contract_json_path_safe=0
+    else
+      append_finding "FE-SWARM-DRIFT-UNSAFE-WORKSPACE-PATH" "$surface_id" "contract_json escapes workspace root: ${contract_json}" "Keep catalog paths relative to the workspace root without absolute paths or .. segments."
+    fi
+  fi
 
   if jq -e '
     (.mutation_policy // {}) as $m
@@ -329,26 +368,24 @@ for ((idx = 0; idx < surface_count; idx++)); do
     append_finding "FE-SWARM-DRIFT-BARE-HEAVY-CARGO" "$surface_id" "validation_commands contain bare heavy Cargo" "Wrap heavy Cargo examples with rch exec -- env CARGO_TARGET_DIR=."
   fi
 
-  smoke_script="$(jq -r '.smoke_script // empty' <<<"$row")"
   if requires_remote_proof_family_contracts "$family_basis"; then
-    contract_json="$(jq -r '.contract_json // empty' <<<"$row")"
     if [[ -z "$smoke_script" ]]; then
       append_finding "FE-SWARM-DRIFT-MISSING-SMOKE" "$surface_id" "remote-proof/proof-economy family row lacks smoke_script" "Add a smoke_script for ${surface_id} before routing this surface."
-    elif [[ ! -f "${workspace_root}/${smoke_script}" ]]; then
+    elif [[ "$smoke_script_path_safe" -eq 0 && ! -f "$smoke_script_path" ]]; then
       append_finding "FE-SWARM-DRIFT-MISSING-SMOKE" "$surface_id" "smoke script not found: ${smoke_script}" "Add ${smoke_script} before routing ${surface_id}."
     fi
     if [[ -z "$contract_json" ]]; then
       append_finding "FE-SWARM-DRIFT-MISSING-CONTRACT" "$surface_id" "remote-proof/proof-economy family row lacks contract_json" "Add a contract_json for ${surface_id} before routing this surface."
-    elif [[ ! -f "${workspace_root}/${contract_json}" ]]; then
+    elif [[ "$contract_json_path_safe" -eq 0 && ! -f "$contract_json_path" ]]; then
       append_finding "FE-SWARM-DRIFT-MISSING-CONTRACT" "$surface_id" "contract JSON not found: ${contract_json}" "Add ${contract_json} before routing ${surface_id}."
-    elif ! jq empty "${workspace_root}/${contract_json}" >/dev/null 2>&1; then
+    elif [[ "$contract_json_path_safe" -eq 0 ]] && ! jq empty "$contract_json_path" >/dev/null 2>&1; then
       append_finding "FE-SWARM-DRIFT-MALFORMED-CONTRACT" "$surface_id" "contract JSON is not parseable: ${contract_json}" "Fix ${contract_json} before routing ${surface_id}."
     fi
   fi
 
-  if [[ -n "$smoke_script" && -f "${workspace_root}/${smoke_script}" ]]; then
-    if ! grep -Eq '(^|[[:space:]])check\)' "${workspace_root}/${smoke_script}" \
-      || ! grep -Eq '(^|[[:space:]])selftest\)' "${workspace_root}/${smoke_script}"; then
+  if [[ -n "$smoke_script" && "$smoke_script_path_safe" -eq 0 && -f "$smoke_script_path" ]]; then
+    if ! grep -Eq '(^|[[:space:]])check\)' "$smoke_script_path" \
+      || ! grep -Eq '(^|[[:space:]])selftest\)' "$smoke_script_path"; then
       append_finding "FE-SWARM-DRIFT-SMOKE-MISSING-MODE" "$surface_id" "smoke script lacks check or selftest mode" "Add check and selftest modes to ${smoke_script}."
     fi
   fi

@@ -145,6 +145,9 @@ impl RuntimeCapability {
             "fs_read" => Some(Self::FsRead),
             "fs_write" => Some(Self::FsWrite),
             "module_load" => Some(Self::ModuleLoad),
+            "console" => Some(Self::Console),
+            "timer" => Some(Self::Timer),
+            "builtin" => Some(Self::Builtin),
 
             // Short aliases used in IR / tests
             "network" | "net" | "net:connect" | "net:fetch" | "net:outbound" | "net.write"
@@ -641,17 +644,15 @@ mod tests {
     #[test]
     fn require_all_succeeds_when_all_granted() {
         let full = CapabilityProfile::full();
-        assert!(
-            require_all(
-                &full,
-                &[
-                    RuntimeCapability::VmDispatch,
-                    RuntimeCapability::PolicyWrite
-                ],
-                "test"
-            )
-            .is_ok()
-        );
+        assert!(require_all(
+            &full,
+            &[
+                RuntimeCapability::VmDispatch,
+                RuntimeCapability::PolicyWrite
+            ],
+            "test"
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1544,16 +1545,12 @@ mod tests {
         ];
         let denials = require_all(&ec, &caps, "mixed").unwrap_err();
         assert_eq!(denials.len(), 2);
-        assert!(
-            denials
-                .iter()
-                .any(|d| d.required == RuntimeCapability::PolicyRead)
-        );
-        assert!(
-            denials
-                .iter()
-                .any(|d| d.required == RuntimeCapability::NetworkEgress)
-        );
+        assert!(denials
+            .iter()
+            .any(|d| d.required == RuntimeCapability::PolicyRead));
+        assert!(denials
+            .iter()
+            .any(|d| d.required == RuntimeCapability::NetworkEgress));
     }
 
     // -- require_capability edge cases --------------------------------------
@@ -1703,22 +1700,13 @@ mod tests {
 
     #[test]
     fn from_tag_str_canonical_names() {
-        assert_eq!(
-            RuntimeCapability::from_tag_str("vm_dispatch"),
-            Some(RuntimeCapability::VmDispatch)
-        );
-        assert_eq!(
-            RuntimeCapability::from_tag_str("fs_read"),
-            Some(RuntimeCapability::FsRead)
-        );
-        assert_eq!(
-            RuntimeCapability::from_tag_str("network_egress"),
-            Some(RuntimeCapability::NetworkEgress)
-        );
-        assert_eq!(
-            RuntimeCapability::from_tag_str("module_load"),
-            Some(RuntimeCapability::ModuleLoad)
-        );
+        for capability in RuntimeCapability::ALL {
+            assert_eq!(
+                RuntimeCapability::from_tag_str(&capability.to_string()),
+                Some(capability),
+                "canonical tag for {capability:?} must round-trip"
+            );
+        }
     }
 
     #[test]

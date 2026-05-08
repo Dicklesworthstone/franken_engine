@@ -1117,13 +1117,13 @@ mod tests {
     #[test]
     fn clopper_pearson_matches_99_of_100_reference() {
         let ci = clopper_pearson_interval(99, 100, DEFAULT_CONFIDENCE_LEVEL)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let lower = ci
             .lower_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let upper = ci
             .upper_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!((lower - 0.94554).abs() < 0.002);
         assert!((upper - 0.999746).abs() < 0.002);
     }
@@ -1199,12 +1199,12 @@ semantic_domain = "security/benign"
 "#;
         write_label(&label_path, label);
 
-        let records = load_security_labels(&root).expect("serde deserialization should succeed");
+        let records = load_security_labels(&root).expect("serde serialization should succeed");
         let record = &records[0];
         let relative = record
             .label_path
             .strip_prefix(&root)
-            .expect("serde deserialization should succeed")
+            .expect("serde serialization should succeed")
             .to_string_lossy()
             .replace('\\', "/");
 
@@ -1226,7 +1226,7 @@ label_sha256 = "{hash}"
         write_label(&root.join(SECURITY_CORPUS_MANIFEST_FILE_NAME), &manifest);
 
         let parsed = validate_corpus_manifest(&root, &records)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].workload_id, "benign-ok");
     }
@@ -1246,12 +1246,12 @@ semantic_domain = "security/malicious"
 "#;
         write_label(&label_path, label);
 
-        let records = load_security_labels(&root).expect("serde deserialization should succeed");
+        let records = load_security_labels(&root).expect("serde serialization should succeed");
         let record = &records[0];
         let relative = record
             .label_path
             .strip_prefix(&root)
-            .expect("serde deserialization should succeed")
+            .expect("serde serialization should succeed")
             .to_string_lossy()
             .replace('\\', "/");
         let manifest = format!(
@@ -1295,12 +1295,12 @@ semantic_domain = "security/benign"
 "#;
         write_label(&label_path, label);
 
-        let records = load_security_labels(&root).expect("serde deserialization should succeed");
+        let records = load_security_labels(&root).expect("serde serialization should succeed");
         let record = &records[0];
         let relative = record
             .label_path
             .strip_prefix(&root)
-            .expect("serde deserialization should succeed")
+            .expect("serde serialization should succeed")
             .to_string_lossy()
             .replace('\\', "/");
         let manifest = format!(
@@ -1382,7 +1382,7 @@ label_sha256 = "{hash}"
             &observations,
             &SecurityConformanceThresholds::default(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert!(!result.summary.gate_pass);
         assert_eq!(result.summary.false_positive_count, 1);
         assert_eq!(result.summary.false_negative_count, 1);
@@ -1435,7 +1435,7 @@ label_sha256 = "{hash}"
     #[test]
     fn security_corpus_serde_roundtrip_benign() {
         let json = serde_json::to_string(&SecurityCorpus::Benign)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(json, "\"benign\"");
         let back: SecurityCorpus =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
@@ -1445,7 +1445,7 @@ label_sha256 = "{hash}"
     #[test]
     fn security_corpus_serde_roundtrip_malicious() {
         let json = serde_json::to_string(&SecurityCorpus::Malicious)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(json, "\"malicious\"");
         let back: SecurityCorpus =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
@@ -1482,7 +1482,7 @@ label_sha256 = "{hash}"
         ];
         for variant in variants {
             let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+                serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityAttackTaxonomy =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, variant);
@@ -1530,7 +1530,7 @@ label_sha256 = "{hash}"
         ];
         for variant in variants {
             let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+                serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityOutcome =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, variant);
@@ -1572,14 +1572,14 @@ label_sha256 = "{hash}"
     fn valid_benign_label_passes_validation() {
         valid_benign_label()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
     fn valid_malicious_label_passes_validation() {
         valid_malicious_label()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
@@ -1666,7 +1666,7 @@ label_sha256 = "{hash}"
         label.expected_outcome = SecurityOutcome::Quarantine;
         label
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
@@ -1675,7 +1675,7 @@ label_sha256 = "{hash}"
         label.expected_outcome = SecurityOutcome::Terminate;
         label
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     // ---- SecurityWorkloadObservation validation ----
@@ -1696,7 +1696,7 @@ label_sha256 = "{hash}"
     fn valid_observation_passes_validation() {
         valid_observation()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
@@ -1754,7 +1754,7 @@ label_sha256 = "{hash}"
         let mut obs = valid_observation();
         obs.sentinel_posterior = 0.0;
         obs.validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
@@ -1762,13 +1762,13 @@ label_sha256 = "{hash}"
         let mut obs = valid_observation();
         obs.sentinel_posterior = 1.0;
         obs.validate()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
     }
 
     #[test]
     fn observation_serde_roundtrip() {
         let obs = valid_observation();
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serde serialization should succeed");
         let back: SecurityWorkloadObservation =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.workload_id, obs.workload_id);
@@ -1783,15 +1783,15 @@ label_sha256 = "{hash}"
         let t = SecurityConformanceThresholds::default();
         let cl = t
             .confidence_level()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!((cl - 0.95).abs() < 1e-6);
         let tpr = t
             .tpr_min_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!((tpr - 0.99).abs() < 1e-6);
         let fpr = t
             .fpr_max_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!((fpr - 0.01).abs() < 1e-6);
         assert_eq!(t.malicious_latency_p95_max_ms, 250);
     }
@@ -1799,7 +1799,7 @@ label_sha256 = "{hash}"
     #[test]
     fn thresholds_serde_roundtrip() {
         let t = SecurityConformanceThresholds::default();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serde serialization should succeed");
         let back: SecurityConformanceThresholds =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, t);
@@ -1815,10 +1815,10 @@ label_sha256 = "{hash}"
         };
         let lower = ci
             .lower_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let upper = ci
             .upper_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!((lower - 0.5).abs() < 1e-6);
         assert!((upper - 0.95).abs() < 1e-6);
     }
@@ -1831,13 +1831,13 @@ label_sha256 = "{hash}"
         };
         assert!(
             (ci.lower_f64()
-                .expect("serde deserialization should succeed"))
+                .expect("serde serialization should succeed"))
             .abs()
                 < 1e-9
         );
         assert!(
             (ci.upper_f64()
-                .expect("serde deserialization should succeed")
+                .expect("serde serialization should succeed")
                 - 1.0)
                 .abs()
                 < 1e-9
@@ -1859,7 +1859,7 @@ label_sha256 = "{hash}"
             lower_millionths: 123_456,
             upper_millionths: 789_012,
         };
-        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ci).expect("serde serialization should succeed");
         let back: BinomialConfidenceInterval =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ci);
@@ -1869,13 +1869,13 @@ label_sha256 = "{hash}"
 
     #[test]
     fn millionths_to_f64_valid_cases() {
-        assert!((millionths_to_f64(0).expect("serde deserialization should succeed")).abs() < 1e-9);
+        assert!((millionths_to_f64(0).expect("serde serialization should succeed")).abs() < 1e-9);
         assert!(
-            (millionths_to_f64(500_000).expect("serde deserialization should succeed") - 0.5).abs()
+            (millionths_to_f64(500_000).expect("serde serialization should succeed") - 0.5).abs()
                 < 1e-6
         );
         assert!(
-            (millionths_to_f64(1_000_000).expect("serde deserialization should succeed") - 1.0)
+            (millionths_to_f64(1_000_000).expect("serde serialization should succeed") - 1.0)
                 .abs()
                 < 1e-9
         );
@@ -1961,18 +1961,18 @@ label_sha256 = "{hash}"
     #[test]
     fn parse_ratio_string_valid() {
         assert!(
-            (parse_ratio_string("0.990000", "test").expect("serde deserialization should succeed")
+            (parse_ratio_string("0.990000", "test").expect("serde serialization should succeed")
                 - 0.99)
                 .abs()
                 < 1e-6
         );
         assert!(
-            (parse_ratio_string("0.0", "test").expect("serde deserialization should succeed"))
+            (parse_ratio_string("0.0", "test").expect("serde serialization should succeed"))
                 .abs()
                 < 1e-9
         );
         assert!(
-            (parse_ratio_string("1.0", "test").expect("serde deserialization should succeed")
+            (parse_ratio_string("1.0", "test").expect("serde serialization should succeed")
                 - 1.0)
                 .abs()
                 < 1e-9
@@ -2005,14 +2005,14 @@ label_sha256 = "{hash}"
     #[test]
     fn percentile_95_hundred_values() {
         let mut values: Vec<u64> = (1..=100).collect();
-        let p95 = percentile_95_us(&mut values).expect("serde deserialization should succeed");
+        let p95 = percentile_95_us(&mut values).expect("serde serialization should succeed");
         assert_eq!(p95, 95);
     }
 
     #[test]
     fn percentile_95_twenty_values() {
         let mut values: Vec<u64> = (1..=20).collect();
-        let p95 = percentile_95_us(&mut values).expect("serde deserialization should succeed");
+        let p95 = percentile_95_us(&mut values).expect("serde serialization should succeed");
         assert_eq!(p95, 19);
     }
 
@@ -2021,12 +2021,12 @@ label_sha256 = "{hash}"
     #[test]
     fn clopper_pearson_zero_successes() {
         let ci =
-            clopper_pearson_interval(0, 100, 0.95).expect("serde deserialization should succeed");
+            clopper_pearson_interval(0, 100, 0.95).expect("serde serialization should succeed");
         assert_eq!(ci.lower_millionths, 0);
         assert!(ci.upper_millionths > 0);
         assert!(
             ci.upper_f64()
-                .expect("serde deserialization should succeed")
+                .expect("serde serialization should succeed")
                 < 0.1
         );
     }
@@ -2034,11 +2034,11 @@ label_sha256 = "{hash}"
     #[test]
     fn clopper_pearson_all_successes() {
         let ci =
-            clopper_pearson_interval(100, 100, 0.95).expect("serde deserialization should succeed");
+            clopper_pearson_interval(100, 100, 0.95).expect("serde serialization should succeed");
         assert_eq!(ci.upper_millionths, 1_000_000);
         assert!(
             ci.lower_f64()
-                .expect("serde deserialization should succeed")
+                .expect("serde serialization should succeed")
                 > 0.9
         );
     }
@@ -2062,13 +2062,13 @@ label_sha256 = "{hash}"
     #[test]
     fn clopper_pearson_half_interval_reasonable() {
         let ci =
-            clopper_pearson_interval(50, 100, 0.95).expect("serde deserialization should succeed");
+            clopper_pearson_interval(50, 100, 0.95).expect("serde serialization should succeed");
         let lower = ci
             .lower_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let upper = ci
             .upper_f64()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(lower > 0.35 && lower < 0.50);
         assert!(upper > 0.50 && upper < 0.65);
     }
@@ -2076,7 +2076,7 @@ label_sha256 = "{hash}"
     #[test]
     fn clopper_pearson_99_of_100_matches_reference_interval() {
         let ci =
-            clopper_pearson_interval(99, 100, 0.95).expect("serde deserialization should succeed");
+            clopper_pearson_interval(99, 100, 0.95).expect("serde serialization should succeed");
         assert!(
             ci.lower_millionths.abs_diff(945_541) <= 1,
             "unexpected lower bound: {}",
@@ -2359,7 +2359,7 @@ label_sha256 = "{hash}"
             &observations,
             &SecurityConformanceThresholds::default(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert_eq!(result.summary.benign_total, 1);
         assert_eq!(result.summary.malicious_total, 1);
         assert_eq!(result.summary.true_positive_count, 1);
@@ -2390,7 +2390,7 @@ label_sha256 = "{hash}"
             &observations,
             &SecurityConformanceThresholds::default(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert_eq!(result.summary.false_positive_count, 1);
         assert_eq!(result.summary.true_positive_count, 1);
     }
@@ -2415,7 +2415,7 @@ label_sha256 = "{hash}"
             &observations,
             &SecurityConformanceThresholds::default(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert_eq!(result.summary.false_negative_count, 1);
         assert_eq!(result.summary.true_positive_count, 0);
     }
@@ -2458,7 +2458,7 @@ label_sha256 = "{hash}"
             ..SecurityConformanceThresholds::default()
         };
         let boundary_probe = evaluate_security_conformance(&records, &observations, &thresholds)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let lower_bound = boundary_probe.summary.tpr_ci.lower_millionths;
 
         assert_eq!(boundary_probe.summary.true_positive_count, 99);
@@ -2468,7 +2468,7 @@ label_sha256 = "{hash}"
 
         thresholds.tpr_min = millionths_to_string(lower_bound);
         let exact_boundary = evaluate_security_conformance(&records, &observations, &thresholds)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(
             exact_boundary.summary.gate_pass,
             "exact lower-CI threshold should pass: {:?}",
@@ -2477,7 +2477,7 @@ label_sha256 = "{hash}"
 
         thresholds.tpr_min = millionths_to_string(lower_bound + 1);
         let failing_boundary = evaluate_security_conformance(&records, &observations, &thresholds)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(!failing_boundary.summary.gate_pass);
         assert!(
             failing_boundary
@@ -2745,7 +2745,7 @@ label_sha256 = "{hash}"
     #[test]
     fn workload_label_serde_roundtrip_benign() {
         let label = valid_benign_label();
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serde serialization should succeed");
         let back: SecurityWorkloadLabel =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, label);
@@ -2754,7 +2754,7 @@ label_sha256 = "{hash}"
     #[test]
     fn workload_label_serde_roundtrip_malicious() {
         let label = valid_malicious_label();
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serde serialization should succeed");
         let back: SecurityWorkloadLabel =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, label);
@@ -2793,7 +2793,7 @@ semantic_domain = "security/benign"
             "aa".repeat(32)
         );
         write_label(&label_path, &body);
-        let records = load_security_labels(&root).expect("serde deserialization should succeed");
+        let records = load_security_labels(&root).expect("serde serialization should succeed");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].label.workload_id, "benign-a");
         assert!(is_valid_sha256_hex(&records[0].label_hash));
@@ -2816,7 +2816,7 @@ semantic_domain = "security/benign"
             );
             write_label(&label_path, &body);
         }
-        let records = load_security_labels(&root).expect("serde deserialization should succeed");
+        let records = load_security_labels(&root).expect("serde serialization should succeed");
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].label.workload_id, "aaa");
         assert_eq!(records[1].label.workload_id, "mmm");
@@ -2849,7 +2849,7 @@ semantic_domain = "security/benign"
             gate_pass: true,
             gate_failure_reasons: vec![],
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serde serialization should succeed");
         let back: SecurityConformanceSummary =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, summary);

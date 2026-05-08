@@ -609,7 +609,7 @@ pub fn generate_report(spec: &MechanismSpec) -> GovernanceReport {
         exploitable_scenarios: exploitable,
         content_hash: String::new(),
     };
-    report.content_hash = report.compute_hash().to_hex();
+    report.content_hash = report.compute_hash();
     report.report_id = format!("gr-{}", &report.content_hash[..32]);
     report
 }

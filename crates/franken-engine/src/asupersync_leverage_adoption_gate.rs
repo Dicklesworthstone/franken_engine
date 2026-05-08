@@ -487,6 +487,24 @@ fn content_hash_for_gate(gate: &AsupersyncLeverageAdoptionGate) -> Result<String
 mod tests {
     use super::*;
 
+    fn child_artifact(
+        artifact_id: &str,
+        status: GateArtifactStatus,
+        stop_go_code: &str,
+    ) -> MandatoryChildArtifact {
+        MandatoryChildArtifact {
+            bead_id: format!("bd-test-{artifact_id}"),
+            title: format!("{artifact_id} test artifact"),
+            artifact_id: artifact_id.to_string(),
+            artifact_path_hint: format!("{artifact_id}.json"),
+            status,
+            stop_go_code: stop_go_code.to_string(),
+            user_impact: format!("{artifact_id} user impact"),
+            operator_impact: format!("{artifact_id} operator impact"),
+            next_action: format!("{artifact_id} next action"),
+        }
+    }
+
     #[test]
     fn gate_fails_closed_over_missing_children() {
         // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
@@ -521,5 +539,246 @@ mod tests {
         assert!(summary.contains("targeted_promotion"));
         assert!(summary.contains("topology_promotion_assessment"));
         assert!(summary.contains("control_plane_policy_diagnostics"));
+    }
+
+    #[test]
+    fn artifact_status_strings_and_satisfaction_flags_are_pinned() {
+        assert_eq!(GateArtifactStatus::Satisfied.as_str(), "satisfied");
+        assert_eq!(GateArtifactStatus::Outstanding.as_str(), "outstanding");
+        assert!(GateArtifactStatus::Satisfied.is_satisfied());
+        assert!(!GateArtifactStatus::Outstanding.is_satisfied());
+    }
+
+    #[test]
+    fn verdict_display_and_serde_names_are_stable() {
+        for (verdict, expected) in [
+            (AdoptionGateVerdict::Stop, "stop"),
+            (AdoptionGateVerdict::GoTargeted, "go_targeted"),
+            (AdoptionGateVerdict::GoBroader, "go_broader"),
+        ] {
+            assert_eq!(verdict.as_str(), expected);
+            assert_eq!(verdict.to_string(), expected);
+            assert_eq!(
+                serde_json::to_string(&verdict).expect("verdict should serialize"),
+                format!("\"{expected}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<AdoptionGateVerdict>(&format!("\"{expected}\""))
+                    .expect("verdict should deserialize"),
+                verdict
+            );
+        }
+    }
+
+    #[test]
+    fn summary_counts_satisfied_outstanding_and_all_decision_buckets() {
+        let artifacts = [
+            child_artifact(
+                "ready_a",
+                GateArtifactStatus::Satisfied,
+                "ready_a.satisfied",
+            ),
+            child_artifact(
+                "ready_b",
+                GateArtifactStatus::Satisfied,
+                "ready_b.satisfied",
+            ),
+            child_artifact(
+                "missing",
+                GateArtifactStatus::Outstanding,
+                "missing.missing_or_invalid",
+            ),
+        ];
+        let diagnostics = [
+            DiagnosticContractEntry {
+                diagnostic_id: "policy_mapping".to_string(),
+                source_bead_id: "bd-test-diagnostic".to_string(),
+                audience: "operator".to_string(),
+                artifact_id: "policy_mapping".to_string(),
+                stable_fields: vec!["trace_id".to_string(), "decision_id".to_string()],
+                replay_signal: "deterministic replay signal".to_string(),
+            },
+            DiagnosticContractEntry {
+                diagnostic_id: "release_blocker".to_string(),
+                source_bead_id: "bd-test-release".to_string(),
+                audience: "user_and_operator".to_string(),
+                artifact_id: "release_blocker".to_string(),
+                stable_fields: vec!["policy_id".to_string()],
+                replay_signal: "release blocker code".to_string(),
+            },
+        ];
+
+        let summary = AdoptionGateSummary::from_parts(
+            &artifacts,
+            &diagnostics,
+            TopologyPromotionDecision::BroaderPromotion,
+        );
+
+        assert_eq!(summary.mandatory_child_count, 3);
+        assert_eq!(summary.satisfied_child_count, 2);
+        assert_eq!(summary.outstanding_child_count, 1);
+        assert_eq!(summary.diagnostic_contract_count, 2);
+        assert_eq!(summary.decision_counts["no_promotion"], 0);
+        assert_eq!(summary.decision_counts["targeted_promotion"], 0);
+        assert_eq!(summary.decision_counts["broader_promotion"], 1);
+    }
+
+    #[test]
+    fn missing_or_invalid_child_artifact_fails_closed_with_actionable_code() {
+        let artifact = validate_child_artifact(
+            "bd-test-missing",
+            "missing child",
+            "definitely_absent_child_artifact_for_bd_juf8o",
+            "definitely_absent_child_artifact_for_bd_juf8o.json",
+            "missing child should block adoption",
+        );
+
+        assert_eq!(artifact.status, GateArtifactStatus::Outstanding);
+        assert_eq!(
+            artifact.stop_go_code,
+            "definitely_absent_child_artifact_for_bd_juf8o.missing_or_invalid"
+        );
+        assert_eq!(
+            artifact.next_action,
+            "Generate definitely_absent_child_artifact_for_bd_juf8o.json before re-running adoption gate."
+        );
+        assert_eq!(artifact.user_impact, "missing child should block adoption");
+    }
+
+    #[test]
+    fn topology_artifact_status_is_satisfied_and_records_decision_code() {
+        let mut topology = build_topology_promotion_assessment();
+        topology.decision = TopologyPromotionDecision::NoPromotion;
+
+        let artifact = validate_topology_artifact(&topology);
+
+        assert_eq!(artifact.status, GateArtifactStatus::Satisfied);
+        assert_eq!(artifact.stop_go_code, "topology_decision.no_promotion");
+        assert_eq!(artifact.artifact_id, "topology_promotion_assessment");
+        assert!(
+            artifact
+                .operator_impact
+                .contains("direct-manager seams that should remain unchanged")
+        );
+    }
+
+    #[test]
+    fn outstanding_child_artifacts_override_broader_topology_promotion() {
+        let mut topology = build_topology_promotion_assessment();
+        topology.decision = TopologyPromotionDecision::BroaderPromotion;
+        topology
+            .seams
+            .first_mut()
+            .expect("default topology has at least one seam")
+            .decision = TopologyPromotionDecision::BroaderPromotion;
+
+        let gate = build_asupersync_leverage_adoption_gate_from_topology(topology)
+            .expect("adoption gate should build from broader topology");
+
+        assert_eq!(
+            gate.topology_decision,
+            TopologyPromotionDecision::BroaderPromotion
+        );
+        assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
+        assert_eq!(gate.stop_go_code, "asupersync_leverage.stop.open_gap");
+        assert!(!gate.is_go());
+        assert!(gate.has_outstanding_child_artifacts());
+        assert!(
+            gate.outstanding_risk_ids
+                .iter()
+                .all(|risk| risk.ends_with(".missing_or_invalid"))
+        );
+    }
+
+    #[test]
+    fn diagnostic_contract_index_pins_required_stable_fields_for_every_audience() {
+        let diagnostics = diagnostic_contract_index();
+        assert_eq!(diagnostics.len(), 3);
+
+        for diagnostic in diagnostics {
+            assert!(matches!(
+                diagnostic.audience.as_str(),
+                "operator" | "user_and_operator"
+            ));
+            for required in [
+                "trace_id",
+                "component",
+                "event",
+                "outcome",
+                "error_code",
+                "seed",
+                "scenario_id",
+                "decision_id",
+                "policy_id",
+            ] {
+                assert!(
+                    diagnostic
+                        .stable_fields
+                        .iter()
+                        .any(|field| field == required),
+                    "{} missing stable field {required}",
+                    diagnostic.diagnostic_id
+                );
+            }
+            assert!(!diagnostic.replay_signal.trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn content_hash_ignores_existing_hash_field_but_changes_with_contract_content() {
+        let mut gate = build_asupersync_leverage_adoption_gate()
+            .expect("adoption gate should build for hash regression");
+        let original = content_hash_for_gate(&gate).expect("hash should compute");
+
+        gate.content_hash = "sha256:preexisting-placeholder".to_string();
+        assert_eq!(
+            content_hash_for_gate(&gate).expect("hash should ignore content_hash field"),
+            original
+        );
+
+        gate.next_action
+            .push_str(" Extra deterministic operator action.");
+        assert_ne!(
+            content_hash_for_gate(&gate).expect("hash should include contract content"),
+            original
+        );
+    }
+
+    #[test]
+    fn rendered_summary_lists_every_child_artifact_and_diagnostic_contract() {
+        let gate = build_asupersync_leverage_adoption_gate()
+            .expect("adoption gate should build for summary coverage");
+        let summary = render_operator_summary(&gate);
+
+        for artifact in &gate.mandatory_child_artifacts {
+            assert!(
+                summary.contains(&artifact.bead_id),
+                "summary missing child bead {}",
+                artifact.bead_id
+            );
+            assert!(
+                summary.contains(&artifact.artifact_id),
+                "summary missing artifact {}",
+                artifact.artifact_id
+            );
+            assert!(
+                summary.contains(artifact.status.as_str()),
+                "summary missing status {}",
+                artifact.status.as_str()
+            );
+        }
+
+        for diagnostic in &gate.diagnostic_contract_index {
+            assert!(
+                summary.contains(&diagnostic.diagnostic_id),
+                "summary missing diagnostic {}",
+                diagnostic.diagnostic_id
+            );
+            assert!(
+                summary.contains(&diagnostic.artifact_id),
+                "summary missing diagnostic artifact {}",
+                diagnostic.artifact_id
+            );
+        }
     }
 }

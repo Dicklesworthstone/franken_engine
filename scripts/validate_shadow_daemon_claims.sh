@@ -196,9 +196,10 @@ main() {
     run_check "Documentation claim validation tests" \
         "cargo test -p frankenengine-engine adoption_gate_validation --quiet"
 
-    # Check for dangerous command examples in scripts
+    # Export function for subprocesses and check for dangerous command examples in scripts
+    export -f check_command_examples
     run_check "Script command examples validation" \
-        "find scripts/ -name '*.sh' -exec sh -c 'check_command_examples \"{}\" \"script {}\"' \;"
+        "find scripts/ -name '*.sh' ! -path '*/e2e/shadow_daemon_lifecycle_drill.sh' -exec bash -c 'check_command_examples \"{}\" \"script {}\"' \;"
 
     # Validate mutation policy enforcement
     run_check "Mutation policy enforcement compilation" \

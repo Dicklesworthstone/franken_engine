@@ -87,12 +87,7 @@ impl fmt::Display for StoreKind {
     }
 }
 
-pub(crate) fn mark_typed_heavy_generic_compat_metadata(metadata: &mut BTreeMap<String, String>) {
-    metadata.insert(
-        TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY.to_string(),
-        TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE.to_string(),
-    );
-}
+// Legacy compatibility function removed to enforce typed boundaries for typed-heavy stores
 
 fn is_typed_heavy_store(store: StoreKind) -> bool {
     matches!(
@@ -215,18 +210,7 @@ fn typed_heavy_payload_matches_typed_model(
     }
 }
 
-fn typed_heavy_put_is_explicit_legacy_compat(
-    store: StoreKind,
-    key: &str,
-    metadata: &BTreeMap<String, String>,
-) -> bool {
-    typed_heavy_legacy_prefixes(store)
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
-        && metadata
-            .get(TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY)
-            .is_some_and(|mode| mode == TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE)
-}
+// Legacy compatibility function removed to enforce typed boundaries
 
 fn typed_heavy_write_policy_error(store: StoreKind, operation: &str, key: &str) -> StorageError {
     StorageError::WriteRejected {
@@ -258,9 +242,7 @@ fn enforce_typed_heavy_put_policy(
     if !is_typed_heavy_store(store) {
         return Ok(());
     }
-    if typed_heavy_put_is_current_typed_envelope(store, key, value, metadata)
-        || typed_heavy_put_is_explicit_legacy_compat(store, key, metadata)
-    {
+    if typed_heavy_put_is_current_typed_envelope(store, key, value, metadata) {
         return Ok(());
     }
     Err(typed_heavy_write_policy_error(store, "put", key))
@@ -298,27 +280,8 @@ fn enforce_typed_heavy_delete_policy(
         return Ok(());
     }
 
-    if !typed_heavy_legacy_prefixes(store)
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
-    {
-        return Err(typed_heavy_read_policy_error(
-            store,
-            "delete",
-            format!(
-                "key `{key}` is neither a typed `{}` envelope nor a recognized compatibility prefix",
-                typed_store_prefix(store)
-            ),
-        ));
-    }
-
-    match existing {
-        None => Ok(()),
-        Some(record) if typed_heavy_put_is_explicit_legacy_compat(store, key, &record.metadata) => {
-            Ok(())
-        }
-        Some(_) => Err(typed_heavy_write_policy_error(store, "delete", key)),
-    }
+    // Reject all non-typed access for typed-heavy stores
+    Err(typed_heavy_write_policy_error(store, "delete", key))
 }
 
 fn enforce_typed_heavy_query_policy(
@@ -330,28 +293,22 @@ fn enforce_typed_heavy_query_policy(
     }
 
     if let Some(prefix) = &query.key_prefix {
-        if typed_heavy_key_is_recognized(store, prefix) {
+        let typed_prefix = typed_store_prefix(store);
+        if prefix.starts_with(&typed_prefix) {
             return Ok(());
         }
         return Err(typed_heavy_read_policy_error(
             store,
             "query",
-            format!("key_prefix `{prefix}` is not a typed or recognized compatibility prefix"),
+            format!("key_prefix `{prefix}` is not a typed envelope prefix"),
         ));
     }
 
-    if query
-        .metadata_filters
-        .get(TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY)
-        .is_some_and(|mode| mode == TYPED_HEAVY_BACKFILL_QUERY_MODE_VALUE)
-    {
-        return Ok(());
-    }
-
+    // Reject unscoped queries for typed-heavy stores
     Err(typed_heavy_read_policy_error(
         store,
         "query",
-        "unscoped generic scans require an explicit backfill-planning marker".to_string(),
+        "unscoped queries not allowed for typed-heavy stores".to_string(),
     ))
 }
 
@@ -652,11 +609,15 @@ impl InMemoryStorageAdapter {
     }
 
     fn state_hash(&self) -> String {
-        let bytes = serde_json::to_vec(&(self.schema_version, &self.stores))
-            .unwrap_or_else(|_e| {
-                // Fallback to deterministic representation on serialization failure
-                format!("schema_v{}_stores_{}", self.schema_version, self.stores.len()).into_bytes()
-            });
+        let bytes = serde_json::to_vec(&(self.schema_version, &self.stores)).unwrap_or_else(|_e| {
+            // Fallback to deterministic representation on serialization failure
+            format!(
+                "schema_v{}_stores_{}",
+                self.schema_version,
+                self.stores.len()
+            )
+            .into_bytes()
+        });
         digest_hex(&bytes)
     }
 

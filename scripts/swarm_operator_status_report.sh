@@ -809,7 +809,8 @@ jq -n \
     end;
   def tag_labels($items):
     bounded(as_array($items)
-      | map(if (type == "object") then (.purpose // .surface_id // .tag // empty) else tostring end)
+      | map(if (type == "object") then (.purpose // .surface_id // .tag // empty) else . end)
+      | map(if (type == "string" or type == "number" or type == "boolean") then tostring else empty end)
       | map(select(length > 0))
       | unique);
   def reason_code: (.code // .reason_code // .finding_code // "unknown") | tostring;

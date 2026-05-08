@@ -114,4 +114,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "release_checklist_json"
+path = "fuzz_targets/release_checklist_json.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

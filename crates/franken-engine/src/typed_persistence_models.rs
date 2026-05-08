@@ -514,19 +514,18 @@ where
     for allocation in allocations {
         if let Some(existing_natural_key) =
             natural_key_by_id.insert(allocation.typed_record_id, allocation.natural_key.as_str())
+            && existing_natural_key != allocation.natural_key.as_str()
         {
-            if existing_natural_key != allocation.natural_key.as_str() {
-                return Err(StorageError::IntegrityViolation {
-                    store: StoreKind::PolicyCache,
-                    detail: format!(
-                        "typed id allocation for {} assigned id {} to multiple natural keys: `{}` and `{}`",
-                        T::MODEL_NAME,
-                        allocation.typed_record_id,
-                        existing_natural_key,
-                        allocation.natural_key
-                    ),
-                });
-            }
+            return Err(StorageError::IntegrityViolation {
+                store: StoreKind::PolicyCache,
+                detail: format!(
+                    "typed id allocation for {} assigned id {} to multiple natural keys: `{}` and `{}`",
+                    T::MODEL_NAME,
+                    allocation.typed_record_id,
+                    existing_natural_key,
+                    allocation.natural_key
+                ),
+            });
         }
     }
     Ok(())

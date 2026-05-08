@@ -401,13 +401,13 @@ impl ShadowReplayVerifier {
         export: &ShadowEvidenceJournalExport,
     ) -> Result<(), ReplayVerificationError> {
         // Check schema version compatibility
-        if export.schema_version != SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION {
-            if !self.config.allow_schema_migration {
-                return Err(ReplayVerificationError::InvalidCheckpoint(format!(
-                    "Schema version mismatch: expected {}, got {}",
-                    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, export.schema_version
-                )));
-            }
+        if export.schema_version != SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+            && !self.config.allow_schema_migration
+        {
+            return Err(ReplayVerificationError::InvalidCheckpoint(format!(
+                "Schema version mismatch: expected {}, got {}",
+                SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, export.schema_version
+            )));
         }
 
         // Check that all events have valid IDs and links
@@ -740,40 +740,36 @@ impl ShadowReplayVerifier {
                 let artifacts_hash = ContentHash::compute(&artifacts_bytes);
 
                 // Check for expected output hash in metadata
-                if let Value::Object(metadata_obj) = &row.metadata {
-                    if let Some(Value::String(expected_hash_str)) =
+                if let Value::Object(metadata_obj) = &row.metadata
+                    && let Some(Value::String(expected_hash_str)) =
                         metadata_obj.get("expected_decision_hash")
-                    {
-                        if let Ok(expected_hash_bytes) = hex_decode(expected_hash_str) {
-                            if expected_hash_bytes.len() == 32 {
-                                let mut hash_array = [0u8; 32];
-                                hash_array.copy_from_slice(&expected_hash_bytes);
-                                let expected_hash = ContentHash::from_bytes(hash_array);
+                    && let Ok(expected_hash_bytes) = hex_decode(expected_hash_str)
+                    && expected_hash_bytes.len() == 32
+                {
+                    let mut hash_array = [0u8; 32];
+                    hash_array.copy_from_slice(&expected_hash_bytes);
+                    let expected_hash = ContentHash::from_bytes(hash_array);
 
-                                if artifacts_hash != expected_hash {
-                                    // Create decision ID from event data
-                                    let decision_id_bytes =
-                                        format!("decision_{}", row.journal_event_id).into_bytes();
-                                    let schema_id =
-                                        crate::engine_object_id::SchemaId::from_definition(
-                                            b"shadow_replay_drift_detection_v1",
-                                        );
-                                    let decision_id = crate::engine_object_id::derive_id(
-                                        crate::engine_object_id::ObjectDomain::EvidenceRecord,
-                                        "shadow_replay",
-                                        &schema_id,
-                                        &decision_id_bytes,
-                                    )?;
+                    if artifacts_hash != expected_hash {
+                        // Create decision ID from event data
+                        let decision_id_bytes =
+                            format!("decision_{}", row.journal_event_id).into_bytes();
+                        let schema_id = crate::engine_object_id::SchemaId::from_definition(
+                            b"shadow_replay_drift_detection_v1",
+                        );
+                        let decision_id = crate::engine_object_id::derive_id(
+                            crate::engine_object_id::ObjectDomain::EvidenceRecord,
+                            "shadow_replay",
+                            &schema_id,
+                            &decision_id_bytes,
+                        )?;
 
-                                    drift_types.push(DriftType::BehavioralRegression {
-                                        decision_id,
-                                        expected_output: expected_hash,
-                                        actual_output: artifacts_hash,
-                                        reproducible: true, // Would need multiple runs to verify
-                                    });
-                                }
-                            }
-                        }
+                        drift_types.push(DriftType::BehavioralRegression {
+                            decision_id,
+                            expected_output: expected_hash,
+                            actual_output: artifacts_hash,
+                            reproducible: true, // Would need multiple runs to verify
+                        });
                     }
                 }
             }
@@ -794,11 +790,10 @@ impl ShadowReplayVerifier {
                 DriftType::SchemaDrift {
                     migration_compatible,
                     ..
-                } => {
-                    if !migration_compatible {
-                        return false;
-                    }
+                } if !migration_compatible => {
+                    return false;
                 }
+                DriftType::SchemaDrift { .. } => {}
                 DriftType::BehavioralRegression { .. } => {
                     return false;
                 }
@@ -933,7 +928,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Helper function to decode hex string to bytes.
 fn hex_decode(hex: &str) -> Result<Vec<u8>, ReplayVerificationError> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(ReplayVerificationError::InvalidCheckpoint(
             "Hex string has odd length".to_string(),
         ));

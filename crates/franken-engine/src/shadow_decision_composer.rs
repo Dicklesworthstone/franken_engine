@@ -1661,7 +1661,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, ShadowDecisionError::InvalidInput(_)));
-        assert!(err.to_string().contains("default freshness window must be non-negative"));
+        assert!(
+            err.to_string()
+                .contains("default freshness window must be non-negative")
+        );
     }
 
     #[test]
@@ -1707,9 +1710,17 @@ mod tests {
         let result = compose_shadow_decision(&input);
         assert!(result.is_ok());
         let artifacts = result.unwrap();
-        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Blocked);
+        assert_eq!(
+            artifacts.shadow_status.truth_state,
+            ShadowTruthState::Blocked
+        );
         assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
-        assert!(artifacts.shadow_status.error_codes.contains(&"FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE".to_string()));
+        assert!(
+            artifacts
+                .shadow_status
+                .error_codes
+                .contains(&"FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE".to_string())
+        );
     }
 
     #[test]
@@ -1735,7 +1746,10 @@ mod tests {
         let result = compose_shadow_decision(&input);
         assert!(result.is_ok());
         let artifacts = result.unwrap();
-        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Contaminated);
+        assert_eq!(
+            artifacts.shadow_status.truth_state,
+            ShadowTruthState::Contaminated
+        );
         assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
     }
 
@@ -1764,7 +1778,10 @@ mod tests {
         let result = compose_shadow_decision(&input);
         assert!(result.is_ok());
         let artifacts = result.unwrap();
-        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Degraded);
+        assert_eq!(
+            artifacts.shadow_status.truth_state,
+            ShadowTruthState::Degraded
+        );
         assert_eq!(artifacts.shadow_status.decision, ShadowDecision::Degraded);
     }
 
@@ -1803,14 +1820,20 @@ mod tests {
             "def789",
             1715173200,
             events,
-            "/tmp/output"
+            "/tmp/output",
         );
 
         assert_eq!(input.shadow_run_id, "test-run-456");
         assert_eq!(input.source_revision, "def789");
         assert_eq!(input.generated_epoch_seconds, 1715173200);
-        assert_eq!(input.default_freshness_window_seconds, DEFAULT_SHADOW_DECISION_FRESHNESS_WINDOW_SECONDS);
-        assert_eq!(input.max_recommendations, DEFAULT_SHADOW_DECISION_MAX_RECOMMENDATIONS);
+        assert_eq!(
+            input.default_freshness_window_seconds,
+            DEFAULT_SHADOW_DECISION_FRESHNESS_WINDOW_SECONDS
+        );
+        assert_eq!(
+            input.max_recommendations,
+            DEFAULT_SHADOW_DECISION_MAX_RECOMMENDATIONS
+        );
         assert_eq!(input.journal_events.len(), 1);
         assert!(input.existing_autopilot_outputs.is_empty());
     }
@@ -1821,7 +1844,11 @@ mod tests {
         let shadow_err: ShadowDecisionError = json_err.into();
 
         assert!(matches!(shadow_err, ShadowDecisionError::Json(_)));
-        assert!(shadow_err.to_string().contains("shadow decision JSON error:"));
+        assert!(
+            shadow_err
+                .to_string()
+                .contains("shadow decision JSON error:")
+        );
     }
 
     #[test]
@@ -1830,6 +1857,10 @@ mod tests {
         let shadow_err: ShadowDecisionError = io_err.into();
 
         assert!(matches!(shadow_err, ShadowDecisionError::Io(_)));
-        assert!(shadow_err.to_string().contains("shadow decision I/O error:"));
+        assert!(
+            shadow_err
+                .to_string()
+                .contains("shadow decision I/O error:")
+        );
     }
 }

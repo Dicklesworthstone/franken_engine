@@ -1105,7 +1105,8 @@ fn parse_json_document(input: &str, document_kind: &str) -> StorageResult<Value>
     if input.len() > MAX_JSON_DOCUMENT_SIZE {
         return Err(integrity(format!(
             "{document_kind} exceeds maximum size limit of {} bytes (actual: {} bytes)",
-            MAX_JSON_DOCUMENT_SIZE, input.len()
+            MAX_JSON_DOCUMENT_SIZE,
+            input.len()
         )));
     }
 
@@ -1129,13 +1130,13 @@ fn parse_json_with_recursion_limit(input: &str) -> Result<Value, serde_json::Err
                 // Reject if deeper than safe threshold (128 levels)
                 if depth > 128 {
                     use serde::de::Error;
-                    return Err(serde_json::Error::custom("JSON nesting depth exceeds maximum allowed (128 levels)"));
+                    return Err(serde_json::Error::custom(
+                        "JSON nesting depth exceeds maximum allowed (128 levels)",
+                    ));
                 }
             }
-            '}' | ']' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+            '}' | ']' if depth > 0 => {
+                depth -= 1;
             }
             _ => {}
         }

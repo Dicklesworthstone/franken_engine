@@ -276,13 +276,11 @@ pub fn compile_react_source(
 
     // Step 5: Compute metadata
     let metadata = ReactCompileMetadata {
-        input_hash: ContentHash::compute(source.as_bytes())
-            .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))?,
+        input_hash: ContentHash::compute(source.as_bytes()),
         config_hash: ContentHash::compute(
             &serde_json::to_vec(config)
                 .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
-        )
-        .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))?,
+        ),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -401,11 +399,10 @@ fn compute_process_hash(
         "transform_counts": result.metadata.transform_counts
     });
 
-    ContentHash::compute(
+    Ok(ContentHash::compute(
         &serde_json::to_vec(&process_data)
             .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
-    )
-    .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))
+    ))
 }
 
 // ---------------------------------------------------------------------------

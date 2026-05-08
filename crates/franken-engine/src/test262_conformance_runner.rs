@@ -1353,6 +1353,7 @@ pub mod differential_testing {
 
         /// Generate golden fixtures by running tests against reference engines.
         /// This would be called manually when reference engines are available.
+        #[allow(dead_code)]
         fn generate_golden_fixtures(&mut self) -> Result<(), String> {
             let repo_root = default_repo_root();
             self.generate_golden_fixtures_from_roots(
@@ -1361,6 +1362,7 @@ pub mod differential_testing {
             )
         }
 
+        #[allow(dead_code)]
         fn generate_golden_fixtures_from_roots(
             &mut self,
             legacy_v8_root: &Path,
@@ -1413,11 +1415,13 @@ pub mod differential_testing {
     }
 
     #[derive(Debug, Clone, Copy)]
+    #[allow(dead_code)]
     enum ReferenceEngine {
         V8,
         QuickJs,
     }
 
+    #[allow(dead_code)]
     impl ReferenceEngine {
         fn display_name(self) -> &'static str {
             match self {
@@ -1450,6 +1454,7 @@ pub mod differential_testing {
         }
     }
 
+    #[allow(dead_code)]
     fn reference_engine_output(
         engine: ReferenceEngine,
         legacy_root: &Path,
@@ -1497,6 +1502,7 @@ pub mod differential_testing {
         }
     }
 
+    #[allow(dead_code)]
     fn find_reference_executable(engine: ReferenceEngine, legacy_root: &Path) -> Option<PathBuf> {
         if let Ok(path) = std::env::var(engine.env_var()) {
             let path = PathBuf::from(path);
@@ -1511,6 +1517,7 @@ pub mod differential_testing {
             .find(|path| path.is_file())
     }
 
+    #[allow(dead_code)]
     fn unavailable_reference_output(
         engine: ReferenceEngine,
         reference_path: &Path,
@@ -1532,6 +1539,7 @@ pub mod differential_testing {
         }
     }
 
+    #[allow(dead_code)]
     fn wrap_reference_source(source: &str) -> String {
         format!(
             "if (typeof globalThis.console === 'undefined') {{ globalThis.console = {{ log: (...args) => print(args.join(' ')) }}; }}\n{}",
@@ -1539,6 +1547,7 @@ pub mod differential_testing {
         )
     }
 
+    #[allow(dead_code)]
     fn reference_output_hash(stdout: &str, stderr: &str, exit_code: i32) -> String {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(stdout.as_bytes());
@@ -1549,6 +1558,7 @@ pub mod differential_testing {
         ContentHash::compute(&bytes).to_hex()
     }
 
+    #[allow(dead_code)]
     fn sanitize_fixture_name(test_id: &str) -> String {
         test_id
             .chars()
@@ -1559,6 +1569,7 @@ pub mod differential_testing {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn default_repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()

@@ -1712,46 +1712,46 @@ fn acquire_bundle_write_lock(artifact_dir: &Path) -> io::Result<BundleWriteLock>
 
     // Check for existing lock and validate if owner is still alive
     if lock_path.exists() {
-        if let Ok(lock_content) = fs::read_to_string(&lock_path) {
-            if let Ok(lock_pid) = lock_content.trim().parse::<u32>() {
-                // Check if the process is still running
-                #[cfg(unix)]
-                {
-                    use std::process::Command;
-                    let is_alive = Command::new("kill")
-                        .arg("-0")
-                        .arg(lock_pid.to_string())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-                    if is_alive {
-                        return Err(io::Error::new(
-                            ErrorKind::AlreadyExists,
-                            format!(
-                                "bundle already being written by PID {}: {}",
-                                lock_pid,
-                                lock_path.display()
-                            ),
-                        ));
-                    }
+        if let Ok(lock_content) = fs::read_to_string(&lock_path)
+            && let Ok(lock_pid) = lock_content.trim().parse::<u32>()
+        {
+            // Check if the process is still running
+            #[cfg(unix)]
+            {
+                use std::process::Command;
+                let is_alive = Command::new("kill")
+                    .arg("-0")
+                    .arg(lock_pid.to_string())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if is_alive {
+                    return Err(io::Error::new(
+                        ErrorKind::AlreadyExists,
+                        format!(
+                            "bundle already being written by PID {}: {}",
+                            lock_pid,
+                            lock_path.display()
+                        ),
+                    ));
                 }
-                #[cfg(not(unix))]
-                {
-                    // On non-Unix platforms, assume stale if older than 5 minutes
-                    if let Ok(metadata) = lock_path.metadata() {
-                        if let Ok(modified) = metadata.modified() {
-                            if modified.elapsed().unwrap_or(std::time::Duration::MAX)
-                                < std::time::Duration::from_secs(300)
-                            {
-                                return Err(io::Error::new(
-                                    ErrorKind::AlreadyExists,
-                                    format!(
-                                        "bundle recently locked by PID {}: {}",
-                                        lock_pid,
-                                        lock_path.display()
-                                    ),
-                                ));
-                            }
+            }
+            #[cfg(not(unix))]
+            {
+                // On non-Unix platforms, assume stale if older than 5 minutes
+                if let Ok(metadata) = lock_path.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if modified.elapsed().unwrap_or(std::time::Duration::MAX)
+                            < std::time::Duration::from_secs(300)
+                        {
+                            return Err(io::Error::new(
+                                ErrorKind::AlreadyExists,
+                                format!(
+                                    "bundle recently locked by PID {}: {}",
+                                    lock_pid,
+                                    lock_path.display()
+                                ),
+                            ));
                         }
                     }
                 }
@@ -3274,9 +3274,11 @@ mod tests {
     #[test]
     fn ledger_by_decision_type_empty_result() {
         let ledger = InMemoryLedger::new();
-        assert!(ledger
-            .by_decision_type(DecisionType::SecurityAction)
-            .is_empty());
+        assert!(
+            ledger
+                .by_decision_type(DecisionType::SecurityAction)
+                .is_empty()
+        );
     }
 
     #[test]

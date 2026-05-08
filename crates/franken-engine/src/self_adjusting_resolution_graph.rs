@@ -129,8 +129,7 @@ impl ModuleNode {
         hasher.update((self.version.len() as u64).to_le_bytes());
         hasher.update(self.version.as_bytes());
         hasher.update(self.content_hash.as_bytes());
-        ContentHash::compute(&hasher.finalize())
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        Ok(ContentHash::compute(&hasher.finalize()))
     }
 }
 
@@ -170,8 +169,7 @@ impl DependencyEdge {
             hasher.update((cond.len() as u64).to_le_bytes());
             hasher.update(cond.as_bytes());
         }
-        ContentHash::compute(&hasher.finalize())
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        Ok(ContentHash::compute(&hasher.finalize()))
     }
 }
 
@@ -380,7 +378,7 @@ fn compute_graph_hash(
         hasher.update(b"root:");
         hasher.update(root.as_bytes());
     }
-    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    Ok(ContentHash::compute(&hasher.finalize()))
 }
 
 /// Compute a content hash for an invalidation receipt (excluding the content_hash field itself).
@@ -405,7 +403,7 @@ fn compute_receipt_hash(
     hasher.update(receipt.new_hash.as_bytes());
     hasher.update(receipt.recomputed_count.to_le_bytes());
     hasher.update(receipt.skipped_count.to_le_bytes());
-    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    Ok(ContentHash::compute(&hasher.finalize()))
 }
 
 /// Compute a content hash for a rollback checkpoint.
@@ -425,7 +423,7 @@ fn compute_checkpoint_hash(
         hasher.update((rid.len() as u64).to_le_bytes());
         hasher.update(rid.as_bytes());
     }
-    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    Ok(ContentHash::compute(&hasher.finalize()))
 }
 
 /// Build a reverse-adjacency index: for each target, collect all sources.
@@ -1038,8 +1036,7 @@ pub fn franken_engine_resolution_manifest() -> ResolutionGraph {
         specifier: specifier.to_string(),
         resolved_path: path.to_string(),
         version: version.to_string(),
-        content_hash: ContentHash::compute(format!("{id}:{version}").as_bytes())
-            .expect("hash computation should not fail"),
+        content_hash: ContentHash::compute(format!("{id}:{version}").as_bytes()),
     };
 
     let nodes = vec![
@@ -1133,8 +1130,7 @@ mod tests {
             specifier: format!("./{id}"),
             resolved_path: format!("/src/{id}.ts"),
             version: "1.0.0".to_string(),
-            content_hash: ContentHash::compute(id.as_bytes())
-                .expect("hash computation should not fail"),
+            content_hash: ContentHash::compute(id.as_bytes()),
         }
     }
 
@@ -2122,14 +2118,14 @@ mod tests {
             specifier: "b".to_string(),
             resolved_path: "/x".to_string(),
             version: "1".to_string(),
-            content_hash: ContentHash::compute(b"same").expect("hash computation should not fail"),
+            content_hash: ContentHash::compute(b"same"),
         };
         let node_b = ModuleNode {
             node_id: "a".to_string(),
             specifier: "|b".to_string(),
             resolved_path: "/x".to_string(),
             version: "1".to_string(),
-            content_hash: ContentHash::compute(b"same").expect("hash computation should not fail"),
+            content_hash: ContentHash::compute(b"same"),
         };
         assert_ne!(node_a.compute_hash(), node_b.compute_hash());
     }
@@ -2187,7 +2183,7 @@ mod tests {
     #[test]
     fn receipt_id_differs_by_operation_type() {
         // Bug: invalidate and remove on same module/state produced same receipt ID.
-        let hash = ContentHash::compute(b"test-graph").expect("hash computation should not fail");
+        let hash = ContentHash::compute(b"test-graph");
         let invalidate_id = generate_receipt_id("invalidate", "mod_a", &hash);
         let remove_id = generate_receipt_id("remove", "mod_a", &hash);
         assert_ne!(invalidate_id, remove_id);

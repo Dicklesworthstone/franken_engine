@@ -1346,14 +1346,7 @@ pub fn write_react_package_cohort_bundle(
     let compat_report_bytes = canonical_json_bytes(&compat_report, &compat_report_path)?;
 
     // Compute compatibility report content hash to bind report content into manifest
-    let compat_report_hash =
-        ContentHash::compute(&compat_report_bytes).map_err(|e| ReactCohortWriteError::Io {
-            path: compat_report_path.display().to_string(),
-            source: io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("hash computation failed: {:?}", e),
-            ),
-        })?;
+    let compat_report_hash = ContentHash::compute(&compat_report_bytes);
 
     let manifest = ReactCohortRunManifest {
         schema_version: REACT_COHORT_RUN_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -1426,9 +1419,9 @@ fn canonicalize_compat_report_for_bundle(report: &mut EcosystemCompatibilityRepo
         result.execution_time_ms = 0;
     }
     report.total_execution_time_ms = 0;
-    report.report_hash = report.compute_hash().unwrap_or_else(|_| {
-        ContentHash::compute(b"fallback_hash").unwrap_or_else(|_| ContentHash::from_bytes([0; 32]))
-    });
+    report.report_hash = report
+        .compute_hash()
+        .unwrap_or_else(|_| ContentHash::compute(b"fallback_hash"));
 }
 
 fn build_cohort_events(

@@ -1915,11 +1915,11 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
         let placeholder = format!("/*__namespace:{namespace_name}__*/");
         let namespace_block = render_namespace_block(
             &namespace_name,
-            &namespace_assignments
-                .remove(&namespace_name)
-                .ok_or_else(|| TsNormalizationError::UnsupportedSyntax {
-                    feature: "namespace processing with missing assignment"
-                })?,
+            &namespace_assignments.remove(&namespace_name).ok_or(
+                TsNormalizationError::UnsupportedSyntax {
+                    feature: "namespace processing with missing assignment",
+                },
+            )?,
         )
         .join("\n");
         rendered = rendered.replacen(&placeholder, &namespace_block, 1);

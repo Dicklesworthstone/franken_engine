@@ -3160,7 +3160,12 @@ pub fn lower_ir2_to_ir3(
         match &op.inner {
             Ir1Op::LoadLiteral { value } => {
                 let dst = alloc_register(&mut register_cursor);
-                lower_literal_to_ir3_optimized(value, dst, &mut ir3.instructions, &mut constant_pool);
+                lower_literal_to_ir3_optimized(
+                    value,
+                    dst,
+                    &mut ir3.instructions,
+                    &mut constant_pool,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
@@ -4724,7 +4729,8 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
-                        let pool_index = push_constant_optimized(&mut constant_pool, &i.to_string());
+                        let pool_index =
+                            push_constant_optimized(&mut constant_pool, &i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -7856,12 +7862,12 @@ fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
     // Thread-local index cache to avoid quadratic behavior
     thread_local! {
         static POOL_INDICES: Mutex<BTreeMap<*mut Vec<String>, BTreeMap<String, u32>>> =
-            Mutex::new(BTreeMap::new());
+            const { Mutex::new(BTreeMap::new()) };
     }
 
     POOL_INDICES.with(|indices| {
         let mut indices = indices.lock().unwrap();
-        let pool_ptr = pool.as_mut_ptr();
+        let pool_ptr = pool as *mut Vec<String>;
         let pool_index = indices.entry(pool_ptr).or_insert_with(|| {
             // Build index for existing pool contents
             pool.iter()

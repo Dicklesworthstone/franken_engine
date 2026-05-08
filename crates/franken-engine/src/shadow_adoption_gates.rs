@@ -548,46 +548,47 @@ impl DocumentationClaimValidator {
         let gated_capabilities = self.gates.get_gated_capabilities();
 
         // Check for autonomous mutation claims
-        if gated_capabilities.contains("autonomous_live_mutation") {
-            if text_lower.contains("autonomous")
-                && (text_lower.contains("mutation")
-                    || text_lower.contains("execute")
-                    || text_lower.contains("modify"))
-            {
-                violations.push(GatedClaimViolation {
-                    claim_type: "autonomous_live_mutation".to_string(),
-                    violation_text: extract_violation_context(&text, &["autonomous", "mutation"]),
-                    gate_id: "no_mock_drill".to_string(),
-                    required_status: GateStatus::Green,
-                    actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
-                });
-            }
+        if gated_capabilities.contains("autonomous_live_mutation")
+            && text_lower.contains("autonomous")
+            && (text_lower.contains("mutation")
+                || text_lower.contains("execute")
+                || text_lower.contains("modify"))
+        {
+            violations.push(GatedClaimViolation {
+                claim_type: "autonomous_live_mutation".to_string(),
+                violation_text: extract_violation_context(text, &["autonomous", "mutation"]),
+                gate_id: "no_mock_drill".to_string(),
+                required_status: GateStatus::Green,
+                actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
+            });
         }
 
         // Check for production daemon claims
-        if gated_capabilities.contains("production_daemon_status") {
-            if text_lower.contains("production") && text_lower.contains("daemon") {
-                violations.push(GatedClaimViolation {
-                    claim_type: "production_daemon_status".to_string(),
-                    violation_text: extract_violation_context(&text, &["production", "daemon"]),
-                    gate_id: "no_mock_drill".to_string(),
-                    required_status: GateStatus::Green,
-                    actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
-                });
-            }
+        if gated_capabilities.contains("production_daemon_status")
+            && text_lower.contains("production")
+            && text_lower.contains("daemon")
+        {
+            violations.push(GatedClaimViolation {
+                claim_type: "production_daemon_status".to_string(),
+                violation_text: extract_violation_context(text, &["production", "daemon"]),
+                gate_id: "no_mock_drill".to_string(),
+                required_status: GateStatus::Green,
+                actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
+            });
         }
 
         // Check for operator replacement claims
-        if gated_capabilities.contains("operator_replacement") {
-            if text_lower.contains("replac") && text_lower.contains("operator") {
-                violations.push(GatedClaimViolation {
-                    claim_type: "operator_replacement".to_string(),
-                    violation_text: extract_violation_context(&text, &["replac", "operator"]),
-                    gate_id: "no_mock_drill".to_string(),
-                    required_status: GateStatus::Green,
-                    actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
-                });
-            }
+        if gated_capabilities.contains("operator_replacement")
+            && text_lower.contains("replac")
+            && text_lower.contains("operator")
+        {
+            violations.push(GatedClaimViolation {
+                claim_type: "operator_replacement".to_string(),
+                violation_text: extract_violation_context(text, &["replac", "operator"]),
+                gate_id: "no_mock_drill".to_string(),
+                required_status: GateStatus::Green,
+                actual_status: self.gates.get_gate_status("no_mock_drill").unwrap().clone(),
+            });
         }
 
         violations
@@ -637,9 +638,11 @@ mod tests {
         assert!(gates.get_gate_status("replay_verification").is_some());
         assert!(gates.get_gate_status("advisory_contract").is_some());
         assert!(gates.get_gate_status("handoff_contracts").is_some());
-        assert!(gates
-            .get_gate_status("mutation_policy_enforcement")
-            .is_some());
+        assert!(
+            gates
+                .get_gate_status("mutation_policy_enforcement")
+                .is_some()
+        );
     }
 
     #[test]

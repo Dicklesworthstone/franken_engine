@@ -1,0 +1,276 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-decision-composer-fixtures.v1",
+  "base_existing_autopilot_output": {
+    "schema_version": "franken-engine.swarm-autopilot-recommendation-bundle.v1",
+    "decision": "pass",
+    "recommendations": [
+      {
+        "recommendation_id": "existing-rec-observe",
+        "action": "observe"
+      }
+    ]
+  },
+  "base_journal_events": [
+    {
+      "source_key": "br_queue",
+      "source_id": "br-queue-base",
+      "source_kind": "br_queue_snapshot_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "collected_epoch_seconds": 1778122920,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/br_queue.json",
+      "error_codes": [],
+      "payload": {
+        "ready": [],
+        "in_progress": {
+          "issues": []
+        }
+      }
+    },
+    {
+      "source_key": "bv_robot_plan",
+      "source_id": "bv-plan-base",
+      "source_kind": "bv_robot_plan_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "collected_epoch_seconds": 1778122921,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/bv_robot_plan.json",
+      "error_codes": [],
+      "payload": {
+        "actionable_tracks": []
+      }
+    },
+    {
+      "source_key": "agent_mail",
+      "source_id": "agent-mail-base",
+      "source_kind": "agent_mail_snapshot_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "collected_epoch_seconds": 1778122922,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/agent_mail.json",
+      "error_codes": [],
+      "payload": {
+        "active_reservations": []
+      }
+    },
+    {
+      "source_key": "rch_status",
+      "source_id": "rch-status-base",
+      "source_kind": "rch_status_snapshot_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "collected_epoch_seconds": 1778122923,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/rch_status.json",
+      "local_fallback_contamination": false,
+      "error_codes": [],
+      "payload": {
+        "remote_ok": true
+      }
+    },
+    {
+      "source_key": "git_state",
+      "source_id": "git-state-base",
+      "source_kind": "git_state_snapshot_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "collected_epoch_seconds": 1778122924,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/git_state.json",
+      "error_codes": [],
+      "payload": {
+        "dirty": false,
+        "lines": [
+          "## main...origin/main"
+        ]
+      }
+    },
+    {
+      "source_key": "artifact_bundles",
+      "source_id": "artifact-bundles-base",
+      "source_kind": "artifact_bundle_snapshot_json",
+      "schema_version": "franken-engine.swarm-autopilot-shadow-source-snapshot.v1",
+      "content_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "collected_epoch_seconds": 1778122925,
+      "freshness_window_seconds": 300,
+      "fresh": true,
+      "degraded": false,
+      "raw_payload_ref": "fixture/artifact_bundles.json",
+      "error_codes": [],
+      "payload": {
+        "no_mock_proof_artifacts": [
+          "artifacts/no_mock/proof.json"
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "healthy_idle_queue",
+      "source_overrides": {},
+      "expected": {
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_action": "observe_idle_queue"
+      }
+    },
+    {
+      "case_id": "active_owned_lane",
+      "source_overrides": {
+        "br_queue": {
+          "payload": {
+            "ready": [],
+            "in_progress": {
+              "issues": [
+                {
+                  "id": "bd-djejh.4",
+                  "assignee": "CyanWolf",
+                  "updated_epoch_seconds": 1778122920
+                }
+              ]
+            }
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "confirmed",
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_action": "continue_owned_lane"
+      }
+    },
+    {
+      "case_id": "stale_reservation",
+      "source_overrides": {
+        "agent_mail": {
+          "degraded": true,
+          "payload": {
+            "active_reservations": [
+              {
+                "path": "scripts/example.sh",
+                "holder": "OldAgent",
+                "stale": true,
+                "expires_epoch_seconds": 1778120000
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_action": "review_stale_reservation"
+      }
+    },
+    {
+      "case_id": "contradictory_ownership",
+      "source_overrides": {
+        "br_queue": {
+          "degraded": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP"
+          ]
+        }
+      },
+      "expected": {
+        "truth_state": "blocked",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_action": "reconcile_bead_ownership",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP"
+      }
+    },
+    {
+      "case_id": "agent_mail_degraded",
+      "source_overrides": {
+        "agent_mail": {
+          "degraded": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+          ]
+        }
+      },
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_action": "refresh_degraded_sources",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"
+      }
+    },
+    {
+      "case_id": "dirty_worktree",
+      "source_overrides": {
+        "git_state": {
+          "payload": {
+            "dirty": true,
+            "lines": [
+              "## main...origin/main",
+              " M scripts/example.sh"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_action": "inspect_dirty_worktree"
+      }
+    },
+    {
+      "case_id": "rch_fallback_contamination",
+      "source_overrides": {
+        "rch_status": {
+          "degraded": true,
+          "local_fallback_contamination": true,
+          "error_codes": [
+            "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+          ],
+          "payload": {
+            "local_fallback": true
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "contaminated",
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_action": "rerun_rch_remote_proof",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"
+      }
+    },
+    {
+      "case_id": "missing_no_mock_proof",
+      "source_overrides": {
+        "artifact_bundles": {
+          "payload": {
+            "no_mock_proof_artifacts": []
+          }
+        }
+      },
+      "expected": {
+        "truth_state": "degraded",
+        "decision": "degraded",
+        "expected_exit_code": 0,
+        "required_action": "request_no_mock_proof",
+        "required_error_code": "FE-SWARM-AUTOPILOT-SHADOW-MISSING-NO-MOCK-PROOF"
+      }
+    }
+  ]
+}

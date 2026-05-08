@@ -14,7 +14,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::deterministic_serde::CanonicalValue;
+use crate::deterministic_serde::{CanonicalValue, SerdeError};
 use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::ContentHash;
 use crate::shadow_decision_composer::{
@@ -30,7 +30,6 @@ use crate::signature_preimage::{
 };
 
 const SHADOW_REPLAY_COMPONENT: &str = "shadow_replay_verifier";
-const REPLAY_VERIFICATION_DOMAIN: &[u8] = b"FrankenEngine.ShadowReplayVerification.v1";
 
 /// Types of drift that can be detected during replay verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,9 +326,8 @@ impl ShadowReplayVerifier {
         if let Some(signing_key) = &self.signing_key {
             let report_hash = self.compute_report_hash(&report)?;
             let signature = sign_preimage(
-                &report_hash.as_bytes(),
-                REPLAY_VERIFICATION_DOMAIN,
                 signing_key,
+                &report_hash.as_bytes(),
             )?;
             report.verification_signature = Some(signature);
         }
@@ -661,7 +659,7 @@ impl ShadowReplayVerifier {
             let event_id_str = row.journal_event_id.to_string();
             if let Some(artifacts) = replay_result.artifact_results.get(&event_id_str) {
                 // Check if decision output matches expected
-                let artifacts_bytes = deterministic_serde::to_canonical_bytes(artifacts)?;
+                let artifacts_bytes = serde_json::to_vec(artifacts).map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", e)))?;
                 let artifacts_hash = ContentHash::compute(&artifacts_bytes);
 
                 // Check for expected output hash in metadata
@@ -676,8 +674,8 @@ impl ShadowReplayVerifier {
                                 if artifacts_hash != expected_hash {
                                     // Create decision ID from event data
                                     let decision_id_bytes = format!("decision_{}", row.journal_event_id).into_bytes();
-                                    let decision_id = EngineObjectId::from_content_hash(
-                                        ContentHash::compute(&decision_id_bytes));
+                                    let decision_id = EngineObjectId::from_bytes(
+                                        *ContentHash::compute(&decision_id_bytes).as_bytes());
 
                                     drift_types.push(DriftType::BehavioralRegression {
                                         decision_id,
@@ -775,7 +773,7 @@ impl ShadowReplayVerifier {
         id_bytes.extend_from_slice(&timestamp_ms.to_le_bytes());
 
         let content_hash = ContentHash::compute(&id_bytes);
-        let object_id = EngineObjectId::from_content_hash(content_hash);
+        let object_id = EngineObjectId::from_bytes(*content_hash.as_bytes());
         Ok(object_id)
     }
 
@@ -785,7 +783,7 @@ impl ShadowReplayVerifier {
         let mut signable_report = report.clone();
         signable_report.verification_signature = None;
 
-        let report_bytes = deterministic_serde::to_canonical_bytes(&signable_report)?;
+        let report_bytes = serde_json::to_vec(&signable_report).map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", e)))?;
         Ok(ContentHash::compute(&report_bytes))
     }
 }
@@ -828,8 +826,8 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, ReplayVerificationError> {
     Ok(bytes)
 }
 
-impl From<deterministic_serde::SerdeError> for ReplayVerificationError {
-    fn from(err: deterministic_serde::SerdeError) -> Self {
+impl From<SerdeError> for ReplayVerificationError {
+    fn from(err: SerdeError) -> Self {
         ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", err))
     }
 }

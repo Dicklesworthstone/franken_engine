@@ -1173,7 +1173,13 @@
         "control_surface_catalog_no_match",
         "control_surface_catalog_drift_fail_closed",
         "control_surface_catalog_duplicate_warning",
-        "control_surface_catalog_shadow_blocked"
+        "control_surface_catalog_shadow_blocked",
+        "control_surface_catalog_remote_proof_resident",
+        "control_surface_catalog_proof_economy_what_if",
+        "control_surface_catalog_build_storm_qos",
+        "control_surface_catalog_worker_toolchain_mismatch",
+        "control_surface_catalog_warm_target_roi",
+        "control_surface_catalog_local_fallback_contaminated"
       ],
       "intended_renderer_repo": "/dp/frankentui",
       "local_tui_renderer": false

@@ -454,7 +454,7 @@ impl SafetyMembrane {
             &batch.entries,
             batch.epoch,
         );
-        if expected_mac != batch.batch_mac {
+        if !batch.batch_mac.constant_time_eq(&expected_mac) {
             return self.record_rejection(
                 batch,
                 MembraneRejectionReason::MacVerificationFailed,
@@ -470,7 +470,7 @@ impl SafetyMembrane {
             for entry in &batch.entries {
                 let expected_entry_mac = compute_entry_mac(session_key, entry, batch.epoch);
                 match entry.entry_mac {
-                    Some(actual) if actual == expected_entry_mac => {}
+                    Some(actual) if actual.constant_time_eq(&expected_entry_mac) => {}
                     Some(_) => {
                         return self.record_rejection(
                             batch,
@@ -2113,7 +2113,12 @@ mod tests {
         };
         let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
         let batch = ts
-            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .build_batch(
+                vec![make_entry(1, b"data")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
             .expect("serde serialization should succeed");
         let expected = compute_entry_mac(&session_key(), &batch.entries[0], test_epoch());
         assert_eq!(batch.entries[0].entry_mac, Some(expected));
@@ -2272,7 +2277,12 @@ mod tests {
         let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
         let mut protocol = established_protocol();
         let mut batch = ts
-            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .build_batch(
+                vec![make_entry(1, b"data")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
             .expect("serde serialization should succeed");
         batch.entries[0].entry_mac = None;
 
@@ -2296,9 +2306,18 @@ mod tests {
         let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
         let mut protocol = established_protocol();
         let mut batch = ts
-            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .build_batch(
+                vec![make_entry(1, b"data")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
             .expect("serde serialization should succeed");
-        batch.entries[0].entry_mac = Some(compute_entry_mac(&[0xCD; 32], &batch.entries[0], test_epoch()));
+        batch.entries[0].entry_mac = Some(compute_entry_mac(
+            &[0xCD; 32],
+            &batch.entries[0],
+            test_epoch(),
+        ));
 
         let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
         assert!(matches!(
@@ -2538,8 +2557,7 @@ mod tests {
     #[test]
     fn region_state_serde_roundtrip_all_variants() {
         for variant in RegionState::ALL {
-            let json =
-                serde_json::to_string(variant).expect("serde serialization should succeed");
+            let json = serde_json::to_string(variant).expect("serde serialization should succeed");
             let back: RegionState =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(

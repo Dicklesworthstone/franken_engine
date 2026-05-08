@@ -67,6 +67,14 @@ run_fixture_case() {
   if [[ -n "$expected_surface" ]]; then
     jq -e --arg surface "$expected_surface" '.recommendations[0].surface_id == $surface' "${output_dir}/swarm_control_surface_intent_plan.json" >/dev/null \
       || record_failure "${case_id} surface mismatch"
+    jq -e '
+      [
+        .recommendations[0].matched_intent_tags[]?,
+        .recommendations[0].matched_symptom_tags[]?
+      ]
+      | all(.[]; type == "string")
+    ' "${output_dir}/swarm_control_surface_intent_plan.json" >/dev/null \
+      || record_failure "${case_id} matched tags must be strings"
   fi
   if [[ -n "$expected_reason" ]]; then
     jq -e --arg code "$expected_reason" 'any(.fail_closed_reasons[]; .code == $code)' "${output_dir}/swarm_control_surface_intent_plan.json" >/dev/null \

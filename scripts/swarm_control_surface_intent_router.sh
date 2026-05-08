@@ -163,7 +163,7 @@ jq -n \
   --slurpfile intent "$intent_json" \
   '
   def arr($x): if $x == null then [] else $x end;
-  def intersect($a; $b): [$a[] as $x | select($b | index($x))];
+  def intersect($a; $b): [$a[] as $x | select($b | index($x)) | $x];
   def expanded_for($tag):
     if ((["remote-proof-residency", "resident-remote-proof", "remote-proof-bundle"] | index($tag)) != null) then
       ["resident-proof", "remote-proof", "bundle-executor", "proof-reuse"]

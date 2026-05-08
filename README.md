@@ -150,7 +150,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. **Note**: De-escalation unimplemented - containment operates as permanent ratchet | App-specific integration | App-specific integration |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped | Not native to runtime | Not native to runtime |
-| Cross-runtime lockstep oracle | Built in Node/Bun differential harness | N/A | N/A |
+| Cross-runtime lockstep oracle | SIMULATED Node/Bun differential harness (planned full pipeline integration) | N/A | N/A |
 
 ## Build Modes
 

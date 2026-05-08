@@ -321,10 +321,35 @@ pub struct ReplayCoverageMetricInput {
 }
 
 impl ReplayCoverageMetricInput {
+    /// Creates a new input from real artifact files and verification commands.
+    /// Recommended for production use to ensure authentic replay coverage.
+    pub fn from_artifacts(
+        code_revision: impl Into<String>,
+        scenario_set: impl Into<String>,
+        artifact_path: impl Into<String>,
+        artifact_hash: impl Into<String>,
+        verification_command: impl Into<String>,
+        decisions: Vec<SecurityDecisionReplayEvidence>,
+    ) -> Self {
+        Self {
+            code_revision: code_revision.into(),
+            freshness_days: 0, // Let caller specify if needed
+            scenario_set: scenario_set.into(),
+            artifact_path: artifact_path.into(),
+            artifact_hash: artifact_hash.into(),
+            verification_command: verification_command.into(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
+            decisions,
+        }
+    }
+
+    #[cfg(test)]
     pub fn representative_fixture(code_revision: impl Into<String>) -> Self {
         Self::verified_fixture(code_revision)
     }
 
+    #[cfg(test)]
     pub fn verified_fixture(code_revision: impl Into<String>) -> Self {
         let scenario_set = "security_critical_allow_deny_escalate_v1";
         Self {
@@ -392,6 +417,7 @@ impl ReplayCoverageMetricInput {
         }
     }
 
+    #[cfg(test)]
     pub fn provisional_fixture(code_revision: impl Into<String>) -> Self {
         Self {
             code_revision: code_revision.into(),
@@ -416,6 +442,7 @@ impl ReplayCoverageMetricInput {
     }
 }
 
+#[cfg(test)]
 fn deterministic_fixture_sha256(scope: &str) -> String {
     format!(
         "sha256:{}",
@@ -423,6 +450,7 @@ fn deterministic_fixture_sha256(scope: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn provisional_replay_evidence(
     decision_id: impl Into<String>,
     decision_kind: SecurityDecisionKind,
@@ -749,6 +777,7 @@ pub const fn coverage_millionths(covered: u64, total: u64) -> u64 {
 }
 
 /// Creates a properly evidenced replay coverage entry for testing (non-fake data)
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn verified_replay_evidence(
     decision_id: impl Into<String>,

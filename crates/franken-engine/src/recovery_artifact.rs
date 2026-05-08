@@ -529,7 +529,7 @@ impl RecoveryArtifactStore {
         // Check signature.
         let expected_sig =
             AuthenticityHash::compute_keyed(&self.signing_key, artifact.artifact_id.as_bytes());
-        if expected_sig != artifact.signature {
+        if !artifact.signature.constant_time_eq(&expected_sig) {
             return Err(VerificationError::SignatureInvalid {
                 details: "signature does not match signing key".to_string(),
             });
@@ -816,6 +816,20 @@ mod tests {
             result,
             Err(VerificationError::SignatureInvalid { .. })
         ));
+    }
+
+    #[test]
+    fn verify_uses_constant_time_signature_comparison() {
+        let source = include_str!("recovery_artifact.rs");
+
+        assert!(
+            source.contains("artifact.signature.constant_time_eq(&expected_sig)"),
+            "recovery artifact verification must compare keyed signatures in constant time"
+        );
+        assert!(
+            !source.contains("expected_sig != artifact.signature"),
+            "keyed recovery signatures must not use early-exit equality"
+        );
     }
 
     #[test]

@@ -220,6 +220,8 @@ pub enum ReactCompileError {
     EmptyInput,
     /// Serialization failed.
     SerializationError(String),
+    /// Hash computation failed.
+    HashError(String),
 }
 
 impl fmt::Display for ReactCompileError {
@@ -232,6 +234,7 @@ impl fmt::Display for ReactCompileError {
             Self::InvalidConfig(msg) => write!(f, "Invalid config: {}", msg),
             Self::EmptyInput => f.write_str("Empty input provided"),
             Self::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+            Self::HashError(msg) => write!(f, "Hash error: {}", msg),
         }
     }
 }
@@ -273,11 +276,13 @@ pub fn compile_react_source(
 
     // Step 5: Compute metadata
     let metadata = ReactCompileMetadata {
-        input_hash: ContentHash::compute(source.as_bytes()),
+        input_hash: ContentHash::compute(source.as_bytes())
+            .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))?,
         config_hash: ContentHash::compute(
             &serde_json::to_vec(config)
                 .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
-        ),
+        )
+        .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))?,
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -383,7 +388,10 @@ fn count_transforms(lowering_result: &ReactLoweringResult) -> BTreeMap<String, u
 }
 
 /// Compute deterministic process hash for compilation.
-fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfig) -> Result<ContentHash, ReactCompileError> {
+fn compute_process_hash(
+    result: &ReactCompileResult,
+    _config: &ReactCompileConfig,
+) -> Result<ContentHash, ReactCompileError> {
     let process_data = serde_json::json!({
         "pipeline": "react_compilation",
         "steps": ["parse", "lower", "generate"],
@@ -393,10 +401,11 @@ fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfi
         "transform_counts": result.metadata.transform_counts
     });
 
-    Ok(ContentHash::compute(
+    ContentHash::compute(
         &serde_json::to_vec(&process_data)
             .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
-    ))
+    )
+    .map_err(|e| ReactCompileError::HashError(format!("{:?}", e)))
 }
 
 // ---------------------------------------------------------------------------

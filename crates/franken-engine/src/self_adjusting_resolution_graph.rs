@@ -117,7 +117,7 @@ impl ModuleNode {
     ///
     /// Uses length-prefixed fields to prevent delimiter-collision attacks
     /// (e.g. `node_id="a|"` + `specifier="b"` vs `node_id="a"` + `specifier="|b"`).
-    pub fn compute_hash(&self) -> ContentHash {
+    pub fn compute_hash(&self) -> Result<ContentHash, Box<dyn std::error::Error>> {
         let mut hasher = Sha256::new();
         hasher.update(b"ModuleNode:v2:");
         hasher.update((self.node_id.len() as u64).to_le_bytes());
@@ -130,6 +130,7 @@ impl ModuleNode {
         hasher.update(self.version.as_bytes());
         hasher.update(self.content_hash.as_bytes());
         ContentHash::compute(&hasher.finalize())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
 
@@ -154,7 +155,7 @@ impl DependencyEdge {
     /// Compute a deterministic hash of this edge.
     ///
     /// Uses length-prefixed fields to prevent delimiter-collision attacks.
-    pub fn compute_hash(&self) -> ContentHash {
+    pub fn compute_hash(&self) -> Result<ContentHash, Box<dyn std::error::Error>> {
         let mut hasher = Sha256::new();
         hasher.update(b"DependencyEdge:v2:");
         hasher.update((self.source.len() as u64).to_le_bytes());
@@ -170,6 +171,7 @@ impl DependencyEdge {
             hasher.update(cond.as_bytes());
         }
         ContentHash::compute(&hasher.finalize())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 }
 
@@ -229,7 +231,8 @@ pub struct ResolutionGraph {
 impl ResolutionGraph {
     /// Recompute the content hash from current state.
     pub fn recompute_hash(&mut self) {
-        self.content_hash = compute_graph_hash(&self.nodes, &self.edges, &self.root_modules);
+        self.content_hash = compute_graph_hash(&self.nodes, &self.edges, &self.root_modules)
+            .expect("graph hash computation should not fail");
     }
 
     /// Return the number of nodes.
@@ -276,7 +279,8 @@ pub struct InvalidationReceipt {
 impl InvalidationReceipt {
     /// Recompute the receipt content hash from its fields.
     pub fn recompute_hash(&mut self) {
-        self.content_hash = compute_receipt_hash(self);
+        self.content_hash =
+            compute_receipt_hash(self).expect("receipt hash computation should not fail");
     }
 }
 
@@ -305,7 +309,8 @@ pub struct RollbackCheckpoint {
 impl RollbackCheckpoint {
     /// Recompute the checkpoint content hash.
     pub fn recompute_hash(&mut self) {
-        self.content_hash = compute_checkpoint_hash(self);
+        self.content_hash =
+            compute_checkpoint_hash(self).expect("checkpoint hash computation should not fail");
     }
 }
 
@@ -352,17 +357,18 @@ fn compute_graph_hash(
     nodes: &BTreeMap<String, ModuleNode>,
     edges: &[DependencyEdge],
     roots: &[String],
-) -> ContentHash {
+) -> Result<ContentHash, Box<dyn std::error::Error>> {
     let mut hasher = Sha256::new();
     hasher.update(b"ResolutionGraph:v1:");
     for (id, node) in nodes {
         hasher.update(b"node:");
         hasher.update(id.as_bytes());
-        hasher.update(node.compute_hash().as_bytes());
+        hasher.update(node.compute_hash()?.as_bytes());
     }
-    let mut sorted_edge_hashes: Vec<ContentHash> = edges.iter()
+    let mut sorted_edge_hashes: Vec<ContentHash> = edges
+        .iter()
         .map(|e| e.compute_hash())
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
     sorted_edge_hashes.sort();
     for h in &sorted_edge_hashes {
         hasher.update(b"edge:");
@@ -374,11 +380,13 @@ fn compute_graph_hash(
         hasher.update(b"root:");
         hasher.update(root.as_bytes());
     }
-    ContentHash::compute(&hasher.finalize())
+    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 /// Compute a content hash for an invalidation receipt (excluding the content_hash field itself).
-fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
+fn compute_receipt_hash(
+    receipt: &InvalidationReceipt,
+) -> Result<ContentHash, Box<dyn std::error::Error>> {
     let mut hasher = Sha256::new();
     hasher.update(b"InvalidationReceipt:v1:");
     hasher.update((receipt.receipt_id.len() as u64).to_le_bytes());
@@ -397,11 +405,13 @@ fn compute_receipt_hash(receipt: &InvalidationReceipt) -> ContentHash {
     hasher.update(receipt.new_hash.as_bytes());
     hasher.update(receipt.recomputed_count.to_le_bytes());
     hasher.update(receipt.skipped_count.to_le_bytes());
-    ContentHash::compute(&hasher.finalize())
+    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 /// Compute a content hash for a rollback checkpoint.
-fn compute_checkpoint_hash(checkpoint: &RollbackCheckpoint) -> ContentHash {
+fn compute_checkpoint_hash(
+    checkpoint: &RollbackCheckpoint,
+) -> Result<ContentHash, Box<dyn std::error::Error>> {
     let mut hasher = Sha256::new();
     hasher.update(b"RollbackCheckpoint:v1:");
     hasher.update((checkpoint.checkpoint_id.len() as u64).to_le_bytes());
@@ -415,7 +425,7 @@ fn compute_checkpoint_hash(checkpoint: &RollbackCheckpoint) -> ContentHash {
         hasher.update((rid.len() as u64).to_le_bytes());
         hasher.update(rid.as_bytes());
     }
-    ContentHash::compute(&hasher.finalize())
+    ContentHash::compute(&hasher.finalize()).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 /// Build a reverse-adjacency index: for each target, collect all sources.
@@ -582,7 +592,9 @@ pub fn build_graph(
     // Validate roots.
     validate_roots(&roots, &node_map)?;
 
-    let content_hash = compute_graph_hash(&node_map, &edges, &roots);
+    let content_hash = compute_graph_hash(&node_map, &edges, &roots).map_err(|e| {
+        ResolutionGraphError::InternalError(format!("hash computation failed: {}", e))
+    })?;
 
     // Generate a deterministic graph_id.
     let graph_id = {
@@ -973,7 +985,9 @@ pub fn verify_checkpoint(
     checkpoint: &RollbackCheckpoint,
 ) -> Result<bool, ResolutionGraphError> {
     // Verify checkpoint self-integrity.
-    let expected = compute_checkpoint_hash(checkpoint);
+    let expected = compute_checkpoint_hash(checkpoint).map_err(|e| {
+        ResolutionGraphError::InternalError(format!("checkpoint hash computation failed: {}", e))
+    })?;
     if expected != checkpoint.content_hash {
         return Err(ResolutionGraphError::SnapshotCorrupted);
     }
@@ -1024,7 +1038,8 @@ pub fn franken_engine_resolution_manifest() -> ResolutionGraph {
         specifier: specifier.to_string(),
         resolved_path: path.to_string(),
         version: version.to_string(),
-        content_hash: ContentHash::compute(format!("{id}:{version}").as_bytes()),
+        content_hash: ContentHash::compute(format!("{id}:{version}").as_bytes())
+            .expect("hash computation should not fail"),
     };
 
     let nodes = vec![
@@ -1118,7 +1133,8 @@ mod tests {
             specifier: format!("./{id}"),
             resolved_path: format!("/src/{id}.ts"),
             version: "1.0.0".to_string(),
-            content_hash: ContentHash::compute(id.as_bytes()),
+            content_hash: ContentHash::compute(id.as_bytes())
+                .expect("hash computation should not fail"),
         }
     }
 
@@ -1960,8 +1976,10 @@ mod tests {
         let n1 = make_node("a");
         let n2 = make_node("a");
         assert_eq!(
-            n1.compute_hash(),
+            n1.compute_hash()
+                .expect("node hash computation should not fail"),
             n2.compute_hash()
+                .expect("node hash computation should not fail")
         );
     }
 
@@ -1971,8 +1989,10 @@ mod tests {
         let mut n2 = make_node("a");
         n2.version = "2.0.0".to_string();
         assert_ne!(
-            n1.compute_hash(),
+            n1.compute_hash()
+                .expect("node hash computation should not fail"),
             n2.compute_hash()
+                .expect("node hash computation should not fail")
         );
     }
 
@@ -1983,8 +2003,10 @@ mod tests {
         let e1 = make_edge("a", "b");
         let e2 = make_edge("a", "b");
         assert_eq!(
-            e1.compute_hash(),
+            e1.compute_hash()
+                .expect("edge hash computation should not fail"),
             e2.compute_hash()
+                .expect("edge hash computation should not fail")
         );
     }
 
@@ -1993,8 +2015,10 @@ mod tests {
         let e1 = make_edge_with_kind("a", "b", EdgeKind::StaticImport);
         let e2 = make_edge_with_kind("a", "b", EdgeKind::DynamicImport);
         assert_ne!(
-            e1.compute_hash(),
+            e1.compute_hash()
+                .expect("edge hash computation should not fail"),
             e2.compute_hash()
+                .expect("edge hash computation should not fail")
         );
     }
 
@@ -2004,7 +2028,8 @@ mod tests {
     fn test_receipt_hash_self_consistent() {
         let graph = simple_graph();
         let receipt = invalidate_module(&graph, "b").expect("serde deserialization should succeed");
-        let expected = compute_receipt_hash(&receipt);
+        let expected =
+            compute_receipt_hash(&receipt).expect("receipt hash computation should not fail");
         assert_eq!(receipt.content_hash, expected);
     }
 
@@ -2097,19 +2122,16 @@ mod tests {
             specifier: "b".to_string(),
             resolved_path: "/x".to_string(),
             version: "1".to_string(),
-            content_hash: ContentHash::compute(b"same"),
+            content_hash: ContentHash::compute(b"same").expect("hash computation should not fail"),
         };
         let node_b = ModuleNode {
             node_id: "a".to_string(),
             specifier: "|b".to_string(),
             resolved_path: "/x".to_string(),
             version: "1".to_string(),
-            content_hash: ContentHash::compute(b"same"),
+            content_hash: ContentHash::compute(b"same").expect("hash computation should not fail"),
         };
-        assert_ne!(
-            node_a.compute_hash(),
-            node_b.compute_hash()
-        );
+        assert_ne!(node_a.compute_hash(), node_b.compute_hash());
     }
 
     #[test]
@@ -2128,8 +2150,12 @@ mod tests {
             conditions: vec![],
         };
         assert_ne!(
-            edge_a.compute_hash().expect("edge hash should not fail"),
-            edge_b.compute_hash().expect("edge hash should not fail")
+            edge_a
+                .compute_hash()
+                .expect("edge hash computation should not fail"),
+            edge_b
+                .compute_hash()
+                .expect("edge hash computation should not fail")
         );
     }
 
@@ -2149,15 +2175,19 @@ mod tests {
             conditions: vec!["a".to_string(), "b".to_string()],
         };
         assert_ne!(
-            edge_a.compute_hash().expect("edge hash should not fail"),
-            edge_b.compute_hash().expect("edge hash should not fail")
+            edge_a
+                .compute_hash()
+                .expect("edge hash computation should not fail"),
+            edge_b
+                .compute_hash()
+                .expect("edge hash computation should not fail")
         );
     }
 
     #[test]
     fn receipt_id_differs_by_operation_type() {
         // Bug: invalidate and remove on same module/state produced same receipt ID.
-        let hash = ContentHash::compute(b"test-graph");
+        let hash = ContentHash::compute(b"test-graph").expect("hash computation should not fail");
         let invalidate_id = generate_receipt_id("invalidate", "mod_a", &hash);
         let remove_id = generate_receipt_id("remove", "mod_a", &hash);
         assert_ne!(invalidate_id, remove_id);

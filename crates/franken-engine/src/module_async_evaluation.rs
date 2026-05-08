@@ -510,6 +510,10 @@ pub struct AsyncModuleEvaluator {
     /// Declared dependency graph, distinct from the mutable pending set used
     /// for wake-up bookkeeping.
     declared_dependencies: BTreeMap<String, BTreeSet<String>>,
+    /// Reverse index for declared dependencies, used by rejection propagation.
+    reverse_declared_dependencies: BTreeMap<String, BTreeSet<String>>,
+    /// Reverse index for currently pending dependencies, used by settlement wakeups.
+    pending_dependents: BTreeMap<String, BTreeSet<String>>,
     /// Rejection linkages computed during evaluation.
     rejection_linkages: Vec<RejectionLinkage>,
     /// Witness events for deterministic replay.
@@ -525,6 +529,8 @@ impl AsyncModuleEvaluator {
         Self {
             states: BTreeMap::new(),
             declared_dependencies: BTreeMap::new(),
+            reverse_declared_dependencies: BTreeMap::new(),
+            pending_dependents: BTreeMap::new(),
             rejection_linkages: Vec::new(),
             witness_events: Vec::new(),
             global_seq: 0,
@@ -552,6 +558,49 @@ impl AsyncModuleEvaluator {
         });
     }
 
+    fn replace_declared_dependencies(&mut self, specifier: &str, dependencies: &[String]) {
+        if let Some(previous) = self.declared_dependencies.insert(
+            specifier.to_string(),
+            dependencies.iter().cloned().collect(),
+        ) {
+            for dependency in previous {
+                remove_reverse_dependency(
+                    &mut self.reverse_declared_dependencies,
+                    &dependency,
+                    specifier,
+                );
+            }
+        }
+
+        for dependency in dependencies {
+            self.reverse_declared_dependencies
+                .entry(dependency.clone())
+                .or_default()
+                .insert(specifier.to_string());
+        }
+    }
+
+    fn index_pending_dependency(&mut self, specifier: &str, dependency: &str) {
+        self.pending_dependents
+            .entry(dependency.to_string())
+            .or_default()
+            .insert(specifier.to_string());
+    }
+
+    fn remove_pending_dependency_index(&mut self, dependency: &str, specifier: &str) {
+        remove_reverse_dependency(&mut self.pending_dependents, dependency, specifier);
+    }
+
+    fn remove_pending_index_for_module(&mut self, specifier: &str) {
+        let Some(state) = self.states.get(specifier) else {
+            return;
+        };
+        let dependencies: Vec<String> = state.pending_dependencies.iter().cloned().collect();
+        for dependency in dependencies {
+            self.remove_pending_dependency_index(&dependency, specifier);
+        }
+    }
+
     /// Register a module for async evaluation.
     pub fn register_module(
         &mut self,
@@ -560,10 +609,8 @@ impl AsyncModuleEvaluator {
         dependencies: &[String],
         evaluation_promise: Option<PromiseHandle>,
     ) {
-        self.declared_dependencies.insert(
-            specifier.to_string(),
-            dependencies.iter().cloned().collect(),
-        );
+        self.replace_declared_dependencies(specifier, dependencies);
+        self.remove_pending_index_for_module(specifier);
 
         let mut state = if has_top_level_await {
             AsyncModuleState::async_pending(
@@ -575,6 +622,7 @@ impl AsyncModuleEvaluator {
         };
 
         let mut awaiting_dependencies = Vec::new();
+        let mut pending_dependencies = Vec::new();
         let mut rejected_dependency = None;
 
         // Track which dependencies are async (need to wait).
@@ -582,6 +630,7 @@ impl AsyncModuleEvaluator {
             if let Some(dep_state) = self.states.get(dep) {
                 if dep_state.phase == AsyncModulePhase::Rejected {
                     state.add_pending_dependency(dep.clone());
+                    pending_dependencies.push(dep.clone());
                     if rejected_dependency.is_none() {
                         rejected_dependency = Some((
                             dep.clone(),
@@ -595,6 +644,7 @@ impl AsyncModuleEvaluator {
                     }
                 } else if !dep_state.phase.is_terminal() {
                     state.add_pending_dependency(dep.clone());
+                    pending_dependencies.push(dep.clone());
                     awaiting_dependencies.push(dep.clone());
                 }
             }
@@ -609,6 +659,9 @@ impl AsyncModuleEvaluator {
         }
 
         self.states.insert(specifier.to_string(), state);
+        for dependency in pending_dependencies {
+            self.index_pending_dependency(specifier, &dependency);
+        }
 
         self.emit_event(
             specifier,
@@ -695,6 +748,7 @@ impl AsyncModuleEvaluator {
             );
             state.add_pending_dependency(dependency.to_string());
         }
+        self.index_pending_dependency(specifier, dependency);
         self.emit_event(specifier, AsyncEvalEventType::DependencySuspended, detail);
         Ok(())
     }
@@ -709,14 +763,16 @@ impl AsyncModuleEvaluator {
 
         // Collect modules that were waiting on this dependency.
         let waiting_modules: Vec<String> = self
-            .states
-            .iter()
-            .filter(|(_, s)| s.pending_dependencies.contains(settled_module))
-            .map(|(k, _)| k.clone())
-            .collect();
+            .pending_dependents
+            .remove(settled_module)
+            .map(|dependents| dependents.into_iter().collect())
+            .unwrap_or_default();
 
         for module_spec in &waiting_modules {
             let all_settled = if let Some(state) = self.states.get_mut(module_spec) {
+                if !state.pending_dependencies.contains(settled_module) {
+                    continue;
+                }
                 state.resolve_dependency(settled_module);
                 state.all_dependencies_settled()
             } else {
@@ -758,6 +814,7 @@ impl AsyncModuleEvaluator {
 
     /// Mark a module's evaluation as successfully settled.
     pub fn settle_module(&mut self, specifier: &str) -> Result<Vec<String>, AsyncEvalError> {
+        self.remove_pending_index_for_module(specifier);
         let suspension_count = {
             let state =
                 self.states
@@ -799,6 +856,7 @@ impl AsyncModuleEvaluator {
         let reason_description = Some(format!("{reason:?}"));
 
         // Mark the module as rejected.
+        self.remove_pending_index_for_module(specifier);
         {
             let state =
                 self.states
@@ -948,15 +1006,14 @@ impl AsyncModuleEvaluator {
 
     fn find_linked_modules(&self, rejected_module: &str) -> Vec<LinkedModule> {
         let mut linked = Vec::new();
-        for specifier in self.states.keys() {
+        let Some(dependents) = self.reverse_declared_dependencies.get(rejected_module) else {
+            return linked;
+        };
+        for specifier in dependents {
             if specifier == rejected_module {
                 continue;
             }
-            if self
-                .declared_dependencies
-                .get(specifier)
-                .is_some_and(|deps| deps.contains(rejected_module))
-            {
+            if self.states.contains_key(specifier) {
                 linked.push(LinkedModule {
                     module_specifier: specifier.clone(),
                     import_bindings: Vec::new(),
@@ -971,15 +1028,14 @@ impl AsyncModuleEvaluator {
         let mut closure = BTreeSet::new();
         let mut worklist = vec![rejected_module.to_string()];
         while let Some(current) = worklist.pop() {
-            for specifier in self.states.keys() {
+            let Some(dependents) = self.reverse_declared_dependencies.get(&current) else {
+                continue;
+            };
+            for specifier in dependents {
                 if closure.contains(specifier.as_str()) || specifier == &current {
                     continue;
                 }
-                if self
-                    .declared_dependencies
-                    .get(specifier)
-                    .is_some_and(|deps| deps.contains(&current))
-                {
+                if self.states.contains_key(specifier) {
                     closure.insert(specifier.clone());
                     worklist.push(specifier.clone());
                 }
@@ -996,6 +1052,22 @@ impl AsyncModuleEvaluator {
     /// Access the witness events.
     pub fn witness_events(&self) -> &[AsyncEvalWitnessEvent] {
         &self.witness_events
+    }
+}
+
+fn remove_reverse_dependency(
+    index: &mut BTreeMap<String, BTreeSet<String>>,
+    dependency: &str,
+    dependent: &str,
+) {
+    let should_remove = if let Some(dependents) = index.get_mut(dependency) {
+        dependents.remove(dependent);
+        dependents.is_empty()
+    } else {
+        false
+    };
+    if should_remove {
+        index.remove(dependency);
     }
 }
 
@@ -1285,6 +1357,72 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(resumable.contains(&"consumer.js".to_string()));
         assert!(eval.states()["consumer.js"].all_dependencies_settled());
+    }
+
+    #[test]
+    fn evaluator_dependency_notification_uses_runtime_pending_index() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("dep.js", false, &[], None);
+        eval.register_module("consumer.js", true, &[], Some(PromiseHandle(2)));
+        eval.suspend_on_dependency("consumer.js", "dep.js", PromiseHandle(1))
+            .expect("serde deserialization should succeed");
+
+        assert!(eval.declared_dependencies["consumer.js"].is_empty());
+        assert!(
+            eval.pending_dependents
+                .get("dep.js")
+                .is_some_and(|dependents| dependents.contains("consumer.js"))
+        );
+
+        let resumable = eval
+            .notify_dependency_settled("dep.js")
+            .expect("serde deserialization should succeed");
+
+        assert_eq!(resumable, vec!["consumer.js".to_string()]);
+        assert!(!eval.pending_dependents.contains_key("dep.js"));
+        assert!(eval.states()["consumer.js"].all_dependencies_settled());
+    }
+
+    #[test]
+    fn evaluator_reregister_refreshes_reverse_dependency_index() {
+        let mut eval = AsyncModuleEvaluator::with_defaults();
+        eval.register_module("old.js", true, &[], Some(PromiseHandle(1)));
+        eval.register_module("new.js", true, &[], Some(PromiseHandle(2)));
+        eval.register_module(
+            "consumer.js",
+            true,
+            &["old.js".to_string()],
+            Some(PromiseHandle(3)),
+        );
+        eval.register_module(
+            "consumer.js",
+            true,
+            &["new.js".to_string()],
+            Some(PromiseHandle(4)),
+        );
+
+        assert!(
+            !eval
+                .reverse_declared_dependencies
+                .get("old.js")
+                .is_some_and(|dependents| dependents.contains("consumer.js"))
+        );
+        assert!(
+            eval.reverse_declared_dependencies
+                .get("new.js")
+                .is_some_and(|dependents| dependents.contains("consumer.js"))
+        );
+
+        let mut bindings = empty_live_bindings();
+        let linkage = eval
+            .reject_module("old.js", &js_error("fail"), &mut bindings)
+            .expect("serde deserialization should succeed");
+
+        assert!(!linkage.transitive_closure.contains("consumer.js"));
+        assert_ne!(
+            eval.states()["consumer.js"].phase,
+            AsyncModulePhase::Rejected
+        );
     }
 
     #[test]

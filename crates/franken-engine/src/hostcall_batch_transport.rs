@@ -681,7 +681,7 @@ impl SafetyMembrane {
                 region_id,
                 offset,
                 length,
-                ..
+                payload_hash,
             } = &entry.payload
             {
                 match regions.get(region_id) {
@@ -702,6 +702,44 @@ impl SafetyMembrane {
                         );
                     }
                     Some(region) => {
+                        if region.region_id != *region_id {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!(
+                                    "region map key {region_id} points to descriptor {}",
+                                    region.region_id
+                                ),
+                                tick,
+                            );
+                        }
+                        if region.session_id != self.session_id {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!(
+                                    "region {region_id} session {} does not match membrane session {}",
+                                    region.session_id, self.session_id
+                                ),
+                                tick,
+                            );
+                        }
+                        let Some(content_hash) = region.content_hash.as_ref() else {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!("region {region_id} is sealed without content hash"),
+                                tick,
+                            );
+                        };
+                        if !payload_hash.constant_time_eq(content_hash) {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!("region {region_id} payload hash mismatch"),
+                                tick,
+                            );
+                        }
                         // Validate that offset + length does not exceed
                         // the region's occupied bytes (bounds check).
                         let Some(end) = offset.checked_add(*length) else {
@@ -1038,10 +1076,11 @@ pub fn compute_entry_mac(
     entry: &BatchEntry,
     epoch: SecurityEpoch,
 ) -> Result<AuthenticityHash, BatchTransportError> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
-        .map_err(|_| BatchTransportError::CryptoInitializationFailed {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key).map_err(|_| {
+        BatchTransportError::CryptoInitializationFailed {
             operation: "HMAC-SHA256 new_from_slice for entry MAC".to_string(),
-        })?;
+        }
+    })?;
     mac.update(b"franken::batch_transport::entry_mac::");
     mac.update(&epoch.as_u64().to_le_bytes());
     mac.update(&entry.sequence.to_le_bytes());
@@ -1057,10 +1096,11 @@ pub fn compute_batch_mac(
     entries: &[BatchEntry],
     epoch: SecurityEpoch,
 ) -> Result<AuthenticityHash, BatchTransportError> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
-        .map_err(|_| BatchTransportError::CryptoInitializationFailed {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key).map_err(|_| {
+        BatchTransportError::CryptoInitializationFailed {
             operation: "HMAC-SHA256 new_from_slice for batch MAC".to_string(),
-        })?;
+        }
+    })?;
     mac.update(b"franken::batch_transport::batch_mac::");
     mac.update(&batch_id.to_le_bytes());
     mac.update(&epoch.as_u64().to_le_bytes());
@@ -1722,7 +1762,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let entries = vec![make_entry(1, b"mac-test")];
         let mac1 = compute_batch_mac(&session_key, 1, &entries, epoch).unwrap();
-        let mac2 = compute_batch_mac(&[0xFF; 32], 1, &entries, epoch);
+        let mac2 = compute_batch_mac(&[0xFF; 32], 1, &entries, epoch).unwrap();
         let v = if mac1 != mac2 {
             BatchTransportVerdict::Pass
         } else {
@@ -1953,6 +1993,64 @@ mod tests {
 
     fn established_protocol() -> SessionProtocolState {
         make_established_protocol_state_for("test-sess")
+    }
+
+    fn make_shared_region_entry(
+        sequence: u64,
+        region_id: u64,
+        offset: u64,
+        length: u64,
+        payload_hash: ContentHash,
+        trace_id: &str,
+    ) -> BatchEntry {
+        let payload = BatchPayload::SharedRegion {
+            region_id,
+            offset,
+            length,
+            payload_hash,
+        };
+        BatchEntry {
+            sequence,
+            content_hash: compute_entry_content_hash(sequence, &payload, trace_id),
+            payload,
+            entry_mac: None,
+            trace_id: trace_id.into(),
+        }
+    }
+
+    fn sealed_region(
+        region_id: u64,
+        session_id: &str,
+        content_hash: Option<ContentHash>,
+    ) -> SharedMemoryRegion {
+        SharedMemoryRegion {
+            region_id,
+            session_id: session_id.into(),
+            capacity_bytes: 128,
+            occupied_bytes: 64,
+            state: RegionState::Sealed,
+            content_hash,
+            allocated_at_tick: 1,
+            sealed_at_tick: Some(2),
+        }
+    }
+
+    fn assert_shared_region_rejected_atomically(ts: &mut BatchTransportState, entry: BatchEntry) {
+        let batch = ts
+            .build_batch(vec![entry], &session_key(), test_epoch(), 100)
+            .expect("forged shared-region batch should build before membrane validation");
+        let credits_before = ts.credit_pool.available();
+        let mut protocol = established_protocol();
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::InvalidRegion,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+        assert_eq!(ts.credit_pool.available(), credits_before);
     }
 
     // --- Config tests ---
@@ -2211,16 +2309,16 @@ mod tests {
     #[test]
     fn batch_mac_deterministic() {
         let entries = vec![make_entry(1, b"test")];
-        let m1 = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
-        let m2 = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+        let m1 = compute_batch_mac(&session_key(), 1, &entries, test_epoch()).unwrap();
+        let m2 = compute_batch_mac(&session_key(), 1, &entries, test_epoch()).unwrap();
         assert_eq!(m1, m2);
     }
 
     #[test]
     fn batch_mac_key_sensitive() {
         let entries = vec![make_entry(1, b"test")];
-        let m1 = compute_batch_mac(&[0xAA; 32], 1, &entries, test_epoch());
-        let m2 = compute_batch_mac(&[0xBB; 32], 1, &entries, test_epoch());
+        let m1 = compute_batch_mac(&[0xAA; 32], 1, &entries, test_epoch()).unwrap();
+        let m2 = compute_batch_mac(&[0xBB; 32], 1, &entries, test_epoch()).unwrap();
         assert_ne!(m1, m2);
     }
 
@@ -2285,7 +2383,7 @@ mod tests {
             trace_id: trace_id.into(),
         };
         let entries = vec![entry];
-        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch()).unwrap();
 
         let mut mac_preimage = Vec::new();
         mac_preimage.extend_from_slice(b"franken::batch_transport::batch_mac::");
@@ -2542,11 +2640,8 @@ mod tests {
                 100,
             )
             .expect("serde serialization should succeed");
-        batch.entries[0].entry_mac = Some(compute_entry_mac(
-            &[0xCD; 32],
-            &batch.entries[0],
-            test_epoch(),
-        ).unwrap());
+        batch.entries[0].entry_mac =
+            Some(compute_entry_mac(&[0xCD; 32], &batch.entries[0], test_epoch()).unwrap());
 
         let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
         assert!(matches!(
@@ -2640,6 +2735,50 @@ mod tests {
             })
         ));
         assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+    }
+
+    #[test]
+    fn submit_batch_rejects_shared_region_descriptor_mismatch_atomically() {
+        let mut ts = default_state();
+        let region_hash = ContentHash::compute(b"region");
+        ts.regions
+            .insert(7, sealed_region(8, "test-sess", Some(region_hash)));
+        let entry = make_shared_region_entry(1, 7, 0, 64, region_hash, "descriptor-mismatch");
+
+        assert_shared_region_rejected_atomically(&mut ts, entry);
+    }
+
+    #[test]
+    fn submit_batch_rejects_shared_region_session_mismatch_atomically() {
+        let mut ts = default_state();
+        let region_hash = ContentHash::compute(b"region");
+        ts.regions
+            .insert(7, sealed_region(7, "foreign-sess", Some(region_hash)));
+        let entry = make_shared_region_entry(1, 7, 0, 64, region_hash, "session-mismatch");
+
+        assert_shared_region_rejected_atomically(&mut ts, entry);
+    }
+
+    #[test]
+    fn submit_batch_rejects_shared_region_missing_hash_atomically() {
+        let mut ts = default_state();
+        let payload_hash = ContentHash::compute(b"payload");
+        ts.regions.insert(7, sealed_region(7, "test-sess", None));
+        let entry = make_shared_region_entry(1, 7, 0, 64, payload_hash, "missing-hash");
+
+        assert_shared_region_rejected_atomically(&mut ts, entry);
+    }
+
+    #[test]
+    fn submit_batch_rejects_shared_region_payload_hash_mismatch_atomically() {
+        let mut ts = default_state();
+        let region_hash = ContentHash::compute(b"region");
+        let payload_hash = ContentHash::compute(b"forged-region");
+        ts.regions
+            .insert(7, sealed_region(7, "test-sess", Some(region_hash)));
+        let entry = make_shared_region_entry(1, 7, 0, 64, payload_hash, "hash-mismatch");
+
+        assert_shared_region_rejected_atomically(&mut ts, entry);
     }
 
     // --- Membrane tests ---
@@ -3277,7 +3416,7 @@ mod tests {
         // Submit 5 batches so the audit trail must truncate to 3
         for i in 1..=5u64 {
             let entries = vec![make_entry(i, b"data")];
-            let batch_mac = compute_batch_mac(&session_key(), i, &entries, epoch);
+            let batch_mac = compute_batch_mac(&session_key(), i, &entries, epoch).unwrap();
             let batch = BatchEnvelope {
                 batch_id: i,
                 session_id: "s".into(),
@@ -3320,7 +3459,7 @@ mod tests {
 
         let entries = vec![make_entry(1, b"test")];
         let epoch42 = SecurityEpoch::from_raw(42);
-        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch42);
+        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch42).unwrap();
         let batch = BatchEnvelope {
             batch_id: 1,
             session_id: "s".into(),
@@ -3359,7 +3498,7 @@ mod tests {
 
         // Submit a batch with 2 entries to a config that only allows 1 -> BatchSizeExceeded
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
-        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch);
+        let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch).unwrap();
         let batch = BatchEnvelope {
             batch_id: 1,
             session_id: "s".into(),
@@ -3443,16 +3582,18 @@ mod tests {
     #[test]
     fn batch_mac_varies_by_epoch() {
         let entries = vec![make_entry(1, b"data")];
-        let m1 = compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(1));
-        let m2 = compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(2));
+        let m1 =
+            compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(1)).unwrap();
+        let m2 =
+            compute_batch_mac(&session_key(), 1, &entries, SecurityEpoch::from_raw(2)).unwrap();
         assert_ne!(m1, m2);
     }
 
     #[test]
     fn batch_mac_varies_by_batch_id() {
         let entries = vec![make_entry(1, b"data")];
-        let m1 = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
-        let m2 = compute_batch_mac(&session_key(), 2, &entries, test_epoch());
+        let m1 = compute_batch_mac(&session_key(), 1, &entries, test_epoch()).unwrap();
+        let m2 = compute_batch_mac(&session_key(), 2, &entries, test_epoch()).unwrap();
         assert_ne!(m1, m2);
     }
 
@@ -3585,7 +3726,7 @@ mod tests {
     #[test]
     fn batch_envelope_serde_roundtrip() {
         let entries = vec![make_entry(1, b"test")];
-        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch());
+        let mac = compute_batch_mac(&session_key(), 1, &entries, test_epoch()).unwrap();
         let envelope = BatchEnvelope {
             batch_id: 1,
             session_id: "sess".into(),

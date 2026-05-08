@@ -486,6 +486,14 @@ pub fn validate_operator_action_command(command: &str) -> CommandValidation {
         }
     }
 
+    // Check for shell escape attempts
+    if command_trimmed.contains("$(") || command_trimmed.contains("`") {
+        return CommandValidation::ForbiddenMutation {
+            command: "shell_escape".to_string(),
+            reason: "Shell command substitution is forbidden in operator actions".to_string(),
+        };
+    }
+
     match detect_forbidden_command_usage(command_trimmed) {
         Ok(Some(ForbiddenCommandUsage { command, direct })) => {
             let reason = if direct {
@@ -502,14 +510,6 @@ pub fn validate_operator_action_command(command: &str) -> CommandValidation {
         Err(reason) => {
             return CommandValidation::ValidationFailed { reason };
         }
-    }
-
-    // Check for shell escape attempts
-    if command_trimmed.contains("$(") || command_trimmed.contains("`") {
-        return CommandValidation::ForbiddenMutation {
-            command: "shell_escape".to_string(),
-            reason: "Shell command substitution is forbidden in operator actions".to_string(),
-        };
     }
 
     // Check for potentially dangerous flags
@@ -696,6 +696,8 @@ mod tests {
             ("cmd\nbr status", "br"),
             ("cmd br", "br"),
             ("cmd;git status", "git"),
+            ("echo ok&&br update bd-x --status closed", "br"),
+            ("true;git commit -m x", "git"),
             ("printf x|rch exec -- cargo check", "rch"),
         ];
 

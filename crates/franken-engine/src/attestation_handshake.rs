@@ -508,10 +508,9 @@ impl PolicyPlaneVerifier {
     ) -> Result<CellAuthorization, HandshakeError> {
         // 1. Verify challenge authenticity before using any of its fields.
         let expected_challenge_signature = self.sign(&challenge.canonical_bytes());
-        if !challenge
+        if !bool::from(challenge
             .policy_plane_signature
-            .ct_eq(&expected_challenge_signature)
-            .into()
+            .ct_eq(&expected_challenge_signature))
         {
             self.emit_failure_event(
                 &response.cell_id,
@@ -587,7 +586,7 @@ impl PolicyPlaneVerifier {
 
         // 6. Verify key binding proof.
         let expected_binding = compute_key_binding(&response.signer_public_key, measurement);
-        if !response.key_binding_proof.ct_eq(&expected_binding).into() {
+        if !bool::from(response.key_binding_proof.ct_eq(&expected_binding)) {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::KeyBindingFailed,
@@ -601,7 +600,7 @@ impl PolicyPlaneVerifier {
         // 7. Verify response signature.
         let expected_sig =
             compute_response_signature(&response.signer_public_key, &response.canonical_bytes());
-        if !response.response_signature.ct_eq(&expected_sig).into() {
+        if !bool::from(response.response_signature.ct_eq(&expected_sig)) {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::SignatureFailed,
@@ -650,10 +649,9 @@ impl PolicyPlaneVerifier {
         })?;
 
         let expected_signature = self.sign(&auth.canonical_bytes());
-        if !auth
+        if !bool::from(auth
             .authorization_signature
-            .ct_eq(&expected_signature)
-            .into()
+            .ct_eq(&expected_signature))
         {
             return Err(HandshakeError::AuthorizationSignatureInvalid);
         }

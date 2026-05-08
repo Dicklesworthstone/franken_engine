@@ -360,13 +360,17 @@ pub struct ArtifactContext {
 
 impl ArtifactContext {
     pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
+        Self::new_with_timestamp(artifact_dir, "2026-01-01T00:00:00Z")
+    }
+
+    pub fn new_with_timestamp(artifact_dir: impl Into<PathBuf>, timestamp: &str) -> Self {
         Self {
             artifact_dir: artifact_dir.into(),
-            run_id: format!("run-{}-{}", COMPONENT, Utc::now().format("%Y%m%dT%H%M%SZ")),
+            run_id: format!("run-{}-{}", COMPONENT, timestamp.replace([':', '-'], "").replace("Z", "")),
             trace_id: "trace.rgc.621b".to_string(),
             decision_id: "decision.rgc.621b".to_string(),
             policy_id: "policy.rgc.621b".to_string(),
-            generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            generated_at_utc: timestamp.to_string(),
             source_commit: "unknown".to_string(),
             toolchain: std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string()),
             command_invocation: "cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- --artifact-dir <path>".to_string(),

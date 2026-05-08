@@ -160,15 +160,29 @@ impl ShadowAdoptionGates {
 
     /// Check if all gates are green
     pub fn all_gates_green(&self) -> bool {
-        self.gates.iter().all(|gate| gate.status == GateStatus::Green)
+        self.gates
+            .iter()
+            .all(|gate| gate.status == GateStatus::Green)
     }
 
     /// Get summary of gate statuses
     pub fn get_summary(&self) -> GateSummary {
         let total = self.gates.len();
-        let green = self.gates.iter().filter(|g| g.status == GateStatus::Green).count();
-        let red = self.gates.iter().filter(|g| g.status == GateStatus::Red).count();
-        let unknown = self.gates.iter().filter(|g| g.status == GateStatus::Unknown).count();
+        let green = self
+            .gates
+            .iter()
+            .filter(|g| g.status == GateStatus::Green)
+            .count();
+        let red = self
+            .gates
+            .iter()
+            .filter(|g| g.status == GateStatus::Red)
+            .count();
+        let unknown = self
+            .gates
+            .iter()
+            .filter(|g| g.status == GateStatus::Unknown)
+            .count();
 
         GateSummary {
             total_gates: total,
@@ -194,11 +208,15 @@ pub struct GateSummary {
 
 /// Forbidden mutation commands that shadow daemon must never execute
 pub const FORBIDDEN_MUTATION_COMMANDS: &[&str] = &[
-    "br", "beads",
-    "rch", "remote_compilation_helper",
+    "br",
+    "beads",
+    "rch",
+    "remote_compilation_helper",
     "git",
-    "agent-mail", "mcp-agent-mail",
-    "worker", "queue",
+    "agent-mail",
+    "mcp-agent-mail",
+    "worker",
+    "queue",
 ];
 
 /// Command validation result
@@ -212,28 +230,133 @@ pub enum CommandValidation {
     ValidationFailed { reason: String },
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ForbiddenCommandUsage {
+    command: &'static str,
+    direct: bool,
+}
+
+fn classify_command_token(
+    token: &str,
+    at_segment_start: bool,
+    saw_separator: bool,
+) -> Option<ForbiddenCommandUsage> {
+    let executable = token.rsplit('/').next().unwrap_or(token);
+    FORBIDDEN_MUTATION_COMMANDS
+        .iter()
+        .copied()
+        .find(|forbidden| executable == *forbidden)
+        .map(|command| ForbiddenCommandUsage {
+            command,
+            direct: at_segment_start && !saw_separator,
+        })
+}
+
+fn finish_command_token(
+    token: &mut String,
+    at_segment_start: &mut bool,
+    saw_separator: bool,
+) -> Option<ForbiddenCommandUsage> {
+    if token.is_empty() {
+        return None;
+    }
+    let usage = classify_command_token(token, *at_segment_start, saw_separator);
+    token.clear();
+    *at_segment_start = false;
+    usage
+}
+
+fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenCommandUsage>, String> {
+    let mut token = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped_in_double_quote = false;
+    let mut at_segment_start = true;
+    let mut saw_separator = false;
+    let mut previous_was_whitespace = true;
+
+    for ch in command.chars() {
+        if in_single_quote {
+            if ch == '\'' {
+                in_single_quote = false;
+            }
+            continue;
+        }
+
+        if in_double_quote {
+            if escaped_in_double_quote {
+                escaped_in_double_quote = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped_in_double_quote = true;
+                continue;
+            }
+            if ch == '"' {
+                in_double_quote = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single_quote = true,
+            '"' => in_double_quote = true,
+            '#' if token.is_empty() && previous_was_whitespace => break,
+            ';' | '|' | '&' | '\n' | '\r' => {
+                if let Some(usage) =
+                    finish_command_token(&mut token, &mut at_segment_start, saw_separator)
+                {
+                    return Ok(Some(usage));
+                }
+                at_segment_start = true;
+                saw_separator = true;
+                previous_was_whitespace = true;
+            }
+            ch if ch.is_whitespace() => {
+                if let Some(usage) =
+                    finish_command_token(&mut token, &mut at_segment_start, saw_separator)
+                {
+                    return Ok(Some(usage));
+                }
+                previous_was_whitespace = true;
+            }
+            _ => {
+                token.push(ch);
+                previous_was_whitespace = false;
+            }
+        }
+    }
+
+    if in_single_quote || in_double_quote {
+        return Err("Unterminated quote in operator action command".to_string());
+    }
+
+    Ok(finish_command_token(
+        &mut token,
+        &mut at_segment_start,
+        saw_separator,
+    ))
+}
+
 /// Validate that a command string is advisory-only and doesn't contain mutations
 pub fn validate_operator_action_command(command: &str) -> CommandValidation {
     let command_trimmed = command.trim();
 
-    // Check for direct forbidden command usage
-    for &forbidden in FORBIDDEN_MUTATION_COMMANDS {
-        if command_trimmed.starts_with(forbidden) {
+    match detect_forbidden_command_usage(command_trimmed) {
+        Ok(Some(ForbiddenCommandUsage { command, direct })) => {
+            let reason = if direct {
+                format!("Direct execution of '{command}' is forbidden in shadow daemon context")
+            } else {
+                format!("Indirect execution of '{command}' is forbidden in shadow daemon context")
+            };
             return CommandValidation::ForbiddenMutation {
-                command: forbidden.to_string(),
-                reason: format!("Direct execution of '{}' is forbidden in shadow daemon context", forbidden),
+                command: command.to_string(),
+                reason,
             };
         }
-
-        // Check for shell command invocation
-        if command_trimmed.contains(&format!(" {} ", forbidden)) ||
-           command_trimmed.contains(&format!(" {}\t", forbidden)) ||
-           command_trimmed.contains(&format!("\t{} ", forbidden)) ||
-           command_trimmed.contains(&format!("\t{}\t", forbidden)) {
-            return CommandValidation::ForbiddenMutation {
-                command: forbidden.to_string(),
-                reason: format!("Indirect execution of '{}' is forbidden in shadow daemon context", forbidden),
-            };
+        Ok(None) => {}
+        Err(reason) => {
+            return CommandValidation::ValidationFailed { reason };
         }
     }
 
@@ -246,10 +369,11 @@ pub fn validate_operator_action_command(command: &str) -> CommandValidation {
     }
 
     // Check for potentially dangerous flags
-    if command_trimmed.contains("--execute") ||
-       command_trimmed.contains("--force") ||
-       command_trimmed.contains("--auto") ||
-       command_trimmed.contains("--yes") {
+    if command_trimmed.contains("--execute")
+        || command_trimmed.contains("--force")
+        || command_trimmed.contains("--auto")
+        || command_trimmed.contains("--yes")
+    {
         return CommandValidation::ForbiddenMutation {
             command: "dangerous_flag".to_string(),
             reason: "Commands with auto-execution flags are forbidden".to_string(),
@@ -281,8 +405,11 @@ impl DocumentationClaimValidator {
 
         // Check for autonomous mutation claims
         if gated_capabilities.contains("autonomous_live_mutation") {
-            if text_lower.contains("autonomous") &&
-               (text_lower.contains("mutation") || text_lower.contains("execute") || text_lower.contains("modify")) {
+            if text_lower.contains("autonomous")
+                && (text_lower.contains("mutation")
+                    || text_lower.contains("execute")
+                    || text_lower.contains("modify"))
+            {
                 violations.push(GatedClaimViolation {
                     claim_type: "autonomous_live_mutation".to_string(),
                     violation_text: extract_violation_context(&text, &["autonomous", "mutation"]),
@@ -366,7 +493,11 @@ mod tests {
         assert!(gates.get_gate_status("replay_verification").is_some());
         assert!(gates.get_gate_status("advisory_contract").is_some());
         assert!(gates.get_gate_status("handoff_contracts").is_some());
-        assert!(gates.get_gate_status("mutation_policy_enforcement").is_some());
+        assert!(
+            gates
+                .get_gate_status("mutation_policy_enforcement")
+                .is_some()
+        );
     }
 
     #[test]
@@ -387,7 +518,8 @@ mod tests {
             validate_operator_action_command("br update task-123"),
             CommandValidation::ForbiddenMutation {
                 command: "br".to_string(),
-                reason: "Direct execution of 'br' is forbidden in shadow daemon context".to_string()
+                reason: "Direct execution of 'br' is forbidden in shadow daemon context"
+                    .to_string()
             }
         );
 
@@ -395,7 +527,8 @@ mod tests {
             validate_operator_action_command("git commit -m 'test'"),
             CommandValidation::ForbiddenMutation {
                 command: "git".to_string(),
-                reason: "Direct execution of 'git' is forbidden in shadow daemon context".to_string()
+                reason: "Direct execution of 'git' is forbidden in shadow daemon context"
+                    .to_string()
             }
         );
 
@@ -404,9 +537,54 @@ mod tests {
             validate_operator_action_command("echo 'test' && br status"),
             CommandValidation::ForbiddenMutation {
                 command: "br".to_string(),
-                reason: "Indirect execution of 'br' is forbidden in shadow daemon context".to_string()
+                reason: "Indirect execution of 'br' is forbidden in shadow daemon context"
+                    .to_string()
             }
         );
+    }
+
+    #[test]
+    fn test_command_validation_shell_separator_bypasses() {
+        let commands = [
+            ("cmd;br status", "br"),
+            ("cmd|br status", "br"),
+            ("cmd||br status", "br"),
+            ("cmd\nbr status", "br"),
+            ("cmd br", "br"),
+            ("cmd;git status", "git"),
+            ("printf x|rch exec -- cargo check", "rch"),
+        ];
+
+        for (command, forbidden) in commands {
+            assert_eq!(
+                validate_operator_action_command(command),
+                CommandValidation::ForbiddenMutation {
+                    command: forbidden.to_string(),
+                    reason: format!(
+                        "Indirect execution of '{forbidden}' is forbidden in shadow daemon context"
+                    )
+                },
+                "should reject command separator bypass: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_command_validation_word_boundaries_allow_advisory_mentions() {
+        let advisory_commands = [
+            "branch status should be reviewed",
+            "grep 'br status' logfile.txt",
+            "print('Use br status to check')",
+            "# br status - run this manually",
+        ];
+
+        for command in advisory_commands {
+            assert_eq!(
+                validate_operator_action_command(command),
+                CommandValidation::Advisory,
+                "should allow non-executed advisory mention: {command}"
+            );
+        }
     }
 
     #[test]
@@ -482,7 +660,7 @@ mod tests {
 
         // Should allow advisory claims
         let violations = validator.validate_documentation_text(
-            "The shadow daemon provides advisory recommendations for operators."
+            "The shadow daemon provides advisory recommendations for operators.",
         );
         assert!(violations.is_empty());
     }

@@ -479,9 +479,7 @@ impl SentinelReport {
         hasher.update((self.cells.len() as u64).to_le_bytes());
         {
             let mut cell_hashes: Vec<ContentHash> =
-                self.cells.iter()
-                    .map(|c| c.compute_hash())
-                    .collect();
+                self.cells.iter().map(|c| c.compute_hash()).collect();
             cell_hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
             for h in &cell_hashes {
                 hasher.update(h.as_bytes());
@@ -1949,5 +1947,91 @@ mod tests {
     fn test_schema_version_format() {
         assert!(CALIBRATION_SENTINEL_SCHEMA_VERSION.starts_with("franken-engine."));
         assert!(CALIBRATION_SENTINEL_SCHEMA_VERSION.ends_with(".v1"));
+    }
+
+    // -------------------------------------------------------------------
+    // Golden snapshot regression test
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn golden_build_report_deterministic_output() {
+        // Create deterministic test data for stable golden snapshot
+        let epoch = SecurityEpoch::from_raw(42);
+
+        // Create a mix of green, yellow, and red cells for comprehensive coverage
+        let cells = vec![
+            make_green_cell("cell-green-1", "latency", PromotionRule::RequireAll),
+            make_yellow_cell("cell-yellow-1", "throughput", PromotionRule::PermitMajority),
+            make_red_cell("cell-red-1", "memory", PromotionRule::FailClosed),
+            make_green_cell("cell-green-2", "cpu", PromotionRule::RequireAll),
+        ];
+
+        // Call the target function to generate the report
+        let report = build_report(epoch, cells);
+
+        // Serialize to JSON with stable formatting (BTreeMap ensures key ordering)
+        let json_output =
+            serde_json::to_string_pretty(&report).expect("SentinelReport should serialize to JSON");
+
+        // Check for golden file update mode
+        let golden_path = "tests/golden/build_report_output.golden";
+
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            // Write new golden file
+            std::fs::write(golden_path, &json_output).expect("Should be able to write golden file");
+            println!("Updated golden file: {}", golden_path);
+        } else {
+            // Read expected output and compare
+            let expected = std::fs::read_to_string(golden_path)
+                .expect("Golden file should exist. Run with UPDATE_GOLDEN=1 to create it.");
+
+            assert_eq!(
+                expected.trim(),
+                json_output.trim(),
+                "build_report output has changed. If this is intentional, run: UPDATE_GOLDEN=1 cargo test"
+            );
+        }
+
+        // Additional validation of output structure (schema validation)
+        assert!(
+            !report.report_id.is_empty(),
+            "report_id should not be empty"
+        );
+        assert_eq!(
+            report.epoch,
+            SecurityEpoch::from_raw(42),
+            "epoch should match input"
+        );
+        assert_eq!(report.cells.len(), 4, "should have 4 cells");
+        assert_eq!(
+            report.decisions.len(),
+            4,
+            "should have 4 decisions matching cells"
+        );
+        assert!(
+            report.green_count >= 2,
+            "should have at least 2 green cells"
+        );
+        assert!(report.red_count >= 1, "should have at least 1 red cell");
+        assert!(
+            !report.content_hash.as_bytes().is_empty(),
+            "content_hash should be populated"
+        );
+
+        // Verify deterministic behavior - same inputs should produce identical output
+        let report2 = build_report(
+            SecurityEpoch::from_raw(42),
+            vec![
+                make_green_cell("cell-green-1", "latency", PromotionRule::RequireAll),
+                make_yellow_cell("cell-yellow-1", "throughput", PromotionRule::PermitMajority),
+                make_red_cell("cell-red-1", "memory", PromotionRule::FailClosed),
+                make_green_cell("cell-green-2", "cpu", PromotionRule::RequireAll),
+            ],
+        );
+
+        assert_eq!(
+            report, report2,
+            "build_report should be deterministic for identical inputs"
+        );
     }
 }

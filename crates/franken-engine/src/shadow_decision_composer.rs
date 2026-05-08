@@ -589,7 +589,11 @@ pub fn normalize_journal_event(
     error_codes.extend(payload_error_codes(&payload));
     dedupe_sorted(&mut error_codes);
 
-    let source_kind = non_empty(event.source_kind.as_deref()).unwrap_or("unknown");
+    let source_kind = event
+        .source_kind
+        .as_deref()
+        .and_then(non_empty)
+        .unwrap_or("unknown");
     let source_key = event
         .source_key
         .as_deref()

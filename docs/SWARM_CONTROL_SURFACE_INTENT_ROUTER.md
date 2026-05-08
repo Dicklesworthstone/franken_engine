@@ -28,15 +28,18 @@ scores each catalog row by tag overlap:
 
 - remote proof residency and artifact retrieval route toward resident
   remote-proof, artifact mirror, and archive export surfaces
-- proof-cost pressure and reuse uncertainty route toward proof-economy policy
-  and replay surfaces
-- build-storm, QoS, and toolchain-pressure language routes toward worker
-  capability/toolchain normalization when no complete build-storm catalog row is
-  available
-- sticky worker, warm-target ROI, and prefetch language route toward warm-target
-  ROI and prefetch surfaces
-- local-fallback contamination routes toward RCH rehabilitation or remote-proof
-  surfaces instead of creating a duplicate proof lane
+- proof-cost pressure routes toward proof-economy policy surfaces, while proof
+  reuse uncertainty routes toward replay-trace normalization surfaces
+- build-storm and QoS pressure route toward build-storm batching when cataloged,
+  with worker capability/toolchain normalization as a secondary recommendation
+- direct worker toolchain mismatch routes toward worker capability/toolchain
+  normalization
+- sticky-worker reuse routes toward sticky-worker warm-target leasing, while
+  warm-target ROI and prefetch language route toward ROI eviction and prefetch
+  advisory surfaces
+- local-fallback contamination routes toward RCH rehabilitation, fail-closed
+  remote-proof classification, or remote-proof surfaces instead of creating a
+  duplicate proof lane
 
 After expansion, scoring is deterministic:
 

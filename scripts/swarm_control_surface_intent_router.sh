@@ -171,16 +171,24 @@ jq -n \
       ["artifact-mirror", "remote-proof", "handoff"]
     elif ((["archive-export", "remote-proof-archive-export"] | index($tag)) != null) then
       ["archive-export", "remote-proof", "handoff"]
-    elif ((["proof-cost-pressure", "proof-reuse-uncertainty", "proof-cost"] | index($tag)) != null) then
-      ["proof-economy", "policy", "cost", "admission", "replay-trace"]
+    elif ((["proof-cost-pressure", "proof-cost", "expensive-proof-lane"] | index($tag)) != null) then
+      ["proof-economy", "policy", "cost", "admission"]
+    elif ((["proof-reuse-uncertainty", "proof-reuse", "proof-economy-replay", "trace-shape-drift"] | index($tag)) != null) then
+      ["proof-economy", "replay-trace", "normalizer", "determinism"]
     elif ((["counterfactual-proof-cost", "scheduler-what-if"] | index($tag)) != null) then
       ["proof-economy", "counterfactual", "what-if", "operator-report"]
-    elif ((["build-storm", "build-storm-qos", "qos-resource-pressure", "toolchain-mismatch"] | index($tag)) != null) then
-      ["worker-capability", "toolchain", "proof-routing", "resource-pressure", "admission"]
-    elif ((["sticky-worker-reuse", "warm-target-roi", "warm-target-reuse", "prefetch-roi"] | index($tag)) != null) then
-      ["warm-target", "roi", "eviction", "prefetch", "locality"]
+    elif ((["build-storm", "build-storm-qos", "build-storm-backlog", "qos-resource-pressure", "resource-pressure"] | index($tag)) != null) then
+      ["build-storm", "qos", "batching", "admission", "resource-pressure", "worker-capability", "toolchain", "proof-routing"]
+    elif ((["toolchain-mismatch", "worker-toolchain-mismatch", "worker-capability-drift"] | index($tag)) != null) then
+      ["worker-capability", "toolchain", "normalizer", "proof-routing", "resource-pressure"]
+    elif ((["sticky-worker-reuse", "sticky-worker", "sticky-worker-lease", "worker-sticky-reuse", "warm-target-lease"] | index($tag)) != null) then
+      ["sticky-worker", "lease", "reuse", "warm-target", "locality"]
+    elif ((["warm-target-roi", "warm-target-reuse"] | index($tag)) != null) then
+      ["warm-target", "roi", "eviction", "locality"]
+    elif ((["prefetch-roi", "warm-target-prefetch", "prefetch-cost"] | index($tag)) != null) then
+      ["warm-target", "prefetch", "roi", "operator-advisory", "locality"]
     elif ((["local-fallback-contamination", "remote-proof-validation-contaminated", "rch-local-fallback"] | index($tag)) != null) then
-      ["rch", "stall", "local-fallback", "remote-proof"]
+      ["rch", "stall", "local-fallback", "remote-proof", "rehabilitation", "remote-proof-classifier", "fail-closed"]
     else
       []
     end;

@@ -1569,7 +1569,8 @@ impl ExecutionOrchestrator {
         if self.adaptive_router.observe_reward(&signal).is_ok() {
             Some(self.adaptive_router.summary())
         } else {
-            None
+            // Fail-closed: return deterministic safe-mode fallback instead of None
+            Some(self.adaptive_router.safe_mode_fallback_summary())
         }
     }
 

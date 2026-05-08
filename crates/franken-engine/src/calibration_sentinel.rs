@@ -479,7 +479,9 @@ impl SentinelReport {
         hasher.update((self.cells.len() as u64).to_le_bytes());
         {
             let mut cell_hashes: Vec<ContentHash> =
-                self.cells.iter().map(|c| c.compute_hash()).collect();
+                self.cells.iter()
+                    .map(|c| c.compute_hash().expect("calibration cell hash should not fail"))
+                    .collect();
             cell_hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
             for h in &cell_hashes {
                 hasher.update(h.as_bytes());
@@ -623,7 +625,8 @@ pub fn create_sentinel(id: &str, kind: SentinelKind, threshold: u64) -> Calibrat
         state: SentinelState::Unknown,
         content_hash: ContentHash::compute(&[]),
     };
-    sentinel.content_hash = sentinel.compute_hash();
+    sentinel.content_hash = sentinel.compute_hash()
+        .expect("calibration sentinel hash computation should not fail");
     sentinel
 }
 
@@ -634,7 +637,8 @@ pub fn update_sentinel(sentinel: &mut CalibrationSentinel, value: u64) -> Sentin
     sentinel.current_value_millionths = value;
     let upper_bound = sentinel.kind.is_upper_bound();
     sentinel.state = classify_state_directed(value, sentinel.threshold_millionths, upper_bound);
-    sentinel.content_hash = sentinel.compute_hash();
+    sentinel.content_hash = sentinel.compute_hash()
+        .expect("calibration sentinel hash computation should not fail");
     sentinel.state
 }
 
@@ -742,7 +746,8 @@ pub fn evaluate_promotion(cell: &ObservabilityCell) -> PromotionDecision {
         suppression_reasons,
         content_hash: ContentHash::compute(&[]),
     };
-    decision.content_hash = decision.compute_hash();
+    decision.content_hash = decision.compute_hash()
+        .expect("calibration decision hash computation should not fail");
     decision
 }
 
@@ -782,7 +787,8 @@ pub fn build_report(epoch: SecurityEpoch, cells: Vec<ObservabilityCell>) -> Sent
         red_count,
         content_hash: ContentHash::compute(&[]),
     };
-    report.content_hash = report.compute_hash();
+    report.content_hash = report.compute_hash()
+        .expect("calibration report hash computation should not fail");
     report
 }
 
@@ -1398,7 +1404,10 @@ mod tests {
     fn test_build_cell_hash_deterministic() {
         let cell1 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
         let cell2 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
-        assert_eq!(cell1.compute_hash(), cell2.compute_hash());
+        assert_eq!(
+            cell1.compute_hash().expect("calibration cell hash should not fail"),
+            cell2.compute_hash().expect("calibration cell hash should not fail")
+        );
     }
 
     // -- evaluate_promotion tests -------------------------------------------
@@ -1820,7 +1829,10 @@ mod tests {
         let s2 = make_sentinel("ch1", SentinelKind::ErrorBound, 500_000, 100_000);
         let c1 = build_cell("same", "domain_a", vec![s1], PromotionRule::FailClosed);
         let c2 = build_cell("same", "domain_b", vec![s2], PromotionRule::FailClosed);
-        assert_ne!(c1.compute_hash(), c2.compute_hash());
+        assert_ne!(
+            c1.compute_hash().expect("calibration cell hash should not fail"),
+            c2.compute_hash().expect("calibration cell hash should not fail")
+        );
     }
 
     // -- Helper function tests ----------------------------------------------

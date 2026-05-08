@@ -96,6 +96,12 @@ Each run writes a signed artifact manifest, structured events, command
 transcript, stdout/stderr captures, and the emitted compile/run/replay artifacts
 under `artifacts/readme_cli_workflow_smoke/<timestamp>/`.
 
+## ⚠️ Advisory Mode
+
+**IMPORTANT**: FrankenEngine automation capabilities currently operate in **advisory-only mode**. The shadow daemon and related automation features provide recommendations and preview commands for manual operator execution only. They **cannot and must not execute** live mutations, production deployments, or automatic operations until adoption gates are explicitly verified green.
+
+See [Shadow Daemon Proof State](docs/SHADOW_DAEMON_PROOF_STATE.md) for current capability restrictions and promotion requirements.
+
 ## Design Philosophy
 
 1. **Runtime ownership over wrappers**

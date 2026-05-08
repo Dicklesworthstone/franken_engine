@@ -714,13 +714,13 @@ impl EcosystemCompatibilityReport {
             >= self.compatibility_threshold_millionths;
 
         // Compute report hash
-        self.report_hash = self.compute_hash();
+        self.report_hash = self.compute_hash()?;
 
         Ok(())
     }
 
     /// Computes a deterministic hash of the report.
-    pub fn compute_hash(&self) -> ContentHash {
+    pub fn compute_hash(&self) -> Result<ContentHash, EcosystemCompatibilityError> {
         let test_results = self
             .test_results
             .iter()
@@ -736,8 +736,11 @@ impl EcosystemCompatibilityReport {
         };
 
         let encoded = serde_json::to_vec(&hash_view)
-            .expect("ecosystem compatibility report hash view must serialize");
-        ContentHash::compute(&encoded)
+            .map_err(|e| EcosystemCompatibilityError::SerializationError {
+                context: "ecosystem compatibility report hash view".to_string(),
+                error: e.to_string(),
+            })?;
+        Ok(ContentHash::compute(&encoded))
     }
 
     /// Returns the percentage of tests that passed.

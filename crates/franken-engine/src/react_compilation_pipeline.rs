@@ -218,6 +218,8 @@ pub enum ReactCompileError {
     InvalidConfig(String),
     /// Empty input provided.
     EmptyInput,
+    /// Serialization failed.
+    SerializationError(String),
 }
 
 impl fmt::Display for ReactCompileError {
@@ -229,6 +231,7 @@ impl fmt::Display for ReactCompileError {
             Self::SourceMapError(msg) => write!(f, "Source map error: {}", msg),
             Self::InvalidConfig(msg) => write!(f, "Invalid config: {}", msg),
             Self::EmptyInput => f.write_str("Empty input provided"),
+            Self::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
         }
     }
 }
@@ -272,7 +275,8 @@ pub fn compile_react_source(
     let metadata = ReactCompileMetadata {
         input_hash: ContentHash::compute(source.as_bytes()),
         config_hash: ContentHash::compute(
-            &serde_json::to_vec(config).expect("serde deserialization should succeed"),
+            &serde_json::to_vec(config)
+                .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
         ),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -316,7 +320,7 @@ pub fn generate_compilation_evidence(
         input_hash: result.metadata.input_hash,
         output_hash: output_spec.code_hash,
         config_hash: result.metadata.config_hash,
-        process_hash: compute_process_hash(result, config),
+        process_hash: compute_process_hash(result, config)?,
     };
 
     ReactCompileEvidence {
@@ -379,7 +383,7 @@ fn count_transforms(lowering_result: &ReactLoweringResult) -> BTreeMap<String, u
 }
 
 /// Compute deterministic process hash for compilation.
-fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfig) -> ContentHash {
+fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfig) -> Result<ContentHash, ReactCompileError> {
     let process_data = serde_json::json!({
         "pipeline": "react_compilation",
         "steps": ["parse", "lower", "generate"],
@@ -389,9 +393,10 @@ fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfi
         "transform_counts": result.metadata.transform_counts
     });
 
-    ContentHash::compute(
-        &serde_json::to_vec(&process_data).expect("serde deserialization should succeed"),
-    )
+    Ok(ContentHash::compute(
+        &serde_json::to_vec(&process_data)
+            .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
+    ))
 }
 
 // ---------------------------------------------------------------------------

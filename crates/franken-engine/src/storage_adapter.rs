@@ -1511,7 +1511,7 @@ mod tests {
 
     #[test]
     fn event_context_valid() {
-        let ctx = EventContext::new("t", "d", "p").expect("serde deserialization should succeed");
+        let ctx = EventContext::new("t", "d", "p").expect("serde serialization should succeed");
         assert_eq!(ctx.trace_id, "t");
         assert_eq!(ctx.decision_id, "d");
         assert_eq!(ctx.policy_id, "p");
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn store_kind_serde_round_trip() {
         let kind = StoreKind::PlasWitness;
-        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
         let back: StoreKind =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, kind);
@@ -1773,7 +1773,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION).unwrap_err();
         assert!(matches!(err, StorageError::MigrationFailed { .. }));
         assert!(err.to_string().contains("downgrade"));
@@ -1850,7 +1850,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::ReplayIndex,
@@ -1859,7 +1859,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::ReplayIndex,
@@ -1868,7 +1868,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let query = StoreQuery {
             key_prefix: Some("run/".to_string()),
@@ -1876,7 +1876,7 @@ mod tests {
         };
         let rows = adapter
             .query(StoreKind::ReplayIndex, &query, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.key.starts_with("run/")));
     }
@@ -1895,7 +1895,7 @@ mod tests {
                 meta,
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::EvidenceIndex,
@@ -1904,7 +1904,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let mut filters = BTreeMap::new();
         filters.insert("env".to_string(), "prod".to_string());
@@ -1914,7 +1914,7 @@ mod tests {
         };
         let rows = adapter
             .query(StoreKind::EvidenceIndex, &query, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, "a");
     }
@@ -1932,7 +1932,7 @@ mod tests {
                     BTreeMap::new(),
                     &context,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("serde serialization should succeed");
         }
         let query = StoreQuery {
             limit: Some(2),
@@ -1940,7 +1940,7 @@ mod tests {
         };
         let rows = adapter
             .query(StoreKind::ReplayIndex, &query, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(rows.len(), 2);
     }
 
@@ -1949,7 +1949,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         let result = adapter
             .get(StoreKind::PolicyCache, "no-such-key", &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(result.is_none());
     }
 
@@ -1958,7 +1958,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         let deleted = adapter
             .delete(StoreKind::PolicyCache, "no-such-key", &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(!deleted);
     }
 
@@ -1967,7 +1967,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         let rows = adapter
             .query(StoreKind::PlasWitness, &StoreQuery::default(), &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(rows.is_empty());
     }
 
@@ -1983,7 +1983,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r2 = adapter
             .put(
                 StoreKind::PolicyCache,
@@ -1992,7 +1992,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(r2.revision > r1.revision);
         assert_eq!(r2.value, vec![2]);
     }
@@ -2115,7 +2115,7 @@ mod tests {
     fn frankensqlite_crud_operations() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let context = ctx();
 
         let record = adapter
@@ -2126,27 +2126,27 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(record.key, "k1");
         assert_eq!(record.value, vec![1, 2]);
 
         let got = adapter
             .get(StoreKind::ReplayIndex, "k1", &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(got.is_some());
         assert_eq!(
-            got.expect("serde deserialization should succeed").value,
+            got.expect("serde serialization should succeed").value,
             vec![1, 2]
         );
 
         let deleted = adapter
             .delete(StoreKind::ReplayIndex, "k1", &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(deleted);
 
         let got = adapter
             .get(StoreKind::ReplayIndex, "k1", &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(got.is_none());
     }
 
@@ -2154,7 +2154,7 @@ mod tests {
     fn frankensqlite_query_limit_zero_errors() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let query = StoreQuery {
             limit: Some(0),
             ..Default::default()
@@ -2172,7 +2172,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let _ = adapter.put(
             StoreKind::ReplayIndex,
             "k".into(),
@@ -2183,7 +2183,7 @@ mod tests {
         let event = adapter
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(event.outcome, "error");
         assert!(event.error_code.is_some());
     }
@@ -2195,7 +2195,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter
             .get(StoreKind::ReplayIndex, "k", &ctx())
             .unwrap_err();
@@ -2209,7 +2209,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter
             .query(StoreKind::ReplayIndex, &StoreQuery::default(), &ctx())
             .unwrap_err();
@@ -2223,7 +2223,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter
             .delete(StoreKind::ReplayIndex, "k", &ctx())
             .unwrap_err();
@@ -2237,7 +2237,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let entries = vec![BatchPutEntry {
             key: "k".into(),
             value: vec![1],
@@ -2253,10 +2253,10 @@ mod tests {
     fn frankensqlite_migrate_downgrade_rejected() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION).unwrap_err();
         assert!(matches!(err, StorageError::MigrationFailed { .. }));
     }
@@ -2265,7 +2265,7 @@ mod tests {
     fn frankensqlite_migrate_skip_rejected() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 5).unwrap_err();
         assert!(matches!(err, StorageError::MigrationFailed { .. }));
     }
@@ -2277,7 +2277,7 @@ mod tests {
             ..Default::default()
         };
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).unwrap_err();
         assert!(matches!(err, StorageError::BackendUnavailable { .. }));
     }
@@ -2286,7 +2286,7 @@ mod tests {
     fn frankensqlite_ensure_schema_version() {
         let backend = MockFrankenSqlite::default();
         let adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(
             adapter
                 .ensure_schema_version(STORAGE_SCHEMA_VERSION)
@@ -2300,7 +2300,7 @@ mod tests {
     fn frankensqlite_backend_name() {
         let backend = MockFrankenSqlite::default();
         let adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(adapter.backend_name(), "frankensqlite");
     }
 
@@ -2308,7 +2308,7 @@ mod tests {
     fn frankensqlite_batch_put_success() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let entries = vec![
             BatchPutEntry {
                 key: "a".into(),
@@ -2323,7 +2323,7 @@ mod tests {
         ];
         let records = adapter
             .put_batch(StoreKind::ReplayIndex, entries, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(records.len(), 2);
     }
 
@@ -2331,7 +2331,7 @@ mod tests {
     fn frankensqlite_invalid_key_on_put() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let err = adapter
             .put(
                 StoreKind::ReplayIndex,
@@ -2348,7 +2348,7 @@ mod tests {
     fn frankensqlite_invalid_key_on_batch() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let entries = vec![
             BatchPutEntry {
                 key: "ok".into(),
@@ -2436,7 +2436,7 @@ mod tests {
             metadata: BTreeMap::new(),
             revision: 42,
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serde serialization should succeed");
         let back: StoreRecord =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, record);
@@ -2453,7 +2453,7 @@ mod tests {
             outcome: "ok".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let back: StorageEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
@@ -2470,7 +2470,7 @@ mod tests {
             state_hash_before: "aabb".into(),
             state_hash_after: "ccdd".into(),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde serialization should succeed");
         let back: MigrationReceipt =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, receipt);
@@ -2483,7 +2483,7 @@ mod tests {
             value: vec![1],
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let back: BatchPutEntry =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, entry);
@@ -2509,7 +2509,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let _ = adapter.put(
             StoreKind::ReplayIndex,
             "".into(),
@@ -2543,7 +2543,7 @@ mod tests {
             metadata_filters: filters,
             limit: Some(10),
         };
-        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&query).expect("serde serialization should succeed");
         let back: StoreQuery =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
@@ -2552,7 +2552,7 @@ mod tests {
     #[test]
     fn event_context_serde_roundtrip() {
         let context = ctx();
-        let json = serde_json::to_string(&context).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&context).expect("serde serialization should succeed");
         let back: EventContext =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(context, back);
@@ -2596,7 +2596,7 @@ mod tests {
             },
         ];
         for error in &errors {
-            let json = serde_json::to_string(error).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(error).expect("serde serialization should succeed");
             let back: StorageError =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(error, &back);
@@ -2615,7 +2615,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r2 = adapter
             .put(
                 StoreKind::PolicyCache,
@@ -2624,13 +2624,13 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(r2.revision > r1.revision);
         // Get should return latest value
         let got = adapter
             .get(StoreKind::PolicyCache, "key-a", &context)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed")
+            .expect("serde serialization should succeed");
         assert_eq!(got.value, vec![2]);
     }
 
@@ -2650,7 +2650,7 @@ mod tests {
                 meta_a.clone(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::EvidenceIndex,
@@ -2659,7 +2659,7 @@ mod tests {
                 meta_b,
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::EvidenceIndex,
@@ -2668,7 +2668,7 @@ mod tests {
                 meta_a,
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         // Prefix + metadata filter
         let mut filters = BTreeMap::new();
         filters.insert("env".to_string(), "prod".to_string());
@@ -2679,7 +2679,7 @@ mod tests {
         };
         let results = adapter
             .query(StoreKind::EvidenceIndex, &query, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].key, "replay/001");
     }
@@ -2697,7 +2697,7 @@ mod tests {
                     BTreeMap::new(),
                     &context,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("serde serialization should succeed");
         }
         let query = StoreQuery {
             limit: Some(1),
@@ -2705,7 +2705,7 @@ mod tests {
         };
         let results = adapter
             .query(StoreKind::ReplayIndex, &query, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(results.len(), 1);
     }
 
@@ -2720,7 +2720,7 @@ mod tests {
             state_hash_before: "0000000000000000".to_string(),
             state_hash_after: "0000000000000000".to_string(),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde serialization should succeed");
         let back: MigrationReceipt =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
@@ -2738,7 +2738,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let back: StorageEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.error_code.is_none());
@@ -2793,7 +2793,7 @@ mod tests {
             StoreKind::IfcProvenance,
             StoreKind::SpecializationIndex,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let back: StoreKind =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind, "StoreKind::{kind:?}");
@@ -2819,7 +2819,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         let receipt = adapter
             .migrate_to(STORAGE_SCHEMA_VERSION)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(receipt.from_version, STORAGE_SCHEMA_VERSION);
         assert_eq!(receipt.to_version, STORAGE_SCHEMA_VERSION);
     }
@@ -2836,7 +2836,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::PolicyCache,
@@ -2845,15 +2845,15 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r1 = adapter
             .get(StoreKind::ReplayIndex, "shared-key", &context)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed")
+            .expect("serde serialization should succeed");
         let r2 = adapter
             .get(StoreKind::PolicyCache, "shared-key", &context)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed")
+            .expect("serde serialization should succeed");
         assert_eq!(r1.value, vec![1]);
         assert_eq!(r2.value, vec![2]);
     }
@@ -2881,10 +2881,10 @@ mod tests {
         ];
         adapter
             .put_batch(StoreKind::BenchmarkLedger, entries, &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let rows = adapter
             .query(StoreKind::BenchmarkLedger, &StoreQuery::default(), &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].key, "batch/a");
         assert_eq!(rows[1].key, "batch/b");
@@ -2903,13 +2903,13 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .delete(StoreKind::ReplayIndex, "only", &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let rows = adapter
             .query(StoreKind::ReplayIndex, &StoreQuery::default(), &context)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(rows.is_empty());
     }
 
@@ -2943,7 +2943,7 @@ mod tests {
             outcome: "error".into(),
             error_code: Some("FE-STOR-0002".into()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let back: StorageEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.error_code, Some("FE-STOR-0002".into()));
@@ -2961,7 +2961,7 @@ mod tests {
             metadata: meta,
             revision: 1,
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serde serialization should succeed");
         let back: StoreRecord =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.metadata.len(), 2);
@@ -2972,10 +2972,10 @@ mod tests {
     fn frankensqlite_migrate_success_receipt() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let receipt = adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(receipt.backend, "frankensqlite");
         assert_eq!(receipt.from_version, STORAGE_SCHEMA_VERSION);
         assert_eq!(receipt.to_version, STORAGE_SCHEMA_VERSION + 1);
@@ -2986,7 +2986,7 @@ mod tests {
     fn frankensqlite_events_accessor() {
         let backend = MockFrankenSqlite::default();
         let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(adapter.events().is_empty());
         adapter
             .put(
@@ -2996,7 +2996,7 @@ mod tests {
                 BTreeMap::new(),
                 &ctx(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(adapter.events().len(), 1);
         assert_eq!(adapter.events()[0].event, "put");
         assert_eq!(adapter.events()[0].outcome, "ok");
@@ -3014,8 +3014,8 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&adapter).expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
+        let json = serde_json::to_string(&adapter).expect("serde serialization should succeed");
         let back: InMemoryStorageAdapter =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
@@ -3164,7 +3164,7 @@ mod tests {
         let mut adapter = InMemoryStorageAdapter::new();
         let results = adapter
             .put_batch(StoreKind::ReplayIndex, vec![], &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(results.is_empty());
     }
 
@@ -3190,7 +3190,7 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         adapter
             .put(
                 StoreKind::PolicyCache,
@@ -3199,10 +3199,10 @@ mod tests {
                 BTreeMap::new(),
                 &context,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let receipt = adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(receipt.stores_touched.contains(&StoreKind::ReplayIndex));
         assert!(receipt.stores_touched.contains(&StoreKind::PolicyCache));
         assert_eq!(receipt.records_touched, 2);

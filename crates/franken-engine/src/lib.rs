@@ -495,7 +495,7 @@ pub mod transport_certificate_ledger;
 pub mod tropical_semiring;
 pub mod trust_card;
 pub mod trust_economics;
-pub mod trust_zone;
+pub use capability::trust_zone;
 pub mod ts_module_resolution;
 pub mod ts_normalization;
 pub mod ts_normalization_evidence;

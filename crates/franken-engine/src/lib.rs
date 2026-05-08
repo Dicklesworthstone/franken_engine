@@ -423,6 +423,8 @@ pub mod session_hostcall_channel;
 pub mod shadow_ablation_engine;
 pub mod shadow_decision_composer;
 pub mod shadow_evidence_journal;
+pub mod shadow_replay_fixtures;
+pub mod shadow_replay_verifier;
 pub mod shape_transition_algebra;
 pub mod shipped_path_matrix;
 pub mod shipped_path_parity_verifier;

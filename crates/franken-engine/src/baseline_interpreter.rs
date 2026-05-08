@@ -2506,8 +2506,8 @@ impl InterpreterCore {
     fn jit_record_loop_iteration(&mut self, instruction_index: usize) -> bool {
         let count = self.jit_loop_iteration_counts.increment(instruction_index);
 
-        // Check if threshold crossed for hot loop tier promotion
-        count >= self.jit_hot_threshold
+        // Check if threshold crossed for hot loop tier promotion (edge-triggered)
+        count == self.jit_hot_threshold
     }
 
     /// Get the current call count for a function.

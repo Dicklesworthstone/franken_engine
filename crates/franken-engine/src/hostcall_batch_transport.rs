@@ -1930,18 +1930,6 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
         })
         .collect();
     let inv_json = serde_json::to_string_pretty(&inventory).map_err(std::io::Error::other)?;
-    std::fs::write(dir.join("batch_transport_inventory.json"), inv_json)?;
-
-    let manifest = serde_json::json!({
-        "schema": "batch_transport_evidence_v1",
-        "specimen_count": result.specimen_count,
-        "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
-        "all_pass": result.all_pass,
-        "pass_count": result.pass_count,
-        "content_hash": result.content_hash.to_hex(),
-    });
-    let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
-    std::fs::write(dir.join("batch_transport_manifest.json"), man_json)?;
 
     let mut events = String::new();
     for spec in &corpus {
@@ -1954,7 +1942,6 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
         events.push_str(&serde_json::to_string(&line).map_err(std::io::Error::other)?);
         events.push('\n');
     }
-    std::fs::write(dir.join("batch_transport_events.jsonl"), events)?;
 
     let mut cmds = String::new();
     cmds.push_str("# Batch Transport Evidence Commands\n");
@@ -1962,7 +1949,41 @@ pub fn write_batch_transport_evidence_bundle(dir: &std::path::Path) -> std::io::
     cmds.push_str(
         "cargo test -p frankenengine-engine --test hostcall_batch_transport_integration\n",
     );
-    std::fs::write(dir.join("batch_transport_commands.txt"), cmds)?;
+
+    // Write to temporary files first, then atomically rename into place
+    std::fs::write(dir.join("batch_transport_inventory.json.tmp"), inv_json)?;
+    std::fs::write(dir.join("batch_transport_events.jsonl.tmp"), events)?;
+    std::fs::write(dir.join("batch_transport_commands.txt.tmp"), cmds)?;
+
+    // Atomic rename into place
+    std::fs::rename(
+        dir.join("batch_transport_inventory.json.tmp"),
+        dir.join("batch_transport_inventory.json"),
+    )?;
+    std::fs::rename(
+        dir.join("batch_transport_events.jsonl.tmp"),
+        dir.join("batch_transport_events.jsonl"),
+    )?;
+    std::fs::rename(
+        dir.join("batch_transport_commands.txt.tmp"),
+        dir.join("batch_transport_commands.txt"),
+    )?;
+
+    // Write manifest last as completion marker
+    let manifest = serde_json::json!({
+        "schema": "batch_transport_evidence_v1",
+        "specimen_count": result.specimen_count,
+        "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+        "all_pass": result.all_pass,
+        "pass_count": result.pass_count,
+        "content_hash": result.content_hash.to_hex(),
+    });
+    let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
+    std::fs::write(dir.join("batch_transport_manifest.json.tmp"), man_json)?;
+    std::fs::rename(
+        dir.join("batch_transport_manifest.json.tmp"),
+        dir.join("batch_transport_manifest.json"),
+    )?;
 
     Ok(())
 }

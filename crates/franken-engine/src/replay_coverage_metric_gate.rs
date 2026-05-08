@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::disruptive_floor_metric_gate::{
     DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId, MetricArtifact,
 };
+#[cfg(test)]
 use crate::hash_tiers::ContentHash;
 use crate::proof_artifact::validate_sha256;
 

@@ -55,6 +55,7 @@ pub const AMBIENT_MOCK_GUARD_REGRESSION_BEAD_ID: &str = "bd-2muur.3.3";
 pub const AMBIENT_MOCK_GUARD_REGRESSION_POLICY_ID: &str =
     "frankenengine.control-plane-mocks.guard-regression.v1";
 pub const AMBIENT_MOCK_GUARD_REGRESSION_SEED: &str = "ambient-mock-guard-regression-fixtures-v1";
+const CONTROL_PLANE_MOCK_SHARED_BUNDLE_LOCK_FILE: &str = ".control_plane_mock_bundle.lock";
 
 /// Scanner version for the source-derived inventory. Bump this when the
 /// scanner logic changes to invalidate cached or serialized inventories.
@@ -1112,10 +1113,14 @@ fn control_plane_mock_inventory_json_bytes<T: Serialize>(
     })
 }
 
+fn control_plane_mock_shared_bundle_lock_path(out_dir: &Path) -> PathBuf {
+    out_dir.join(CONTROL_PLANE_MOCK_SHARED_BUNDLE_LOCK_FILE)
+}
+
 fn acquire_control_plane_mock_inventory_bundle_lock(
     out_dir: &Path,
 ) -> Result<ControlPlaneMockInventoryBundleLock, ControlPlaneMockInventoryBundleError> {
-    let lock_path = out_dir.join(".control_plane_mock_inventory.lock");
+    let lock_path = control_plane_mock_shared_bundle_lock_path(out_dir);
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1539,7 +1544,7 @@ pub mod mocks {
 fn acquire_ambient_mock_guard_bundle_lock(
     out_dir: &Path,
 ) -> Result<AmbientMockGuardBundleLock, AmbientMockGuardError> {
-    let lock_path = out_dir.join(".ambient_mock_guard.lock");
+    let lock_path = control_plane_mock_shared_bundle_lock_path(out_dir);
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -2999,7 +3004,7 @@ fn render_orchestrator_context_refactor_step_log(
 fn acquire_orchestrator_context_refactor_bundle_lock(
     out_dir: &Path,
 ) -> Result<OrchestratorContextRefactorBundleLock, OrchestratorContextRefactorError> {
-    let lock_path = out_dir.join(".orchestrator_context_refactor.lock");
+    let lock_path = control_plane_mock_shared_bundle_lock_path(out_dir);
     match fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -4455,6 +4460,37 @@ mod tests {
         assert!(replay_command.contains(root.to_str().expect("utf-8 workspace root")));
 
         let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(out_dir);
+    }
+
+    #[test]
+    fn control_plane_bundle_writers_share_output_lock() {
+        let out_dir = unique_temp_dir("control-plane-shared-bundle-lock");
+        fs::create_dir_all(&out_dir).expect("create bundle dir");
+
+        let inventory_lock = acquire_control_plane_mock_inventory_bundle_lock(&out_dir)
+            .expect("inventory writer should acquire shared bundle lock");
+        assert!(matches!(
+            acquire_ambient_mock_guard_bundle_lock(&out_dir),
+            Err(AmbientMockGuardError::Busy { path })
+                if path.ends_with(CONTROL_PLANE_MOCK_SHARED_BUNDLE_LOCK_FILE)
+        ));
+        assert!(matches!(
+            acquire_orchestrator_context_refactor_bundle_lock(&out_dir),
+            Err(OrchestratorContextRefactorError::Busy { path })
+                if path.ends_with(CONTROL_PLANE_MOCK_SHARED_BUNDLE_LOCK_FILE)
+        ));
+        drop(inventory_lock);
+
+        let ambient_lock = acquire_ambient_mock_guard_bundle_lock(&out_dir)
+            .expect("ambient writer should acquire shared bundle lock after release");
+        assert!(matches!(
+            acquire_control_plane_mock_inventory_bundle_lock(&out_dir),
+            Err(ControlPlaneMockInventoryBundleError::Busy { path })
+                if path.ends_with(CONTROL_PLANE_MOCK_SHARED_BUNDLE_LOCK_FILE)
+        ));
+        drop(ambient_lock);
+
         let _ = fs::remove_dir_all(out_dir);
     }
 

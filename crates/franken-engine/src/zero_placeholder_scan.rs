@@ -68,6 +68,7 @@ impl ZeroPlaceholderSubsystem {
 #[serde(rename_all = "snake_case")]
 pub enum ZeroPlaceholderStatus {
     OpenPlaceholder,
+    Blocked,
     FailClosed,
     Resolved,
 }
@@ -76,6 +77,7 @@ impl ZeroPlaceholderStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::OpenPlaceholder => "open_placeholder",
+            Self::Blocked => "blocked",
             Self::FailClosed => "fail_closed",
             Self::Resolved => "resolved",
         }
@@ -164,6 +166,7 @@ impl ZeroPlaceholderInventory {
                         ZeroPlaceholderStatus::OpenPlaceholder => {
                             open_placeholder_finding_count += 1;
                         }
+                        ZeroPlaceholderStatus::Blocked => {}
                         ZeroPlaceholderStatus::FailClosed => {
                             fail_closed_finding_count += 1;
                         }
@@ -1108,6 +1111,7 @@ fn map_lowering_status(status: LoweringGapStatus) -> ZeroPlaceholderStatus {
 fn severity_for_status(status: ZeroPlaceholderStatus) -> ZeroPlaceholderSeverity {
     match status {
         ZeroPlaceholderStatus::OpenPlaceholder => ZeroPlaceholderSeverity::High,
+        ZeroPlaceholderStatus::Blocked => ZeroPlaceholderSeverity::Medium,
         ZeroPlaceholderStatus::FailClosed => ZeroPlaceholderSeverity::Medium,
         ZeroPlaceholderStatus::Resolved => ZeroPlaceholderSeverity::Low,
     }
@@ -1203,6 +1207,7 @@ mod tests {
     fn zero_placeholder_status_serde_round_trip() {
         for status in [
             ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::Blocked,
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
@@ -1421,9 +1426,11 @@ mod tests {
         assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
         assert!(finding.source_reference.contains("lowering_pipeline"));
         assert!(finding.source_reference.contains("baseline_interpreter"));
-        assert!(finding
-            .observed_behavior
-            .contains("dedicated IR3 iterator instructions"));
+        assert!(
+            finding
+                .observed_behavior
+                .contains("dedicated IR3 iterator instructions")
+        );
     }
 
     #[test]
@@ -1768,6 +1775,7 @@ mod tests {
     fn zero_placeholder_status_serde_roundtrip() {
         for s in [
             ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::Blocked,
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
@@ -1920,6 +1928,7 @@ mod tests {
     fn status_serde_json_value_matches_as_str() {
         for status in [
             ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::Blocked,
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
@@ -1965,6 +1974,7 @@ mod tests {
     fn status_ordering_is_total() {
         let statuses = [
             ZeroPlaceholderStatus::OpenPlaceholder,
+            ZeroPlaceholderStatus::Blocked,
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ];
@@ -2217,11 +2227,13 @@ mod tests {
         assert_eq!(events[2].finding_id.as_deref(), Some("evt::b"));
         assert_eq!(events[3].event, "inventory_completed");
         assert_eq!(events[3].outcome, "completed");
-        assert!(events[3]
-            .detail
-            .as_ref()
-            .expect("serde deserialization should succeed")
-            .contains("2 findings"));
+        assert!(
+            events[3]
+                .detail
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .contains("2 findings")
+        );
     }
 
     #[test]
@@ -2235,11 +2247,13 @@ mod tests {
         assert_eq!(events.len(), 2, "start + end, no finding events");
         assert_eq!(events[0].event, "inventory_started");
         assert_eq!(events[1].event, "inventory_completed");
-        assert!(events[1]
-            .detail
-            .as_ref()
-            .expect("serde deserialization should succeed")
-            .contains("0 findings"));
+        assert!(
+            events[1]
+                .detail
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .contains("0 findings")
+        );
     }
 
     #[test]

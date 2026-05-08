@@ -25,8 +25,6 @@ use crate::shadow_evidence_journal::{
 };
 use crate::signature_preimage::{Signature, SigningKey, sign_preimage};
 
-const SHADOW_REPLAY_COMPONENT: &str = "shadow_replay_verifier";
-
 /// Types of drift that can be detected during replay verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DriftType {

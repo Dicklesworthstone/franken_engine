@@ -131,6 +131,9 @@ where
         limit: None,
     };
     let mut rows = storage.query_typed::<ShadowEvidenceJournalEntry>(&query, context)?;
+    for row in &rows {
+        validated_payload_from_entry(row)?;
+    }
     rows.sort_by(entry_order);
     Ok(rows)
 }
@@ -151,6 +154,9 @@ where
         limit: None,
     };
     let mut rows = storage.query_typed::<ShadowEvidenceJournalEntry>(&query, context)?;
+    for row in &rows {
+        validated_payload_from_entry(row)?;
+    }
     rows.sort_by(entry_order);
     Ok(rows)
 }
@@ -308,6 +314,7 @@ fn append_to_entry(
 fn export_row_from_entry(
     entry: ShadowEvidenceJournalEntry,
 ) -> StorageResult<ShadowEvidenceJournalExportRow> {
+    let normalized_payload = validated_payload_from_entry(&entry)?;
     Ok(ShadowEvidenceJournalExportRow {
         journal_event_id: entry.journal_event_id,
         bead_id: entry.bead_id,
@@ -318,10 +325,7 @@ fn export_row_from_entry(
         sequence_id: entry.sequence_id,
         payload_content_hash: entry.payload_content_hash,
         normalized_payload_path: entry.normalized_payload_path,
-        normalized_payload: parse_json_value(
-            &entry.normalized_payload_json,
-            "normalized_payload_json",
-        )?,
+        normalized_payload,
         normalized_payload_hash: entry.normalized_payload_hash,
         raw_evidence_hashes: parse_hash_array(&entry.raw_evidence_hashes_json)?,
         freshness_window_ms: entry.freshness_window_ms,
@@ -683,6 +687,22 @@ fn parse_json_value(input: &str, field: &str) -> StorageResult<Value> {
     serde_json::from_str(input).map_err(|err| integrity(format!("failed to parse {field}: {err}")))
 }
 
+fn validated_payload_from_entry(entry: &ShadowEvidenceJournalEntry) -> StorageResult<Value> {
+    let normalized_payload =
+        parse_json_value(&entry.normalized_payload_json, "normalized_payload_json")?;
+    let normalized_payload_json = canonical_json_string(&normalized_payload)?;
+    let computed_hash = sha256_hex(normalized_payload_json.as_bytes());
+    let payload_hash = normalize_sha256(&entry.payload_content_hash)?;
+    let normalized_hash = normalize_sha256(&entry.normalized_payload_hash)?;
+    if payload_hash != computed_hash || normalized_hash != computed_hash {
+        return Err(integrity(format!(
+            "stored payload hash mismatch for journal event {}",
+            entry.journal_event_id
+        )));
+    }
+    Ok(normalized_payload)
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -936,5 +956,28 @@ mod tests {
             .expect_err("unknown parent links must fail closed");
         assert!(matches!(err, StorageError::IntegrityViolation { .. }));
         assert!(err.to_string().contains("parent event 42 does not exist"));
+    }
+
+    #[test]
+    fn read_refuses_stored_payload_hash_mismatch() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let context = ctx();
+        let mut entry = append_to_entry(source_seed(), 0).expect("source entry should build");
+        entry.normalized_payload_json = canonical_json_string(
+            &json!({"schema_version": "franken-engine.shadow-source.v1", "beads": []}),
+        )
+        .expect("alternate payload should serialize");
+
+        adapter
+            .put_typed(&entry, &context)
+            .expect("typed shape validation should allow the corrupted fixture");
+        let err = read_all_events(&mut adapter, &context)
+            .expect_err("stored content-hash mismatches must fail closed");
+
+        assert!(matches!(err, StorageError::IntegrityViolation { .. }));
+        assert!(
+            err.to_string()
+                .contains("stored payload hash mismatch for journal event 0")
+        );
     }
 }

@@ -4004,8 +4004,12 @@ pub fn lower_ir2_to_ir3(
                 let dst = alloc_register(&mut register_cursor);
                 if part_regs.is_empty() {
                     // Empty template literal => empty string.
-                    ir3.instructions
-                        .push(Ir3Instruction::Move { dst, src: dst });
+                    lower_literal_to_ir3(
+                        &Ir1Literal::String(String::new()),
+                        dst,
+                        &mut ir3.instructions,
+                        &mut ir3.constant_pool,
+                    );
                 } else {
                     // Copy parts into contiguous registers so RegRange is valid.
                     let start_reg = register_cursor;
@@ -4924,8 +4928,12 @@ pub fn lower_ir2_to_ir3(
 
                     let dst = alloc_register(&mut fn_reg);
                     if part_regs.is_empty() {
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst, src: dst });
+                        lower_literal_to_ir3(
+                            &Ir1Literal::String(String::new()),
+                            dst,
+                            &mut ir3.instructions,
+                            &mut ir3.constant_pool,
+                        );
                     } else {
                         let start_reg = fn_reg;
                         for &src in &part_regs {
@@ -10566,6 +10574,100 @@ mod tests {
                 .iter()
                 .any(|instruction| matches!(instruction, Ir3Instruction::TemplateLiteral { .. })),
             "arrow function body should retain TemplateLiteral lowering"
+        );
+    }
+
+    #[test]
+    fn lower_empty_template_literal_to_ir3_loads_empty_string() {
+        let ir0 = expr_ir0(Expression::TemplateLiteral {
+            quasis: Vec::new(),
+            expressions: Vec::new(),
+        });
+        let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
+        let output =
+            lower_ir0_to_ir3(&ir0, &ctx).expect("empty template literal should lower to IR3");
+
+        let empty_pool_index = output
+            .ir3
+            .constant_pool
+            .iter()
+            .position(String::is_empty)
+            .expect("empty template literal should load an empty string constant");
+        let empty_pool_index =
+            u32::try_from(empty_pool_index).expect("constant pool index should fit in u32");
+
+        assert!(
+            output.ir3.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::LoadStr { pool_index, .. } if *pool_index == empty_pool_index
+                )
+            }),
+            "empty template literal must emit a real empty string load"
+        );
+        assert!(
+            !output
+                .ir3
+                .instructions
+                .iter()
+                .any(
+                    |instruction| matches!(instruction, Ir3Instruction::Move { dst, src } if dst == src),
+                ),
+            "empty template literal must not lower to a self-move"
+        );
+    }
+
+    #[test]
+    fn lower_arrow_function_empty_template_literal_body_to_ir3_loads_empty_string() {
+        let ir0 = expr_ir0(Expression::ArrowFunction {
+            params: vec![],
+            body: ArrowBody::Expression(Box::new(Expression::TemplateLiteral {
+                quasis: Vec::new(),
+                expressions: Vec::new(),
+            })),
+            is_async: false,
+        });
+        let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
+        let output = lower_ir0_to_ir3(&ir0, &ctx)
+            .expect("arrow function empty template literal should lower to IR3");
+
+        let function_desc = output
+            .ir3
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Ir3Instruction::CreateClosure { function_index, .. } => {
+                    output.ir3.function_table.get(*function_index as usize)
+                }
+                _ => None,
+            })
+            .expect("arrow function should create a deferred closure body");
+        let body = &output.ir3.instructions[function_desc.entry as usize..];
+        let empty_pool_index = output
+            .ir3
+            .constant_pool
+            .iter()
+            .position(String::is_empty)
+            .expect("empty template literal should load an empty string constant");
+        let empty_pool_index =
+            u32::try_from(empty_pool_index).expect("constant pool index should fit in u32");
+
+        assert!(
+            body.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Ir3Instruction::LoadStr { pool_index, .. } if *pool_index == empty_pool_index
+                )
+            }),
+            "empty template literal in function body must emit a real empty string load"
+        );
+        assert!(
+            !body
+                .iter()
+                .any(
+                    |instruction| matches!(instruction, Ir3Instruction::Move { dst, src } if dst == src),
+                ),
+            "empty template literal in function body must not lower to a self-move"
         );
     }
 

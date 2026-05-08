@@ -1096,6 +1096,7 @@ mod tests {
     }
 
     /// Integration tests for shadow replay verification functionality.
+    #[cfg(test)]
     pub mod integration_tests {
         use super::*;
         use crate::shadow_replay_fixtures::*;

@@ -16,11 +16,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
+
+static HSP_BUNDLE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Typestate session phases
@@ -1888,8 +1893,95 @@ pub fn run_hsp_corpus() -> HspRunnerResult {
     }
 }
 
+struct HspBundleWriteLock {
+    path: PathBuf,
+}
+
+impl HspBundleWriteLock {
+    fn acquire(dir: &Path) -> io::Result<Self> {
+        let path = dir.join(".hsp_evidence_bundle.lock");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut lock_file) => {
+                writeln!(lock_file, "pid={}", std::process::id())?;
+                lock_file.sync_all()?;
+                Ok(Self { path })
+            }
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "hostcall session protocol evidence bundle busy: {}",
+                    path.display()
+                ),
+            )),
+            Err(source) => Err(source),
+        }
+    }
+}
+
+impl Drop for HspBundleWriteLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn unique_hsp_temp_path(final_path: &Path) -> PathBuf {
+    let counter = HSP_BUNDLE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    final_path.with_file_name(format!(
+        ".{file_name}.tmp.{}.{}",
+        std::process::id(),
+        counter
+    ))
+}
+
+fn sync_hsp_parent_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+
+    Ok(())
+}
+
+fn write_hsp_artifact_atomic(final_path: &Path, contents: &[u8]) -> io::Result<()> {
+    let temp_path = unique_hsp_temp_path(final_path);
+    let write_result = (|| {
+        let mut temp_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        temp_file.write_all(contents)?;
+        temp_file.sync_all()?;
+        std::fs::rename(&temp_path, final_path)?;
+        sync_hsp_parent_dir(final_path)
+    })();
+
+    if write_result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    write_result
+}
+
 /// Write evidence bundle to directory.
-pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
+pub fn write_hsp_evidence_bundle(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let _bundle_lock = HspBundleWriteLock::acquire(dir)?;
+
     let corpus = hsp_corpus();
     let result = run_hsp_corpus();
 
@@ -1907,22 +1999,10 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
             })
         })
         .collect();
-    let inv_json = serde_json::to_string_pretty(&inventory).map_err(std::io::Error::other)?;
-    std::fs::write(dir.join("hsp_inventory.json"), inv_json)?;
+    let inv_json = serde_json::to_string_pretty(&inventory).map_err(io::Error::other)?;
+    write_hsp_artifact_atomic(&dir.join("hsp_inventory.json"), inv_json.as_bytes())?;
 
-    // 2. Manifest JSON
-    let manifest = serde_json::json!({
-        "schema": "hostcall_session_protocol_evidence_v1",
-        "specimen_count": result.specimen_count,
-        "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
-        "all_clean": result.all_clean,
-        "terminal_count": result.terminal_count,
-        "content_hash": result.content_hash.to_hex(),
-    });
-    let man_json = serde_json::to_string_pretty(&manifest).map_err(std::io::Error::other)?;
-    std::fs::write(dir.join("hsp_manifest.json"), man_json)?;
-
-    // 3. Events JSONL
+    // 2. Events JSONL
     let mut events = String::new();
     for spec in &corpus {
         let line = serde_json::json!({
@@ -1933,19 +2013,31 @@ pub fn write_hsp_evidence_bundle(dir: &std::path::Path) -> std::io::Result<()> {
             "transitions": spec.transition_count,
             "clean": spec.clean_completion,
         });
-        events.push_str(&serde_json::to_string(&line).map_err(std::io::Error::other)?);
+        events.push_str(&serde_json::to_string(&line).map_err(io::Error::other)?);
         events.push('\n');
     }
-    std::fs::write(dir.join("hsp_events.jsonl"), events)?;
+    write_hsp_artifact_atomic(&dir.join("hsp_events.jsonl"), events.as_bytes())?;
 
-    // 4. Commands TXT
+    // 3. Commands TXT
     let mut cmds = String::new();
     cmds.push_str("# Hostcall Session Protocol Evidence Commands\n");
     cmds.push_str("cargo test -p frankenengine-engine hostcall_session_protocol\n");
     cmds.push_str(
         "cargo test -p frankenengine-engine --test hostcall_session_protocol_integration\n",
     );
-    std::fs::write(dir.join("hsp_commands.txt"), cmds)?;
+    write_hsp_artifact_atomic(&dir.join("hsp_commands.txt"), cmds.as_bytes())?;
+
+    // 4. Manifest JSON, published last as the bundle completion marker.
+    let manifest = serde_json::json!({
+        "schema": "hostcall_session_protocol_evidence_v1",
+        "specimen_count": result.specimen_count,
+        "families_covered": result.families_covered.iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+        "all_clean": result.all_clean,
+        "terminal_count": result.terminal_count,
+        "content_hash": result.content_hash.to_hex(),
+    });
+    let man_json = serde_json::to_string_pretty(&manifest).map_err(io::Error::other)?;
+    write_hsp_artifact_atomic(&dir.join("hsp_manifest.json"), man_json.as_bytes())?;
 
     Ok(())
 }

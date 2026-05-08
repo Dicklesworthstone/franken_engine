@@ -446,8 +446,73 @@ impl SafetyMembrane {
                 tick,
             );
         }
+        if batch.epoch != self.current_epoch {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::EpochMismatch,
+                format!(
+                    "batch epoch {} != membrane epoch {}",
+                    batch.epoch, self.current_epoch
+                ),
+                tick,
+            );
+        }
 
-        // 2a. MAC Verification
+        // 2a. Payload/hash and unsigned aggregate checks. The MAC authenticates
+        // content hashes, so the membrane must first bind those hashes back to
+        // the actual payload bytes and reject forged aggregate envelope fields.
+        for entry in &batch.entries {
+            let expected_content_hash =
+                compute_entry_content_hash(entry.sequence, &entry.payload, &entry.trace_id);
+            if !entry.content_hash.constant_time_eq(&expected_content_hash) {
+                return self.record_rejection(
+                    batch,
+                    MembraneRejectionReason::MacVerificationFailed,
+                    format!("entry {} content hash mismatch", entry.sequence),
+                    tick,
+                );
+            }
+        }
+        let Some(expected_total_payload_bytes) = compute_total_payload_bytes(&batch.entries) else {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::BatchSizeExceeded,
+                "payload byte total overflow".into(),
+                tick,
+            );
+        };
+        if batch.total_payload_bytes != expected_total_payload_bytes {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::BatchSizeExceeded,
+                format!(
+                    "declared payload bytes {} != recomputed {}",
+                    batch.total_payload_bytes, expected_total_payload_bytes
+                ),
+                tick,
+            );
+        }
+        let Ok(expected_credits_consumed) = u64::try_from(batch.entries.len()) else {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::BatchSizeExceeded,
+                "entry count exceeds u64 credit accounting".into(),
+                tick,
+            );
+        };
+        if batch.credits_consumed != expected_credits_consumed {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::InsufficientCredits,
+                format!(
+                    "declared credits {} != entry count {}",
+                    batch.credits_consumed, expected_credits_consumed
+                ),
+                tick,
+            );
+        }
+
+        // 2b. MAC Verification
         let expected_mac = crate::hostcall_batch_transport::compute_batch_mac(
             session_key,
             batch.batch_id,
@@ -463,7 +528,7 @@ impl SafetyMembrane {
             );
         }
 
-        // 2b. Optional per-entry MAC verification. When configured, every
+        // 2c. Optional per-entry MAC verification. When configured, every
         // entry must carry a valid MAC bound to the session key, epoch,
         // sequence, content hash, and trace id.
         if config.require_per_entry_mac {
@@ -928,6 +993,19 @@ pub fn compute_entry_content_hash(
     finish_content_hash(hasher)
 }
 
+fn compute_total_payload_bytes(entries: &[BatchEntry]) -> Option<u64> {
+    let mut total_payload_bytes: u64 = 0;
+    for entry in entries {
+        let entry_payload_bytes = match &entry.payload {
+            BatchPayload::Inline(data) => u64::try_from(data.len()).ok()?,
+            BatchPayload::SharedRegion { length, .. } => *length,
+            BatchPayload::Backpressure(_) => 0,
+        };
+        total_payload_bytes = total_payload_bytes.checked_add(entry_payload_bytes)?;
+    }
+    Some(total_payload_bytes)
+}
+
 /// Compute the per-entry MAC for authenticated entry transport.
 pub fn compute_entry_mac(
     session_key: &[u8; 32],
@@ -1152,18 +1230,11 @@ impl BatchTransportState {
             }
         }
 
-        let mut total_payload_bytes: u64 = 0;
-        for entry in &entries {
-            match &entry.payload {
-                BatchPayload::Inline(data) => {
-                    total_payload_bytes = total_payload_bytes.saturating_add(data.len() as u64);
-                }
-                BatchPayload::SharedRegion { length, .. } => {
-                    total_payload_bytes = total_payload_bytes.saturating_add(*length);
-                }
-                BatchPayload::Backpressure(_) => {}
-            }
-        }
+        let total_payload_bytes =
+            compute_total_payload_bytes(&entries).ok_or(BatchTransportError::PayloadTooLarge {
+                bytes: u64::MAX,
+                max: self.config.max_batch_payload_bytes,
+            })?;
 
         if total_payload_bytes > self.config.max_batch_payload_bytes {
             return Err(BatchTransportError::PayloadTooLarge {
@@ -1174,6 +1245,11 @@ impl BatchTransportState {
 
         let batch_id = self.next_batch_id;
         self.next_batch_id = self.next_batch_id.saturating_add(1);
+
+        for entry in &mut entries {
+            entry.content_hash =
+                compute_entry_content_hash(entry.sequence, &entry.payload, &entry.trace_id);
+        }
 
         if self.config.require_per_entry_mac {
             for entry in &mut entries {
@@ -2077,6 +2153,29 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn batch_build_recomputes_entry_content_hash() {
+        let mut ts = default_state();
+        let payload = BatchPayload::Inline(b"canonical".to_vec());
+        let stale_hash = ContentHash::compute(b"stale");
+        let entry = BatchEntry {
+            sequence: 1,
+            payload,
+            content_hash: stale_hash,
+            entry_mac: None,
+            trace_id: "trace-recompute".into(),
+        };
+
+        let batch = ts
+            .build_batch(vec![entry], &session_key(), test_epoch(), 100)
+            .expect("batch builder should canonicalize content hashes");
+        assert_ne!(batch.entries[0].content_hash, stale_hash);
+        assert_eq!(
+            batch.entries[0].content_hash,
+            compute_entry_content_hash(1, &batch.entries[0].payload, "trace-recompute")
+        );
+    }
+
     // --- MAC tests ---
 
     #[test]
@@ -2266,6 +2365,106 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn submit_batch_rejects_payload_mutation_preserving_mac() {
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+        let mut batch = ts
+            .build_batch(
+                vec![make_entry(1, b"trusted")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
+            .expect("test batch should build");
+        batch.entries[0].payload = BatchPayload::Inline(b"forged!".to_vec());
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::MacVerificationFailed,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+    }
+
+    #[test]
+    fn submit_batch_rejects_forged_payload_total() {
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+        let mut batch = ts
+            .build_batch(
+                vec![make_entry(1, b"data")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
+            .expect("test batch should build");
+        batch.total_payload_bytes = 0;
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::BatchSizeExceeded,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+    }
+
+    #[test]
+    fn submit_batch_rejects_forged_credit_count() {
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+        let mut batch = ts
+            .build_batch(
+                vec![make_entry(1, b"a"), make_entry(2, b"b")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
+            .expect("test batch should build");
+        batch.credits_consumed = 0;
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::InsufficientCredits,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+    }
+
+    #[test]
+    fn submit_batch_rejects_batch_epoch_mismatch() {
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+        let stale_epoch = SecurityEpoch::from_raw(test_epoch().as_u64() + 1);
+        let batch = ts
+            .build_batch(
+                vec![make_entry(1, b"data")],
+                &session_key(),
+                stale_epoch,
+                100,
+            )
+            .expect("test batch should build");
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::EpochMismatch,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
     }
 
     #[test]

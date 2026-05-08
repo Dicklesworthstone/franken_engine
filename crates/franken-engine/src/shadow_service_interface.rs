@@ -6,13 +6,10 @@
 #![forbid(unsafe_code)]
 
 use crate::shadow_handoff_contracts::{
-    ShadowStatusPanelBundle, PanelBundleBuilder, DaemonHealth,
-    SourceFreshnessEntry, DegradedGateEntry, ReplayDriftEntry, RecommendedAction,
-    ActionPriority, serialize_panel_bundle
+    DaemonHealth, PanelBundleBuilder, ShadowStatusPanelBundle, serialize_panel_bundle,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::time::SystemTime;
 
 use crate::security_epoch::SecurityEpoch;
 
@@ -111,10 +108,16 @@ pub trait ShadowServiceInterface {
     fn get_panel_bundle(&self) -> Result<ShadowStatusPanelBundle, ServiceError>;
 
     /// Get filtered subset of panels
-    fn get_filtered_panels(&self, request: FilteredPanelsRequest) -> Result<FilteredPanelsResponse, ServiceError>;
+    fn get_filtered_panels(
+        &self,
+        request: FilteredPanelsRequest,
+    ) -> Result<FilteredPanelsResponse, ServiceError>;
 
     /// Preview action command (advisory-only)
-    fn preview_action(&self, request: ActionPreviewRequest) -> Result<ActionPreviewResponse, ServiceError>;
+    fn preview_action(
+        &self,
+        request: ActionPreviewRequest,
+    ) -> Result<ActionPreviewResponse, ServiceError>;
 
     /// Get service health status
     fn get_health(&self) -> Result<ServiceHealthResponse, ServiceError>;
@@ -134,9 +137,15 @@ impl std::fmt::Display for ServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServiceError::DaemonUnavailable => write!(f, "Shadow daemon unavailable"),
-            ServiceError::InvalidRequest { field, reason } => write!(f, "Invalid request field '{}': {}", field, reason),
-            ServiceError::ActionNotFound { action_id } => write!(f, "Action '{}' not found", action_id),
-            ServiceError::ResponseTooLarge { size_bytes } => write!(f, "Response too large: {} bytes", size_bytes),
+            ServiceError::InvalidRequest { field, reason } => {
+                write!(f, "Invalid request field '{}': {}", field, reason)
+            }
+            ServiceError::ActionNotFound { action_id } => {
+                write!(f, "Action '{}' not found", action_id)
+            }
+            ServiceError::ResponseTooLarge { size_bytes } => {
+                write!(f, "Response too large: {} bytes", size_bytes)
+            }
             ServiceError::InternalError { detail } => write!(f, "Internal error: {}", detail),
         }
     }
@@ -147,88 +156,45 @@ impl std::error::Error for ServiceError {}
 /// Default implementation of shadow service interface
 pub struct DefaultShadowService {
     config: ShadowServiceConfig,
-    start_time: SecurityEpoch,
 }
 
 impl DefaultShadowService {
     pub fn new(config: ShadowServiceConfig) -> Self {
-        Self {
-            config,
-            start_time: SecurityEpoch::GENESIS,
-        }
+        Self { config }
     }
 
-    /// Create mock panel bundle for demonstration
-    fn create_mock_panel_bundle(&self) -> ShadowStatusPanelBundle {
-        let epoch = SecurityEpoch::GENESIS;
-
+    /// Create an explicit unavailable bundle until real daemon evidence is attached.
+    fn create_unavailable_panel_bundle(&self) -> ShadowStatusPanelBundle {
         PanelBundleBuilder::new()
-            .with_daemon_health(DaemonHealth::Healthy)
-            .with_active_journals(3)
-            .with_uptime(3600) // Fixed uptime for deterministic behavior
-            .with_last_decision(epoch)
-            .add_source_freshness(SourceFreshnessEntry {
-                source_id: "git-journal".to_string(),
-                last_update: epoch,
-                staleness_seconds: 45,
-                threshold_seconds: 300,
-                is_stale: false,
-            })
-            .add_source_freshness(SourceFreshnessEntry {
-                source_id: "evidence-journal".to_string(),
-                last_update: epoch,
-                staleness_seconds: 420,
-                threshold_seconds: 300,
-                is_stale: true,
-            })
-            .add_degraded_gate(DegradedGateEntry {
-                gate_id: "replay-verification".to_string(),
-                degradation_reason: "High replay drift detected".to_string(),
-                degraded_since: epoch,
-                severity: crate::shadow_handoff_contracts::GateDegradationSeverity::Warning,
-            })
-            .add_replay_drift(ReplayDriftEntry {
-                journal_id: "journal-001".to_string(),
-                drift_type: "schema_drift".to_string(),
-                detected_at: epoch,
-                severity: crate::shadow_handoff_contracts::DriftSeverity::Minor,
-                expected_migration: true,
-            })
-            .add_recommended_action(RecommendedAction {
-                action_id: "refresh-stale-sources".to_string(),
-                description: "Refresh stale evidence journal sources".to_string(),
-                command_preview: "shadow-daemon refresh --source evidence-journal".to_string(),
-                priority: ActionPriority::Medium,
-                estimated_duration: Some(120),
-            })
-            .add_recommended_action(RecommendedAction {
-                action_id: "investigate-drift".to_string(),
-                description: "Investigate schema drift in journal-001".to_string(),
-                command_preview: "shadow-daemon investigate-drift --journal journal-001".to_string(),
-                priority: ActionPriority::High,
-                estimated_duration: Some(300),
-            })
+            .with_daemon_health(DaemonHealth::Offline)
             .build()
     }
 }
 
 impl ShadowServiceInterface for DefaultShadowService {
     fn get_panel_bundle(&self) -> Result<ShadowStatusPanelBundle, ServiceError> {
-        let bundle = self.create_mock_panel_bundle();
+        let bundle = self.create_unavailable_panel_bundle();
 
         // Check response size
-        let serialized = serialize_panel_bundle(&bundle)
-            .map_err(|e| ServiceError::InternalError { detail: e.to_string() })?;
+        let serialized =
+            serialize_panel_bundle(&bundle).map_err(|e| ServiceError::InternalError {
+                detail: e.to_string(),
+            })?;
 
         if serialized.len() > self.config.max_response_size_bytes {
-            return Err(ServiceError::ResponseTooLarge { size_bytes: serialized.len() });
+            return Err(ServiceError::ResponseTooLarge {
+                size_bytes: serialized.len(),
+            });
         }
 
         Ok(bundle)
     }
 
-    fn get_filtered_panels(&self, request: FilteredPanelsRequest) -> Result<FilteredPanelsResponse, ServiceError> {
-        let bundle = self.create_mock_panel_bundle();
+    fn get_filtered_panels(
+        &self,
+        request: FilteredPanelsRequest,
+    ) -> Result<FilteredPanelsResponse, ServiceError> {
+        let bundle = self.create_unavailable_panel_bundle();
 
         let response = FilteredPanelsResponse {
             shadow_status: if request.panels.contains(&PanelType::ShadowStatus) {
@@ -262,15 +228,20 @@ impl ShadowServiceInterface for DefaultShadowService {
         Ok(response)
     }
 
-    fn preview_action(&self, request: ActionPreviewRequest) -> Result<ActionPreviewResponse, ServiceError> {
-        let bundle = self.create_mock_panel_bundle();
+    fn preview_action(
+        &self,
+        request: ActionPreviewRequest,
+    ) -> Result<ActionPreviewResponse, ServiceError> {
+        let bundle = self.create_unavailable_panel_bundle();
 
         // Find the action
-        let action = bundle.recommended_actions.actions
+        let action = bundle
+            .recommended_actions
+            .actions
             .iter()
             .find(|a| a.action_id == request.action_id)
             .ok_or_else(|| ServiceError::ActionNotFound {
-                action_id: request.action_id.clone()
+                action_id: request.action_id.clone(),
             })?;
 
         Ok(ActionPreviewResponse {
@@ -284,11 +255,11 @@ impl ShadowServiceInterface for DefaultShadowService {
 
     fn get_health(&self) -> Result<ServiceHealthResponse, ServiceError> {
         Ok(ServiceHealthResponse {
-            status: "healthy".to_string(),
-            uptime_seconds: 3600, // Fixed uptime for deterministic behavior
+            status: "unavailable".to_string(),
+            uptime_seconds: 0,
             version: crate::shadow_handoff_contracts::HANDOFF_CONTRACT_VERSION.to_string(),
-            shadow_daemon_connected: true, // Mock connection
-            last_panel_update: Some(SecurityEpoch::GENESIS),
+            shadow_daemon_connected: false,
+            last_panel_update: None,
         })
     }
 }
@@ -296,11 +267,23 @@ impl ShadowServiceInterface for DefaultShadowService {
 /// Create service error response
 pub fn create_error_response(error: ServiceError) -> ServiceErrorResponse {
     let (code, advisory) = match &error {
-        ServiceError::DaemonUnavailable => ("daemon_unavailable", Some("Check shadow daemon status")),
-        ServiceError::InvalidRequest { .. } => ("invalid_request", Some("Verify request format and fields")),
-        ServiceError::ActionNotFound { .. } => ("action_not_found", Some("Use GET /shadow/status to see available actions")),
-        ServiceError::ResponseTooLarge { .. } => ("response_too_large", Some("Use filtered panels to reduce response size")),
-        ServiceError::InternalError { .. } => ("internal_error", Some("Contact system administrator")),
+        ServiceError::DaemonUnavailable => {
+            ("daemon_unavailable", Some("Check shadow daemon status"))
+        }
+        ServiceError::InvalidRequest { .. } => {
+            ("invalid_request", Some("Verify request format and fields"))
+        }
+        ServiceError::ActionNotFound { .. } => (
+            "action_not_found",
+            Some("Use GET /shadow/status to see available actions"),
+        ),
+        ServiceError::ResponseTooLarge { .. } => (
+            "response_too_large",
+            Some("Use filtered panels to reduce response size"),
+        ),
+        ServiceError::InternalError { .. } => {
+            ("internal_error", Some("Contact system administrator"))
+        }
     };
 
     ServiceErrorResponse {
@@ -330,18 +313,24 @@ mod tests {
         let config = ShadowServiceConfig::default();
         let service = DefaultShadowService::new(config);
 
-        let bundle = service.get_panel_bundle().expect("Should generate panel bundle");
+        let bundle = service
+            .get_panel_bundle()
+            .expect("Should generate panel bundle");
 
-        assert!(matches!(bundle.shadow_status.daemon_health, DaemonHealth::Healthy));
-        assert_eq!(bundle.shadow_status.active_journals, 3);
-        assert_eq!(bundle.source_freshness.sources.len(), 2);
-        assert_eq!(bundle.source_freshness.stale_source_count, 1);
-        assert_eq!(bundle.degraded_gates.gates.len(), 1);
-        assert_eq!(bundle.degraded_gates.degraded_count, 1);
-        assert_eq!(bundle.replay_drift.drift_entries.len(), 1);
-        assert_eq!(bundle.replay_drift.total_drift_count, 1);
-        assert_eq!(bundle.recommended_actions.actions.len(), 2);
-        assert_eq!(bundle.recommended_actions.priority_action_count, 1);
+        assert!(matches!(
+            bundle.shadow_status.daemon_health,
+            DaemonHealth::Offline
+        ));
+        assert_eq!(bundle.shadow_status.active_journals, 0);
+        assert_eq!(bundle.shadow_status.last_decision_timestamp, None);
+        assert_eq!(bundle.source_freshness.sources.len(), 0);
+        assert_eq!(bundle.source_freshness.stale_source_count, 0);
+        assert_eq!(bundle.degraded_gates.gates.len(), 0);
+        assert_eq!(bundle.degraded_gates.degraded_count, 0);
+        assert_eq!(bundle.replay_drift.drift_entries.len(), 0);
+        assert_eq!(bundle.replay_drift.total_drift_count, 0);
+        assert_eq!(bundle.recommended_actions.actions.len(), 0);
+        assert_eq!(bundle.recommended_actions.priority_action_count, 0);
     }
 
     #[test]
@@ -354,7 +343,9 @@ mod tests {
         panels.insert(PanelType::RecommendedActions);
 
         let request = FilteredPanelsRequest { panels };
-        let response = service.get_filtered_panels(request).expect("Should filter panels");
+        let response = service
+            .get_filtered_panels(request)
+            .expect("Should filter panels");
 
         assert!(response.shadow_status.is_some());
         assert!(response.source_freshness.is_none());
@@ -371,12 +362,10 @@ mod tests {
         let request = ActionPreviewRequest {
             action_id: "refresh-stale-sources".to_string(),
         };
-        let response = service.preview_action(request).expect("Should preview action");
-
-        assert_eq!(response.action_id, "refresh-stale-sources");
-        assert_eq!(response.safety_check, "advisory_only");
-        assert!(response.command_preview.contains("shadow-daemon refresh"));
-        assert!(response.advisory_notice.contains("preview only"));
+        assert!(matches!(
+            service.preview_action(request),
+            Err(ServiceError::ActionNotFound { .. })
+        ));
     }
 
     #[test]
@@ -399,10 +388,14 @@ mod tests {
 
         let health = service.get_health().expect("Should get health status");
 
-        assert_eq!(health.status, "healthy");
-        assert!(health.shadow_daemon_connected);
-        assert!(health.last_panel_update.is_some());
-        assert_eq!(health.version, crate::shadow_handoff_contracts::HANDOFF_CONTRACT_VERSION);
+        assert_eq!(health.status, "unavailable");
+        assert!(!health.shadow_daemon_connected);
+        assert_eq!(health.uptime_seconds, 0);
+        assert!(health.last_panel_update.is_none());
+        assert_eq!(
+            health.version,
+            crate::shadow_handoff_contracts::HANDOFF_CONTRACT_VERSION
+        );
     }
 
     #[test]

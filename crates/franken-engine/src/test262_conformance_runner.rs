@@ -1353,7 +1353,7 @@ pub mod differential_testing {
 
         /// Generate golden fixtures by running tests against reference engines.
         /// This would be called manually when reference engines are available.
-        pub fn generate_golden_fixtures(&mut self) -> Result<(), String> {
+        fn generate_golden_fixtures(&mut self) -> Result<(), String> {
             let repo_root = default_repo_root();
             self.generate_golden_fixtures_from_roots(
                 &repo_root.join("legacy_v8"),

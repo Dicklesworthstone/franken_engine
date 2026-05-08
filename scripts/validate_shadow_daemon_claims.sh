@@ -98,7 +98,7 @@ check_advisory_language() {
     fi
 
     local content_lower
-    content_lower=$(cat "$file_path" | tr '[:upper:]' '[:lower:]')
+    content_lower=$(tr '[:upper:]' '[:lower:]' < "$file_path")
 
     # Should contain advisory language
     if ! echo "$content_lower" | grep -q "advisory\|recommendation\|preview\|manual"; then
@@ -136,7 +136,7 @@ check_command_examples() {
             for cmd in "${forbidden_commands[@]}"; do
                 if [[ "$line" =~ $cmd ]]; then
                     # Allow if it's clearly a comment or example description
-                    if [[ "$line" =~ "echo.*$cmd" ]] || [[ "$line" =~ "# .*$cmd" ]] || [[ "$line" =~ "Remember to.*$cmd" ]]; then
+                    if [[ "$line" == *echo*"$cmd"* ]] || [[ "$line" == *"# "*"$cmd"* ]] || [[ "$line" == *"Remember to"*"$cmd"* ]]; then
                         continue
                     fi
                     log "$RED" "  ❌ Found potentially dangerous command in $description: $line"
@@ -152,6 +152,19 @@ check_command_examples() {
     else
         return 1
     fi
+}
+
+check_script_command_examples() {
+    local script_path
+    local has_violations=0
+
+    while IFS= read -r script_path; do
+        if ! check_command_examples "$script_path" "script $script_path"; then
+            has_violations=1
+        fi
+    done < <(find scripts/ -name '*.sh' ! -path '*/e2e/shadow_daemon_lifecycle_drill.sh' | sort)
+
+    return "$has_violations"
 }
 
 # Main validation function
@@ -189,21 +202,12 @@ main() {
     run_check "Proof state contains gate status" \
         "grep -q 'Gate Status\|gate status' 'docs/SHADOW_DAEMON_PROOF_STATE.md' || grep -q 'BLOCKED CAPABILITIES' 'docs/SHADOW_DAEMON_PROOF_STATE.md'"
 
-    # Check adoption gate tests
-    run_check "Adoption gate validation tests" \
-        "cargo test -p frankenengine-engine shadow_adoption_gates::tests --quiet"
+    # Rust compile/test gates are enforced by the standard rch workflow, not this
+    # documentation scanner.
 
-    run_check "Documentation claim validation tests" \
-        "cargo test -p frankenengine-engine adoption_gate_validation --quiet"
-
-    # Export function for subprocesses and check for dangerous command examples in scripts
-    export -f check_command_examples
+    # Check for dangerous command examples in scripts in this Bash process.
     run_check "Script command examples validation" \
-        "find scripts/ -name '*.sh' ! -path '*/e2e/shadow_daemon_lifecycle_drill.sh' -exec bash -c 'check_command_examples \"{}\" \"script {}\"' \;"
-
-    # Validate mutation policy enforcement
-    run_check "Mutation policy enforcement compilation" \
-        "cargo check -p frankenengine-engine --lib --quiet"
+        "check_script_command_examples"
 
     # Summary
     echo ""

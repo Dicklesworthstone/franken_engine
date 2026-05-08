@@ -131,10 +131,8 @@ where
         limit: None,
     };
     let mut rows = storage.query_typed::<ShadowEvidenceJournalEntry>(&query, context)?;
-    for row in &rows {
-        validated_payload_from_entry(row)?;
-    }
     rows.sort_by(entry_order);
+    validate_stored_journal_rows(&rows)?;
     Ok(rows)
 }
 
@@ -148,16 +146,15 @@ where
     S: StorageAdapter,
 {
     require_non_empty("bead_id", bead_id)?;
+    let known_sequence_ids = existing_sequence_ids(storage, context)?;
     let query = StoreQuery {
         key_prefix: Some(TYPED_SHADOW_KEY_PREFIX.to_string()),
         metadata_filters: BTreeMap::from([("bead_id".to_string(), bead_id.to_string())]),
         limit: None,
     };
     let mut rows = storage.query_typed::<ShadowEvidenceJournalEntry>(&query, context)?;
-    for row in &rows {
-        validated_payload_from_entry(row)?;
-    }
     rows.sort_by(entry_order);
+    validate_stored_journal_rows_against(&rows, &known_sequence_ids)?;
     Ok(rows)
 }
 
@@ -703,6 +700,39 @@ fn validated_payload_from_entry(entry: &ShadowEvidenceJournalEntry) -> StorageRe
     Ok(normalized_payload)
 }
 
+fn validate_stored_journal_rows(rows: &[ShadowEvidenceJournalEntry]) -> StorageResult<()> {
+    let mut seen_sequence_ids = BTreeSet::new();
+    for row in rows {
+        validated_payload_from_entry(row)?;
+        validate_parent_links(row, &seen_sequence_ids)?;
+        if !seen_sequence_ids.insert(row.sequence_id) {
+            return Err(integrity(format!(
+                "duplicate journal sequence id {}",
+                row.sequence_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_stored_journal_rows_against(
+    rows: &[ShadowEvidenceJournalEntry],
+    known_sequence_ids: &BTreeSet<i64>,
+) -> StorageResult<()> {
+    let mut seen_sequence_ids = BTreeSet::new();
+    for row in rows {
+        validated_payload_from_entry(row)?;
+        validate_parent_links(row, known_sequence_ids)?;
+        if !seen_sequence_ids.insert(row.sequence_id) {
+            return Err(integrity(format!(
+                "duplicate journal sequence id {}",
+                row.sequence_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -978,6 +1008,25 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("stored payload hash mismatch for journal event 0")
+        );
+    }
+
+    #[test]
+    fn read_refuses_missing_stored_parent_link() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        let context = ctx();
+        let entry = append_to_entry(advisory_seed(42), 100).expect("advisory entry should build");
+
+        adapter
+            .put_typed(&entry, &context)
+            .expect("typed shape validation should allow the missing-parent fixture");
+        let err =
+            read_all_events(&mut adapter, &context).expect_err("missing stored parent must fail");
+
+        assert!(matches!(err, StorageError::IntegrityViolation { .. }));
+        assert!(
+            err.to_string()
+                .contains("parent event 42 does not exist for journal row 100")
         );
     }
 }

@@ -464,14 +464,14 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_stringify_object_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::Resolved,
+            status: ZeroPlaceholderStatus::OpenPlaceholder,
             severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.stringify.object".to_string(),
             source_reference: "crates/franken-engine/src/stdlib.rs::json_stringify".to_string(),
             observed_behavior:
-                "JSON.stringify now traverses heap-backed Array and Object handles directly, applying deterministic omission/nulling rules and fail-closed errors for cycles, proxies, accessors, and unsupported object classes."
+                "JSON.stringify baseline implementation returns stub '{}' for all Object values without heap traversal or property enumeration."
                     .to_string(),
             required_behavior:
                 "Stringify object graphs through deterministic heap traversal with explicit omission/nulling rules and fail-closed errors for unsupported cases."
@@ -1421,11 +1421,9 @@ mod tests {
         assert_eq!(finding.owner_bead_id, ITERATOR_RUNTIME_BEAD_ID);
         assert!(finding.source_reference.contains("lowering_pipeline"));
         assert!(finding.source_reference.contains("baseline_interpreter"));
-        assert!(
-            finding
-                .observed_behavior
-                .contains("dedicated IR3 iterator instructions")
-        );
+        assert!(finding
+            .observed_behavior
+            .contains("dedicated IR3 iterator instructions"));
     }
 
     #[test]
@@ -2219,13 +2217,11 @@ mod tests {
         assert_eq!(events[2].finding_id.as_deref(), Some("evt::b"));
         assert_eq!(events[3].event, "inventory_completed");
         assert_eq!(events[3].outcome, "completed");
-        assert!(
-            events[3]
-                .detail
-                .as_ref()
-                .expect("serde deserialization should succeed")
-                .contains("2 findings")
-        );
+        assert!(events[3]
+            .detail
+            .as_ref()
+            .expect("serde deserialization should succeed")
+            .contains("2 findings"));
     }
 
     #[test]
@@ -2239,13 +2235,11 @@ mod tests {
         assert_eq!(events.len(), 2, "start + end, no finding events");
         assert_eq!(events[0].event, "inventory_started");
         assert_eq!(events[1].event, "inventory_completed");
-        assert!(
-            events[1]
-                .detail
-                .as_ref()
-                .expect("serde deserialization should succeed")
-                .contains("0 findings")
-        );
+        assert!(events[1]
+            .detail
+            .as_ref()
+            .expect("serde deserialization should succeed")
+            .contains("0 findings"));
     }
 
     #[test]

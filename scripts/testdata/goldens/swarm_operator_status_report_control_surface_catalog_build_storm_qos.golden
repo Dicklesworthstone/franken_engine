@@ -2,7 +2,7 @@
   "schema_version": "franken-engine.swarm-operator-status-report.v1",
   "bead_id": "bd-jw854",
   "source_revision": "smoke-rev",
-  "status": "degraded",
+  "status": "healthy",
   "tui_ready": true,
   "dashboard_contract": {
     "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
@@ -18,7 +18,7 @@
     "ready_count": 1,
     "in_progress_count": 1,
     "reservation_count": 1,
-    "degraded_count": 1,
+    "degraded_count": 0,
     "planned_command_count": 1,
     "predictive_cost_command_count": 1,
     "high_cost_command_count": 0,
@@ -106,15 +106,15 @@
     "causal_trace_missing_edge_count": 0,
     "staged_contamination_decision": "pass",
     "staged_contamination_offender_count": 0,
-    "control_surface_catalog_readiness": "contaminated",
+    "control_surface_catalog_readiness": "ready",
     "control_surface_catalog_decision": "pass",
-    "control_surface_catalog_surface_count": 3,
+    "control_surface_catalog_surface_count": 1,
     "control_surface_catalog_drift_count": 0,
-    "control_surface_catalog_top_recommended_surface": "none",
-    "control_surface_catalog_top_recommended_track": "none",
-    "control_surface_catalog_top_recommended_operator_status_section": "none",
-    "control_surface_catalog_top_recommended_script": "none",
-    "control_surface_catalog_recommended_command_count": 0
+    "control_surface_catalog_top_recommended_surface": "build_storm_qos_batch_planner",
+    "control_surface_catalog_top_recommended_track": "SWARM-BUILD-STORM",
+    "control_surface_catalog_top_recommended_operator_status_section": "build_storm_qos",
+    "control_surface_catalog_top_recommended_script": "scripts/build_storm_qos_batch_planner.sh",
+    "control_surface_catalog_recommended_command_count": 1
   },
   "services": {
     "agent_mail": "ok",
@@ -436,7 +436,7 @@
         "deterministic advisory-only forecast fixture"
       ],
       "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/capacity_forecast.json"
     },
     "capacity_forecast": {
       "artifact_status": "provided",
@@ -462,7 +462,7 @@
         "proof_availability": "Proof availability is healthy enough for advisory reuse.",
         "coordination_pressure": "Coordination pressure is nominal."
       },
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/capacity_forecast.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/capacity_forecast.json"
     },
     "admission_budgets": {
       "artifact_status": "provided",
@@ -483,7 +483,7 @@
           "proof_obligation": true
         }
       ],
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/admission_budget_plan.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/admission_budget_plan.json"
     },
     "swarm_resource_envelope": {
       "artifact_statuses": {
@@ -529,8 +529,8 @@
       "blocked_reason_count": 0,
       "fail_closed_reason_count": 0,
       "artifact_paths": {
-        "resource_envelope_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_resource_envelope.json",
-        "fair_share_batch_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_fair_share_batch_plan.json"
+        "resource_envelope_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_fair_share_batch_plan.json"
       }
     },
     "swarm_topology_placement": {
@@ -676,9 +676,9 @@
         "enforces_placement_automatically": false
       },
       "artifact_paths": {
-        "placement_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_topology_placement_plan.json",
-        "placement_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_topology_placement_receipt.json",
-        "placement_evidence_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_topology_placement_evidence_ledger.json"
+        "placement_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_topology_placement_evidence_ledger.json"
       }
     },
     "swarm_capability_affinity_routing": {
@@ -749,8 +749,8 @@
         "reroutes_tasks_automatically": false
       },
       "artifact_paths": {
-        "routing_advisory_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_capability_affinity_routing_advisory.json",
-        "outcome_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
+        "routing_advisory_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_capability_affinity_routing_advisory.json",
+        "outcome_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
       }
     },
     "lease_exchange_salvage": {
@@ -763,7 +763,7 @@
       "archive_pressure_advisory": "retain",
       "salvage_workflow_state": "clean_finished",
       "recommendations": [],
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/lease_exchange_salvage_simulation.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/lease_exchange_salvage_simulation.json"
     },
     "prefetch_roi": {
       "artifact_status": "provided",
@@ -779,7 +779,7 @@
       "expected_reuse_score": 800000,
       "realized_reuse_score": 910000,
       "reuse_delta": 110000,
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/warm_target_prefetch_roi_advisory.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/warm_target_prefetch_roi_advisory.json"
     },
     "starvation_rescue": {
       "artifact_status": "provided",
@@ -811,8 +811,8 @@
         }
       ],
       "unresolved_risks": [],
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/starvation_rescue_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/starvation_rescue_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/starvation_rescue_conformance_report.json"
     },
     "checkpoint_restore": {
       "artifact_status": "provided",
@@ -831,9 +831,9 @@
       "escalation_band": "ready",
       "unresolved_risks": [],
       "checked_artifact_path_count": 8,
-      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/checkpoint_bundle.json",
-      "plan_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/checkpoint_restore_plan.json",
-      "conformance_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/checkpoint_restore_conformance_report.json"
+      "artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/checkpoint_restore_conformance_report.json"
     },
     "execution_queue_advisory": {
       "artifact_status": "provided",
@@ -876,10 +876,10 @@
       "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
       "restore_dependency_state": "clear",
       "restore_dependency_detail": "Checkpoint restore handoff is ready.",
-      "queue_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/execution_queue_artifact.json",
-      "risk_budget_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/execution_queue_risk_budget_receipt.json",
-      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/execution_queue_bottleneck_report.json",
-      "run_manifest_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/execution_queue_run_manifest.json"
+      "queue_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/execution_queue_run_manifest.json"
     },
     "queue_fidelity": {
       "artifact_status": "provided",
@@ -918,11 +918,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "fidelity_score_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/fidelity_score_receipt.json",
-        "drift_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/drift_ledger.json",
-        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/counterfactual_backtest_report.json",
-        "tuning_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/tuning_plan.json",
-        "frontier_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/frontier.json"
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/frontier.json"
       }
     },
     "queue_tuning_promotion": {
@@ -962,11 +962,11 @@
         "applies_live_retuning": false
       },
       "artifact_paths": {
-        "bundle_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/tuning_policy_bundle.json",
-        "promotion_guard_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/promotion_guard_receipt.json",
-        "rollout_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/manual_approval_rollout_plan.json",
-        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/rollback_comparator_receipt.json",
-        "canary_verdict_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/canary_verdict_ledger.json"
+        "bundle_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/canary_verdict_ledger.json"
       }
     },
     "queue_policy_adoption": {
@@ -1047,10 +1047,10 @@
         "supersession_executed": false
       },
       "artifact_paths": {
-        "adoption_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/adoption_receipt.json",
-        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/adoption_snapshot_bundle.json",
-        "sustained_gain_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/sustained_gain_receipt.json",
-        "expiry_supersession_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/expiry_supersession_plan.json",
+        "adoption_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/expiry_supersession_plan.json",
         "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
       }
     },
@@ -1108,8 +1108,8 @@
         "operator_wording_required": "advisory-only"
       },
       "artifact_paths": {
-        "causal_graph_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/causal_trace_graph.json",
-        "anomaly_report_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/causal_trace_anomalies.json"
+        "causal_graph_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/causal_trace_anomalies.json"
       }
     },
     "staged_contamination": {
@@ -1184,47 +1184,72 @@
         "intent_plan": "provided",
         "drift_report": "provided"
       },
-      "readiness": "contaminated",
-      "severity": "critical",
+      "readiness": "ready",
+      "severity": "ok",
       "catalog_decision": "pass",
-      "intent_plan_decision": "fail_closed",
+      "intent_plan_decision": "pass",
       "drift_report_decision": "pass",
-      "surface_count": 3,
+      "surface_count": 1,
       "drift_count": 0,
-      "top_recommended_surface": null,
-      "top_recommended_track": null,
-      "top_recommended_purpose": null,
-      "top_recommended_operator_status_section": null,
-      "top_recommended_script": null,
-      "top_recommended_smoke_script": null,
-      "top_recommended_contract_json": null,
-      "top_recommended_runbook_doc": null,
-      "top_recommended_score": null,
-      "top_recommended_required_inputs": [],
-      "top_recommended_emitted_artifacts": [],
-      "top_recommended_validation_commands": [],
-      "top_recommended_intent_tags": [],
-      "top_recommended_symptom_tags": [],
-      "top_recommended_matched_intent_tags": [],
-      "top_recommended_matched_symptom_tags": [],
-      "recommended_command_count": 0,
-      "artifacts_to_preserve_count": 0,
+      "top_recommended_surface": "build_storm_qos_batch_planner",
+      "top_recommended_track": "SWARM-BUILD-STORM",
+      "top_recommended_purpose": "build storm QoS batching",
+      "top_recommended_operator_status_section": "build_storm_qos",
+      "top_recommended_script": "scripts/build_storm_qos_batch_planner.sh",
+      "top_recommended_smoke_script": "scripts/e2e/build_storm_qos_batch_planner_smoke.sh",
+      "top_recommended_contract_json": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "top_recommended_runbook_doc": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "top_recommended_score": 1000000,
+      "top_recommended_required_inputs": [
+        "pending_requests_json",
+        "resource_lease_plans_json",
+        "proof_cost_history_json",
+        "rch_workers_json"
+      ],
+      "top_recommended_emitted_artifacts": [
+        "build_storm_batch_plan.json"
+      ],
+      "top_recommended_validation_commands": [
+        "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check"
+      ],
+      "top_recommended_intent_tags": [
+        "admission",
+        "batching",
+        "build-storm",
+        "qos",
+        "resource-pressure"
+      ],
+      "top_recommended_symptom_tags": [
+        "build-storm-backlog",
+        "heavy-validation-backlog",
+        "qos-resource-pressure"
+      ],
+      "top_recommended_matched_intent_tags": [
+        "admission",
+        "batching",
+        "build-storm",
+        "qos",
+        "resource-pressure"
+      ],
+      "top_recommended_matched_symptom_tags": [
+        "build-storm-backlog",
+        "heavy-validation-backlog",
+        "qos-resource-pressure"
+      ],
+      "recommended_command_count": 1,
+      "artifacts_to_preserve_count": 1,
       "blocked_reason_codes": [],
       "degraded_reason_codes": [],
-      "fail_closed_reason_codes": [
-        "FE-SWARM-INTENT-NO-MATCHING-SURFACE"
-      ],
+      "fail_closed_reason_codes": [],
       "duplicate_new_work_warning": null,
       "duplicate_new_work_warnings": [],
-      "recommended_commands": [],
-      "artifacts_to_preserve": [],
-      "warnings": [
-        {
-          "code": "FE-SWARM-INTENT-NO-MATCHING-SURFACE",
-          "surface_id": "intent",
-          "detail": "no catalog surface matched requested queue-retuning tags"
-        }
+      "recommended_commands": [
+        "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check"
       ],
+      "artifacts_to_preserve": [
+        "build_storm_batch_plan.json"
+      ],
+      "warnings": [],
       "mutation_policy": {
         "advisory_only": true,
         "fixture_fed_only": true,
@@ -1236,32 +1261,25 @@
         "changes_live_queue_policy": false
       },
       "artifact_paths": {
-        "catalog_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_control_surface_catalog.json",
-        "catalog_findings_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_control_surface_catalog_findings.json",
-        "intent_plan_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_control_surface_intent_plan.json",
+        "catalog_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_control_surface_catalog.json",
+        "catalog_findings_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_control_surface_catalog_findings.json",
+        "intent_plan_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_control_surface_intent_plan.json",
         "intent_events_jsonl": "control_surface_intent.events.jsonl",
         "intent_commands_txt": "control_surface_intent.commands.txt",
         "intent_report_md": "control_surface_intent.report.md",
-        "drift_report_json": "[SMOKE_ROOT]/control_surface_catalog_no_match-fixtures/swarm_control_surface_drift_report.json",
+        "drift_report_json": "[SMOKE_ROOT]/control_surface_catalog_build_storm_qos-fixtures/swarm_control_surface_drift_report.json",
         "drift_events_jsonl": "control_surface_drift.events.jsonl",
         "drift_commands_txt": "control_surface_drift.commands.txt",
         "drift_report_md": "control_surface_drift.report.md"
       }
     }
   },
-  "degraded": [
-    {
-      "component": "swarm_control_surface_catalog",
-      "status": "contaminated",
-      "impact": "control-surface catalog routing evidence failed closed or carries unsafe mutation claims",
-      "remediation": "Refresh catalog, intent-router, and drift-gate artifacts before using control-surface routing guidance."
-    }
-  ],
+  "degraded": [],
   "recommendations": [
     {
-      "action": "respect_control_surface_catalog_fail_closed",
-      "bead_id": null,
-      "reason": "control-surface catalog routing evidence failed closed or carries unsafe mutation claims"
+      "action": "pick_next_ready_bead",
+      "bead_id": "bd-p03vs",
+      "reason": "resource governor admits validation and bead is ready"
     }
   ]
 }

@@ -382,7 +382,7 @@ consumption:
 | `swarm_topology_aware_queue_advisory` | `swarm-topology-aware-queue-advisory.v1` from `scripts/swarm_topology_aware_queue_scorer.sh` | Show preferred-locality confidence, cache-reuse guidance, worker exclusions, degraded/blocked/contaminated queue-locality advice, and source artifact links without mutating the live queue or pinning workers. |
 | `swarm_benchmark_responsiveness` | `swarm-benchmark-workload-catalog.v1` plus `swarm-benchmark-responsiveness-advisory.v1` from `scripts/swarm_benchmark_workload_catalog_normalizer.sh` and `scripts/swarm_benchmark_responsiveness_scorer.sh` | Show benchmark readiness, selected workload and class, throughput-gap and utilization bands, cache recommendation, remote-proof confidence, bottleneck classes, and source artifact links without running live benchmarks, mutating the queue, or mutating workers. |
 | `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
-| `swarm_control_surface_catalog` | `swarm-control-surface-catalog.v1` plus `swarm-control-surface-intent-plan.v1` and `swarm-control-surface-drift-report.v1` from `scripts/swarm_control_surface_catalog_normalizer.sh`, `scripts/swarm_control_surface_intent_router.sh`, and `scripts/swarm_control_surface_drift_gate.sh` | Show catalog decision, surface count, drift count, top recommended surface, command count, blocked/degraded/fail-closed reason codes, duplicate-new-work warning, and artifact links without creating another dashboard producer or mutating live work. |
+| `swarm_control_surface_catalog` | `swarm-control-surface-catalog.v1` plus `swarm-control-surface-intent-plan.v1` and `swarm-control-surface-drift-report.v1` from `scripts/swarm_control_surface_catalog_normalizer.sh`, `scripts/swarm_control_surface_intent_router.sh`, and `scripts/swarm_control_surface_drift_gate.sh` | Show catalog decision, surface count, drift count, top recommended surface, track, purpose, operator-status section, implementation/smoke scripts, required inputs, emitted artifacts, validation commands, blocked/degraded/fail-closed reason codes, duplicate-new-work warning, and artifact links without creating another dashboard producer or mutating live work. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
 
 The resource-envelope input contract is fixed by
@@ -408,6 +408,11 @@ drift-gate schemas emitted by `scripts/swarm_control_surface_catalog_normalizer.
 uses those artifacts as advisory routing evidence only; it does not create a
 second dashboard, claim live mutation authority, or perform automatic
 remediation.
+The handoff fields must preserve enough detail for remote-proof residency,
+proof-economy what-if, build-storm QoS, worker-toolchain mismatch, warm-target
+ROI, and local-fallback-contamination decisions to tell an operator which
+surface was selected, why it matched, which script to run, and which artifacts
+to keep.
 
 Each section must remain JSON-first so `/dp/frankentui` can render it without
 adding a parallel TUI framework inside `franken_engine`.
@@ -467,6 +472,12 @@ The smoke test publishes deterministic goldens for:
 - `control_surface_catalog_drift_fail_closed`
 - `control_surface_catalog_duplicate_warning`
 - `control_surface_catalog_shadow_blocked`
+- `control_surface_catalog_remote_proof_resident`
+- `control_surface_catalog_proof_economy_what_if`
+- `control_surface_catalog_build_storm_qos`
+- `control_surface_catalog_worker_toolchain_mismatch`
+- `control_surface_catalog_warm_target_roi`
+- `control_surface_catalog_local_fallback_contaminated`
 
 These fixtures are the handoff payloads for a later `/dp/frankentui` renderer.
 They are not evidence that an interactive renderer exists in this repository.

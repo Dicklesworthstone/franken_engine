@@ -111,6 +111,9 @@
     "control_surface_catalog_surface_count": 3,
     "control_surface_catalog_drift_count": 0,
     "control_surface_catalog_top_recommended_surface": "swarm_capability_affinity_routing",
+    "control_surface_catalog_top_recommended_track": "worker_routing",
+    "control_surface_catalog_top_recommended_operator_status_section": "none",
+    "control_surface_catalog_top_recommended_script": "none",
     "control_surface_catalog_recommended_command_count": 1
   },
   "services": {
@@ -1190,6 +1193,25 @@
       "drift_count": 0,
       "top_recommended_surface": "swarm_capability_affinity_routing",
       "top_recommended_track": "worker_routing",
+      "top_recommended_purpose": null,
+      "top_recommended_operator_status_section": null,
+      "top_recommended_script": null,
+      "top_recommended_smoke_script": null,
+      "top_recommended_contract_json": null,
+      "top_recommended_runbook_doc": null,
+      "top_recommended_score": null,
+      "top_recommended_required_inputs": [],
+      "top_recommended_emitted_artifacts": [
+        "swarm_capability_affinity_routing_advisory.json",
+        "swarm_capability_affinity_routing_outcome_ledger.json"
+      ],
+      "top_recommended_validation_commands": [
+        "bash scripts/e2e/swarm_capability_affinity_routing_outcome_ledger_smoke.sh selftest"
+      ],
+      "top_recommended_intent_tags": [],
+      "top_recommended_symptom_tags": [],
+      "top_recommended_matched_intent_tags": [],
+      "top_recommended_matched_symptom_tags": [],
       "recommended_command_count": 1,
       "artifacts_to_preserve_count": 2,
       "blocked_reason_codes": [],

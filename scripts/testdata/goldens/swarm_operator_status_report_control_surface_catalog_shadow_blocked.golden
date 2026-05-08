@@ -111,6 +111,9 @@
     "control_surface_catalog_surface_count": 3,
     "control_surface_catalog_drift_count": 0,
     "control_surface_catalog_top_recommended_surface": "swarm_autopilot_shadow_daemon",
+    "control_surface_catalog_top_recommended_track": "autopilot_shadow",
+    "control_surface_catalog_top_recommended_operator_status_section": "none",
+    "control_surface_catalog_top_recommended_script": "none",
     "control_surface_catalog_recommended_command_count": 1
   },
   "services": {
@@ -1190,6 +1193,24 @@
       "drift_count": 0,
       "top_recommended_surface": "swarm_autopilot_shadow_daemon",
       "top_recommended_track": "autopilot_shadow",
+      "top_recommended_purpose": null,
+      "top_recommended_operator_status_section": null,
+      "top_recommended_script": null,
+      "top_recommended_smoke_script": null,
+      "top_recommended_contract_json": null,
+      "top_recommended_runbook_doc": null,
+      "top_recommended_score": null,
+      "top_recommended_required_inputs": [],
+      "top_recommended_emitted_artifacts": [
+        "swarm_autopilot_shadow_daemon_report.json"
+      ],
+      "top_recommended_validation_commands": [
+        "bash scripts/e2e/swarm_autopilot_shadow_daemon_smoke.sh selftest"
+      ],
+      "top_recommended_intent_tags": [],
+      "top_recommended_symptom_tags": [],
+      "top_recommended_matched_intent_tags": [],
+      "top_recommended_matched_symptom_tags": [],
       "recommended_command_count": 1,
       "artifacts_to_preserve_count": 1,
       "blocked_reason_codes": [

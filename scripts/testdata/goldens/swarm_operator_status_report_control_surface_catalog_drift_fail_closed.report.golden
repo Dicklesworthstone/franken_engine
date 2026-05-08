@@ -10,7 +10,8 @@
 - Admission budget: `balanced` with `0` deferred
 - Resource envelope: `ready` / `admit` with `3` admitted and `0` deferred
 - Topology placement: `ready` class=`numa_hot_cache_preferred` cache=`hot` adoption=`adopted`
-- Control surface catalog: `contaminated` decision=`pass` surfaces=`3` drift=`1` top=`swarm_capability_affinity_routing` commands=`1`
+- Control surface catalog: `contaminated` decision=`pass` surfaces=`3` drift=`1` top=`swarm_capability_affinity_routing` track=`worker_routing` script=`none` commands=`1`
+  - Control surface handoff: section=`none` purpose=`none` fail=`["FE-SWARM-DRIFT-DUPLICATE-INTENT"]` degraded=`[]` blocked=`[]`
 - Actionability guard: `missing` decision=`missing` candidate=`none` reasons=`0`
 - Capability affinity: `ready` mode=`capability_affinity_confirmed` preferred=`2` mismatch=`0` gap=`0` drift=`0`
 - Lease exchange posture: `retain_current_assignments`

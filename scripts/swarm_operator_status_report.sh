@@ -802,6 +802,16 @@ jq -n \
     if (($primary // []) | length) > 0 then $primary else ($fallback // []) end;
   def bounded($items): (($items // [])[0:8]);
   def strings($items): bounded(($items // []) | map(tostring));
+  def as_array($items):
+    if $items == null then []
+    elif ($items | type) == "array" then $items
+    else [$items]
+    end;
+  def tag_labels($items):
+    bounded(as_array($items)
+      | map(if (type == "object") then (.purpose // .surface_id // .tag // empty) else tostring end)
+      | map(select(length > 0))
+      | unique);
   def reason_code: (.code // .reason_code // .finding_code // "unknown") | tostring;
   def mismatch_severity_rank($class):
     if ($class // "") | IN("contradictory_evidence", "missing_outcome") then 50
@@ -2505,6 +2515,20 @@ jq -n \
       drift_count: ($swarm_control_surface_drift_report.fail_closed_count // (($swarm_control_surface_drift_report.findings // []) | length)),
       top_recommended_surface: ($control_surface_top_recommendation.surface_id // null),
       top_recommended_track: ($control_surface_top_recommendation.track // null),
+      top_recommended_purpose: ($control_surface_top_recommendation.purpose // null),
+      top_recommended_operator_status_section: ($control_surface_top_recommendation.operator_status_section // null),
+      top_recommended_script: ($control_surface_top_recommendation.implementation_script // null),
+      top_recommended_smoke_script: ($control_surface_top_recommendation.smoke_script // null),
+      top_recommended_contract_json: ($control_surface_top_recommendation.contract_json // null),
+      top_recommended_runbook_doc: ($control_surface_top_recommendation.runbook_doc // null),
+      top_recommended_score: ($control_surface_top_recommendation.score // null),
+      top_recommended_required_inputs: bounded($control_surface_top_recommendation.required_inputs),
+      top_recommended_emitted_artifacts: bounded($control_surface_top_recommendation.emitted_artifacts),
+      top_recommended_validation_commands: bounded($control_surface_top_recommendation.validation_commands),
+      top_recommended_intent_tags: tag_labels($control_surface_top_recommendation.intent_tags),
+      top_recommended_symptom_tags: tag_labels($control_surface_top_recommendation.symptom_tags),
+      top_recommended_matched_intent_tags: tag_labels($control_surface_top_recommendation.matched_intent_tags),
+      top_recommended_matched_symptom_tags: tag_labels($control_surface_top_recommendation.matched_symptom_tags),
       recommended_command_count: (($swarm_control_surface_intent_plan.advisory_commands // []) | length),
       artifacts_to_preserve_count: (($swarm_control_surface_intent_plan.artifacts_to_preserve // []) | length),
       blocked_reason_codes: ($control_surface_blocked_reasons | map(reason_code) | unique),
@@ -2872,6 +2896,9 @@ jq -n \
         control_surface_catalog_surface_count: $control_surface_catalog_summary.surface_count,
         control_surface_catalog_drift_count: $control_surface_catalog_summary.drift_count,
         control_surface_catalog_top_recommended_surface: ($control_surface_catalog_summary.top_recommended_surface // "none"),
+        control_surface_catalog_top_recommended_track: ($control_surface_catalog_summary.top_recommended_track // "none"),
+        control_surface_catalog_top_recommended_operator_status_section: ($control_surface_catalog_summary.top_recommended_operator_status_section // "none"),
+        control_surface_catalog_top_recommended_script: ($control_surface_catalog_summary.top_recommended_script // "none"),
         control_surface_catalog_recommended_command_count: $control_surface_catalog_summary.recommended_command_count
       } else {} end)),
       services: {
@@ -3148,7 +3175,8 @@ JQ
     printf -- "- Topology queue advisory: \`%s\` decision=\`%s\` bias=\`%s\` excluded=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.advisory_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_topology_aware_queue_advisory.rank_bias_mode' "$status_path")" "$(jq '.predictive_dashboard.swarm_topology_aware_queue_advisory.worker_exclusions.excluded_worker_count' "$status_path")"
   fi
   if jq -e '.predictive_dashboard | has("swarm_control_surface_catalog")' "$status_path" >/dev/null; then
-    printf -- "- Control surface catalog: \`%s\` decision=\`%s\` surfaces=\`%s\` drift=\`%s\` top=\`%s\` commands=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.catalog_decision' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.surface_count' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.drift_count' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface // "none"' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.recommended_command_count' "$status_path")"
+    printf -- "- Control surface catalog: \`%s\` decision=\`%s\` surfaces=\`%s\` drift=\`%s\` top=\`%s\` track=\`%s\` script=\`%s\` commands=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.catalog_decision' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.surface_count' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.drift_count' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_track // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_script // "none"' "$status_path")" "$(jq '.predictive_dashboard.swarm_control_surface_catalog.recommended_command_count' "$status_path")"
+    printf -- "  - Control surface handoff: section=\`%s\` purpose=\`%s\` fail=\`%s\` degraded=\`%s\` blocked=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_control_surface_catalog.top_recommended_purpose // "none"' "$status_path")" "$(jq -c '.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes' "$status_path")" "$(jq -c '.predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes' "$status_path")" "$(jq -c '.predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes' "$status_path")"
   fi
   if jq -e '.predictive_dashboard | has("swarm_actionability_guard")' "$status_path" >/dev/null; then
     printf -- "- Actionability guard: \`%s\` decision=\`%s\` candidate=\`%s\` reasons=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.guard_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.primary_candidate_id // "none"' "$status_path")" "$(jq '.predictive_dashboard.swarm_actionability_guard.reason_codes | length' "$status_path")"

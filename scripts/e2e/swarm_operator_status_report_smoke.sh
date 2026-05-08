@@ -740,6 +740,8 @@ write_control_surface_catalog_fixtures() {
   local drift_findings='[]'
   local drift_fail_closed_count=0
   local remediation_commands='[]'
+  local control_surface_id=""
+  local control_surface_router_cases="${root_dir}/scripts/testdata/swarm_control_surface_intent_router/cases.json"
   local surfaces='[
     {
       "surface_id":"swarm_actionability_truth_gate",
@@ -806,11 +808,59 @@ write_control_surface_catalog_fixtures() {
       artifacts_to_preserve='["swarm_autopilot_shadow_daemon_report.json"]'
       blocked_reasons='[{"code":"FE-SWARM-INTENT-ACTIVE-OWNER","surface_id":"swarm_autopilot_shadow_daemon","detail":"shadow-daemon lane is blocked by an active owner"}]'
       ;;
+    remote_proof_resident)
+      control_surface_id="resident_remote_proof_bundle_executor"
+      ;;
+    proof_economy_what_if)
+      control_surface_id="proof_economy_operator_what_if_report"
+      ;;
+    build_storm_qos)
+      control_surface_id="build_storm_qos_batch_planner"
+      ;;
+    worker_toolchain_mismatch)
+      control_surface_id="swarm_worker_capability_toolchain_normalizer"
+      intent_decision="degraded"
+      degraded_reasons='[{"code":"FE-SWARM-WORKER-TOOLCHAIN-MISMATCH","surface_id":"swarm_worker_capability_toolchain_normalizer","detail":"worker toolchain fingerprint mismatch requires normalizer handoff before proof routing"}]'
+      ;;
+    warm_target_roi)
+      control_surface_id="warm_target_roi_eviction_ledger"
+      ;;
+    local_fallback_contaminated)
+      control_surface_id="swarm_rch_stall_rehabilitation_ledger"
+      intent_decision="fail_closed"
+      fail_closed_count=1
+      fail_closed_reasons='[{"code":"FE-SWARM-REMOTE-PROOF-LOCAL-FALLBACK-CONTAMINATION","surface_id":"swarm_rch_stall_rehabilitation_ledger","detail":"local fallback output cannot satisfy remote-proof evidence and must be classified before routing"}]'
+      ;;
     *)
       record_failure "unknown control surface catalog mode: ${mode}"
       exit 64
       ;;
   esac
+
+  if [[ -n "$control_surface_id" ]]; then
+    surfaces="$(jq -c --arg surface_id "$control_surface_id" \
+      '[.catalog.surfaces[] | select(.surface_id == $surface_id)]' \
+      "$control_surface_router_cases")"
+    if [[ "$surfaces" == "[]" ]]; then
+      record_failure "missing control surface router fixture: ${control_surface_id}"
+      exit 65
+    fi
+    recommendations="$(jq -c --arg surface_id "$control_surface_id" \
+      'def route_track($id):
+        if $id == "resident_remote_proof_bundle_executor" then "REMOTE-PROOF"
+        elif $id == "proof_economy_operator_what_if_report" then "PROOF-ECONOMY"
+        elif $id == "build_storm_qos_batch_planner" then "SWARM-BUILD-STORM"
+        elif $id == "swarm_worker_capability_toolchain_normalizer" then "SWARM-WORKER-CAPABILITY"
+        elif $id == "warm_target_roi_eviction_ledger" then "SWARM-WARM-TARGET"
+        elif $id == "swarm_rch_stall_rehabilitation_ledger" then "SWARM-RCH"
+        else "unknown"
+        end;
+      [.catalog.surfaces[] | select(.surface_id == $surface_id)
+        | . + {track: route_track(.surface_id), score: 1000000, matched_intent_tags: .intent_tags, matched_symptom_tags: .symptom_tags}]' \
+      "$control_surface_router_cases")"
+    advisory_commands="$(jq -c '.[0].validation_commands // []' <<<"$recommendations")"
+    artifacts_to_preserve="$(jq -c '.[0].emitted_artifacts // []' <<<"$recommendations")"
+  fi
 
   jq -n \
     --arg catalog_path "${fixture_dir}/swarm_control_surface_catalog.json" \
@@ -2916,6 +2966,30 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_control_surface_catalog_fixtures "$fixture_dir" "shadow_blocked"
       ;;
+    control_surface_catalog_remote_proof_resident)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "remote_proof_resident"
+      ;;
+    control_surface_catalog_proof_economy_what_if)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "proof_economy_what_if"
+      ;;
+    control_surface_catalog_build_storm_qos)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "build_storm_qos"
+      ;;
+    control_surface_catalog_worker_toolchain_mismatch)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "worker_toolchain_mismatch"
+      ;;
+    control_surface_catalog_warm_target_roi)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "warm_target_roi"
+      ;;
+    control_surface_catalog_local_fallback_contaminated)
+      write_healthy_fixtures "$fixture_dir"
+      write_control_surface_catalog_fixtures "$fixture_dir" "local_fallback_contaminated"
+      ;;
     actionability_guard_healthy)
       write_healthy_fixtures "$fixture_dir"
       write_actionability_guard_fixtures "$fixture_dir" "healthy"
@@ -3198,6 +3272,21 @@ run_case() {
       and (.predictive_dashboard.swarm_control_surface_catalog.surface_count | type == "number")
       and (.predictive_dashboard.swarm_control_surface_catalog.drift_count | type == "number")
       and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_track | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_purpose == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_purpose | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_script | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_smoke_script == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_smoke_script | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_runbook_doc == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_runbook_doc | type == "string"))
+      and ((.predictive_dashboard.swarm_control_surface_catalog.top_recommended_score == null) or (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_score | type == "number"))
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_validation_commands | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_intent_tags | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_symptom_tags | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_matched_intent_tags | type == "array")
+      and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_matched_symptom_tags | type == "array")
       and (.predictive_dashboard.swarm_control_surface_catalog.recommended_command_count | type == "number")
       and (.predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes | type == "array")
       and (.predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes | type == "array")
@@ -3922,6 +4011,94 @@ run_case() {
         and any(.degraded[]; .component == "swarm_control_surface_catalog")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    control_surface_catalog_remote_proof_resident)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "resident_remote_proof_bundle_executor"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "REMOTE-PROOF"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "remote_proof"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/resident_remote_proof_bundle_executor.sh"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_smoke_script == "scripts/e2e/resident_remote_proof_bundle_executor_smoke.sh"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json == "docs/resident_remote_proof_bundle_contract_v1.json"
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | index("resident_remote_proof_bundle_contract_v1"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | index("resident_remote_proof_bundle_receipt.json"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_validation_commands | index("bash scripts/e2e/resident_remote_proof_bundle_executor_smoke.sh check"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_intent_tags | index("remote-proof"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_matched_symptom_tags | index("worker-proof-gap"))
+        and .summary.control_surface_catalog_top_recommended_operator_status_section == "remote_proof"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_proof_economy_what_if)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "proof_economy_operator_what_if_report"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "PROOF-ECONOMY"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "proof_economy"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/proof_economy_operator_what_if_report.sh"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_runbook_doc == "docs/PROOF_ECONOMY_OPERATOR_WHAT_IF_REPORT.md"
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | index("proof_economy_operator_what_if_contract_v1"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | index("proof_economy_operator_what_if_report.json"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_intent_tags | index("what-if"))
+        and .summary.control_surface_catalog_top_recommended_track == "PROOF-ECONOMY"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_build_storm_qos)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "build_storm_qos_batch_planner"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "SWARM-BUILD-STORM"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "build_storm_qos"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/build_storm_qos_batch_planner.sh"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json == "docs/BUILD_STORM_QOS_BATCH_PLANNER.md"
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | index("rch_workers_json"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | index("build_storm_batch_plan.json"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_symptom_tags | index("qos-resource-pressure"))
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_worker_toolchain_mismatch)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "degraded"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "warning"
+        and .predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision == "degraded"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_worker_capability_toolchain_normalizer"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "SWARM-WORKER-CAPABILITY"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "worker_capability_toolchain"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/swarm_worker_capability_toolchain_normalizer.sh"
+        and (.predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes | index("FE-SWARM-WORKER-TOOLCHAIN-MISMATCH"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | index("swarm_worker_capability_toolchain_input_contract_v1"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | index("worker_capability_toolchain_normalized.json"))
+        and .recommendations[0].action == "review_control_surface_catalog_routing"
+        and any(.degraded[]; .component == "swarm_control_surface_catalog")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_warm_target_roi)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "ready"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "warm_target_roi_eviction_ledger"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "SWARM-WARM-TARGET"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "warm_target"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/warm_target_roi_eviction_ledger.sh"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json == "docs/warm_target_roi_eviction_contract_v1.json"
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs | index("warm_target_roi_eviction_contract_v1"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts | index("warm_target_roi_eviction_ledger.json"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_intent_tags | index("proof-cache"))
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    control_surface_catalog_local_fallback_contaminated)
+      jq -e '
+        .predictive_dashboard.swarm_control_surface_catalog.readiness == "contaminated"
+        and .predictive_dashboard.swarm_control_surface_catalog.severity == "critical"
+        and .predictive_dashboard.swarm_control_surface_catalog.intent_plan_decision == "fail_closed"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface == "swarm_rch_stall_rehabilitation_ledger"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_track == "SWARM-RCH"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section == "swarm_rch_stall_rehabilitation"
+        and .predictive_dashboard.swarm_control_surface_catalog.top_recommended_script == "scripts/swarm_rch_stall_rehabilitation_ledger.sh"
+        and (.predictive_dashboard.swarm_control_surface_catalog.fail_closed_reason_codes | index("FE-SWARM-REMOTE-PROOF-LOCAL-FALLBACK-CONTAMINATION"))
+        and (.predictive_dashboard.swarm_control_surface_catalog.top_recommended_symptom_tags | index("local-fallback"))
+        and .recommendations[0].action == "respect_control_surface_catalog_fail_closed"
+        and any(.degraded[]; .component == "swarm_control_surface_catalog")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
     actionability_guard_healthy)
       jq -e '
         .predictive_dashboard.swarm_actionability_guard.readiness == "ready"
@@ -4031,6 +4208,12 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("control_surface_catalog_drift_fail_closed"))
     and (.golden_fixture_cases | index("control_surface_catalog_duplicate_warning"))
     and (.golden_fixture_cases | index("control_surface_catalog_shadow_blocked"))
+    and (.golden_fixture_cases | index("control_surface_catalog_remote_proof_resident"))
+    and (.golden_fixture_cases | index("control_surface_catalog_proof_economy_what_if"))
+    and (.golden_fixture_cases | index("control_surface_catalog_build_storm_qos"))
+    and (.golden_fixture_cases | index("control_surface_catalog_worker_toolchain_mismatch"))
+    and (.golden_fixture_cases | index("control_surface_catalog_warm_target_roi"))
+    and (.golden_fixture_cases | index("control_surface_catalog_local_fallback_contaminated"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -4138,6 +4321,20 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.surface_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.drift_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_surface"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_track"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_purpose"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_operator_status_section"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_script"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_smoke_script"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_contract_json"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_runbook_doc"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_required_inputs"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_emitted_artifacts"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_validation_commands"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_intent_tags"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_symptom_tags"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_matched_intent_tags"))
+    and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.top_recommended_matched_symptom_tags"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.recommended_command_count"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.blocked_reason_codes"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.degraded_reason_codes"))
@@ -4268,6 +4465,12 @@ run_selftest() {
   run_case "control_surface_catalog_drift_fail_closed" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "control_surface_catalog_duplicate_warning" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "control_surface_catalog_shadow_blocked" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_remote_proof_resident" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_proof_economy_what_if" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_build_storm_qos" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_worker_toolchain_mismatch" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_warm_target_roi" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "control_surface_catalog_local_fallback_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_blocked_divergence" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_stale_source" "degraded" "ok" "ok" "ok" "$tmp_root"

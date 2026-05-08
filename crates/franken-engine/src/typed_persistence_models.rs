@@ -3999,6 +3999,294 @@ mod tests {
             vec![Some(11), Some(12)]
         );
     }
+
+    /// Generic conformance harness for TypedStoreRecord implementations.
+    ///
+    /// This harness validates all documented invariants that every TypedStoreRecord
+    /// implementer must satisfy. New typed models must pass this contract test.
+    fn assert_typed_store_record_contract<T: TypedStoreRecord>(
+        valid_record: T,
+        another_valid_record: T,
+    ) where
+        T: Clone + PartialEq + std::fmt::Debug,
+    {
+        // Test 1: Basic typed roundtrip (to_store_record/from_store_record)
+        assert_typed_roundtrip(&valid_record);
+        assert_typed_roundtrip(&another_valid_record);
+
+        // Test 2: Metadata/key/id mismatch rejection
+        assert_rejects_metadata_mismatch(&valid_record);
+        assert_rejects_key_mismatch(&valid_record);
+        assert_rejects_id_payload_mismatch(&valid_record);
+
+        // Test 3: Negative ID rejection
+        assert_rejects_negative_ids::<T>();
+
+        // Test 4: Legacy generic row rejection (non-typed records)
+        assert_rejects_legacy_generic_rows::<T>();
+
+        // Test 5: Deterministic allocation replay
+        assert_deterministic_allocation(&valid_record, &another_valid_record);
+
+        // Test 6: Store kind consistency
+        assert_store_kind_consistency::<T>(&valid_record);
+    }
+
+    fn assert_typed_roundtrip<T: TypedStoreRecord>(record: &T)
+    where
+        T: Clone + PartialEq + std::fmt::Debug,
+    {
+        let store_record = record
+            .to_store_record(42)
+            .expect("valid typed record should serialize to store record");
+
+        let restored = T::from_store_record(&store_record)
+            .expect("typed store record should deserialize back to typed model");
+
+        assert_eq!(*record, restored, "typed roundtrip should be identity");
+
+        // Verify metadata is properly set
+        assert_eq!(
+            store_record.metadata.get(TYPED_RECORD_FORMAT_KEY),
+            Some(&TYPED_RECORD_FORMAT_VALUE.to_string())
+        );
+        assert_eq!(
+            store_record.metadata.get(TYPED_MODEL_KEY),
+            Some(&T::MODEL_NAME.to_string())
+        );
+        assert_eq!(
+            store_record.metadata.get(TYPED_STORE_KIND_KEY),
+            Some(&T::STORE_KIND.as_str().to_string())
+        );
+        assert_eq!(
+            store_record.metadata.get(TYPED_RECORD_ID_KEY),
+            Some(&record.typed_record_id().to_string())
+        );
+    }
+
+    fn assert_rejects_metadata_mismatch<T: TypedStoreRecord>(record: &T) {
+        let mut store_record = record
+            .to_store_record(42)
+            .expect("valid typed record should serialize");
+
+        // Test wrong record format
+        store_record.metadata.insert(
+            TYPED_RECORD_FORMAT_KEY.to_string(),
+            "wrong_format".to_string(),
+        );
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject wrong record format");
+
+        // Test wrong model name
+        store_record.metadata.insert(
+            TYPED_RECORD_FORMAT_KEY.to_string(),
+            TYPED_RECORD_FORMAT_VALUE.to_string(),
+        );
+        store_record.metadata.insert(
+            TYPED_MODEL_KEY.to_string(),
+            "WrongModel".to_string(),
+        );
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject wrong model name");
+
+        // Test wrong store kind
+        store_record.metadata.insert(
+            TYPED_MODEL_KEY.to_string(),
+            T::MODEL_NAME.to_string(),
+        );
+        store_record.metadata.insert(
+            TYPED_STORE_KIND_KEY.to_string(),
+            "wrong_store".to_string(),
+        );
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject wrong store kind");
+
+        // Test missing required metadata
+        store_record.metadata.remove(TYPED_RECORD_ID_KEY);
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject missing typed_record_id metadata");
+    }
+
+    fn assert_rejects_key_mismatch<T: TypedStoreRecord>(record: &T) {
+        let mut store_record = record
+            .to_store_record(42)
+            .expect("valid typed record should serialize");
+
+        // Test wrong store kind in key
+        store_record.key = format!("typed/wrong_store/{}", record.typed_record_id());
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject key with wrong store kind");
+
+        // Test malformed key
+        store_record.key = "completely_wrong_key".to_string();
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject malformed key");
+
+        // Test key with wrong ID
+        store_record.key = format!("typed/{}/999999", T::STORE_KIND.as_str());
+        store_record.metadata.insert(
+            TYPED_RECORD_ID_KEY.to_string(),
+            "999999".to_string(),
+        );
+        assert!(T::from_store_record(&store_record).is_err(),
+            "should reject key/payload ID mismatch");
+    }
+
+    fn assert_rejects_id_payload_mismatch<T: TypedStoreRecord>(record: &T) {
+        let mut store_record = record
+            .to_store_record(42)
+            .expect("valid typed record should serialize");
+
+        // Corrupt the payload to have wrong ID but keep key/metadata consistent
+        if let Ok(mut payload) = serde_json::from_slice::<serde_json::Value>(&store_record.value) {
+            // Try to find an ID field to corrupt
+            if let Some(obj) = payload.as_object_mut() {
+                for (key, value) in obj.iter_mut() {
+                    if key.contains("id") && value.is_number() {
+                        *value = serde_json::Value::Number(999999.into());
+                        break;
+                    }
+                }
+                store_record.value = serde_json::to_vec(&payload).unwrap_or_default();
+
+                // This should fail because payload ID != key ID
+                assert!(T::from_store_record(&store_record).is_err(),
+                    "should reject payload with mismatched ID");
+            }
+        }
+    }
+
+    fn assert_rejects_negative_ids<T: TypedStoreRecord>() {
+        // Test that typed_record_key_for_id rejects negative IDs
+        assert!(T::typed_record_key_for_id(-1).is_err(),
+            "should reject negative typed record ID");
+        assert!(T::typed_record_key_for_id(-999).is_err(),
+            "should reject large negative typed record ID");
+
+        // Test that record_id_from_key rejects negative IDs in keys
+        let negative_key = format!("typed/{}/-42", T::STORE_KIND.as_str());
+        assert!(T::record_id_from_key(&negative_key).is_err(),
+            "should reject key with negative ID");
+    }
+
+    fn assert_rejects_legacy_generic_rows<T: TypedStoreRecord>() {
+        // Create a legacy generic row (no typed metadata)
+        let legacy_record = StoreRecord {
+            store: T::STORE_KIND,
+            key: "legacy/generic/key".to_string(),
+            value: b"legacy generic payload".to_vec(),
+            metadata: BTreeMap::from([
+                ("format".to_string(), "legacy_v1".to_string()),
+                ("source".to_string(), "migration".to_string()),
+            ]),
+            revision: 1,
+        };
+
+        assert!(T::from_store_record(&legacy_record).is_err(),
+            "should reject legacy generic row without typed metadata");
+
+        // Test partial typed marker rejection
+        let partial_typed_record = StoreRecord {
+            store: T::STORE_KIND,
+            key: format!("typed/{}/123", T::STORE_KIND.as_str()),
+            value: b"partial typed payload".to_vec(),
+            metadata: BTreeMap::from([
+                (TYPED_MODEL_KEY.to_string(), T::MODEL_NAME.to_string()),
+                // Missing other required typed metadata
+            ]),
+            revision: 1,
+        };
+
+        assert!(T::from_store_record(&partial_typed_record).is_err(),
+            "should reject partial typed record with incomplete metadata");
+    }
+
+    fn assert_deterministic_allocation<T: TypedStoreRecord>(
+        record1: &T,
+        record2: &T,
+    ) where
+        T: Clone,
+    {
+        // Test that key generation is deterministic
+        let key1a = record1.typed_record_key().expect("should generate key");
+        let key1b = record1.typed_record_key().expect("should generate key");
+        assert_eq!(key1a, key1b, "typed record key should be deterministic");
+
+        let key2a = record2.typed_record_key().expect("should generate key");
+        let key2b = record2.typed_record_key().expect("should generate key");
+        assert_eq!(key2a, key2b, "typed record key should be deterministic");
+
+        // Test that different records have different keys (assuming different IDs)
+        if record1.typed_record_id() != record2.typed_record_id() {
+            assert_ne!(key1a, key2a, "different typed records should have different keys");
+        }
+
+        // Test deterministic metadata generation
+        let meta1 = record1.typed_record_extra_metadata();
+        let meta1_again = record1.typed_record_extra_metadata();
+        assert_eq!(meta1, meta1_again, "extra metadata should be deterministic");
+    }
+
+    fn assert_store_kind_consistency<T: TypedStoreRecord>(record: &T) {
+        let store_record = record
+            .to_store_record(42)
+            .expect("valid typed record should serialize");
+
+        // Verify store kind consistency
+        assert_eq!(store_record.store, T::STORE_KIND,
+            "store record should have consistent store kind");
+
+        let expected_key_prefix = format!("typed/{}/", T::STORE_KIND.as_str());
+        assert!(store_record.key.starts_with(&expected_key_prefix),
+            "store record key should have correct store kind prefix");
+
+        // Test that parsing works correctly
+        let parsed_id = T::record_id_from_key(&store_record.key)
+            .expect("should parse ID from generated key");
+        assert_eq!(parsed_id, record.typed_record_id(),
+            "parsed ID should match record ID");
+    }
+
+    /// Comprehensive conformance tests for all TypedStoreRecord implementations
+    #[test]
+    fn typed_store_record_conformance_replacement_lineage() {
+        assert_typed_store_record_contract(
+            replacement_entry(1),
+            replacement_entry(2),
+        );
+    }
+
+    #[test]
+    fn typed_store_record_conformance_ifc_provenance() {
+        assert_typed_store_record_contract(
+            ifc_entry(10, "trace-a"),
+            ifc_entry(20, "trace-b"),
+        );
+    }
+
+    #[test]
+    fn typed_store_record_conformance_proof_evidence_index() {
+        assert_typed_store_record_contract(
+            proof_evidence_entry(100),
+            proof_evidence_entry(200),
+        );
+    }
+
+    #[test]
+    fn typed_store_record_conformance_shadow_evidence_journal() {
+        assert_typed_store_record_contract(
+            shadow_evidence_entry(1000),
+            shadow_evidence_entry(2000),
+        );
+    }
+
+    #[test]
+    fn typed_store_record_conformance_specialization_index() {
+        assert_typed_store_record_contract(
+            specialization_entry(50),
+            specialization_entry(60),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

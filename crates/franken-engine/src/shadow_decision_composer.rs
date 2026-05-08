@@ -11,7 +11,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
 };
 
 use serde::{Deserialize, Serialize};
@@ -659,7 +660,42 @@ pub fn normalize_journal_event(
     })
 }
 
+/// Global lock map for output directories to prevent concurrent writes.
+static OUTPUT_DIR_LOCKS: std::sync::LazyLock<Mutex<BTreeMap<PathBuf, std::sync::Arc<Mutex<()>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+/// Acquire a lock for the given output directory to ensure atomic artifact bundle writes.
+fn acquire_output_dir_lock(output_dir: &Path) -> std::sync::Arc<Mutex<()>> {
+    let canonical_path = output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf());
+    let mut locks = OUTPUT_DIR_LOCKS.lock().unwrap();
+    locks.entry(canonical_path).or_insert_with(|| std::sync::Arc::new(Mutex::new(()))).clone()
+}
+
+/// Write content to a file atomically using temp file + rename.
+fn write_file_atomic(path: &str, content: &[u8]) -> Result<(), ShadowDecisionError> {
+    let target_path = Path::new(path);
+    let temp_path = format!("{}.tmp.{}", path, std::process::id());
+
+    // Write to temporary file first
+    fs::write(&temp_path, content)?;
+
+    // Atomically rename to final destination
+    fs::rename(&temp_path, target_path)?;
+
+    Ok(())
+}
+
+/// Write JSON artifact atomically to prevent partial reads during concurrent writes.
+fn write_json_artifact_atomic<T>(path: &str, value: &T) -> Result<(), ShadowDecisionError>
+where
+    T: Serialize,
+{
+    let json_bytes = serde_json::to_string_pretty(value)?.into_bytes();
+    write_file_atomic(path, &json_bytes)
+}
+
 /// Write the composed artifacts, constrained to the provided output directory.
+/// Uses per-directory locking and atomic writes to prevent concurrent write conflicts.
 pub fn write_shadow_decision_artifacts(
     output_dir: impl AsRef<Path>,
     artifacts: &ShadowDecisionArtifacts,
@@ -668,30 +704,39 @@ pub fn write_shadow_decision_artifacts(
     ensure_artifact_paths_under(output_dir, &artifacts.shadow_status.artifact_paths)?;
     fs::create_dir_all(output_dir)?;
 
-    write_json_artifact(
-        &artifacts.shadow_status.artifact_paths.shadow_status_json,
-        &artifacts.shadow_status,
+    // Acquire per-directory lock to prevent concurrent writers from creating mixed bundles
+    let _lock = acquire_output_dir_lock(output_dir).lock().unwrap();
+
+    // Write non-critical files first with atomic writes
+    write_file_atomic(
+        &artifacts.shadow_status.artifact_paths.operator_notice_md,
+        artifacts.operator_notice_md.as_bytes(),
     )?;
-    write_json_artifact(
+    write_file_atomic(
+        &artifacts.shadow_status.artifact_paths.events_jsonl,
+        artifacts.events_jsonl.as_bytes(),
+    )?;
+    write_file_atomic(
+        &artifacts.shadow_status.artifact_paths.commands_txt,
+        artifacts.commands_txt.as_bytes(),
+    )?;
+    write_file_atomic(
+        &artifacts.shadow_status.artifact_paths.report_md,
+        artifacts.report_md.as_bytes(),
+    )?;
+
+    // Write recommendations second-to-last
+    write_json_artifact_atomic(
         &artifacts.shadow_status.artifact_paths.recommendations_json,
         &artifacts.recommendations,
     )?;
-    fs::write(
-        &artifacts.shadow_status.artifact_paths.operator_notice_md,
-        &artifacts.operator_notice_md,
+
+    // Write shadow_status_json last as it serves as the bundle completion signal
+    write_json_artifact_atomic(
+        &artifacts.shadow_status.artifact_paths.shadow_status_json,
+        &artifacts.shadow_status,
     )?;
-    fs::write(
-        &artifacts.shadow_status.artifact_paths.events_jsonl,
-        &artifacts.events_jsonl,
-    )?;
-    fs::write(
-        &artifacts.shadow_status.artifact_paths.commands_txt,
-        &artifacts.commands_txt,
-    )?;
-    fs::write(
-        &artifacts.shadow_status.artifact_paths.report_md,
-        &artifacts.report_md,
-    )?;
+
     Ok(())
 }
 
@@ -1248,14 +1293,6 @@ fn reject_parent_dir_component(label: &str, path: &Path) -> Result<(), ShadowDec
             path.display()
         )));
     }
-    Ok(())
-}
-
-fn write_json_artifact<T>(path: &str, value: &T) -> Result<(), ShadowDecisionError>
-where
-    T: Serialize,
-{
-    fs::write(path, serde_json::to_string_pretty(value)?)?;
     Ok(())
 }
 

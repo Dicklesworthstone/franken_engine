@@ -568,8 +568,20 @@ impl GovernanceAuditLedger {
                 });
             }
             let recomputed_signature =
-                AuthenticityHash::compute_keyed(&preimage, &self.config.signer_key).to_hex();
-            if recomputed_signature != entry.signature {
+                AuthenticityHash::compute_keyed(&preimage, &self.config.signer_key);
+            let entry_signature_bytes = crate::golden_vectors::from_hex(&entry.signature)
+                .map_err(|_| GovernanceLedgerError::SignatureMismatch {
+                    sequence: entry.sequence,
+                })?;
+            if entry_signature_bytes.len() != 32 {
+                return Err(GovernanceLedgerError::SignatureMismatch {
+                    sequence: entry.sequence,
+                });
+            }
+            let mut entry_signature_array = [0u8; 32];
+            entry_signature_array.copy_from_slice(&entry_signature_bytes);
+            let entry_signature = AuthenticityHash(entry_signature_array);
+            if !recomputed_signature.constant_time_eq(&entry_signature) {
                 return Err(GovernanceLedgerError::SignatureMismatch {
                     sequence: entry.sequence,
                 });
@@ -583,9 +595,21 @@ impl GovernanceAuditLedger {
                 &checkpoint.head_hash,
                 checkpoint.timestamp_ns,
             )?;
-            let signature =
-                AuthenticityHash::compute_keyed(&preimage, &self.config.signer_key).to_hex();
-            if signature != checkpoint.signature {
+            let recomputed_signature =
+                AuthenticityHash::compute_keyed(&preimage, &self.config.signer_key);
+            let checkpoint_signature_bytes = crate::golden_vectors::from_hex(&checkpoint.signature)
+                .map_err(|_| GovernanceLedgerError::SignatureMismatch {
+                    sequence: checkpoint.sequence,
+                })?;
+            if checkpoint_signature_bytes.len() != 32 {
+                return Err(GovernanceLedgerError::SignatureMismatch {
+                    sequence: checkpoint.sequence,
+                });
+            }
+            let mut checkpoint_signature_array = [0u8; 32];
+            checkpoint_signature_array.copy_from_slice(&checkpoint_signature_bytes);
+            let checkpoint_signature = AuthenticityHash(checkpoint_signature_array);
+            if !recomputed_signature.constant_time_eq(&checkpoint_signature) {
                 return Err(GovernanceLedgerError::SignatureMismatch {
                     sequence: checkpoint.sequence,
                 });

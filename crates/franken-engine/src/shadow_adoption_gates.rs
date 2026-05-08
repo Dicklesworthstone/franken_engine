@@ -323,7 +323,7 @@ fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenComma
                     return Ok(Some(usage));
                 }
                 at_segment_start = true;
-                saw_separator = true;
+                saw_separator = false;
                 previous_was_whitespace = true;
             }
             // Shell redirections that can separate commands
@@ -334,7 +334,7 @@ fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenComma
                     return Ok(Some(usage));
                 }
                 at_segment_start = true;
-                saw_separator = true;
+                saw_separator = false;
                 previous_was_whitespace = true;
             }
             // Command substitution and subshell operators
@@ -345,7 +345,7 @@ fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenComma
                     return Ok(Some(usage));
                 }
                 at_segment_start = true;
-                saw_separator = true;
+                saw_separator = false;
                 previous_was_whitespace = true;
             }
             ch if ch.is_whitespace() => {

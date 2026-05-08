@@ -2827,4 +2827,163 @@ mod tests {
     fn component_name_non_empty() {
         assert!(!ELISION_GATE_COMPONENT.is_empty());
     }
+
+    // -------------------------------------------------------------------
+    // Golden snapshot regression test
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn golden_generate_savings_report_deterministic_output() {
+        // Create a deterministic AllocationElisionGate with fixed state
+        let mut gate = AllocationElisionGate::new(lane("test-lane-42"), epoch(10));
+
+        // Add some deterministic site evaluations to create realistic state
+        let site_1 = site("allocation-site-1");
+        let site_2 = site("allocation-site-2");
+        let site_3 = site("allocation-site-3");
+
+        // Evaluate sites to populate state (approved, denied, etc.)
+        let eval_input_1 = ElisionEvalInput {
+            site_id: site_1.clone(),
+            lane_id: lane("test-lane-42"),
+            alloc_type: AllocationType::Heap,
+            size_hint: 1024,
+            safety_margin_millionths: 950_000,
+            gc_assessment: good_gc_assessment(),
+            latency_evidence: good_latency_evidence(),
+            epoch: epoch(10),
+            timestamp_ns: 1234567890000,
+            request_id: "req-1".to_string(),
+        };
+
+        let eval_input_2 = ElisionEvalInput {
+            site_id: site_2.clone(),
+            lane_id: lane("test-lane-42"),
+            alloc_type: AllocationType::Stack,
+            size_hint: 256,
+            safety_margin_millionths: 800_000,
+            gc_assessment: bad_gc_assessment(),
+            latency_evidence: good_latency_evidence(),
+            epoch: epoch(10),
+            timestamp_ns: 1234567890001,
+            request_id: "req-2".to_string(),
+        };
+
+        let eval_input_3 = ElisionEvalInput {
+            site_id: site_3.clone(),
+            lane_id: lane("test-lane-42"),
+            alloc_type: AllocationType::Heap,
+            size_hint: 512,
+            safety_margin_millionths: 900_000,
+            gc_assessment: good_gc_assessment(),
+            latency_evidence: good_latency_evidence(),
+            epoch: epoch(10),
+            timestamp_ns: 1234567890002,
+            request_id: "req-3".to_string(),
+        };
+
+        // Evaluate sites to build up state
+        gate.evaluate(&eval_input_1);
+        gate.evaluate(&eval_input_2);
+        gate.evaluate(&eval_input_3);
+
+        // Generate the savings report with deterministic parameters
+        let report = gate.generate_savings_report(
+            &lane("test-lane-42"),
+            500_000,       // estimated_bytes_saved_per_sec
+            1_250,         // estimated_allocs_avoided_per_sec
+            45,            // estimated_gc_cycles_saved_per_min
+            50_000,        // net_p50_improvement_ns (positive = better)
+            150_000,       // net_p99_improvement_ns (positive = better)
+            epoch(42),     // epoch
+            2000000000000, // timestamp_ns (deterministic)
+        );
+
+        // Serialize to JSON with stable formatting (BTreeMap ensures key ordering)
+        let json_output = serde_json::to_string_pretty(&report)
+            .expect("ElisionSavingsReport should serialize to JSON");
+
+        // Check for golden file update mode
+        let golden_path = "tests/golden/generate_savings_report_output.golden";
+
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            // Write new golden file
+            std::fs::write(golden_path, &json_output).expect("Should be able to write golden file");
+            println!("Updated golden file: {}", golden_path);
+        } else {
+            // Read expected output and compare
+            let expected = std::fs::read_to_string(golden_path)
+                .expect("Golden file should exist. Run with UPDATE_GOLDEN=1 to create it.");
+
+            assert_eq!(
+                expected.trim(),
+                json_output.trim(),
+                "generate_savings_report output has changed. If this is intentional, run: UPDATE_GOLDEN=1 cargo test"
+            );
+        }
+
+        // Additional validation of output structure (schema validation)
+        assert_eq!(
+            report.lane_id,
+            lane("test-lane-42"),
+            "lane_id should match input"
+        );
+        assert_eq!(report.epoch, epoch(42), "epoch should match input");
+        assert_eq!(
+            report.timestamp_ns, 2000000000000,
+            "timestamp should match input"
+        );
+        assert_eq!(
+            report.estimated_bytes_saved_per_sec, 500_000,
+            "bytes saved should match input"
+        );
+        assert_eq!(
+            report.estimated_allocs_avoided_per_sec, 1_250,
+            "allocs avoided should match input"
+        );
+        assert_eq!(
+            report.estimated_gc_cycles_saved_per_min, 45,
+            "gc cycles should match input"
+        );
+        assert_eq!(
+            report.net_p50_improvement_ns, 50_000,
+            "p50 improvement should match input"
+        );
+        assert_eq!(
+            report.net_p99_improvement_ns, 150_000,
+            "p99 improvement should match input"
+        );
+
+        // Validate aggregate counts make sense
+        assert!(
+            report.total_sites_evaluated >= 3,
+            "should have evaluated at least 3 sites"
+        );
+        assert!(
+            report.sites_approved + report.sites_denied + report.sites_rolled_back
+                <= report.total_sites_evaluated,
+            "sum of verdict counts should not exceed total"
+        );
+        assert!(
+            !report.report_digest.as_bytes().is_empty(),
+            "report_digest should be populated"
+        );
+
+        // Verify deterministic behavior - same inputs should produce identical output
+        let report2 = gate.generate_savings_report(
+            &lane("test-lane-42"),
+            500_000,
+            1_250,
+            45,
+            50_000,
+            150_000,
+            epoch(42),
+            2000000000000,
+        );
+
+        assert_eq!(
+            report, report2,
+            "generate_savings_report should be deterministic for identical inputs"
+        );
+    }
 }

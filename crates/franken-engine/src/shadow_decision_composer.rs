@@ -710,7 +710,8 @@ pub fn write_shadow_decision_artifacts(
     fs::create_dir_all(output_dir)?;
 
     // Acquire per-directory lock to prevent concurrent writers from creating mixed bundles
-    let _lock = acquire_output_dir_lock(output_dir).lock().unwrap();
+    let lock_arc = acquire_output_dir_lock(output_dir);
+    let _lock = lock_arc.lock().unwrap();
 
     // Write non-critical files first with atomic writes
     write_file_atomic(

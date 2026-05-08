@@ -1,0 +1,101 @@
+{
+  "issues": [
+    {
+      "id": "bd-djejh.8",
+      "title": "[SWARM-AUTOPILOT-P0-H] Gate README claims and mutation policy for shadow daemon adoption",
+      "description": "Add adoption gates so shadow-daemon claims remain truthful.\n\nScope:\n- Prevent README/docs from claiming autonomous live mutation, production daemon status, or operator replacement until no-mock drill and replay gates are green.\n- Add checks that operator-action strings remain recommendations and cannot call br/Agent Mail/rch/git mutation commands from shadow-daemon code paths.\n- Document the proof state, residual risks, and exact commands/artifacts required to promote the daemon from advisory shadow mode.\n- File follow-up beads for any discovered gaps rather than broadening the implementation lane.\n\nValidation:\n- Focused docs/checker tests should fail on aspirational or mutation-capable claims and pass on the bounded advisory contract.",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "created_at": "2026-05-07T04:36:20.881682976Z",
+      "created_by": "BrownCreek",
+      "updated_at": "2026-05-07T04:37:11.782911513Z",
+      "source_repo": ".",
+      "compaction_level": 0,
+      "original_size": 0,
+      "labels": [
+        "autopilot",
+        "docs",
+        "fail-closed",
+        "governance",
+        "shadow-daemon"
+      ],
+      "dependency_count": 3,
+      "dependent_count": 1
+    },
+    {
+      "id": "bd-djejh.6",
+      "title": "[SWARM-AUTOPILOT-P0-F] Add no-mock shadow daemon lifecycle drill and truth gate",
+      "description": "Compose the shadow daemon pieces into a no-mock lifecycle drill.\n\nScope:\n- Run real local br/bv, Agent Mail, rch-status, git, and artifact snapshots through one-shot watchers, journal append/export, decision composition, replay, and truth-gate reporting.\n- Preserve run_manifest.json, events.jsonl, commands.txt, source_snapshots.jsonl, shadow_journal.jsonl, shadow_status.json, recommendations.json, replay_report.json, and truth_gate_report.json.\n- Support fixture replay without live tool access.\n- Fail closed on source staleness, local rch fallback contamination, contradictory ownership, unsupported mutation claims, missing raw references, and nondeterministic replay.\n\nTesting/logging:\n- Cases must cover healthy idle, active no-mock lane, stale/expired agent, Agent Mail degraded, rch local fallback contamination, and dirty shared worktree ambiguity.",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "task",
+      "assignee": "PearlTower",
+      "created_at": "2026-05-07T04:36:20.213507997Z",
+      "created_by": "BrownCreek",
+      "updated_at": "2026-05-08T04:37:44.826434232Z",
+      "source_repo": ".",
+      "compaction_level": 0,
+      "original_size": 0,
+      "labels": [
+        "autopilot",
+        "no-mock",
+        "shadow-daemon",
+        "testing",
+        "truth-gate"
+      ],
+      "dependency_count": 1,
+      "dependent_count": 3
+    },
+    {
+      "id": "bd-djejh",
+      "title": "[SWARM-AUTOPILOT-P0] Add continuous advisory autopilot shadow service and journaled evidence bus",
+      "description": "Create a fail-closed shadow autopilot service that continuously observes br/bv, Agent Mail, rch, git, and emitted swarm artifacts, then writes normalized immutable evidence snapshots into a frankensqlite-backed journal and emits advisory operator status without mutating beads, reservations, worker state, or queues.\n\nWhy this exists:\n- Existing SWARM_AUTOPILOT tracks are proof/advisory snapshots. Operators still need a continuously queryable evidence bus with deterministic replay, stale-source detection, and UI/service handoff contracts.\n- The service must make current proof-only scripts observable over time while preserving the repo rule that automation remains advisory unless an operator explicitly approves a mutation.\n\nArchitecture constraints:\n- Use /dp/frankensqlite for SQLite-backed persistence; do not build a parallel local persistence framework.\n- Use /dp/frankentui for TUI panel handoff and /dp/fastapi_rust for any service/API control surface if an API is needed.\n- Preserve deterministic replay, append-only source records, content hashes, source timestamps, and explicit stale/degraded states.\n- Fail closed on missing source snapshots, local rch fallback contamination, conflicting bead ownership, stale Agent Mail state, dirty worktree ambiguity, or unsupported mutation claims.\n\nCompletion requires the child beads to land contract/docs, journal adapter, watcher normalizers, decision composer, replay/drift verifier, no-mock drill, UI/API handoff, and governance gates.",
+      "status": "open",
+      "priority": 1,
+      "issue_type": "feature",
+      "created_at": "2026-05-07T04:36:18.471800793Z",
+      "created_by": "BrownCreek",
+      "updated_at": "2026-05-07T04:36:23.999612899Z",
+      "source_repo": ".",
+      "compaction_level": 0,
+      "original_size": 0,
+      "labels": [
+        "autopilot",
+        "frankensqlite",
+        "frankentui",
+        "shadow-daemon",
+        "testing"
+      ],
+      "dependency_count": 8,
+      "dependent_count": 0
+    },
+    {
+      "id": "bd-djejh.7",
+      "title": "[SWARM-AUTOPILOT-P0-G] Add frankentui and optional fastapi_rust handoff contracts",
+      "description": "Define and emit handoff artifacts for operator UI/service consumers.\n\nScope:\n- Emit a /dp/frankentui-compatible panel bundle for shadow status, source freshness, degraded gates, replay drift, and recommended next actions.\n- If an HTTP/service surface is needed, define it through /dp/fastapi_rust reuse rather than building a bespoke local API framework.\n- Preserve advisory-only semantics in all UI/service contracts; controls may stage or display commands but must not mutate br/Agent Mail/rch/git directly from the daemon.\n- Include accessibility/scannability expectations for high-volume swarm operations without decorative dashboards.\n\nTests:\n- Validate panel bundle schema, missing-source rendering state, and no-mutation command surfaces.",
+      "status": "open",
+      "priority": 2,
+      "issue_type": "task",
+      "created_at": "2026-05-07T04:36:20.543540320Z",
+      "created_by": "BrownCreek",
+      "updated_at": "2026-05-07T04:37:11.390505767Z",
+      "source_repo": ".",
+      "compaction_level": 0,
+      "original_size": 0,
+      "labels": [
+        "autopilot",
+        "fastapi-rust",
+        "frankentui",
+        "operator-ui",
+        "shadow-daemon"
+      ],
+      "dependency_count": 2,
+      "dependent_count": 2
+    }
+  ],
+  "total": 4,
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}

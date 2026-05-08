@@ -1,0 +1,4 @@
+{"timestamp":"2026-05-08T00:50:05-04:00","event_type":"git_status","status":"success","message":"7 uncommitted changes","scenario":"rch_local_fallback","sequence":0}
+{"timestamp":"2026-05-08T00:50:05-04:00","event_type":"bead_list","status":"success","message":"bead listing completed","scenario":"rch_local_fallback","sequence":1}
+{"timestamp":"2026-05-08T00:50:05-04:00","event_type":"rch_status","status":"success","message":"rch status completed","scenario":"rch_local_fallback","sequence":2}
+{"timestamp":"2026-05-08T00:50:05-04:00","event_type":"rch_contamination_detected","status":"fail_closed","message":"local compilation may contaminate remote build artifacts","scenario":"rch_local_fallback","sequence":3}

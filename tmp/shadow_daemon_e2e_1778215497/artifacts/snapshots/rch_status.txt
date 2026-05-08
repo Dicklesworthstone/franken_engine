@@ -1,0 +1,42 @@
+
+RCH Status
+----------
+
+  Daemon : Running (PID 1979)
+  Uptime : 16h 21m
+  Version : 1.0.24
+  Posture : degraded (Some workers unhealthy, partial remote capability)
+  Workers : 6/7 healthy, 30/46 slots available
+  Builds : 100 total, 8% success rate
+  Tests : 8177 total, 55% pass rate, avg 4m 31s
+  Hook : Installed
+  Saved : 1h 48m saved (2.0x speedup, 8 builds)
+           1h 48m today, 1h 48m this week
+
+
+Alerts
+------
+  ● [warning] Worker 'vmi1293453' is degraded (vmi1293453)
+
+
+Issues
+------
+  ● [warning] Worker 'vmi1293453' has stale/missing pressure telemetry (telemetry_unavailable)
+    Fix: rch workers capabilities --refresh (re-probe worker metrics)
+  ● [info] 1 recent cancellation(s) completed cleanly with deterministic cleanup.
+    Fix: No action required. Use `rch status --json` to inspect cancellation metadata if debugging build interruptions.
+  ● [warning] 1 active build(s) have stale progress while hook heartbeats remain fresh; queued validations may stall behind build 29832517041258738 on worker vmi1264463.
+    Fix: Inspect with `rch queue --json`; if progress remains stale, run `rch cancel 29832517041258738`. If this repeats on vmi1264463, drain it with `rch workers drain vmi1264463` before retrying validation.
+
+
+Repo Convergence
+----------------
+  State : ready (0 ready, 0 drifting, 0 failed, 0 stale)
+
+
+Remediation
+-----------
+  ! Worker vmi1293453 storage telemetry stale or missing [vmi1293453]
+    Fix: rch workers probe vmi1293453
+  ! Operating at reduced capacity: 6/7 workers healthy
+    Fix: rch workers probe --all

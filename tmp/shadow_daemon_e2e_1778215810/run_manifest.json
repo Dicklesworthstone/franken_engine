@@ -1,0 +1,33 @@
+{
+  "drill_id": "shadow_daemon_lifecycle_1778215810",
+  "scenario": "dirty_shared_worktree",
+  "start_time": "2026-05-08T00:50:10-04:00",
+  "project_root": "/data/projects/franken_engine",
+  "work_dir": "/data/projects/franken_engine/tmp/shadow_daemon_e2e_1778215810",
+  "git_commit": "b1e69dd9c3dca87d6a0badebf0399bf1d2207e0d",
+  "git_status_clean": 0,
+  "environment": {
+    "agent_name": "unknown",
+    "hostname": "sensedemobox",
+    "user": "ubuntu",
+    "pwd": "/data/projects/franken_engine/tmp/shadow_daemon_e2e_1778215810"
+  },
+  "end_time": "2026-05-08T00:50:11-04:00",
+  "duration_seconds": 1,
+  "final_status": "completed",
+  "artifact_summary": {
+    "total_files": 11,
+    "total_size_bytes": 19432,
+    "preserved_artifacts": [
+      "run_manifest.json",
+      "artifacts/events.jsonl",
+      "artifacts/commands.txt",
+      "artifacts/snapshots/",
+      "artifacts/journal/shadow_journal.jsonl",
+      "artifacts/decisions/shadow_status.json",
+      "artifacts/decisions/recommendations.json",
+      "artifacts/replay/replay_report.json",
+      "artifacts/truth_gate/truth_gate_report.json"
+    ]
+  }
+}

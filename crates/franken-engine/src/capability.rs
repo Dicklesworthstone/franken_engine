@@ -716,7 +716,7 @@ mod tests {
     #[test]
     fn capability_profile_serialization_round_trip() {
         let full = CapabilityProfile::full();
-        let json = serde_json::to_string(&full).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&full).expect("serde serialization should succeed");
         let restored: CapabilityProfile =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(full, restored);
@@ -733,9 +733,9 @@ mod tests {
         ];
         for profile in &profiles {
             let json1 =
-                serde_json::to_string(profile).expect("serde deserialization should succeed");
+                serde_json::to_string(profile).expect("serde serialization should succeed");
             let json2 =
-                serde_json::to_string(profile).expect("serde deserialization should succeed");
+                serde_json::to_string(profile).expect("serde serialization should succeed");
             assert_eq!(
                 json1, json2,
                 "non-deterministic serialization for {}",
@@ -767,7 +767,7 @@ mod tests {
             RuntimeCapability::FsWrite,
         ];
         for cap in &all {
-            let json = serde_json::to_string(cap).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cap).expect("serde serialization should succeed");
             let restored: RuntimeCapability =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cap, restored);
@@ -784,7 +784,7 @@ mod tests {
             ProfileKind::ComputeOnly,
         ];
         for kind in &all {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serde serialization should succeed");
             let restored: ProfileKind =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, restored);
@@ -826,7 +826,7 @@ mod tests {
             held_profile: ProfileKind::EngineCore,
             component: "test".to_string(),
         };
-        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&denied).expect("serde serialization should succeed");
         let restored: CapabilityDenied =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, restored);
@@ -989,7 +989,7 @@ mod tests {
             held_profile: ProfileKind::Remote,
             component: "fs-writer".to_string(),
         };
-        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&denied).expect("serde serialization should succeed");
         let back: CapabilityDenied =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.required, RuntimeCapability::FsWrite);
@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn capability_profile_json_contains_expected_fields() {
         let ec = CapabilityProfile::engine_core();
-        let json = serde_json::to_string(&ec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ec).expect("serde serialization should succeed");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"capabilities\""));
         assert!(json.contains("EngineCore"));
@@ -1266,7 +1266,7 @@ mod tests {
             CapabilityProfile::compute_only(),
         ];
         for p in &profiles {
-            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(p).expect("serde serialization should succeed");
             let restored: CapabilityProfile =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, restored, "serde roundtrip failed for {}", p.kind);
@@ -1586,7 +1586,7 @@ mod tests {
             held_profile: ProfileKind::Remote,
             component: "gc-manager".to_string(),
         };
-        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&denied).expect("serde serialization should succeed");
         let back: CapabilityDenied =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, back);
@@ -1674,8 +1674,8 @@ mod tests {
     fn profile_serialization_deterministic() {
         let p1 = CapabilityProfile::full();
         let p2 = CapabilityProfile::full();
-        let j1 = serde_json::to_string(&p1).expect("serde deserialization should succeed");
-        let j2 = serde_json::to_string(&p2).expect("serde deserialization should succeed");
+        let j1 = serde_json::to_string(&p1).expect("serde serialization should succeed");
+        let j2 = serde_json::to_string(&p2).expect("serde serialization should succeed");
         assert_eq!(j1, j2);
     }
 

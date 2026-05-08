@@ -1,0 +1,127 @@
+{
+  "schema_version": "franken-engine.shadow-evidence-journal.v1",
+  "rows": [
+    {
+      "journal_event_id": 1,
+      "bead_id": "shadow_drill_git_status",
+      "event_kind": "git_status",
+      "source_kind": "tool_watcher",
+      "source_locator": "e2e://git_status",
+      "collected_timestamp_ms": 1000,
+      "sequence_id": 1,
+      "payload_content_hash": "eb26fb8b4d472929eec6caf4fe872e593a60a77fef4f4a759dd08c96112c3982",
+      "normalized_payload": {
+        "timestamp": "2026-05-08T00:50:10-04:00",
+        "event_type": "git_status",
+        "status": "success",
+        "message": "7 uncommitted changes",
+        "scenario": "dirty_shared_worktree",
+        "sequence": 0
+      },
+      "normalized_payload_hash": "eb26fb8b4d472929eec6caf4fe872e593a60a77fef4f4a759dd08c96112c3982",
+      "raw_evidence_hashes": [],
+      "freshness_window_ms": 300000,
+      "freshness_deadline_ms": 301000,
+      "degradation_state": "success",
+      "retention_class": "drill_test",
+      "parent_event_ids": [],
+      "metadata": {
+        "scenario": "dirty_shared_worktree",
+        "original_timestamp": "2026-05-08T00:50:10-04:00"
+      }
+    },
+    {
+      "journal_event_id": 2,
+      "bead_id": "shadow_drill_bead_list",
+      "event_kind": "bead_list",
+      "source_kind": "tool_watcher",
+      "source_locator": "e2e://bead_list",
+      "collected_timestamp_ms": 1000,
+      "sequence_id": 2,
+      "payload_content_hash": "74e964a0fd95256558555f9c80baa537f258c6b35ca651359507994619819b51",
+      "normalized_payload": {
+        "timestamp": "2026-05-08T00:50:10-04:00",
+        "event_type": "bead_list",
+        "status": "success",
+        "message": "bead listing completed",
+        "scenario": "dirty_shared_worktree",
+        "sequence": 1
+      },
+      "normalized_payload_hash": "74e964a0fd95256558555f9c80baa537f258c6b35ca651359507994619819b51",
+      "raw_evidence_hashes": [],
+      "freshness_window_ms": 300000,
+      "freshness_deadline_ms": 301000,
+      "degradation_state": "success",
+      "retention_class": "drill_test",
+      "parent_event_ids": [
+        1
+      ],
+      "metadata": {
+        "scenario": "dirty_shared_worktree",
+        "original_timestamp": "2026-05-08T00:50:10-04:00"
+      }
+    },
+    {
+      "journal_event_id": 3,
+      "bead_id": "shadow_drill_rch_status",
+      "event_kind": "rch_status",
+      "source_kind": "tool_watcher",
+      "source_locator": "e2e://rch_status",
+      "collected_timestamp_ms": 1000,
+      "sequence_id": 3,
+      "payload_content_hash": "ec59ee24efcc481f3fc28426000a28099d0307ac71ae521751e9b8df0d8099af",
+      "normalized_payload": {
+        "timestamp": "2026-05-08T00:50:10-04:00",
+        "event_type": "rch_status",
+        "status": "success",
+        "message": "rch status completed",
+        "scenario": "dirty_shared_worktree",
+        "sequence": 2
+      },
+      "normalized_payload_hash": "ec59ee24efcc481f3fc28426000a28099d0307ac71ae521751e9b8df0d8099af",
+      "raw_evidence_hashes": [],
+      "freshness_window_ms": 300000,
+      "freshness_deadline_ms": 301000,
+      "degradation_state": "success",
+      "retention_class": "drill_test",
+      "parent_event_ids": [
+        2
+      ],
+      "metadata": {
+        "scenario": "dirty_shared_worktree",
+        "original_timestamp": "2026-05-08T00:50:10-04:00"
+      }
+    },
+    {
+      "journal_event_id": 4,
+      "bead_id": "shadow_drill_ownership_contradiction",
+      "event_kind": "ownership_contradiction",
+      "source_kind": "tool_watcher",
+      "source_locator": "e2e://ownership_contradiction",
+      "collected_timestamp_ms": 1000,
+      "sequence_id": 4,
+      "payload_content_hash": "1d4761b565e5ab0b6d9d83aaacea850742099d064b72147e8ade1adefb6e2fa8",
+      "normalized_payload": {
+        "timestamp": "2026-05-08T00:50:10-04:00",
+        "event_type": "ownership_contradiction",
+        "status": "fail_closed",
+        "message": "uncommitted changes may indicate conflicting ownership",
+        "scenario": "dirty_shared_worktree",
+        "sequence": 3
+      },
+      "normalized_payload_hash": "1d4761b565e5ab0b6d9d83aaacea850742099d064b72147e8ade1adefb6e2fa8",
+      "raw_evidence_hashes": [],
+      "freshness_window_ms": 300000,
+      "freshness_deadline_ms": 301000,
+      "degradation_state": "fail_closed",
+      "retention_class": "drill_test",
+      "parent_event_ids": [
+        3
+      ],
+      "metadata": {
+        "scenario": "dirty_shared_worktree",
+        "original_timestamp": "2026-05-08T00:50:10-04:00"
+      }
+    }
+  ]
+}

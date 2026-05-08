@@ -1,0 +1,19 @@
+{
+  "gate_id": "shadow_daemon_truth_gate_1778215631",
+  "evaluation_timestamp": "2026-05-08T00:47:11-04:00",
+  "scenario": "healthy_idle",
+  "inputs": {
+    "shadow_status": "operational",
+    "fail_closed_events": 0,
+    "replay_drift_count": 0,
+    "deterministic_replay": true
+  },
+  "validation_results": {
+    "fail_closed_check": "pass",
+    "deterministic_replay_check": "pass",
+    "drift_check": "pass"
+  },
+  "final_verdict": "pass",
+  "exit_code": 0,
+  "rules_summary": "3/3 rules passed"
+}

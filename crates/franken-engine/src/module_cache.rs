@@ -676,18 +676,25 @@ impl ModuleCache {
         context: &CacheContext,
     ) -> Box<CacheError> {
         let message = message.into();
-        self.push_event(
-            event,
-            outcome,
-            code.stable_code(),
-            module_id.to_string(),
-            message.clone(),
-            context,
-        );
+        // Create event data before pushing to avoid unsafe expect()
+        let event_data = CacheEvent {
+            seq: self.next_event_seq,
+            trace_id: context.trace_id.clone(),
+            decision_id: context.decision_id.clone(),
+            policy_id: context.policy_id.clone(),
+            component: "module_cache".to_string(),
+            event: event.into(),
+            outcome: outcome.into(),
+            error_code: code.stable_code().to_string(),
+            module_id: module_id.to_string(),
+            detail: message.clone(),
+        };
+        self.next_event_seq = self.next_event_seq.saturating_add(1);
+        self.events.push(event_data.clone());
         Box::new(CacheError {
             code,
             message,
-            event: self.events.last().expect("event was just pushed").clone(),
+            event: event_data,
         })
     }
 }
@@ -1522,7 +1529,7 @@ struct S3FifoBaselineEvent {
     detail: String,
 }
 
-pub fn default_s3fifo_trace_corpus_manifest() -> CacheTraceCorpusManifest {
+pub fn default_s3fifo_trace_corpus_manifest() -> Result<CacheTraceCorpusManifest, CachePolicyReportError> {
     CacheTraceCorpusManifest::new(
         "corpus.s3fifo.baseline",
         vec![
@@ -1781,7 +1788,6 @@ pub fn default_s3fifo_trace_corpus_manifest() -> CacheTraceCorpusManifest {
             },
         ],
     )
-    .expect("default S3-FIFO baseline corpus should be valid")
 }
 
 pub fn default_s3fifo_baseline_config() -> SingleQueueFifoConfig {
@@ -1800,7 +1806,7 @@ pub fn default_s3fifo_candidate_config() -> S3FifoConfig {
 
 pub fn default_s3fifo_baseline_report() -> Result<CachePolicyBaselineReport, CachePolicyReportError>
 {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = default_s3fifo_trace_corpus_manifest()?;
     evaluate_s3fifo_baseline(
         &manifest,
         &default_s3fifo_baseline_config(),
@@ -1810,7 +1816,7 @@ pub fn default_s3fifo_baseline_report() -> Result<CachePolicyBaselineReport, Cac
 }
 
 pub fn default_s3fifo_baseline_contract_fixture() -> S3FifoBaselineComparatorContractFixture {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid");
     let adoption_wedge = S3FifoAdoptionWedgeContract::default();
     S3FifoBaselineComparatorContractFixture {
         schema_version: S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION.to_string(),
@@ -1892,7 +1898,7 @@ pub fn emit_default_s3fifo_baseline_bundle(
 ) -> io::Result<S3FifoBaselineBundleWriteReport> {
     fs::create_dir_all(&context.artifact_dir)?;
 
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = default_s3fifo_trace_corpus_manifest().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let baseline_config = default_s3fifo_baseline_config();
     let candidate_config = default_s3fifo_candidate_config();
     let adoption_wedge = S3FifoAdoptionWedgeContract::default();
@@ -3254,8 +3260,8 @@ mod tests {
 
     #[test]
     fn default_s3fifo_corpus_covers_declared_workloads_deterministically() {
-        let left = default_s3fifo_trace_corpus_manifest();
-        let right = default_s3fifo_trace_corpus_manifest();
+        let left = default_s3fifo_trace_corpus_manifest().expect("corpus should be valid");
+        let right = default_s3fifo_trace_corpus_manifest().expect("corpus should be valid");
 
         assert_eq!(left, right);
         assert_eq!(left.cases.len(), 5);
@@ -3274,7 +3280,7 @@ mod tests {
 
     #[test]
     fn default_s3fifo_baseline_report_is_reproducible() {
-        let manifest = default_s3fifo_trace_corpus_manifest();
+        let manifest = default_s3fifo_trace_corpus_manifest().expect("corpus should be valid");
         let left = default_s3fifo_baseline_report().expect("left report should build");
         let right = default_s3fifo_baseline_report().expect("right report should build");
 

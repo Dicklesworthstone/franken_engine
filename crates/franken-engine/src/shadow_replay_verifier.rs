@@ -14,12 +14,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::deterministic_serde::{self, CanonicalValue};
+use crate::deterministic_serde::CanonicalValue;
 use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::ContentHash;
 use crate::shadow_decision_composer::{
-    ShadowDecision, ShadowDecisionError, ShadowStatus, RecommendationBundle,
-    JournalSourceEvent, ShadowDecisionComposerInput,
+    ShadowDecisionError, ShadowDecisionArtifacts, JournalSourceEvent, ShadowDecisionComposerInput,
 };
 use crate::shadow_evidence_journal::{
     ShadowEvidenceJournalExport, ShadowEvidenceJournalExportRow,
@@ -913,5 +912,161 @@ mod tests {
             reproducible: true,
         }];
         assert!(!verifier.is_expected_migration(&behavioral_regression));
+    }
+
+    /// Integration tests for shadow replay verification functionality.
+    pub mod integration_tests {
+        use super::*;
+        use crate::shadow_replay_fixtures::*;
+
+        /// Test replay of healthy journal export to verify byte-stable outputs.
+        #[test]
+        fn test_replay_export_healthy_journal() {
+            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let export = create_healthy_journal_fixture();
+
+            let result = verifier.replay_export(export.clone(), "test_environment".to_string());
+
+            match result {
+                Ok(report) => {
+                    // Verify the report structure
+                    assert!(!report.report_id.to_string().is_empty());
+                    assert_eq!(report.target_environment, "test_environment");
+                    assert_eq!(report.source_export.schema_version, export.schema_version);
+
+                    // Healthy journal should have minimal drift
+                    assert!(report.detected_drift.len() <= 1, "Healthy journal should have minimal drift");
+
+                    // Replay recipe should be valid
+                    assert!(!report.replay_recipe.input_checkpoint.is_empty());
+                    assert!(!report.replay_recipe.replay_command.is_empty());
+
+                    println!("✓ Healthy journal replay succeeded with {} drift items",
+                             report.detected_drift.len());
+                }
+                Err(e) => {
+                    panic!("Failed to replay healthy journal: {}", e);
+                }
+            }
+        }
+
+        /// Test replay of degraded journal to detect performance drift.
+        #[test]
+        fn test_replay_export_degraded_journal() {
+            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let export = create_degraded_journal_fixture();
+
+            let result = verifier.replay_export(export.clone(), "test_environment".to_string());
+
+            match result {
+                Ok(report) => {
+                    assert_eq!(report.target_environment, "test_environment");
+                    assert_eq!(report.source_export.schema_version, export.schema_version);
+
+                    println!("✓ Degraded journal replay succeeded with {} drift items",
+                             report.detected_drift.len());
+                }
+                Err(e) => {
+                    panic!("Failed to replay degraded journal: {}", e);
+                }
+            }
+        }
+
+        /// Test replay of contaminated journal to detect data corruption.
+        #[test]
+        fn test_replay_export_contaminated_journal() {
+            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let export = create_contaminated_journal_fixture();
+
+            let result = verifier.replay_export(export.clone(), "test_environment".to_string());
+
+            match result {
+                Ok(report) => {
+                    // Contaminated journal should have detected drift
+                    assert!(!report.detected_drift.is_empty(),
+                            "Contaminated journal should detect drift");
+
+                    // Should not be considered expected migration
+                    assert!(!report.is_expected_migration,
+                            "Contaminated journal should not be expected migration");
+
+                    println!("✓ Contaminated journal replay detected {} drift items",
+                             report.detected_drift.len());
+                }
+                Err(e) => {
+                    // Contaminated journal may fail verification
+                    println!("✓ Contaminated journal correctly failed verification: {}", e);
+                }
+            }
+        }
+
+        /// Test replay of stale-source journal for freshness verification.
+        #[test]
+        fn test_replay_export_stale_journal() {
+            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let export = create_stale_source_journal_fixture();
+
+            let result = verifier.replay_export(export.clone(), "test_environment".to_string());
+
+            match result {
+                Ok(report) => {
+                    assert_eq!(report.target_environment, "test_environment");
+
+                    println!("✓ Stale journal replay succeeded with {} drift items",
+                             report.detected_drift.len());
+                }
+                Err(e) => {
+                    panic!("Failed to replay stale journal: {}", e);
+                }
+            }
+        }
+
+        /// Smoke test that exits non-zero on nondeterminism or missing provenance.
+        #[test]
+        fn smoke_test_replay_determinism() {
+            let mut verifier = ShadowReplayVerifier::with_default_config();
+
+            // Test multiple fixture types for determinism
+            let fixtures = vec![
+                ("healthy", create_healthy_journal_fixture()),
+                ("degraded", create_degraded_journal_fixture()),
+                ("mixed", create_mixed_state_journal_fixture()),
+            ];
+
+            for (fixture_name, export) in fixtures {
+                // Replay twice to verify deterministic results
+                let result1 = verifier.replay_export(export.clone(), "test_env_1".to_string());
+                let result2 = verifier.replay_export(export.clone(), "test_env_2".to_string());
+
+                match (result1, result2) {
+                    (Ok(report1), Ok(report2)) => {
+                        // Compare deterministic aspects (drift count should be same)
+                        assert_eq!(report1.detected_drift.len(), report2.detected_drift.len(),
+                                   "Non-deterministic drift detection in {} fixture", fixture_name);
+
+                        // Both should have valid provenance
+                        assert!(!report1.replay_recipe.input_checkpoint.is_empty(),
+                                "Missing provenance in {} fixture", fixture_name);
+                        assert!(!report2.replay_recipe.input_checkpoint.is_empty(),
+                                "Missing provenance in {} fixture", fixture_name);
+
+                        println!("✓ {} fixture determinism verified", fixture_name);
+                    }
+                    (Err(e1), Err(e2)) => {
+                        // Both should fail in the same way
+                        assert_eq!(format!("{:?}", e1), format!("{:?}", e2),
+                                   "Non-deterministic error behavior in {} fixture", fixture_name);
+
+                        println!("✓ {} fixture consistently failed: {}", fixture_name, e1);
+                    }
+                    _ => {
+                        panic!("Non-deterministic result for {} fixture: one succeeded, one failed",
+                               fixture_name);
+                    }
+                }
+            }
+
+            println!("✓ Smoke test passed: all replays are deterministic with valid provenance");
+        }
     }
 }

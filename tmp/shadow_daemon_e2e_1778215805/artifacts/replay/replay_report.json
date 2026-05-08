@@ -1,0 +1,27 @@
+{
+  "report_id": "replay_1778215806",
+  "detection_timestamp_ms": 1778215806000,
+  "source_export_events": 4,
+  "target_environment": "e2e_drill",
+  "detected_drift": [],
+  "is_expected_migration": false,
+  "replay_recipe": {
+    "input_checkpoint": "journal_export.json",
+    "replay_command": [
+      "python3",
+      "replay_verification.py"
+    ],
+    "environment_vars": {
+      "SCENARIO": "rch_local_fallback"
+    },
+    "expected_outputs": {},
+    "referenced_artifacts": [
+      "journal_export.json",
+      "shadow_status.json"
+    ]
+  },
+  "ordering_verification": {
+    "deterministic": true,
+    "ordering_hash": "1fc66dfc229ea04a8bddabe55e5ecced77df92e6a578262490c087589ae47355"
+  }
+}

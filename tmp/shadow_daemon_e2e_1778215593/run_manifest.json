@@ -1,0 +1,15 @@
+{
+    "drill_id": "shadow_daemon_lifecycle_1778215593",
+    "scenario": "healthy_idle",
+    "start_time": "2026-05-08T00:46:33-04:00",
+    "project_root": "/data/projects/franken_engine",
+    "work_dir": "/data/projects/franken_engine/tmp/shadow_daemon_e2e_1778215593",
+    "git_commit": "b1e69dd9c3dca87d6a0badebf0399bf1d2207e0d",
+    "git_status_clean": 0,
+    "environment": {
+        "agent_name": "unknown",
+        "hostname": "sensedemobox",
+        "user": "ubuntu",
+        "pwd": "/data/projects/franken_engine/tmp/shadow_daemon_e2e_1778215593"
+    }
+}

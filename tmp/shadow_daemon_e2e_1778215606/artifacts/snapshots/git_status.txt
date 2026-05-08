@@ -1,0 +1,6 @@
+ M .beads/issues.jsonl
+ M crates/franken-engine/src/capability.rs
+ M crates/franken-engine/src/shadow_replay_verifier.rs
+?? crates/franken-engine/tests/shadow_replay_smoke_integration.rs
+?? scripts/e2e/shadow_daemon_lifecycle_drill.sh
+?? tmp/

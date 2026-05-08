@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
 use frankenengine_engine::shadow_decision_composer::{
-    AdvisoryRecommendation, ArtifactPaths, ExistingAutopilotOutput, JournalSourceEvent,
-    MutationPolicy, ShadowDecision, ShadowDecisionComposerInput, ShadowTruthState,
-    compose_shadow_decision, write_shadow_decision_artifacts,
+    AdvisoryRecommendation, ExistingAutopilotOutput, JournalSourceEvent, MutationPolicy,
+    ShadowDecision, ShadowDecisionComposerInput, ShadowTruthState, compose_shadow_decision,
+    write_shadow_decision_artifacts,
 };
 use serde_json::{Value, json};
 
@@ -86,8 +86,11 @@ fn shadow_decision_composer_covers_operator_conditions() {
 fn shadow_decision_composer_rejects_output_paths_outside_directory() {
     let output_dir = output_dir_for("outside-output-dir");
     let mut input = input_for_case("outside-output-dir", base_events(), &output_dir);
-    input.artifact_paths.shadow_status_json = output_dir
-        .join("../shadow_status.json")
+    input.artifact_paths.shadow_status_json = std::env::temp_dir()
+        .join(format!(
+            "franken-engine-shadow-decision-outside-{}-shadow_status.json",
+            std::process::id()
+        ))
         .to_string_lossy()
         .into_owned();
 

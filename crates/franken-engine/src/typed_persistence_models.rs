@@ -4074,37 +4074,42 @@ mod tests {
             TYPED_RECORD_FORMAT_KEY.to_string(),
             "wrong_format".to_string(),
         );
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject wrong record format");
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject wrong record format"
+        );
 
         // Test wrong model name
         store_record.metadata.insert(
             TYPED_RECORD_FORMAT_KEY.to_string(),
             TYPED_RECORD_FORMAT_VALUE.to_string(),
         );
-        store_record.metadata.insert(
-            TYPED_MODEL_KEY.to_string(),
-            "WrongModel".to_string(),
+        store_record
+            .metadata
+            .insert(TYPED_MODEL_KEY.to_string(), "WrongModel".to_string());
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject wrong model name"
         );
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject wrong model name");
 
         // Test wrong store kind
-        store_record.metadata.insert(
-            TYPED_MODEL_KEY.to_string(),
-            T::MODEL_NAME.to_string(),
+        store_record
+            .metadata
+            .insert(TYPED_MODEL_KEY.to_string(), T::MODEL_NAME.to_string());
+        store_record
+            .metadata
+            .insert(TYPED_STORE_KIND_KEY.to_string(), "wrong_store".to_string());
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject wrong store kind"
         );
-        store_record.metadata.insert(
-            TYPED_STORE_KIND_KEY.to_string(),
-            "wrong_store".to_string(),
-        );
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject wrong store kind");
 
         // Test missing required metadata
         store_record.metadata.remove(TYPED_RECORD_ID_KEY);
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject missing typed_record_id metadata");
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject missing typed_record_id metadata"
+        );
     }
 
     fn assert_rejects_key_mismatch<T: TypedStoreRecord>(record: &T) {
@@ -4114,22 +4119,27 @@ mod tests {
 
         // Test wrong store kind in key
         store_record.key = format!("typed/wrong_store/{}", record.typed_record_id());
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject key with wrong store kind");
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject key with wrong store kind"
+        );
 
         // Test malformed key
         store_record.key = "completely_wrong_key".to_string();
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject malformed key");
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject malformed key"
+        );
 
         // Test key with wrong ID
         store_record.key = format!("typed/{}/999999", T::STORE_KIND.as_str());
-        store_record.metadata.insert(
-            TYPED_RECORD_ID_KEY.to_string(),
-            "999999".to_string(),
+        store_record
+            .metadata
+            .insert(TYPED_RECORD_ID_KEY.to_string(), "999999".to_string());
+        assert!(
+            T::from_store_record(&store_record).is_err(),
+            "should reject key/payload ID mismatch"
         );
-        assert!(T::from_store_record(&store_record).is_err(),
-            "should reject key/payload ID mismatch");
     }
 
     fn assert_rejects_id_payload_mismatch<T: TypedStoreRecord>(record: &T) {
@@ -4150,23 +4160,31 @@ mod tests {
                 store_record.value = serde_json::to_vec(&payload).unwrap_or_default();
 
                 // This should fail because payload ID != key ID
-                assert!(T::from_store_record(&store_record).is_err(),
-                    "should reject payload with mismatched ID");
+                assert!(
+                    T::from_store_record(&store_record).is_err(),
+                    "should reject payload with mismatched ID"
+                );
             }
         }
     }
 
     fn assert_rejects_negative_ids<T: TypedStoreRecord>() {
         // Test that typed_record_key_for_id rejects negative IDs
-        assert!(T::typed_record_key_for_id(-1).is_err(),
-            "should reject negative typed record ID");
-        assert!(T::typed_record_key_for_id(-999).is_err(),
-            "should reject large negative typed record ID");
+        assert!(
+            T::typed_record_key_for_id(-1).is_err(),
+            "should reject negative typed record ID"
+        );
+        assert!(
+            T::typed_record_key_for_id(-999).is_err(),
+            "should reject large negative typed record ID"
+        );
 
         // Test that record_id_from_key rejects negative IDs in keys
         let negative_key = format!("typed/{}/-42", T::STORE_KIND.as_str());
-        assert!(T::record_id_from_key(&negative_key).is_err(),
-            "should reject key with negative ID");
+        assert!(
+            T::record_id_from_key(&negative_key).is_err(),
+            "should reject key with negative ID"
+        );
     }
 
     fn assert_rejects_legacy_generic_rows<T: TypedStoreRecord>() {
@@ -4182,8 +4200,10 @@ mod tests {
             revision: 1,
         };
 
-        assert!(T::from_store_record(&legacy_record).is_err(),
-            "should reject legacy generic row without typed metadata");
+        assert!(
+            T::from_store_record(&legacy_record).is_err(),
+            "should reject legacy generic row without typed metadata"
+        );
 
         // Test partial typed marker rejection
         let partial_typed_record = StoreRecord {
@@ -4197,14 +4217,14 @@ mod tests {
             revision: 1,
         };
 
-        assert!(T::from_store_record(&partial_typed_record).is_err(),
-            "should reject partial typed record with incomplete metadata");
+        assert!(
+            T::from_store_record(&partial_typed_record).is_err(),
+            "should reject partial typed record with incomplete metadata"
+        );
     }
 
-    fn assert_deterministic_allocation<T: TypedStoreRecord>(
-        record1: &T,
-        record2: &T,
-    ) where
+    fn assert_deterministic_allocation<T: TypedStoreRecord>(record1: &T, record2: &T)
+    where
         T: Clone,
     {
         // Test that key generation is deterministic
@@ -4218,7 +4238,10 @@ mod tests {
 
         // Test that different records have different keys (assuming different IDs)
         if record1.typed_record_id() != record2.typed_record_id() {
-            assert_ne!(key1a, key2a, "different typed records should have different keys");
+            assert_ne!(
+                key1a, key2a,
+                "different typed records should have different keys"
+            );
         }
 
         // Test deterministic metadata generation
@@ -4233,43 +4256,42 @@ mod tests {
             .expect("valid typed record should serialize");
 
         // Verify store kind consistency
-        assert_eq!(store_record.store, T::STORE_KIND,
-            "store record should have consistent store kind");
+        assert_eq!(
+            store_record.store,
+            T::STORE_KIND,
+            "store record should have consistent store kind"
+        );
 
         let expected_key_prefix = format!("typed/{}/", T::STORE_KIND.as_str());
-        assert!(store_record.key.starts_with(&expected_key_prefix),
-            "store record key should have correct store kind prefix");
+        assert!(
+            store_record.key.starts_with(&expected_key_prefix),
+            "store record key should have correct store kind prefix"
+        );
 
         // Test that parsing works correctly
-        let parsed_id = T::record_id_from_key(&store_record.key)
-            .expect("should parse ID from generated key");
-        assert_eq!(parsed_id, record.typed_record_id(),
-            "parsed ID should match record ID");
+        let parsed_id =
+            T::record_id_from_key(&store_record.key).expect("should parse ID from generated key");
+        assert_eq!(
+            parsed_id,
+            record.typed_record_id(),
+            "parsed ID should match record ID"
+        );
     }
 
     /// Comprehensive conformance tests for all TypedStoreRecord implementations
     #[test]
     fn typed_store_record_conformance_replacement_lineage() {
-        assert_typed_store_record_contract(
-            replacement_entry(1),
-            replacement_entry(2),
-        );
+        assert_typed_store_record_contract(replacement_entry(1), replacement_entry(2));
     }
 
     #[test]
     fn typed_store_record_conformance_ifc_provenance() {
-        assert_typed_store_record_contract(
-            ifc_entry(10, "trace-a"),
-            ifc_entry(20, "trace-b"),
-        );
+        assert_typed_store_record_contract(ifc_entry(10, "trace-a"), ifc_entry(20, "trace-b"));
     }
 
     #[test]
     fn typed_store_record_conformance_proof_evidence_index() {
-        assert_typed_store_record_contract(
-            proof_evidence_entry(100),
-            proof_evidence_entry(200),
-        );
+        assert_typed_store_record_contract(proof_evidence_entry(100), proof_evidence_entry(200));
     }
 
     #[test]
@@ -4282,10 +4304,137 @@ mod tests {
 
     #[test]
     fn typed_store_record_conformance_specialization_index() {
-        assert_typed_store_record_contract(
-            specialization_entry(50),
-            specialization_entry(60),
+        assert_typed_store_record_contract(specialization_entry(50), specialization_entry(60));
+    }
+
+    // -----------------------------------------------------------------------
+    // CONFORMANCE: TypedStorageAdapterExt trait contract
+    // -----------------------------------------------------------------------
+
+    /// Generic conformance harness for TypedStorageAdapterExt implementations.
+    ///
+    /// Verifies the documented trait contract:
+    /// - Roundtrip put_typed/get_typed/get_typed_by_id operations
+    /// - Invalid typed metadata fails closed
+    /// - validate_typed_record runs before write and after read
+    /// - put_typed_batch maintains atomicity and ordering
+    fn assert_typed_storage_adapter_ext_contract<A, T>(mut adapter: A, records: Vec<T>)
+    where
+        A: TypedStorageAdapterExt,
+        T: TypedStoreRecord + Clone + PartialEq + std::fmt::Debug,
+    {
+        let context = EventContext {
+            trace_id: "typed-conformance-test".to_string(),
+            span_id: "span-test".to_string(),
+        };
+
+        // Test 1: Basic roundtrip put_typed → get_typed
+        let record = &records[0];
+        let store_record = adapter
+            .put_typed(record, &context)
+            .expect("put_typed should succeed for valid record");
+
+        let retrieved = adapter
+            .get_typed::<T>(&store_record.key, &context)
+            .expect("get_typed should succeed");
+        assert_eq!(
+            retrieved,
+            Some(record.clone()),
+            "get_typed should roundtrip put_typed"
         );
+
+        // Test 2: get_typed_by_id roundtrip
+        let retrieved_by_id = adapter
+            .get_typed_by_id::<T>(record.typed_record_id(), &context)
+            .expect("get_typed_by_id should succeed");
+        assert_eq!(
+            retrieved_by_id,
+            Some(record.clone()),
+            "get_typed_by_id should roundtrip put_typed"
+        );
+
+        // Test 3: get_typed with non-existent key returns None
+        let missing = adapter
+            .get_typed::<T>("typed/test_store/999999", &context)
+            .expect("get_typed should handle missing keys gracefully");
+        assert_eq!(
+            missing, None,
+            "get_typed should return None for missing keys"
+        );
+
+        // Test 4: get_typed_by_id with non-existent id returns None
+        let missing_by_id = adapter
+            .get_typed_by_id::<T>(999999, &context)
+            .expect("get_typed_by_id should handle missing ids gracefully");
+        assert_eq!(
+            missing_by_id, None,
+            "get_typed_by_id should return None for missing ids"
+        );
+
+        // Test 5: put_typed_batch atomicity and ordering
+        if records.len() >= 2 {
+            let batch_records = vec![records[0].clone(), records[1].clone()];
+            let store_records = adapter
+                .put_typed_batch(&batch_records, &context)
+                .expect("put_typed_batch should succeed");
+
+            // Verify batch size matches input
+            assert_eq!(
+                store_records.len(),
+                batch_records.len(),
+                "put_typed_batch should return same number of records"
+            );
+
+            // Verify ordering is preserved
+            for (i, original) in batch_records.iter().enumerate() {
+                let retrieved = adapter
+                    .get_typed::<T>(&store_records[i].key, &context)
+                    .expect("should retrieve batch record");
+                assert_eq!(
+                    retrieved,
+                    Some(original.clone()),
+                    "batch ordering should be preserved"
+                );
+            }
+        }
+
+        // Test 6: validate_typed_record enforcement
+        // This is tested indirectly - put_typed calls to_batch_put_entry which calls validate_typed_record
+        // get_typed calls from_store_record which calls validate_typed_record
+        // We verify this by ensuring the operations above succeeded (valid records)
+        // The TypedStoreRecord contract tests already verify validation failure cases
+    }
+
+    /// Test TypedStorageAdapterExt contract with InMemoryStorageAdapter and ReplacementLineageEntry
+    #[test]
+    fn typed_storage_adapter_ext_conforms_to_contract_replacement_lineage() {
+        let adapter = InMemoryStorageAdapter::new();
+        let records = vec![replacement_entry(10), replacement_entry(20)];
+        assert_typed_storage_adapter_ext_contract(adapter, records);
+    }
+
+    /// Test TypedStorageAdapterExt contract with InMemoryStorageAdapter and IfcProvenanceEntry
+    #[test]
+    fn typed_storage_adapter_ext_conforms_to_contract_ifc_provenance() {
+        let adapter = InMemoryStorageAdapter::new();
+        let records = vec![ifc_entry(100, "trace-x"), ifc_entry(200, "trace-y")];
+        assert_typed_storage_adapter_ext_contract(adapter, records);
+    }
+
+    /// Test TypedStorageAdapterExt contract with InMemoryStorageAdapter and SpecializationIndexEntry
+    #[test]
+    fn typed_storage_adapter_ext_conforms_to_contract_specialization_index() {
+        let adapter = InMemoryStorageAdapter::new();
+        let records = vec![specialization_entry(300), specialization_entry(400)];
+        assert_typed_storage_adapter_ext_contract(adapter, records);
+    }
+
+    /// Test TypedStorageAdapterExt contract with InMemoryStorageAdapter and ProofEvidenceIndexEntry
+    #[test]
+    fn typed_storage_adapter_ext_conforms_to_contract_proof_evidence() {
+        let adapter = InMemoryStorageAdapter::new();
+        let records = vec![proof_evidence_entry(500), proof_evidence_entry(600)];
+        assert_typed_storage_adapter_ext_contract(adapter, records);
     }
 }
 

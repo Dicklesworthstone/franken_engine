@@ -513,12 +513,22 @@ impl SafetyMembrane {
         }
 
         // 2b. MAC Verification
-        let expected_mac = crate::hostcall_batch_transport::compute_batch_mac(
+        let expected_mac = match crate::hostcall_batch_transport::compute_batch_mac(
             session_key,
             batch.batch_id,
             &batch.entries,
             batch.epoch,
-        );
+        ) {
+            Ok(mac) => mac,
+            Err(_) => {
+                return self.record_rejection(
+                    batch,
+                    MembraneRejectionReason::MacVerificationFailed,
+                    "failed to compute batch MAC".into(),
+                    tick,
+                );
+            }
+        };
         if !batch.batch_mac.constant_time_eq(&expected_mac) {
             return self.record_rejection(
                 batch,
@@ -533,7 +543,17 @@ impl SafetyMembrane {
         // sequence, content hash, and trace id.
         if config.require_per_entry_mac {
             for entry in &batch.entries {
-                let expected_entry_mac = compute_entry_mac(session_key, entry, batch.epoch);
+                let expected_entry_mac = match compute_entry_mac(session_key, entry, batch.epoch) {
+                    Ok(mac) => mac,
+                    Err(_) => {
+                        return self.record_rejection(
+                            batch,
+                            MembraneRejectionReason::MacVerificationFailed,
+                            format!("failed to compute entry MAC for entry {}", entry.sequence),
+                            tick,
+                        );
+                    }
+                };
                 match entry.entry_mac {
                     Some(actual) if actual.constant_time_eq(&expected_entry_mac) => {}
                     Some(_) => {
@@ -856,6 +876,9 @@ pub enum BatchTransportError {
         reason: MembraneRejectionReason,
         detail: String,
     },
+    CryptoInitializationFailed {
+        operation: String,
+    },
 }
 
 impl fmt::Display for BatchTransportError {
@@ -906,6 +929,9 @@ impl fmt::Display for BatchTransportError {
             Self::Protocol(e) => write!(f, "protocol error: {e}"),
             Self::MembraneRejection { reason, detail } => {
                 write!(f, "membrane rejection ({reason}): {detail}")
+            }
+            Self::CryptoInitializationFailed { operation } => {
+                write!(f, "crypto initialization failed: {operation}")
             }
         }
     }
@@ -1011,15 +1037,17 @@ pub fn compute_entry_mac(
     session_key: &[u8; 32],
     entry: &BatchEntry,
     epoch: SecurityEpoch,
-) -> AuthenticityHash {
+) -> Result<AuthenticityHash, BatchTransportError> {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
-        .expect("HMAC-SHA256 accepts 32-byte session keys");
+        .map_err(|_| BatchTransportError::CryptoInitializationFailed {
+            operation: "HMAC-SHA256 new_from_slice for entry MAC".to_string(),
+        })?;
     mac.update(b"franken::batch_transport::entry_mac::");
     mac.update(&epoch.as_u64().to_le_bytes());
     mac.update(&entry.sequence.to_le_bytes());
     mac.update(entry.content_hash.as_bytes());
     mac.update(entry.trace_id.as_bytes());
-    finish_authenticity_hash(mac)
+    Ok(finish_authenticity_hash(mac))
 }
 
 /// Compute the batch-level MAC over all entries.
@@ -1028,9 +1056,11 @@ pub fn compute_batch_mac(
     batch_id: u64,
     entries: &[BatchEntry],
     epoch: SecurityEpoch,
-) -> AuthenticityHash {
+) -> Result<AuthenticityHash, BatchTransportError> {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
-        .expect("HMAC-SHA256 accepts 32-byte session keys");
+        .map_err(|_| BatchTransportError::CryptoInitializationFailed {
+            operation: "HMAC-SHA256 new_from_slice for batch MAC".to_string(),
+        })?;
     mac.update(b"franken::batch_transport::batch_mac::");
     mac.update(&batch_id.to_le_bytes());
     mac.update(&epoch.as_u64().to_le_bytes());
@@ -1038,7 +1068,7 @@ pub fn compute_batch_mac(
         mac.update(&entry.sequence.to_le_bytes());
         mac.update(entry.content_hash.as_bytes());
     }
-    finish_authenticity_hash(mac)
+    Ok(finish_authenticity_hash(mac))
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,11 +1283,11 @@ impl BatchTransportState {
 
         if self.config.require_per_entry_mac {
             for entry in &mut entries {
-                entry.entry_mac = Some(compute_entry_mac(session_key, entry, epoch));
+                entry.entry_mac = Some(compute_entry_mac(session_key, entry, epoch)?);
             }
         }
 
-        let batch_mac = compute_batch_mac(session_key, batch_id, &entries, epoch);
+        let batch_mac = compute_batch_mac(session_key, batch_id, &entries, epoch)?;
         let credits_consumed = entries.len() as u64;
 
         Ok(BatchEnvelope {
@@ -1691,7 +1721,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     // 8. Batch MAC verification
     {
         let entries = vec![make_entry(1, b"mac-test")];
-        let mac1 = compute_batch_mac(&session_key, 1, &entries, epoch);
+        let mac1 = compute_batch_mac(&session_key, 1, &entries, epoch).unwrap();
         let mac2 = compute_batch_mac(&[0xFF; 32], 1, &entries, epoch);
         let v = if mac1 != mac2 {
             BatchTransportVerdict::Pass
@@ -2197,9 +2227,9 @@ mod tests {
     #[test]
     fn entry_mac_deterministic_and_key_sensitive() {
         let entry = make_entry(1, b"test");
-        let m1 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch());
-        let m2 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch());
-        let m3 = compute_entry_mac(&[0xBB; 32], &entry, test_epoch());
+        let m1 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch()).unwrap();
+        let m2 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch()).unwrap();
+        let m3 = compute_entry_mac(&[0xBB; 32], &entry, test_epoch()).unwrap();
         assert_eq!(m1, m2);
         assert_ne!(m1, m3);
     }
@@ -2219,7 +2249,7 @@ mod tests {
                 100,
             )
             .expect("serde serialization should succeed");
-        let expected = compute_entry_mac(&session_key(), &batch.entries[0], test_epoch());
+        let expected = compute_entry_mac(&session_key(), &batch.entries[0], test_epoch()).unwrap();
         assert_eq!(batch.entries[0].entry_mac, Some(expected));
     }
 
@@ -2516,7 +2546,7 @@ mod tests {
             &[0xCD; 32],
             &batch.entries[0],
             test_epoch(),
-        ));
+        ).unwrap());
 
         let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
         assert!(matches!(

@@ -37,7 +37,7 @@ impl Default for ShadowServiceConfig {
 }
 
 /// Valid panel types for filtering
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PanelType {
     #[serde(rename = "shadow_status")]
     ShadowStatus,

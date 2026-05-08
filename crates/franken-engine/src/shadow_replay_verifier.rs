@@ -327,7 +327,7 @@ impl ShadowReplayVerifier {
             let report_hash = self.compute_report_hash(&report)?;
             let signature = sign_preimage(
                 signing_key,
-                &report_hash.as_bytes(),
+                report_hash.as_bytes(),
             )?;
             report.verification_signature = Some(signature);
         }
@@ -674,8 +674,13 @@ impl ShadowReplayVerifier {
                                 if artifacts_hash != expected_hash {
                                     // Create decision ID from event data
                                     let decision_id_bytes = format!("decision_{}", row.journal_event_id).into_bytes();
-                                    let decision_id = EngineObjectId::from_bytes(
-                                        *ContentHash::compute(&decision_id_bytes).as_bytes());
+                                    let schema_id = crate::engine_object_id::SchemaId::from_definition(b"shadow_replay_drift_detection_v1");
+                                    let decision_id = crate::engine_object_id::derive_id(
+                                        crate::engine_object_id::ObjectDomain::EvidenceRecord,
+                                        "shadow_replay",
+                                        &schema_id,
+                                        &decision_id_bytes
+                                    )?;
 
                                     drift_types.push(DriftType::BehavioralRegression {
                                         decision_id,
@@ -772,8 +777,13 @@ impl ShadowReplayVerifier {
         id_bytes.extend_from_slice(b"|");
         id_bytes.extend_from_slice(&timestamp_ms.to_le_bytes());
 
-        let content_hash = ContentHash::compute(&id_bytes);
-        let object_id = EngineObjectId::from_bytes(*content_hash.as_bytes());
+        let schema_id = crate::engine_object_id::SchemaId::from_definition(b"shadow_replay_report_v1");
+        let object_id = crate::engine_object_id::derive_id(
+            crate::engine_object_id::ObjectDomain::EvidenceRecord,
+            "shadow_replay_reports",
+            &schema_id,
+            &id_bytes
+        )?;
         Ok(object_id)
     }
 
@@ -833,8 +843,14 @@ impl From<SerdeError> for ReplayVerificationError {
 }
 
 impl From<crate::signature_preimage::SignatureError> for ReplayVerificationError {
-    fn from(err: crate::signature_preimage::SignatureError) -> Self {
+    fn from(_err: crate::signature_preimage::SignatureError) -> Self {
         ReplayVerificationError::SignatureVerificationFailed
+    }
+}
+
+impl From<crate::engine_object_id::IdError> for ReplayVerificationError {
+    fn from(err: crate::engine_object_id::IdError) -> Self {
+        ReplayVerificationError::InvalidCheckpoint(format!("ID derivation error: {}", err))
     }
 }
 

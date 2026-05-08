@@ -295,6 +295,7 @@ pub struct BatchEnvelope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MembraneRejectionReason {
+    SessionMismatch,
     PhaseBlocked,
     EpochMismatch,
     ReplayDetected,
@@ -309,6 +310,7 @@ pub enum MembraneRejectionReason {
 impl fmt::Display for MembraneRejectionReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
+            Self::SessionMismatch => "session_mismatch",
             Self::PhaseBlocked => "phase_blocked",
             Self::EpochMismatch => "epoch_mismatch",
             Self::ReplayDetected => "replay_detected",
@@ -325,6 +327,7 @@ impl fmt::Display for MembraneRejectionReason {
 
 impl MembraneRejectionReason {
     pub const ALL: &'static [MembraneRejectionReason] = &[
+        MembraneRejectionReason::SessionMismatch,
         MembraneRejectionReason::PhaseBlocked,
         MembraneRejectionReason::EpochMismatch,
         MembraneRejectionReason::ReplayDetected,
@@ -420,6 +423,20 @@ impl SafetyMembrane {
             );
         }
 
+        // 1a. Session binding check. Batches must not cross transport or
+        // protocol session boundaries, even when callers supply a valid MAC.
+        if batch.session_id != self.session_id || protocol_state.session_id != self.session_id {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::SessionMismatch,
+                format!(
+                    "batch session {} / protocol session {} do not match transport session {}",
+                    batch.session_id, protocol_state.session_id, self.session_id
+                ),
+                tick,
+            );
+        }
+
         // 2. Epoch check
         if protocol_state.validate_epoch(self.current_epoch).is_err() {
             return self.record_rejection(
@@ -446,17 +463,15 @@ impl SafetyMembrane {
             );
         }
 
-        // 2b. Replay Protection
-        if let Err(e) = protocol_state.check_replay(batch.sequence_start, tick, None) {
+        // 3. Batch size check
+        if batch.entries.is_empty() {
             return self.record_rejection(
                 batch,
-                MembraneRejectionReason::ReplayDetected,
-                format!("replay detected: {e}"),
+                MembraneRejectionReason::BatchSizeExceeded,
+                "empty batch".into(),
                 tick,
             );
         }
-
-        // 3. Batch size check
         if batch.entries.len() > config.max_batch_size {
             return self.record_rejection(
                 batch,
@@ -480,17 +495,43 @@ impl SafetyMembrane {
         }
 
         // 5. Sequence contiguity check
-        if !batch.entries.is_empty() {
-            for (expected, entry) in (batch.sequence_start..).zip(batch.entries.iter()) {
-                if entry.sequence != expected {
-                    return self.record_rejection(
-                        batch,
-                        MembraneRejectionReason::SequenceGap,
-                        format!("expected seq {expected}, got {}", entry.sequence),
-                        tick,
-                    );
-                }
+        let mut last_sequence = None;
+        for (offset, entry) in batch.entries.iter().enumerate() {
+            let Some(expected) = u64::try_from(offset)
+                .ok()
+                .and_then(|offset| batch.sequence_start.checked_add(offset))
+            else {
+                return self.record_rejection(
+                    batch,
+                    MembraneRejectionReason::SequenceGap,
+                    format!(
+                        "sequence range overflow from start {} at offset {offset}",
+                        batch.sequence_start
+                    ),
+                    tick,
+                );
+            };
+            if entry.sequence != expected {
+                return self.record_rejection(
+                    batch,
+                    MembraneRejectionReason::SequenceGap,
+                    format!("expected seq {expected}, got {}", entry.sequence),
+                    tick,
+                );
             }
+            last_sequence = Some(expected);
+        }
+        if last_sequence != Some(batch.sequence_end) {
+            return self.record_rejection(
+                batch,
+                MembraneRejectionReason::SequenceGap,
+                format!(
+                    "sequence_end {} does not match last entry {}",
+                    batch.sequence_end,
+                    last_sequence.unwrap_or(batch.sequence_start)
+                ),
+                tick,
+            );
         }
 
         // 6. Credit check
@@ -550,7 +591,17 @@ impl SafetyMembrane {
                     Some(region) => {
                         // Validate that offset + length does not exceed
                         // the region's occupied bytes (bounds check).
-                        let end = offset.saturating_add(*length);
+                        let Some(end) = offset.checked_add(*length) else {
+                            return self.record_rejection(
+                                batch,
+                                MembraneRejectionReason::InvalidRegion,
+                                format!(
+                                    "region {region_id} access overflows: \
+                                     offset({offset})+length({length})"
+                                ),
+                                tick,
+                            );
+                        };
                         if end > region.occupied_bytes {
                             return self.record_rejection(
                                 batch,
@@ -568,6 +619,21 @@ impl SafetyMembrane {
                 }
             }
         }
+
+        // 9. Replay protection. Probe on a clone so rejected batches cannot
+        // consume anti-replay state. Commit only after every entry is accepted.
+        let mut replay_probe = protocol_state.clone();
+        for entry in &batch.entries {
+            if let Err(e) = replay_probe.check_replay(entry.sequence, tick, None) {
+                return self.record_rejection(
+                    batch,
+                    MembraneRejectionReason::ReplayDetected,
+                    format!("replay detected: {e}"),
+                    tick,
+                );
+            }
+        }
+        *protocol_state = replay_probe;
 
         // All checks passed.
         self.record_accept(batch, tick)
@@ -1025,7 +1091,15 @@ impl BatchTransportState {
 
         // Verify contiguity.
         for (i, entry) in entries.iter().enumerate() {
-            let expected = sequence_start + i as u64;
+            let Some(expected) = u64::try_from(i)
+                .ok()
+                .and_then(|offset| sequence_start.checked_add(offset))
+            else {
+                return Err(BatchTransportError::NonContiguousSequences {
+                    expected: u64::MAX,
+                    actual: entry.sequence,
+                });
+            };
             if entry.sequence != expected {
                 return Err(BatchTransportError::NonContiguousSequences {
                     expected,
@@ -1264,10 +1338,10 @@ fn specimen_hash(name: &str, verdict: BatchTransportVerdict) -> ContentHash {
     ContentHash::compute(&buf)
 }
 
-fn make_established_protocol_state() -> SessionProtocolState {
+fn make_established_protocol_state_for(session_id: impl Into<String>) -> SessionProtocolState {
     use crate::hostcall_session_protocol::TransitionTrigger;
     let mut state = SessionProtocolState::new(
-        "corpus-sess".into(),
+        session_id.into(),
         "corpus-ext".into(),
         "corpus-host".into(),
         64,
@@ -1312,7 +1386,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s1".into(), config, epoch);
-        let mut protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state_for("s1");
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
         let batch = ts
             .build_batch(entries, &session_key, epoch, 100)
@@ -1339,7 +1413,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s2".into(), config, epoch);
-        let mut protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state_for("s2");
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts
             .build_batch(entries, &session_key, epoch, 100)
@@ -1436,7 +1510,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s6".into(), config, epoch);
-        let mut protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state_for("s6");
         let entries1 = vec![make_entry(1, b"a")];
         let batch1 = ts
             .build_batch(entries1, &session_key, epoch, 100)
@@ -1466,7 +1540,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         use crate::hostcall_session_protocol::DegradedSeverity;
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s7".into(), config, epoch);
-        let mut protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state_for("s7");
         protocol
             .enter_degraded(DegradedSeverity::IdentityCompromised, "bad".into(), 50)
             .expect("serde deserialization should succeed");
@@ -1554,7 +1628,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s11".into(), config, epoch);
-        let mut protocol = make_established_protocol_state();
+        let mut protocol = make_established_protocol_state_for("s11");
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts
             .build_batch(entries, &session_key, epoch, 100)
@@ -1722,7 +1796,7 @@ mod tests {
     }
 
     fn established_protocol() -> SessionProtocolState {
-        make_established_protocol_state()
+        make_established_protocol_state_for("test-sess")
     }
 
     // --- Config tests ---
@@ -1942,6 +2016,17 @@ mod tests {
         assert!(err.is_err());
     }
 
+    #[test]
+    fn batch_build_rejects_sequence_overflow() {
+        let mut ts = default_state();
+        let entries = vec![make_entry(u64::MAX, b"a"), make_entry(0, b"wrap")];
+        let err = ts.build_batch(entries, &session_key(), test_epoch(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::NonContiguousSequences { .. })
+        ));
+    }
+
     // --- MAC tests ---
 
     #[test]
@@ -2069,6 +2154,122 @@ mod tests {
             .expect("serde deserialization should succeed");
         let err = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn submit_batch_rejects_session_mismatch() {
+        let mut ts = default_state();
+        let mut protocol =
+            SessionProtocolState::new("other-sess".into(), "e".into(), "h".into(), 64, 50);
+        protocol
+            .transition(
+                SessionPhaseTag::Negotiating,
+                crate::hostcall_session_protocol::TransitionTrigger::HandshakeInitiated,
+                1,
+            )
+            .expect("test protocol should negotiate");
+        protocol
+            .transition(
+                SessionPhaseTag::Established,
+                crate::hostcall_session_protocol::TransitionTrigger::HandshakeCompleted,
+                2,
+            )
+            .expect("test protocol should establish");
+        let entries = vec![make_entry(1, b"data")];
+        let batch = ts
+            .build_batch(entries, &session_key(), test_epoch(), 100)
+            .expect("test batch should build");
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::SessionMismatch,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn submit_batch_rejects_replayed_entry_inside_batch() {
+        let mut ts = default_state();
+        let mut protocol = established_protocol();
+
+        let first = ts
+            .build_batch(
+                vec![make_entry(1, b"a"), make_entry(2, b"b")],
+                &session_key(),
+                test_epoch(),
+                100,
+            )
+            .expect("first batch should build");
+        ts.submit_batch(first, &mut protocol, &session_key(), 100)
+            .expect("first batch should submit");
+
+        let replay = ts
+            .build_batch(
+                vec![make_entry(2, b"b-again"), make_entry(3, b"c")],
+                &session_key(),
+                test_epoch(),
+                101,
+            )
+            .expect("replay-shaped batch should build before membrane validation");
+        let err = ts.submit_batch(replay, &mut protocol, &session_key(), 101);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::ReplayDetected,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn submit_batch_rejects_shared_region_range_overflow_atomically() {
+        let config = BatchTransportConfig {
+            max_region_size_bytes: u64::MAX,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
+        let region_hash = ContentHash::compute(b"region");
+        ts.regions.insert(
+            1,
+            SharedMemoryRegion {
+                region_id: 1,
+                session_id: "test-sess".into(),
+                capacity_bytes: u64::MAX,
+                occupied_bytes: u64::MAX,
+                state: RegionState::Sealed,
+                content_hash: Some(region_hash),
+                allocated_at_tick: 1,
+                sealed_at_tick: Some(2),
+            },
+        );
+        let payload = BatchPayload::SharedRegion {
+            region_id: 1,
+            offset: u64::MAX,
+            length: 1,
+            payload_hash: region_hash,
+        };
+        let entry = BatchEntry {
+            sequence: 1,
+            content_hash: compute_entry_content_hash(1, &payload, "range-overflow"),
+            payload,
+            entry_mac: None,
+            trace_id: "range-overflow".into(),
+        };
+        let batch = ts
+            .build_batch(vec![entry], &session_key(), test_epoch(), 100)
+            .expect("range-overflow batch should build before membrane validation");
+        let mut protocol = established_protocol();
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::InvalidRegion,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
     }
 
     // --- Membrane tests ---
@@ -2310,6 +2511,7 @@ mod tests {
     #[test]
     fn membrane_rejection_reason_display_all_variants() {
         let expected = [
+            (MembraneRejectionReason::SessionMismatch, "session_mismatch"),
             (MembraneRejectionReason::PhaseBlocked, "phase_blocked"),
             (MembraneRejectionReason::EpochMismatch, "epoch_mismatch"),
             (MembraneRejectionReason::ReplayDetected, "replay_detected"),
@@ -2332,7 +2534,7 @@ mod tests {
         for (variant, label) in expected {
             assert_eq!(variant.to_string(), label);
         }
-        assert_eq!(MembraneRejectionReason::ALL.len(), 9);
+        assert_eq!(MembraneRejectionReason::ALL.len(), 10);
     }
 
     #[test]
@@ -2699,7 +2901,7 @@ mod tests {
         let epoch = test_epoch();
         let mut membrane = SafetyMembrane::new("s".into(), epoch, 3);
         let config = BatchTransportConfig::default();
-        let mut protocol = established_protocol();
+        let mut protocol = make_established_protocol_state_for("s");
         let credit_pool = CreditPool::new("s".into(), 1000, 2000);
         let regions = BTreeMap::new();
 
@@ -2743,7 +2945,7 @@ mod tests {
         // but we can't directly read current_epoch, so we test indirectly by
         // checking that the membrane's epoch was updated.
         let config = BatchTransportConfig::default();
-        let mut protocol = established_protocol();
+        let mut protocol = make_established_protocol_state_for("s");
         let credit_pool = CreditPool::new("s".into(), 100, 200);
         let regions = BTreeMap::new();
 
@@ -2782,7 +2984,7 @@ mod tests {
             max_batch_size: 1,
             ..Default::default()
         };
-        let mut protocol = established_protocol();
+        let mut protocol = make_established_protocol_state_for("s");
         let credit_pool = CreditPool::new("s".into(), 100, 200);
         let regions = BTreeMap::new();
 

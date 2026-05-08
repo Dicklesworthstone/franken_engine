@@ -1565,7 +1565,7 @@ impl Drop for BundleWriteLock {
 
 fn digest_json(value: &serde_json::Value) -> String {
     // SAFETY: to_vec cannot fail on valid serde_json::Value
-    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(value).expect("serde serialization should succeed");
     sha256_hex(&bytes)
 }
 

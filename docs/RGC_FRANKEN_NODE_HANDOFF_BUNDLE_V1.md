@@ -10,6 +10,8 @@ The handoff bundle is intentionally downstream-facing:
 
 - it consumes engine-owned readiness artifacts rather than re-deriving them
 - it proves that the repo split contract is still being honored
+- it records optional downstream checkout metadata without requiring it for
+  engine-side validation
 - it fails closed when upstream evidence is missing, stale, or orphaned
 
 ## Inputs
@@ -30,8 +32,9 @@ Input resolution rules:
   prefer the latest complete
   `artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json`
   bundle; otherwise fail closed
-- sibling repo: use `RGC_HANDOFF_SIBLING_REPO_PATH` when set; otherwise default
-  to `/dp/franken_node`
+- sibling repo: when `RGC_HANDOFF_SIBLING_REPO_PATH` is set, record whether
+  that optional downstream checkout exists; do not require any `franken_node`
+  checkout for engine-side handoff validation
 
 ## Bundle Artifacts
 
@@ -57,7 +60,8 @@ All heavy Rust verification in this lane runs through `rch`.
 
 The bundle must verify at least:
 
-1. the sibling repo path exists
+1. any configured sibling repo path is recorded as an optional non-blocking
+   downstream probe
 2. the repo split contract still documents one-way dependency direction
 3. the support-surface contract still delegates product-ready claims to
    downstream `franken_node` handoff evidence
@@ -73,7 +77,6 @@ The workflow fails closed when any of the following occur:
 - missing or invalid support-surface contract JSON
 - missing or invalid blocker ledger JSON
 - stale support-surface or blocker-ledger evidence beyond the configured age
-- missing sibling repo
 - repo split contract drift
 - orphaned unresolved blocking/degraded blocker entries
 - missing copied-artifact or structured-log outputs

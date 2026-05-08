@@ -34,7 +34,7 @@ step_logs_dir="${run_dir}/step_logs"
 bundle_doc="docs/RGC_FRANKEN_NODE_HANDOFF_BUNDLE_V1.md"
 bundle_contract_json="docs/franken_node_handoff_bundle_v1.json"
 repo_split_contract_doc="docs/REPO_SPLIT_CONTRACT.md"
-sibling_repo_path="${RGC_HANDOFF_SIBLING_REPO_PATH:-/dp/franken_node}"
+sibling_repo_path="${RGC_HANDOFF_SIBLING_REPO_PATH:-}"
 
 trace_id="trace-rgc-franken-node-handoff-bundle-${timestamp}"
 decision_id="decision-rgc-franken-node-handoff-bundle-${timestamp}"
@@ -260,7 +260,11 @@ write_validation_step_log() {
     echo "bundle_contract_json=${bundle_contract_json}"
     echo "resolved_support_contract_path=${resolved_support_contract_path:-}"
     echo "resolved_blocker_ledger_path=${resolved_blocker_ledger_path:-}"
-    echo "sibling_repo_path=${sibling_repo_path}"
+    if [[ -n "${sibling_repo_path}" ]]; then
+      echo "optional_sibling_repo_path=${sibling_repo_path}"
+    else
+      echo "optional_sibling_repo_path=not configured"
+    fi
     echo "stale_after_hours=${stale_after_hours}"
     if [[ "${validation_outcome}" == "pass" ]]; then
       echo "==> validation passed"
@@ -347,7 +351,9 @@ validate_source_inputs() {
   local input support_age blocker_age orphaned_count cohort_rollup_count
 
   commands_run+=("jq empty ${bundle_contract_json}")
-  commands_run+=("test -d ${sibling_repo_path}")
+  if [[ -n "$sibling_repo_path" ]]; then
+    commands_run+=("test -d ${sibling_repo_path} (optional downstream probe)")
+  fi
   validation_errors=()
 
   mapfile -t source_inputs < <(jq -r '.source_inputs[]' "$bundle_contract_json")
@@ -425,10 +431,6 @@ validate_source_inputs() {
     fi
   fi
 
-  if [[ ! -d "$sibling_repo_path" ]]; then
-    validation_errors+=("missing sibling repo path: ${sibling_repo_path}")
-  fi
-
   if ! grep -Fq -- '- `franken_node` -> `frankenengine-engine`' "$repo_split_contract_doc"; then
     validation_errors+=("repo split contract missing allowed franken_node -> frankenengine-engine dependency line")
   fi
@@ -491,6 +493,10 @@ run_mode() {
 write_smoke_verification() {
   local outcome="$1"
   local sibling_repo_exists_json="false"
+  local sibling_repo_probe_configured_json="false"
+  local sibling_repo_probe_outcome="skip"
+  local sibling_repo_probe_error_code_json="null"
+  local sibling_repo_probe_detail="not configured; engine handoff validation does not require downstream checkout"
   local split_contract_ok_json="false"
   local support_delegate_ok_json="false"
   local non_orphaned_blockers_json="false"
@@ -504,8 +510,17 @@ write_smoke_verification() {
   local ready_cohort_count="null"
   local smoke_outcome="pass"
 
-  if [[ -d "$sibling_repo_path" ]]; then
-    sibling_repo_exists_json="true"
+  if [[ -n "$sibling_repo_path" ]]; then
+    sibling_repo_probe_configured_json="true"
+    if [[ -d "$sibling_repo_path" ]]; then
+      sibling_repo_exists_json="true"
+      sibling_repo_probe_outcome="pass"
+      sibling_repo_probe_detail="found ${sibling_repo_path}"
+    else
+      sibling_repo_probe_outcome="warn"
+      sibling_repo_probe_error_code_json='"FE-RGC-408C-SMOKE-0001"'
+      sibling_repo_probe_detail="configured downstream sibling repo path is missing: ${sibling_repo_path}"
+    fi
   fi
 
   if grep -Fq -- '- `franken_node` -> `frankenengine-engine`' "$repo_split_contract_doc" \
@@ -556,7 +571,6 @@ write_smoke_verification() {
   fi
 
   for check in \
-    "$sibling_repo_exists_json" \
     "$split_contract_ok_json" \
     "$support_delegate_ok_json" \
     "$non_orphaned_blockers_json" \
@@ -576,6 +590,8 @@ write_smoke_verification() {
     --arg decision_id "$decision_id" \
     --arg policy_id "$policy_id" \
     --arg sibling_repo_path "$sibling_repo_path" \
+    --arg sibling_repo_probe_outcome "$sibling_repo_probe_outcome" \
+    --arg sibling_repo_probe_detail "$sibling_repo_probe_detail" \
     --arg support_contract_path "$copied_support_contract_path" \
     --arg blocker_ledger_path "$copied_blocker_ledger_path" \
     --arg repo_split_contract_path "$copied_repo_split_contract_path" \
@@ -584,7 +600,9 @@ write_smoke_verification() {
     --argjson support_contract_valid "$support_contract_valid_json" \
     --argjson blocker_ledger_available "$blocker_ledger_available_json" \
     --argjson blocker_ledger_valid "$blocker_ledger_valid_json" \
+    --argjson sibling_repo_probe_configured "$sibling_repo_probe_configured_json" \
     --argjson sibling_repo_exists "$sibling_repo_exists_json" \
+    --argjson sibling_repo_probe_error_code "$sibling_repo_probe_error_code_json" \
     --argjson split_contract_ok "$split_contract_ok_json" \
     --argjson support_delegate_ok "$support_delegate_ok_json" \
     --argjson non_orphaned_blockers "$non_orphaned_blockers_json" \
@@ -598,7 +616,10 @@ write_smoke_verification() {
       trace_id: $trace_id,
       decision_id: $decision_id,
       policy_id: $policy_id,
-      sibling_repo_path: $sibling_repo_path,
+      sibling_repo_required: false,
+      sibling_repo_path: (if ($sibling_repo_path | length) > 0 then $sibling_repo_path else null end),
+      sibling_repo_probe_configured: $sibling_repo_probe_configured,
+      sibling_repo_exists: $sibling_repo_exists,
       inputs: {
         support_surface_contract: (if $support_contract_available then $support_contract_path else null end),
         engine_product_blocker_ledger: (if $blocker_ledger_available then $blocker_ledger_path else null end),
@@ -607,10 +628,10 @@ write_smoke_verification() {
       outcome: $outcome,
       checks: [
         {
-          check_id: "sibling_repo_exists",
-          outcome: (if $sibling_repo_exists then "pass" else "fail" end),
-          error_code: (if $sibling_repo_exists then null else "FE-RGC-408C-SMOKE-0001" end),
-          detail: (if $sibling_repo_exists then ("found " + $sibling_repo_path) else ("missing " + $sibling_repo_path) end)
+          check_id: "sibling_repo_probe_optional",
+          outcome: $sibling_repo_probe_outcome,
+          error_code: $sibling_repo_probe_error_code,
+          detail: $sibling_repo_probe_detail
         },
         {
           check_id: "one_way_dependency_contract",
@@ -727,7 +748,7 @@ write_summary() {
 - Trace ID: \`${trace_id}\`
 - Decision ID: \`${decision_id}\`
 - Policy ID: \`${policy_id}\`
-- Sibling repo path: \`${sibling_repo_path}\`
+- Optional downstream sibling repo probe: \`${sibling_repo_path:-not configured}\`
 
 ## Engine Readiness Rule
 
@@ -858,7 +879,7 @@ write_handoff_manifest() {
         support_surface_contract: (if ($support_contract_path | length) > 0 then $support_contract_path else null end),
         engine_product_blocker_ledger: (if ($blocker_ledger_path | length) > 0 then $blocker_ledger_path else null end),
         repo_split_contract: $repo_split_contract_path,
-        sibling_repo_path: $sibling_repo_path
+        sibling_repo_path: (if ($sibling_repo_path | length) > 0 then $sibling_repo_path else null end)
       },
       engine_readiness: {
         support_status_counts: $support_status_counts,
@@ -872,7 +893,8 @@ write_handoff_manifest() {
       sibling_smoke: {
         verification_artifact: $smoke_verification_path,
         outcome: $smoke_outcome,
-        sibling_repo_path: $sibling_repo_path
+        sibling_repo_required: false,
+        sibling_repo_path: (if ($sibling_repo_path | length) > 0 then $sibling_repo_path else null end)
       },
       summary_artifact: $summary_path,
       rollback_guidance: [

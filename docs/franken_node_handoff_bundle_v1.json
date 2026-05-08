@@ -1,6 +1,6 @@
 {
   "schema_version": "franken-engine.rgc-franken-node-handoff-bundle.v1",
-  "contract_version": "1.0.0",
+  "contract_version": "1.0.1",
   "bead_id": "bd-1lsy.5.10.3",
   "policy_id": "policy-rgc-franken-node-handoff-bundle-v1",
   "generated_by": "bd-1lsy.5.10.3",
@@ -16,7 +16,7 @@
     "blocker_ledger_env_var": "RGC_HANDOFF_BLOCKER_LEDGER_PATH",
     "blocker_ledger_artifact_glob": "artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json",
     "repo_split_contract_doc": "docs/REPO_SPLIT_CONTRACT.md",
-    "sibling_repo_path": "/dp/franken_node",
+    "sibling_repo_path": "",
     "stale_after_hours": 720
   },
   "required_log_keys": [
@@ -47,15 +47,14 @@
     "missing_blocker_ledger",
     "stale_support_surface_contract",
     "stale_blocker_ledger",
-    "missing_sibling_repo",
     "repo_split_contract_drift",
     "orphaned_unresolved_blocker_entries",
     "missing_required_bundle_artifacts"
   ],
   "sibling_smoke_checks": [
     {
-      "check_id": "sibling_repo_exists",
-      "description": "The downstream franken_node repository path exists."
+      "check_id": "sibling_repo_probe_optional",
+      "description": "If RGC_HANDOFF_SIBLING_REPO_PATH is configured, the downstream franken_node repository path is recorded as non-blocking engine metadata."
     },
     {
       "check_id": "one_way_dependency_contract",

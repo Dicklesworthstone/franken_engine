@@ -228,10 +228,10 @@ The machine-readable contract is [`docs/cross_repo_integration_suite_v1.json`](.
 
 ## RGC FrankenNode Handoff Bundle Gate
 
-`bd-1lsy.5.10.3` packages the engine-owned support-surface contract and blocker ledger into a deterministic handoff bundle for `/dp/franken_node`, with sibling smoke checks and fail-closed routing when upstream evidence is missing, stale, or orphaned.
+`bd-1lsy.5.10.3` packages the engine-owned support-surface contract and blocker ledger into a deterministic handoff bundle for downstream `franken_node`, with optional sibling probe metadata and fail-closed routing when upstream evidence is missing, stale, or orphaned.
 
 ```bash
-# franken_node handoff bundle gate (rch-backed check + test + clippy + sibling smoke checks)
+# franken_node handoff bundle gate (rch-backed check + test + clippy + optional sibling probe)
 RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \
   ./scripts/run_rgc_franken_node_handoff_bundle.sh ci
 

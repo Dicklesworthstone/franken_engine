@@ -147,7 +147,7 @@ fn rgc_408c_contract_is_versioned_and_references_required_inputs_and_outputs() {
     let contract = parse_contract();
 
     assert_eq!(contract.schema_version, CONTRACT_SCHEMA_VERSION);
-    assert_eq!(contract.contract_version, "1.0.0");
+    assert_eq!(contract.contract_version, "1.0.1");
     assert_eq!(contract.bead_id, "bd-1lsy.5.10.3");
     assert_eq!(
         contract.policy_id,
@@ -183,10 +183,7 @@ fn rgc_408c_contract_is_versioned_and_references_required_inputs_and_outputs() {
         contract.input_resolution.blocker_ledger_artifact_glob,
         "artifacts/rgc_engine_product_blocker_ledger/*/engine_product_blocker_ledger.json"
     );
-    assert_eq!(
-        contract.input_resolution.sibling_repo_path,
-        "/dp/franken_node"
-    );
+    assert_eq!(contract.input_resolution.sibling_repo_path, "");
     assert_eq!(contract.input_resolution.stale_after_hours, 720);
 
     for artifact in [
@@ -254,7 +251,7 @@ fn rgc_408c_smoke_check_ids_are_unique_and_cover_required_contract_checks() {
     }
 
     for check_id in [
-        "sibling_repo_exists",
+        "sibling_repo_probe_optional",
         "one_way_dependency_contract",
         "support_contract_delegates_product_ready",
         "unresolved_blockers_not_orphaned",
@@ -448,7 +445,7 @@ fn rgc_408c_runner_script_enforces_split_contract_and_support_delegation_checks(
         "product_ready_state == \"delegated_to_franken_node_handoff\"",
         "grep -Fq -- '- `franken_node` -> `frankenengine-engine`'",
         "grep -Fq -- '- `franken_engine` -> `franken_node`'",
-        "sibling_repo_exists",
+        "sibling_repo_probe_optional",
         "one_way_dependency_contract",
         "support_contract_delegates_product_ready",
     ] {
@@ -555,7 +552,7 @@ fn readme_references_handoff_bundle_gate_and_replay() {
 
     for fragment in [
         "## RGC FrankenNode Handoff Bundle Gate",
-        "/dp/franken_node",
+        "optional sibling probe metadata",
         "RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/path/engine_product_blocker_ledger.json \\",
         "./scripts/run_rgc_franken_node_handoff_bundle.sh ci",
         "./scripts/e2e/rgc_franken_node_handoff_bundle_replay.sh ci",

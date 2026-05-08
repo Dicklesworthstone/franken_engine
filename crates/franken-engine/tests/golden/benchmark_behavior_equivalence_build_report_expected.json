@@ -1,0 +1,238 @@
+{
+  "schema_version": "franken-engine.benchmark-behavior-equivalence.v1",
+  "trace_id": "trace-rgc-704b-epoch-704",
+  "decision_id": "decision-rgc-704b-epoch-704",
+  "policy_id": "RGC-704B",
+  "component": "benchmark_behavior_equivalence",
+  "records": [
+    {
+      "workload_id": "alpha_module_unsupported",
+      "baseline": "bun",
+      "surface": "library_only",
+      "classification": "unsupported_feature",
+      "publication_disposition": "blocked",
+      "owner_route": {
+        "owner_bead_id": "bd-1lsy.5",
+        "owner_hint": "module_interop",
+        "component": "module_system_interop",
+        "rationale": "unsupported feature should route to the owning feature or support lane"
+      },
+      "detail": "module loader edge case is not implemented in the bun parity lane",
+      "minimized_repro_command": null,
+      "record_hash": [
+        172,
+        184,
+        136,
+        126,
+        137,
+        251,
+        223,
+        238,
+        92,
+        73,
+        36,
+        135,
+        167,
+        230,
+        45,
+        231,
+        93,
+        84,
+        9,
+        46,
+        152,
+        164,
+        197,
+        36,
+        189,
+        104,
+        208,
+        90,
+        133,
+        232,
+        225,
+        168
+      ]
+    },
+    {
+      "workload_id": "beta_infra_failure",
+      "baseline": "v8_isolate",
+      "surface": "shipped_path",
+      "classification": "infra_failure",
+      "publication_disposition": "blocked",
+      "owner_route": {
+        "owner_bead_id": "bd-1lsy.8.4.2",
+        "owner_hint": "benchmark_harness",
+        "component": "benchmark_behavior_equivalence",
+        "rationale": "runner or baseline infra failure belongs to the benchmark harness lane"
+      },
+      "detail": "runner failed before collecting a comparable output",
+      "minimized_repro_command": null,
+      "record_hash": [
+        123,
+        54,
+        91,
+        14,
+        241,
+        219,
+        60,
+        245,
+        178,
+        108,
+        179,
+        192,
+        186,
+        183,
+        3,
+        229,
+        154,
+        44,
+        108,
+        64,
+        130,
+        244,
+        88,
+        129,
+        136,
+        19,
+        128,
+        175,
+        16,
+        114,
+        128,
+        197
+      ]
+    },
+    {
+      "workload_id": "gamma_equivalent_library",
+      "baseline": "deno",
+      "surface": "library_only",
+      "classification": "equivalent",
+      "publication_disposition": "non_publication_evidence",
+      "owner_route": null,
+      "detail": "library-only parity evidence retained for corpus monitoring",
+      "minimized_repro_command": null,
+      "record_hash": [
+        42,
+        4,
+        106,
+        174,
+        12,
+        28,
+        59,
+        2,
+        18,
+        3,
+        244,
+        236,
+        1,
+        67,
+        191,
+        243,
+        92,
+        62,
+        17,
+        104,
+        201,
+        180,
+        28,
+        208,
+        140,
+        117,
+        119,
+        240,
+        149,
+        231,
+        83,
+        83
+      ]
+    },
+    {
+      "workload_id": "zeta_shipped_path_drift",
+      "baseline": "node_js",
+      "surface": "shipped_path",
+      "classification": "shipped_path_drift",
+      "publication_disposition": "blocked",
+      "owner_route": {
+        "owner_bead_id": "bd-1lsy.9.6",
+        "owner_hint": "shipped_path_parity",
+        "component": "shipped_path_parity",
+        "rationale": "user-visible shipped-path drift belongs to the shipped-path parity lane"
+      },
+      "detail": "shipped path output diverged from the node baseline",
+      "minimized_repro_command": "frankenctl bench --workload zeta_shipped_path_drift --min",
+      "record_hash": [
+        138,
+        232,
+        130,
+        153,
+        7,
+        225,
+        135,
+        30,
+        146,
+        27,
+        74,
+        189,
+        239,
+        2,
+        238,
+        52,
+        251,
+        28,
+        23,
+        47,
+        198,
+        159,
+        29,
+        32,
+        25,
+        136,
+        202,
+        95,
+        131,
+        219,
+        31,
+        20
+      ]
+    }
+  ],
+  "owner_routes": [
+    {
+      "owner_bead_id": "bd-1lsy.5",
+      "owner_hint": "module_interop",
+      "component": "module_system_interop",
+      "rationale": "unsupported feature should route to the owning feature or support lane",
+      "workload_ids": [
+        "alpha_module_unsupported"
+      ],
+      "classifications": [
+        "unsupported_feature"
+      ]
+    },
+    {
+      "owner_bead_id": "bd-1lsy.8.4.2",
+      "owner_hint": "benchmark_harness",
+      "component": "benchmark_behavior_equivalence",
+      "rationale": "runner or baseline infra failure belongs to the benchmark harness lane",
+      "workload_ids": [
+        "beta_infra_failure"
+      ],
+      "classifications": [
+        "infra_failure"
+      ]
+    },
+    {
+      "owner_bead_id": "bd-1lsy.9.6",
+      "owner_hint": "shipped_path_parity",
+      "component": "shipped_path_parity",
+      "rationale": "user-visible shipped-path drift belongs to the shipped-path parity lane",
+      "workload_ids": [
+        "zeta_shipped_path_drift"
+      ],
+      "classifications": [
+        "shipped_path_drift"
+      ]
+    }
+  ]
+}

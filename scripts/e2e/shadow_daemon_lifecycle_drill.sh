@@ -1,17 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-# Shadow Daemon Lifecycle Drill - No-Mock End-to-End Test
+# Shadow Daemon Lifecycle Drill - Synthetic Evidence Exercise
 #
-# This script exercises the complete shadow daemon lifecycle:
+# This script exercises the shadow daemon lifecycle shape with synthetic
+# scenario records:
 # - Real local tool execution (br/bv, Agent Mail, rch-status, git)
 # - One-shot watchers and artifact collection
 # - Journal append/export operations
-# - Decision composition from journal events
-# - Replay verification and drift detection
+# - Synthetic decision composition from journal events
+# - Synthetic replay consistency checks
 # - Truth gate reporting and validation
 #
-# All artifacts are preserved for forensic analysis and fixture replay.
+# This is not bd-djejh.6 no-mock proof. Synthetic evidence fails closed with
+# EXIT_SYNTHETIC_EVIDENCE so the drill cannot satisfy no-mock adoption gates.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -19,6 +21,7 @@ E2E_WORK_DIR="$PROJECT_ROOT/tmp/shadow_daemon_e2e_$(date +%s)"
 
 # Test scenario from command line argument
 SCENARIO="${1:-healthy_idle}"
+DRILL_EVIDENCE_MODE="synthetic_drill"
 
 # Exit codes for different failure modes
 EXIT_SUCCESS=0
@@ -29,6 +32,7 @@ EXIT_UNSUPPORTED_MUTATION=13
 EXIT_MISSING_REFERENCES=14
 EXIT_NONDETERMINISTIC_REPLAY=15
 EXIT_TRUTH_GATE_FAILURE=16
+EXIT_SYNTHETIC_EVIDENCE=17
 
 # Colors for output
 RED='\033[0;31m'
@@ -67,6 +71,14 @@ setup_workspace() {
 {
     "drill_id": "shadow_daemon_lifecycle_$(date +%s)",
     "scenario": "$SCENARIO",
+    "evidence_mode": "$DRILL_EVIDENCE_MODE",
+    "no_mock_proof": false,
+    "proof_limitations": [
+        "synthetic scenario records",
+        "inline python decision composition",
+        "inline python replay consistency checks",
+        "does not satisfy bd-djejh.6 no-mock lifecycle proof"
+    ],
     "start_time": "$(date -Iseconds)",
     "project_root": "$PROJECT_ROOT",
     "work_dir": "$E2E_WORK_DIR",
@@ -91,7 +103,7 @@ execute_tool_watchers() {
     local commands_file="$E2E_WORK_DIR/artifacts/commands.txt"
     local events_file="$E2E_WORK_DIR/artifacts/events.jsonl"
 
-    echo "# Shadow Daemon Tool Execution Log - $(date)" > "$commands_file"
+    echo "# Shadow Daemon Synthetic Tool Execution Log - $(date)" > "$commands_file"
     touch "$events_file"
 
     case "$SCENARIO" in
@@ -154,12 +166,13 @@ execute_healthy_idle_tools() {
     fi
 }
 
-# Active no-mock lane scenario
+# Synthetic active-lane scenario. The scenario name is kept for compatibility,
+# but the resulting artifacts are not no-mock proof.
 execute_active_no_mock_tools() {
     local commands_file="$1"
     local events_file="$2"
 
-    log "Running active no-mock lane scenario"
+    log "Running synthetic active lane scenario"
 
     # All tools from healthy idle plus more active operations
     execute_healthy_idle_tools "$commands_file" "$events_file"
@@ -173,10 +186,26 @@ execute_active_no_mock_tools() {
         append_event "$events_file" "actionable_beads" "error" "actionable bead listing failed"
     fi
 
-    # Agent mail check (if available)
+    # Agent mail check (actual connectivity test)
     if command -v python3 > /dev/null; then
         echo "python3 -c 'import json; print(json.dumps({\"tool\": \"agent_mail_check\"}))'" >> "$commands_file"
-        append_event "$events_file" "agent_mail_check" "success" "agent mail connectivity verified"
+        if python3 -c "
+import subprocess
+import json
+try:
+    result = subprocess.run(['curl', '-s', '--max-time', '5', 'http://127.0.0.1:8765/api/mcp'],
+                          capture_output=True, text=True, timeout=10)
+    if result.returncode == 0:
+        exit(0)
+    else:
+        exit(1)
+except:
+    exit(1)
+" 2>/dev/null; then
+            append_event "$events_file" "agent_mail_check" "success" "agent mail connectivity verified via MCP endpoint"
+        else
+            append_event "$events_file" "agent_mail_check" "error" "agent mail endpoint unreachable at http://127.0.0.1:8765/api/mcp"
+        fi
     else
         append_event "$events_file" "agent_mail_check" "warning" "python3 not available for agent mail check"
     fi
@@ -207,9 +236,26 @@ execute_degraded_agent_mail() {
 
     execute_healthy_idle_tools "$commands_file" "$events_file"
 
-    # Simulate degraded agent mail
-    append_event "$events_file" "agent_mail_degraded" "warning" "agent mail responses taking >5s"
-    append_event "$events_file" "agent_mail_fallback" "success" "falling back to local tool execution"
+    # Test for degraded agent mail performance
+    if command -v python3 > /dev/null && command -v curl > /dev/null; then
+        start_time=$(date +%s%3N)
+        if curl -s --max-time 5 http://127.0.0.1:8765/api/mcp > /dev/null 2>&1; then
+            end_time=$(date +%s%3N)
+            response_time=$((end_time - start_time))
+            if [ $response_time -gt 5000 ]; then
+                append_event "$events_file" "agent_mail_degraded" "warning" "agent mail responses taking ${response_time}ms (>5s threshold)"
+                append_event "$events_file" "agent_mail_fallback" "success" "falling back to local tool execution"
+            else
+                append_event "$events_file" "agent_mail_performance" "success" "agent mail responding in ${response_time}ms"
+            fi
+        else
+            append_event "$events_file" "agent_mail_degraded" "error" "agent mail endpoint unreachable, using local fallback"
+            append_event "$events_file" "agent_mail_fallback" "success" "falling back to local tool execution"
+        fi
+    else
+        append_event "$events_file" "agent_mail_degraded" "warning" "cannot test agent mail performance - missing dependencies"
+        append_event "$events_file" "agent_mail_fallback" "success" "falling back to local tool execution"
+    fi
 }
 
 # RCH local fallback contamination scenario
@@ -223,7 +269,18 @@ execute_rch_fallback_tools() {
 
     # Detect RCH local fallback contamination
     echo "rch status --local-fallback-check" >> "$commands_file"
-    append_event "$events_file" "rch_contamination_detected" "fail_closed" "local compilation may contaminate remote build artifacts"
+    if command -v rch > /dev/null; then
+        if rch status 2>&1 | grep -q "local fallback"; then
+            append_event "$events_file" "rch_contamination_detected" "fail_closed" "local compilation contamination detected in rch status"
+        elif rch status 2>&1 | grep -q "workers.*0"; then
+            append_event "$events_file" "rch_contamination_detected" "fail_closed" "no rch workers available - local compilation may contaminate artifacts"
+        else
+            rch_output=$(rch status 2>&1)
+            append_event "$events_file" "rch_status_check" "success" "rch workers available: $(echo "$rch_output" | grep -o '[0-9]* workers' | head -1)"
+        fi
+    else
+        append_event "$events_file" "rch_contamination_detected" "fail_closed" "rch not available - cannot verify build artifact contamination"
+    fi
 }
 
 # Dirty shared worktree ambiguity scenario
@@ -250,8 +307,8 @@ append_event() {
     local timestamp="${5:-$(date -Iseconds)}"
 
     # Write single-line JSON for proper JSONL format
-    printf '{"timestamp":"%s","event_type":"%s","status":"%s","message":"%s","scenario":"%s","sequence":%d}\n' \
-        "$timestamp" "$event_type" "$status" "$message" "$SCENARIO" "$(wc -l < "$events_file")" >> "$events_file"
+    printf '{"timestamp":"%s","event_type":"%s","status":"%s","message":"%s","scenario":"%s","evidence_mode":"%s","sequence":%d}\n' \
+        "$timestamp" "$event_type" "$status" "$message" "$SCENARIO" "$DRILL_EVIDENCE_MODE" "$(wc -l < "$events_file")" >> "$events_file"
 }
 
 # Journal operations - append events and export checkpoints
@@ -284,6 +341,7 @@ convert_events_to_journal() {
 import json
 import hashlib
 import sys
+import time
 
 def compute_hash(data):
     return hashlib.sha256(data.encode()).hexdigest()
@@ -302,14 +360,14 @@ with open('$events_file', 'r') as f:
                     "event_kind": event["event_type"],
                     "source_kind": "tool_watcher",
                     "source_locator": f"e2e://{event['event_type']}",
-                    "collected_timestamp_ms": int(1000),  # Simplified for drill
+                    "collected_timestamp_ms": int(time.time() * 1000),  # Real timestamp
                     "sequence_id": line_num,
                     "payload_content_hash": compute_hash(json.dumps(event, sort_keys=True)),
                     "normalized_payload": event,
                     "normalized_payload_hash": compute_hash(json.dumps(event, sort_keys=True)),
                     "raw_evidence_hashes": [],
                     "freshness_window_ms": 300000,  # 5 minutes
-                    "freshness_deadline_ms": int(1000) + 300000,
+                    "freshness_deadline_ms": int(time.time() * 1000) + 300000,
                     "degradation_state": event["status"],
                     "retention_class": "drill_test",
                     "parent_event_ids": [line_num - 1] if line_num > 1 else [],
@@ -374,7 +432,8 @@ execute_decision_composition() {
         exit $EXIT_MISSING_REFERENCES
     fi
 
-    # Compose shadow decisions (simplified for drill)
+    # Compose synthetic shadow decisions. This is intentionally marked as
+    # non-authoritative so it cannot be used as no-mock proof.
     python3 <<EOF
 import json
 import sys
@@ -386,6 +445,9 @@ events = export_data.get('rows', [])
 
 # Analyze events to compose decisions
 status = {
+    "proof_class": "synthetic_drill",
+    "no_mock_proof": False,
+    "composer_kind": "inline_python_synthetic",
     "shadow_truth_state": "operational",
     "total_events": len(events),
     "healthy_events": len([e for e in events if e.get('degradation_state') == 'success']),
@@ -412,6 +474,8 @@ with open('$status_file', 'w') as f:
 
 # Generate recommendations
 recommendations = {
+    "proof_class": "synthetic_drill",
+    "no_mock_proof": False,
     "recommendations": [
         {
             "type": "operational_guidance",
@@ -426,7 +490,8 @@ recommendations = {
     "composition_metadata": {
         "input_events": len(events),
         "composition_time": "$(date -Iseconds)",
-        "scenario": "$SCENARIO"
+        "scenario": "$SCENARIO",
+        "composer_kind": "inline_python_synthetic"
     }
 }
 
@@ -451,31 +516,72 @@ execute_replay_verification() {
         exit $EXIT_MISSING_REFERENCES
     fi
 
-    # Perform replay verification (simplified for drill)
+    # Perform a synthetic replay consistency check. This is intentionally marked
+    # as non-authoritative so it cannot be used as no-mock proof.
     python3 <<EOF
 import json
 import hashlib
 import sys
+import time
 
 with open('$journal_export', 'r') as f:
     export_data = json.load(f)
 
 events = export_data.get('rows', [])
 
-# Simulate replay verification
+# Perform actual replay verification by checking event consistency
+detected_drift = []
+event_hashes = []
+
+# Check for event integrity and consistency
+for i, event in enumerate(events):
+    # Verify event has required fields
+    required_fields = ['event_type', 'timestamp', 'status']
+    for field in required_fields:
+        if field not in event:
+            detected_drift.append({
+                "event_index": i,
+                "drift_type": "missing_field",
+                "description": f"Event missing required field: {field}"
+            })
+
+    # Check for timestamp consistency (events should be in order)
+    if i > 0 and 'timestamp' in event and 'timestamp' in events[i-1]:
+        try:
+            current_ts = float(event['timestamp'])
+            prev_ts = float(events[i-1]['timestamp'])
+            if current_ts < prev_ts:
+                detected_drift.append({
+                    "event_index": i,
+                    "drift_type": "timestamp_regression",
+                    "description": f"Event timestamp {current_ts} < previous {prev_ts}"
+                })
+        except (ValueError, TypeError):
+            detected_drift.append({
+                "event_index": i,
+                "drift_type": "invalid_timestamp",
+                "description": f"Non-numeric timestamp: {event.get('timestamp', 'missing')}"
+            })
+
+# Generate actual replay verification report
 replay_results = {
-    "report_id": "replay_$(date +%s)",
-    "detection_timestamp_ms": int($(date +%s) * 1000),
+    "report_id": f"replay_{int(time.time())}",
+    "proof_class": "synthetic_drill",
+    "no_mock_proof": False,
+    "verifier_kind": "inline_python_synthetic",
+    "detection_timestamp_ms": int(time.time() * 1000),
     "source_export_events": len(events),
     "target_environment": "e2e_drill",
-    "detected_drift": [],
+    "detected_drift": detected_drift,
     "is_expected_migration": False,
+    "verification_status": "pass" if len(detected_drift) == 0 else "drift_detected",
     "replay_recipe": {
         "input_checkpoint": "journal_export.json",
-        "replay_command": ["python3", "replay_verification.py"],
+        "replay_command": ["python3", "inline_synthetic_replay_check"],
         "environment_vars": {"SCENARIO": "$SCENARIO"},
-        "expected_outputs": {},
-        "referenced_artifacts": ["journal_export.json", "shadow_status.json"]
+        "verification_method": "event_consistency_check",
+        "referenced_artifacts": ["journal_export.json", "shadow_status.json"],
+        "authoritative_no_mock_proof": False
     }
 }
 
@@ -561,8 +667,12 @@ truth_gate = {
     "gate_id": "shadow_daemon_truth_gate_$(date +%s)",
     "evaluation_timestamp": "$(date -Iseconds)",
     "scenario": "$SCENARIO",
+    "proof_class": "synthetic_drill",
+    "no_mock_proof": False,
     "inputs": {
         "shadow_status": status.get("shadow_truth_state"),
+        "shadow_status_proof_class": status.get("proof_class"),
+        "replay_proof_class": replay.get("proof_class"),
         "fail_closed_events": status.get("fail_closed_events", 0),
         "replay_drift_count": len(replay.get("detected_drift", [])),
         "deterministic_replay": replay.get("ordering_verification", {}).get("deterministic", False)
@@ -603,10 +713,17 @@ else:
     truth_gate["validation_results"]["drift_check"] = "fail"
     truth_gate["exit_code"] = $EXIT_NONDETERMINISTIC_REPLAY
 
+# Rule 4: Synthetic evidence must never satisfy the no-mock adoption gate
+rules_total += 1
+truth_gate["validation_results"]["authoritative_no_mock_proof"] = "fail"
+truth_gate["exit_code"] = $EXIT_SYNTHETIC_EVIDENCE
+
 # Scenario-specific validations
 if "$SCENARIO" in ["stale_expired_agent", "rch_local_fallback", "dirty_shared_worktree"]:
     # These scenarios should trigger fail-closed behavior
-    if status.get("shadow_truth_state") == "fail_closed":
+    if truth_gate["exit_code"] == $EXIT_SYNTHETIC_EVIDENCE:
+        truth_gate["final_verdict"] = "fail_synthetic_evidence_not_no_mock_proof"
+    elif status.get("shadow_truth_state") == "fail_closed":
         truth_gate["validation_results"]["expected_fail_closed"] = "pass"
         truth_gate["final_verdict"] = "pass_expected_failure"
         truth_gate["exit_code"] = $EXIT_SUCCESS
@@ -616,7 +733,9 @@ if "$SCENARIO" in ["stale_expired_agent", "rch_local_fallback", "dirty_shared_wo
         truth_gate["exit_code"] = $EXIT_TRUTH_GATE_FAILURE
 else:
     # Normal scenarios should pass cleanly
-    if rules_passed == rules_total:
+    if truth_gate["exit_code"] == $EXIT_SYNTHETIC_EVIDENCE:
+        truth_gate["final_verdict"] = "fail_synthetic_evidence_not_no_mock_proof"
+    elif rules_passed == rules_total:
         truth_gate["final_verdict"] = "pass"
         truth_gate["exit_code"] = $EXIT_SUCCESS
     else:
@@ -648,6 +767,9 @@ EOF
         $EXIT_TRUTH_GATE_FAILURE)
             error "Truth gate failed: validation rules not met"
             ;;
+        $EXIT_SYNTHETIC_EVIDENCE)
+            error "Truth gate failed: synthetic drill is not no-mock proof"
+            ;;
         *)
             error "Truth gate failed: unknown error ($truth_gate_exit)"
             ;;
@@ -669,7 +791,7 @@ with open('$E2E_WORK_DIR/run_manifest.json', 'r') as f:
 
 manifest["end_time"] = "$(date -Iseconds)"
 manifest["duration_seconds"] = $(( $(date +%s) - $(date -d "$(jq -r .start_time "$E2E_WORK_DIR/run_manifest.json")" +%s) ))
-manifest["final_status"] = "completed"
+manifest["final_status"] = "completed_synthetic"
 manifest["artifact_summary"] = {
     "total_files": $(find "$E2E_WORK_DIR/artifacts" -type f | wc -l),
     "total_size_bytes": $(du -sb "$E2E_WORK_DIR/artifacts" | cut -f1),
@@ -703,11 +825,11 @@ usage() {
     cat <<EOF
 Usage: $0 [SCENARIO]
 
-Shadow Daemon Lifecycle Drill - No-Mock End-to-End Test
+Shadow Daemon Lifecycle Drill - Synthetic Evidence Exercise
 
 SCENARIOS:
   healthy_idle              Normal idle state with minimal activity (default)
-  active_no_mock_lane      Active operations without mocks
+  active_no_mock_lane      Synthetic active-lane exercise, not no-mock proof
   stale_expired_agent      Agent data older than freshness threshold
   agent_mail_degraded      Agent Mail experiencing degraded performance
   rch_local_fallback       RCH falling back to local compilation (contamination)
@@ -722,9 +844,10 @@ EXIT CODES:
   14  Missing raw references
   15  Nondeterministic replay detected
   16  Truth gate validation failure
+  17  Synthetic evidence cannot satisfy no-mock adoption gates
 
-The drill preserves all artifacts for forensic analysis and supports fixture replay
-without requiring live tool access.
+The drill preserves artifacts for forensic analysis and fixture replay, but it
+is synthetic evidence and exits 17 so it cannot satisfy no-mock adoption gates.
 EOF
 }
 

@@ -128,4 +128,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "shadow_panel_bundle"
+path = "fuzz_targets/shadow_panel_bundle.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

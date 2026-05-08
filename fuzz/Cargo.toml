@@ -100,4 +100,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "parse_js_ts"
+path = "fuzz_targets/parse_js_ts.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

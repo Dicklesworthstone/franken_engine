@@ -1225,7 +1225,9 @@ fn ensure_artifact_paths_under(
     for artifact_path in artifact_paths {
         let artifact_path = Path::new(artifact_path);
         reject_parent_dir_component("artifact path", artifact_path)?;
-        if artifact_path.is_absolute() != output_dir_is_absolute || !artifact_path.starts_with(output_dir) {
+        if artifact_path.is_absolute() != output_dir_is_absolute
+            || !artifact_path.starts_with(output_dir)
+        {
             return Err(ShadowDecisionError::InvalidInput(format!(
                 "artifact path `{}` is outside output dir `{}`",
                 artifact_path.display(),

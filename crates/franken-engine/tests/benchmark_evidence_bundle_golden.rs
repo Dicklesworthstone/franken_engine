@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
-    BenchmarkRun, BundleConfig, BundleStatus, EvidenceBundle, EnvironmentSnapshot,
+    BenchmarkRun, BundleConfig, EvidenceBundle, EnvironmentSnapshot,
     ParityTarget, ParityVerdict, WorkloadCategory, WorkloadProvenance, generate_report,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
@@ -157,7 +157,7 @@ fn create_deterministic_bundle() -> EvidenceBundle {
     // Add parity verdicts
     bundle.add_parity_verdict(create_parity_verdict(
         "micro-001",
-        ParityTarget::Node,
+        ParityTarget::NodeJs,
         950_000 // 0.95 ratio
     )).unwrap();
     bundle.add_parity_verdict(create_parity_verdict(

@@ -325,7 +325,7 @@ impl DeterministicTsModuleResolver {
                 index_fingerprint,
                 fallback_packages,
             },
-        })
+        }
     }
 
     pub fn validate_resolution_index_bundle(

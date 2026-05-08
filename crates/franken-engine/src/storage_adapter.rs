@@ -87,7 +87,12 @@ impl fmt::Display for StoreKind {
     }
 }
 
-// Legacy compatibility function removed to enforce typed boundaries for typed-heavy stores
+pub(crate) fn mark_typed_heavy_generic_compat_metadata(metadata: &mut BTreeMap<String, String>) {
+    metadata.insert(
+        TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY.to_string(),
+        TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE.to_string(),
+    );
+}
 
 fn is_typed_heavy_store(store: StoreKind) -> bool {
     matches!(
@@ -146,6 +151,27 @@ fn typed_heavy_key_is_recognized(store: StoreKind, key: &str) -> bool {
         || typed_heavy_legacy_prefixes(store)
             .iter()
             .any(|prefix| key.starts_with(prefix))
+}
+
+fn typed_heavy_metadata_is_explicit_compat(metadata: &BTreeMap<String, String>) -> bool {
+    metadata
+        .get(TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY)
+        .is_some_and(|mode| mode == TYPED_HEAVY_GENERIC_COMPAT_MODE_VALUE)
+}
+
+fn typed_heavy_key_has_legacy_prefix(store: StoreKind, key: &str) -> bool {
+    typed_heavy_legacy_prefixes(store)
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+fn typed_heavy_put_is_explicit_generic_compat_row(
+    store: StoreKind,
+    key: &str,
+    metadata: &BTreeMap<String, String>,
+) -> bool {
+    typed_heavy_metadata_is_explicit_compat(metadata)
+        && typed_heavy_key_has_legacy_prefix(store, key)
 }
 
 fn typed_heavy_put_is_current_typed_envelope(
@@ -210,8 +236,6 @@ fn typed_heavy_payload_matches_typed_model(
     }
 }
 
-// Legacy compatibility function removed to enforce typed boundaries
-
 fn typed_heavy_write_policy_error(store: StoreKind, operation: &str, key: &str) -> StorageError {
     StorageError::WriteRejected {
         detail: format!(
@@ -243,6 +267,9 @@ fn enforce_typed_heavy_put_policy(
         return Ok(());
     }
     if typed_heavy_put_is_current_typed_envelope(store, key, value, metadata) {
+        return Ok(());
+    }
+    if typed_heavy_put_is_explicit_generic_compat_row(store, key, metadata) {
         return Ok(());
     }
     Err(typed_heavy_write_policy_error(store, "put", key))
@@ -279,8 +306,13 @@ fn enforce_typed_heavy_delete_policy(
     if key.starts_with(&typed_prefix) {
         return Ok(());
     }
+    if existing
+        .map(|record| typed_heavy_put_is_explicit_generic_compat_row(store, key, &record.metadata))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
 
-    // Reject all non-typed access for typed-heavy stores
     Err(typed_heavy_write_policy_error(store, "delete", key))
 }
 
@@ -297,18 +329,25 @@ fn enforce_typed_heavy_query_policy(
         if prefix.starts_with(&typed_prefix) {
             return Ok(());
         }
+        if typed_heavy_key_has_legacy_prefix(store, prefix) {
+            return Ok(());
+        }
         return Err(typed_heavy_read_policy_error(
             store,
             "query",
-            format!("key_prefix `{prefix}` is not a typed envelope prefix"),
+            format!(
+                "key_prefix `{prefix}` is neither a typed envelope nor a recognized compatibility prefix"
+            ),
         ));
     }
 
-    // Reject unscoped queries for typed-heavy stores
     Err(typed_heavy_read_policy_error(
         store,
         "query",
-        "unscoped queries not allowed for typed-heavy stores".to_string(),
+        format!(
+            "unscoped queries require a typed envelope prefix, a recognized compatibility prefix, or a `{}` `{}` backfill-planning marker",
+            TYPED_HEAVY_GENERIC_ACCESS_MODE_KEY, TYPED_HEAVY_BACKFILL_QUERY_MODE_VALUE
+        ),
     ))
 }
 

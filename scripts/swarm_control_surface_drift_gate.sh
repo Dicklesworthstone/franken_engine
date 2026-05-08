@@ -150,9 +150,13 @@ catalog_family_basis() {
     [
       (.surface_id // ""),
       (.track // ""),
+      (.purpose // ""),
+      (.operator_status_section // ""),
       (.implementation_script // ""),
       (.smoke_script // ""),
-      (.contract_json // "")
+      (.contract_json // ""),
+      ((.intent_tags // []) | map(tostring) | join("|")),
+      ((.symptom_tags // []) | map(tostring) | join("|"))
     ] | join("|") | ascii_downcase
   ' <<<"$row"
 }

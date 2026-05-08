@@ -30,7 +30,8 @@ The gate exits 42 when it finds any of these conditions:
   mutation, reservation release, Agent Mail send, or live queue-policy change
 - a row has a smoke script that does not expose both `check` and `selftest`
 - a remote-proof/proof-economy/warm-target/build-storm/sticky-worker/worker
-  capability catalog row lacks a required smoke script or contract JSON
+  capability catalog row, whether identified by id/path or tags, lacks a
+  required smoke script or contract JSON
 - a validation command contains bare heavy Cargo instead of
   `rch exec -- env CARGO_TARGET_DIR=`
 - an owner bead is present in the bead snapshot but is not closed

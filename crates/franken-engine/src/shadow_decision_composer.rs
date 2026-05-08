@@ -1145,6 +1145,7 @@ fn advisory_recommendations(
     recommendations
 }
 
+#[allow(clippy::too_many_arguments)]
 fn recommendation(
     latest_sources: &BTreeMap<String, SourceSnapshot>,
     artifact_paths: &ArtifactPaths,
@@ -1333,5 +1334,502 @@ mod tests {
             err.to_string().contains("parent-directory traversal"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_input_rejects_empty_shadow_run_id() {
+        let input = ShadowDecisionComposerInput {
+            shadow_run_id: "".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: 1715173200,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events: vec![],
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
+        };
+
+        let result = validate_input(&input);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ShadowDecisionError::InvalidInput(_)));
+        assert!(err.to_string().contains("shadow_run_id must not be empty"));
+    }
+
+    #[test]
+    fn validate_input_rejects_negative_generated_epoch_seconds() {
+        let input = ShadowDecisionComposerInput {
+            shadow_run_id: "test-run-123".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: -1,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events: vec![],
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
+        };
+
+        let result = validate_input(&input);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("generated_epoch_seconds must be non-negative")
+        );
+    }
+
+    #[test]
+    fn compose_shadow_decision_with_stale_sources_marks_stale() {
+        let mut source_snapshots = BTreeMap::new();
+        for (i, key) in REQUIRED_SHADOW_DECISION_SOURCE_KEYS.iter().enumerate() {
+            let status = if i == 0 {
+                SourceSnapshotStatus::Stale
+            } else {
+                SourceSnapshotStatus::Fresh
+            };
+            source_snapshots.insert(
+                key.to_string(),
+                SourceSnapshot {
+                    timestamp: "2026-05-08T12:00:00Z".to_string(),
+                    content: Value::Object(serde_json::Map::new()),
+                    status,
+                },
+            );
+        }
+
+        let input = ShadowDecisionComposerInput {
+            timestamp: "2026-05-08T12:00:00Z".to_string(),
+            journal_events: vec![],
+            source_snapshots,
+            existing_autopilot: None,
+        };
+
+        let result = compose_shadow_decision(&input);
+        assert!(result.is_ok());
+        let artifacts = result.unwrap();
+        assert_eq!(artifacts.status.truth_state, ShadowTruthState::Stale);
+    }
+
+    #[test]
+    fn normalize_journal_event_handles_valid_json() {
+        let event = JournalSourceEvent {
+            timestamp: "2026-05-08T12:00:00Z".to_string(),
+            event_type: "test_event".to_string(),
+            raw_data: r#"{"key": "value", "number": 42}"#.to_string(),
+        };
+
+        let result = normalize_journal_event(&event);
+        assert!(result.is_ok());
+        let normalized = result.unwrap();
+        assert_eq!(normalized.event_type, "test_event");
+        assert_eq!(normalized.normalized_data["key"], "value");
+        assert_eq!(normalized.normalized_data["number"], 42);
+    }
+
+    #[test]
+    fn normalize_journal_event_handles_invalid_json() {
+        let event = JournalSourceEvent {
+            timestamp: "2026-05-08T12:00:00Z".to_string(),
+            event_type: "test_event".to_string(),
+            raw_data: "invalid json {".to_string(),
+        };
+
+        let result = normalize_journal_event(&event);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("JSON parse error"));
+    }
+
+    #[test]
+    fn normalize_journal_event_empty_data_creates_empty_object() {
+        let event = JournalSourceEvent {
+            timestamp: "2026-05-08T12:00:00Z".to_string(),
+            event_type: "empty_event".to_string(),
+            raw_data: String::new(),
+        };
+
+        let result = normalize_journal_event(&event);
+        assert!(result.is_ok());
+        let normalized = result.unwrap();
+        assert!(normalized.normalized_data.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn artifact_paths_for_output_dir_creates_correct_paths() {
+        let output_dir = Path::new("/test/output");
+        let paths = ArtifactPaths::for_output_dir(output_dir);
+
+        assert!(paths.shadow_status_json.contains("shadow_status.json"));
+        assert!(paths.recommendations_json.contains("recommendations.json"));
+        assert!(paths.shadow_status_json.starts_with("/test/output"));
+        assert!(paths.recommendations_json.starts_with("/test/output"));
+    }
+
+    #[test]
+    fn recommendation_artifact_paths_creates_valid_structure() {
+        let paths = RecommendationArtifactPaths {
+            recommendations_json: "/test/recommendations.json".to_string(),
+            recommendation_metadata_dir: "/test/meta".to_string(),
+        };
+
+        assert_eq!(paths.recommendations_json, "/test/recommendations.json");
+        assert_eq!(paths.recommendation_metadata_dir, "/test/meta");
+    }
+
+    #[test]
+    fn shadow_decision_error_display_formatting() {
+        let err1 = ShadowDecisionError::InvalidInput("test error".to_string());
+        assert_eq!(err1.to_string(), "invalid input: test error");
+
+        let err2 = ShadowDecisionError::JsonParseError("parse error".to_string());
+        assert_eq!(err2.to_string(), "JSON parse error: parse error");
+
+        let err3 = ShadowDecisionError::IoError("io error".to_string());
+        assert_eq!(err3.to_string(), "I/O error: io error");
+
+        let err4 = ShadowDecisionError::MissingRequiredSource("source".to_string());
+        assert_eq!(err4.to_string(), "missing required source: source");
+    }
+
+    #[test]
+    fn shadow_truth_state_serialization() {
+        let fresh = ShadowTruthState::Fresh;
+        let stale = ShadowTruthState::Stale;
+        let degraded = ShadowTruthState::Degraded;
+
+        let fresh_json = serde_json::to_string(&fresh).unwrap();
+        let stale_json = serde_json::to_string(&stale).unwrap();
+        let degraded_json = serde_json::to_string(&degraded).unwrap();
+
+        assert_eq!(fresh_json, r#""Fresh""#);
+        assert_eq!(stale_json, r#""Stale""#);
+        assert_eq!(degraded_json, r#""Degraded""#);
+
+        // Test deserialization
+        assert_eq!(
+            serde_json::from_str::<ShadowTruthState>(&fresh_json).unwrap(),
+            fresh
+        );
+        assert_eq!(
+            serde_json::from_str::<ShadowTruthState>(&stale_json).unwrap(),
+            stale
+        );
+        assert_eq!(
+            serde_json::from_str::<ShadowTruthState>(&degraded_json).unwrap(),
+            degraded
+        );
+    }
+
+    #[test]
+    fn shadow_decision_serialization() {
+        let proceed = ShadowDecision::Proceed;
+        let hold = ShadowDecision::Hold;
+
+        let proceed_json = serde_json::to_string(&proceed).unwrap();
+        let hold_json = serde_json::to_string(&hold).unwrap();
+
+        assert_eq!(proceed_json, r#""Proceed""#);
+        assert_eq!(hold_json, r#""Hold""#);
+
+        // Test deserialization
+        assert_eq!(
+            serde_json::from_str::<ShadowDecision>(&proceed_json).unwrap(),
+            proceed
+        );
+        assert_eq!(
+            serde_json::from_str::<ShadowDecision>(&hold_json).unwrap(),
+            hold
+        );
+    }
+
+    #[test]
+    fn mutation_policy_defaults() {
+        let policy = MutationPolicy::default();
+        assert!(!policy.allow_destructive_operations);
+        assert!(!policy.allow_force_push);
+        assert!(!policy.allow_branch_deletion);
+        assert!(!policy.allow_config_changes);
+        assert!(!policy.allow_dependency_updates);
+        assert!(!policy.allow_schema_migrations);
+        assert!(!policy.allow_critical_path_changes);
+        assert!(policy.require_review_for_api_changes);
+        assert!(policy.require_review_for_breaking_changes);
+        assert!(policy.require_tests_for_new_code);
+        assert_eq!(policy.max_simultaneous_mutations, 3);
+        assert_eq!(policy.mutation_blast_radius_limit, 50);
+    }
+
+    #[test]
+    fn sibling_reuse_creation() {
+        let reuse = SiblingReuse {
+            agent_name: "TestAgent".to_string(),
+            recommendation_id: "rec_123".to_string(),
+            similarity_score: 0.85,
+            justification: "Similar work pattern".to_string(),
+        };
+
+        assert_eq!(reuse.agent_name, "TestAgent");
+        assert_eq!(reuse.similarity_score, 0.85);
+    }
+
+    #[test]
+    fn advisory_recommendation_structure() {
+        let rec = AdvisoryRecommendation {
+            recommendation_id: "rec_456".to_string(),
+            command_line: "git commit -m 'test'".to_string(),
+            rationale: "Test commit".to_string(),
+            risk_assessment: "low".to_string(),
+            estimated_duration_minutes: 5,
+            requires_manual_review: false,
+            sibling_reuse: None,
+        };
+
+        assert_eq!(rec.recommendation_id, "rec_456");
+        assert_eq!(rec.estimated_duration_minutes, 5);
+        assert!(!rec.requires_manual_review);
+        assert!(rec.sibling_reuse.is_none());
+    }
+
+    #[test]
+    fn dedupe_sorted_removes_duplicates_and_sorts() {
+        let mut values = vec![
+            "c".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "a".to_string(),
+        ];
+        dedupe_sorted(&mut values);
+        assert_eq!(values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn dedupe_sorted_handles_empty_vec() {
+        let mut values: Vec<String> = vec![];
+        dedupe_sorted(&mut values);
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn dedupe_sorted_handles_single_item() {
+        let mut values = vec!["single".to_string()];
+        dedupe_sorted(&mut values);
+        assert_eq!(values, vec!["single"]);
+    }
+
+    #[test]
+    fn reject_parent_dir_component_accepts_safe_paths() {
+        let safe_path = Path::new("safe/path/file.txt");
+        let result = reject_parent_dir_component("test", safe_path);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn reject_parent_dir_component_rejects_parent_traversal() {
+        let unsafe_path = Path::new("../unsafe/path/file.txt");
+        let result = reject_parent_dir_component("test", unsafe_path);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("parent-directory traversal")
+        );
+    }
+
+    #[test]
+    fn source_snapshot_status_serialization() {
+        let fresh = SourceSnapshotStatus::Fresh;
+        let stale = SourceSnapshotStatus::Stale;
+        let degraded = SourceSnapshotStatus::Degraded;
+
+        let fresh_json = serde_json::to_string(&fresh).unwrap();
+        let stale_json = serde_json::to_string(&stale).unwrap();
+        let degraded_json = serde_json::to_string(&degraded).unwrap();
+
+        assert_eq!(fresh_json, r#""Fresh""#);
+        assert_eq!(stale_json, r#""Stale""#);
+        assert_eq!(degraded_json, r#""Degraded""#);
+    }
+
+    // Additional test coverage for production code paths
+
+    #[test]
+    fn normalize_journal_event_rejects_negative_default_freshness_window() {
+        let event = JournalSourceEvent::default();
+        let result = normalize_journal_event(&event, -10);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ShadowDecisionError::InvalidInput(_)));
+        assert!(err.to_string().contains("default freshness window must be non-negative"));
+    }
+
+    #[test]
+    fn normalize_journal_event_rejects_negative_source_freshness_window() {
+        let event = JournalSourceEvent {
+            source_key: Some("test_source".to_string()),
+            freshness_window_seconds: Some(-5),
+            ..Default::default()
+        };
+        let result = normalize_journal_event(&event, 300);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("has negative freshness window"));
+    }
+
+    #[test]
+    fn normalize_journal_event_handles_malformed_json_payload() {
+        let event = JournalSourceEvent {
+            normalized_payload_json: Some("{broken json".to_string()),
+            ..Default::default()
+        };
+        let result = normalize_journal_event(&event, 300);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ShadowDecisionError::Json(_)));
+    }
+
+    #[test]
+    fn compose_shadow_decision_with_missing_sources_produces_blocked_state() {
+        let input = ShadowDecisionComposerInput {
+            shadow_run_id: "test-run-123".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: 1715173200,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events: vec![], // Empty - missing required sources
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
+        };
+
+        let result = compose_shadow_decision(&input);
+        assert!(result.is_ok());
+        let artifacts = result.unwrap();
+        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Blocked);
+        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
+        assert!(artifacts.shadow_status.error_codes.contains(&"FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE".to_string()));
+    }
+
+    #[test]
+    fn compose_shadow_decision_with_contamination_produces_contaminated_state() {
+        let event = JournalSourceEvent {
+            source_key: Some("br_queue".to_string()),
+            local_fallback_contamination: true,
+            collected_epoch_seconds: Some(1715173200),
+            payload: Some(serde_json::json!({})),
+            ..Default::default()
+        };
+        let input = ShadowDecisionComposerInput {
+            shadow_run_id: "test-run-123".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: 1715173200,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events: vec![event],
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
+        };
+
+        let result = compose_shadow_decision(&input);
+        assert!(result.is_ok());
+        let artifacts = result.unwrap();
+        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Contaminated);
+        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
+    }
+
+    #[test]
+    fn compose_shadow_decision_with_stale_source_produces_degraded_state() {
+        let old_timestamp = 1715173200 - 600; // 10 minutes ago
+        let event = JournalSourceEvent {
+            source_key: Some("br_queue".to_string()),
+            collected_epoch_seconds: Some(old_timestamp),
+            freshness_window_seconds: Some(300), // 5 minute window
+            fresh: Some(false),
+            payload: Some(serde_json::json!({})),
+            ..Default::default()
+        };
+        let input = ShadowDecisionComposerInput {
+            shadow_run_id: "test-run-123".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: 1715173200,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events: vec![event],
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
+        };
+
+        let result = compose_shadow_decision(&input);
+        assert!(result.is_ok());
+        let artifacts = result.unwrap();
+        assert_eq!(artifacts.shadow_status.truth_state, ShadowTruthState::Degraded);
+        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::Degraded);
+    }
+
+    #[test]
+    fn mutation_policy_advisory_only_is_fail_closed() {
+        let policy = MutationPolicy::advisory_only();
+
+        assert!(policy.advisory_only);
+        assert!(policy.proof_only);
+        assert!(!policy.mutates_br);
+        assert!(!policy.reassigns_beads);
+        assert!(!policy.releases_reservations);
+        assert!(!policy.sends_agent_mail);
+        assert!(!policy.runs_cargo);
+        assert!(!policy.runs_rch);
+        assert!(!policy.mutates_git);
+        assert!(!policy.mutates_remote_workers);
+        assert!(!policy.changes_live_queue_policy);
+        assert!(!policy.writes_outside_output_dir);
+    }
+
+    #[test]
+    fn sibling_reuse_required_provides_expected_paths() {
+        let reuse = SiblingReuse::required();
+
+        assert_eq!(reuse.persistence, "/dp/frankensqlite");
+        assert_eq!(reuse.tui, "/dp/frankentui");
+        assert_eq!(reuse.service_api, "/dp/fastapi_rust");
+    }
+
+    #[test]
+    fn shadow_decision_composer_input_new_creates_valid_input() {
+        let events = vec![JournalSourceEvent::default()];
+        let input = ShadowDecisionComposerInput::new(
+            "test-run-456",
+            "def789",
+            1715173200,
+            events,
+            "/tmp/output"
+        );
+
+        assert_eq!(input.shadow_run_id, "test-run-456");
+        assert_eq!(input.source_revision, "def789");
+        assert_eq!(input.generated_epoch_seconds, 1715173200);
+        assert_eq!(input.default_freshness_window_seconds, DEFAULT_SHADOW_DECISION_FRESHNESS_WINDOW_SECONDS);
+        assert_eq!(input.max_recommendations, DEFAULT_SHADOW_DECISION_MAX_RECOMMENDATIONS);
+        assert_eq!(input.journal_events.len(), 1);
+        assert!(input.existing_autopilot_outputs.is_empty());
+    }
+
+    #[test]
+    fn error_conversion_from_serde_json_error() {
+        let json_err = serde_json::from_str::<Value>("invalid json").unwrap_err();
+        let shadow_err: ShadowDecisionError = json_err.into();
+
+        assert!(matches!(shadow_err, ShadowDecisionError::Json(_)));
+        assert!(shadow_err.to_string().contains("shadow decision JSON error:"));
+    }
+
+    #[test]
+    fn error_conversion_from_io_error() {
+        let io_err = std::fs::read("nonexistent_file_path_12345").unwrap_err();
+        let shadow_err: ShadowDecisionError = io_err.into();
+
+        assert!(matches!(shadow_err, ShadowDecisionError::Io(_)));
+        assert!(shadow_err.to_string().contains("shadow decision I/O error:"));
     }
 }

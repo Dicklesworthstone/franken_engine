@@ -653,7 +653,7 @@ impl InMemoryStorageAdapter {
 
     fn state_hash(&self) -> String {
         let bytes = serde_json::to_vec(&(self.schema_version, &self.stores))
-            .unwrap_or_else(|e| {
+            .unwrap_or_else(|_e| {
                 // Fallback to deterministic representation on serialization failure
                 format!("schema_v{}_stores_{}", self.schema_version, self.stores.len()).into_bytes()
             });

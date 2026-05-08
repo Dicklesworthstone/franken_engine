@@ -480,7 +480,7 @@ impl SentinelReport {
         {
             let mut cell_hashes: Vec<ContentHash> =
                 self.cells.iter()
-                    .map(|c| c.compute_hash().expect("calibration cell hash should not fail"))
+                    .map(|c| c.compute_hash())
                     .collect();
             cell_hashes.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
             for h in &cell_hashes {
@@ -625,8 +625,7 @@ pub fn create_sentinel(id: &str, kind: SentinelKind, threshold: u64) -> Calibrat
         state: SentinelState::Unknown,
         content_hash: ContentHash::compute(&[]),
     };
-    sentinel.content_hash = sentinel.compute_hash()
-        .expect("calibration sentinel hash computation should not fail");
+    sentinel.content_hash = sentinel.compute_hash();
     sentinel
 }
 
@@ -637,8 +636,7 @@ pub fn update_sentinel(sentinel: &mut CalibrationSentinel, value: u64) -> Sentin
     sentinel.current_value_millionths = value;
     let upper_bound = sentinel.kind.is_upper_bound();
     sentinel.state = classify_state_directed(value, sentinel.threshold_millionths, upper_bound);
-    sentinel.content_hash = sentinel.compute_hash()
-        .expect("calibration sentinel hash computation should not fail");
+    sentinel.content_hash = sentinel.compute_hash();
     sentinel.state
 }
 
@@ -746,8 +744,7 @@ pub fn evaluate_promotion(cell: &ObservabilityCell) -> PromotionDecision {
         suppression_reasons,
         content_hash: ContentHash::compute(&[]),
     };
-    decision.content_hash = decision.compute_hash()
-        .expect("calibration decision hash computation should not fail");
+    decision.content_hash = decision.compute_hash();
     decision
 }
 
@@ -787,8 +784,7 @@ pub fn build_report(epoch: SecurityEpoch, cells: Vec<ObservabilityCell>) -> Sent
         red_count,
         content_hash: ContentHash::compute(&[]),
     };
-    report.content_hash = report.compute_hash()
-        .expect("calibration report hash computation should not fail");
+    report.content_hash = report.compute_hash();
     report
 }
 

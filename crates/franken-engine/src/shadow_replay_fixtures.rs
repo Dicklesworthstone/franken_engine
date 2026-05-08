@@ -19,7 +19,7 @@ pub fn create_healthy_journal_fixture() -> ShadowEvidenceJournalExport {
     let base_timestamp = 1704067200000; // 2024-01-01 00:00:00 UTC
 
     let mut rows = Vec::new();
-    let mut event_id_counter = 1000i64;
+    let event_id_counter = 1000i64;
 
     // Create a sequence of healthy events with proper parent links
     for i in 0..5 {
@@ -78,7 +78,7 @@ pub fn create_degraded_journal_fixture() -> ShadowEvidenceJournalExport {
     let base_timestamp = 1704067200000;
 
     let mut rows = Vec::new();
-    let mut event_id_counter = 2000i64;
+    let event_id_counter = 2000i64;
 
     // Create events with degraded performance characteristics
     for i in 0..4 {
@@ -138,7 +138,7 @@ pub fn create_contaminated_journal_fixture() -> ShadowEvidenceJournalExport {
     let base_timestamp = 1704067200000;
 
     let mut rows = Vec::new();
-    let mut event_id_counter = 3000i64;
+    let event_id_counter = 3000i64;
 
     // Create events with intentional contamination for drift testing
     for i in 0..3 {
@@ -207,7 +207,7 @@ pub fn create_stale_source_journal_fixture() -> ShadowEvidenceJournalExport {
     let base_timestamp = 1704067200000 - 86_400_000; // 1 day ago
 
     let mut rows = Vec::new();
-    let mut event_id_counter = 4000i64;
+    let event_id_counter = 4000i64;
 
     // Create events from stale sources that should trigger freshness warnings
     for i in 0..6 {
@@ -267,7 +267,7 @@ pub fn create_mixed_state_journal_fixture() -> ShadowEvidenceJournalExport {
     let base_timestamp = 1704067200000;
 
     let mut rows = Vec::new();
-    let mut event_id_counter = 5000i64;
+    let event_id_counter = 5000i64;
 
     // Mix of healthy, degraded, and edge case events
     let states = vec![

@@ -1342,12 +1342,7 @@ pub fn write_react_package_cohort_bundle(
             path: compat_report_path.display().to_string(),
             source,
         })?;
-    canonicalize_compat_report_for_bundle(&mut compat_report).map_err(|source| {
-        ReactCohortWriteError::CompatibilityReport {
-            path: compat_report_path.display().to_string(),
-            source,
-        }
-    })?;
+    canonicalize_compat_report_for_bundle(&mut compat_report);
     let compat_report_bytes = canonical_json_bytes(&compat_report, &compat_report_path)?;
 
     // Compute compatibility report content hash to bind report content into manifest

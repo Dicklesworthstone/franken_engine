@@ -301,7 +301,7 @@ pub fn generate_compilation_evidence(
     result: &ReactCompileResult,
     config: &ReactCompileConfig,
     language: ReactInputLanguage,
-) -> ReactCompileEvidence {
+) -> Result<ReactCompileEvidence, ReactCompileError> {
     let input_spec = ReactInputSpec {
         source_hash: result.metadata.input_hash,
         language,
@@ -323,12 +323,12 @@ pub fn generate_compilation_evidence(
         process_hash: compute_process_hash(result, config)?,
     };
 
-    ReactCompileEvidence {
+    Ok(ReactCompileEvidence {
         input_spec,
         output_spec,
         compile_receipt,
         timestamp: result.metadata.timestamp,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +452,8 @@ mod tests {
 
         let result = compile_react_source(source, ReactInputLanguage::Jsx, &config)
             .expect("serde deserialization should succeed");
-        let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
+        let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
+            .expect("Evidence generation should succeed");
 
         assert!(evidence.output_spec.success);
         assert_eq!(

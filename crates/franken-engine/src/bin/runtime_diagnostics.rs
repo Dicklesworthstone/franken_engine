@@ -1482,4 +1482,420 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn main_function_handles_empty_args() {
+        let result = run(vec![]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Usage:"));
+    }
+
+    #[test]
+    fn main_function_handles_unknown_subcommand() {
+        let result = run(vec!["unknown".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown subcommand 'unknown'"));
+    }
+
+    #[test]
+    fn main_function_handles_help_commands() {
+        assert!(run(vec!["help".to_string()]).is_ok());
+        assert!(run(vec!["--help".to_string()]).is_ok());
+        assert!(run(vec!["-h".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn run_diagnostics_requires_input_path() {
+        let result = run_diagnostics(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--input"));
+    }
+
+    #[test]
+    fn run_diagnostics_requires_output_path() {
+        let result = run_diagnostics(&["--input".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_diagnostics_validates_input_file_exists() {
+        let temp_dir = unique_temp_dir("diagnostics-missing-input");
+        let nonexistent_path = temp_dir.join("nonexistent.json");
+        let out_path = temp_dir.join("out.json");
+
+        let result = run_diagnostics(&[
+            "--input".to_string(),
+            nonexistent_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_diagnostics_with_valid_minimal_input() {
+        let temp_dir = unique_temp_dir("diagnostics-minimal");
+        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+
+        let input_path = temp_dir.join("input.json");
+        let input = RuntimeDiagnosticsCliInput {
+            target_session_id: "test_session".to_string(),
+            source_runtime_state_json_path: None,
+            source_module_resolution_bundle_json_path: None,
+            diagnostics_source_filter: None,
+            operator_context: None,
+        };
+        fs::write(
+            &input_path,
+            serde_json::to_vec_pretty(&input).expect("input should encode"),
+        )
+        .expect("input should be written");
+
+        let out_path = temp_dir.join("diagnostics.json");
+
+        let result = run_diagnostics(&[
+            "--input".to_string(),
+            input_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+
+        assert!(result.is_ok());
+        assert!(out_path.exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_export_requires_input_path() {
+        let result = run_export(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--input"));
+    }
+
+    #[test]
+    fn run_export_requires_output_path() {
+        let result = run_export(&["--input".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_export_handles_invalid_filter() {
+        let result = run_export(&[
+            "--input".to_string(),
+            "test.json".to_string(),
+            "--out".to_string(),
+            "out.json".to_string(),
+            "--filter".to_string(),
+            "invalid_filter".to_string(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid evidence filter"));
+    }
+
+    #[test]
+    fn run_export_handles_invalid_severity() {
+        let result = run_export(&[
+            "--input".to_string(),
+            "test.json".to_string(),
+            "--out".to_string(),
+            "out.json".to_string(),
+            "--min-severity".to_string(),
+            "invalid_severity".to_string(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid evidence severity"));
+    }
+
+    #[test]
+    fn run_support_bundle_requires_output_path() {
+        let result = run_support_bundle(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_support_bundle_minimal_execution() {
+        let temp_dir = unique_temp_dir("support-bundle");
+        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+
+        let out_path = temp_dir.join("support_bundle.json");
+
+        let result = run_support_bundle(&["--out".to_string(), out_path.display().to_string()]);
+
+        assert!(result.is_ok());
+        assert!(out_path.exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_support_bundle_with_redaction_policy() {
+        let temp_dir = unique_temp_dir("support-bundle-redaction");
+        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+
+        let out_path = temp_dir.join("support_bundle.json");
+
+        let result = run_support_bundle(&[
+            "--out".to_string(),
+            out_path.display().to_string(),
+            "--redaction-policy".to_string(),
+            "sensitive".to_string(),
+        ]);
+
+        assert!(result.is_ok());
+        assert!(out_path.exists());
+
+        let output = fs::read_to_string(&out_path).expect("output should exist");
+        let bundle =
+            serde_json::from_str::<SupportBundleOutput>(&output).expect("output should decode");
+        assert_eq!(
+            bundle.redaction_policy,
+            SupportBundleRedactionPolicy::Sensitive
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_doctor_requires_input_path() {
+        let result = run_doctor(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--input"));
+    }
+
+    #[test]
+    fn run_doctor_requires_output_path() {
+        let result = run_doctor(&["--input".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_doctor_validates_input_file_exists() {
+        let temp_dir = unique_temp_dir("doctor-missing-input");
+        let nonexistent_path = temp_dir.join("nonexistent.json");
+        let out_path = temp_dir.join("doctor_out.json");
+
+        let result = run_doctor(&[
+            "--input".to_string(),
+            nonexistent_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_onboarding_scorecard_requires_signals_path() {
+        let result = run_onboarding_scorecard(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--signals"));
+    }
+
+    #[test]
+    fn run_onboarding_scorecard_requires_output_path() {
+        let result = run_onboarding_scorecard(&["--signals".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_onboarding_scorecard_validates_signals_file() {
+        let temp_dir = unique_temp_dir("scorecard-missing-signals");
+        let nonexistent_path = temp_dir.join("nonexistent.json");
+        let out_path = temp_dir.join("scorecard.json");
+
+        let result = run_onboarding_scorecard(&[
+            "--signals".to_string(),
+            nonexistent_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_rollout_decision_artifact_requires_rollout_path() {
+        let result = run_rollout_decision_artifact(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--rollout"));
+    }
+
+    #[test]
+    fn run_rollout_decision_artifact_requires_output_path() {
+        let result =
+            run_rollout_decision_artifact(&["--rollout".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_rollout_decision_artifact_validates_decision_type() {
+        let result = run_rollout_decision_artifact(&[
+            "--rollout".to_string(),
+            "test.json".to_string(),
+            "--out".to_string(),
+            "out.json".to_string(),
+            "--decision-type".to_string(),
+            "invalid_decision".to_string(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid decision type"));
+    }
+
+    #[test]
+    fn run_ga_evidence_package_requires_package_input_path() {
+        let result = run_ga_evidence_package(&[]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--package-input"));
+    }
+
+    #[test]
+    fn run_ga_evidence_package_requires_output_path() {
+        let result =
+            run_ga_evidence_package(&["--package-input".to_string(), "test.json".to_string()]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--out"));
+    }
+
+    #[test]
+    fn run_ga_evidence_package_validates_input_file() {
+        let temp_dir = unique_temp_dir("ga-package-missing-input");
+        let nonexistent_path = temp_dir.join("nonexistent.json");
+        let out_path = temp_dir.join("ga_package.json");
+
+        let result = run_ga_evidence_package(&[
+            "--package-input".to_string(),
+            nonexistent_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parse_decision_type_handles_valid_types() {
+        assert!(parse_decision_type("progressive").is_ok());
+        assert!(parse_decision_type("rollback").is_ok());
+        assert!(parse_decision_type("hold").is_ok());
+    }
+
+    #[test]
+    fn parse_decision_type_rejects_invalid_types() {
+        assert!(parse_decision_type("invalid").is_err());
+        assert!(parse_decision_type("").is_err());
+        assert!(parse_decision_type("PROGRESSIVE").is_err()); // case sensitive
+    }
+
+    #[test]
+    fn parse_evidence_severity_handles_valid_severities() {
+        assert!(parse_evidence_severity("low").is_ok());
+        assert!(parse_evidence_severity("medium").is_ok());
+        assert!(parse_evidence_severity("high").is_ok());
+        assert!(parse_evidence_severity("critical").is_ok());
+    }
+
+    #[test]
+    fn parse_evidence_severity_rejects_invalid_severities() {
+        assert!(parse_evidence_severity("invalid").is_err());
+        assert!(parse_evidence_severity("").is_err());
+        assert!(parse_evidence_severity("LOW").is_err()); // case sensitive
+    }
+
+    #[test]
+    fn unique_temp_dir_creates_different_paths() {
+        let dir1 = unique_temp_dir("test1");
+        let dir2 = unique_temp_dir("test2");
+        let dir3 = unique_temp_dir("test1"); // same prefix should get different path
+
+        assert_ne!(dir1, dir2);
+        assert_ne!(dir1, dir3);
+        assert_ne!(dir2, dir3);
+
+        // All should be under temp directory
+        assert!(dir1.starts_with(std::env::temp_dir()));
+        assert!(dir2.starts_with(std::env::temp_dir()));
+        assert!(dir3.starts_with(std::env::temp_dir()));
+    }
+
+    #[test]
+    fn evidence_export_filter_parsing() {
+        assert_eq!(EvidenceExportFilter::All.as_str(), "all");
+        assert_eq!(EvidenceExportFilter::Errors.as_str(), "errors");
+        assert_eq!(EvidenceExportFilter::Warnings.as_str(), "warnings");
+        assert_eq!(EvidenceExportFilter::Critical.as_str(), "critical");
+    }
+
+    #[test]
+    fn support_bundle_redaction_policy_parsing() {
+        assert_eq!(SupportBundleRedactionPolicy::None.as_str(), "none");
+        assert_eq!(
+            SupportBundleRedactionPolicy::Sensitive.as_str(),
+            "sensitive"
+        );
+        assert_eq!(SupportBundleRedactionPolicy::Full.as_str(), "full");
+    }
+
+    #[test]
+    fn usage_message_contains_all_subcommands() {
+        let usage_msg = usage();
+        assert!(usage_msg.contains("diagnostics"));
+        assert!(usage_msg.contains("export-evidence"));
+        assert!(usage_msg.contains("support-bundle"));
+        assert!(usage_msg.contains("doctor"));
+        assert!(usage_msg.contains("compatibility-advisories"));
+        assert!(usage_msg.contains("onboarding-scorecard"));
+        assert!(usage_msg.contains("rollout-decision-artifact"));
+        assert!(usage_msg.contains("ga-evidence-package"));
+        assert!(usage_msg.contains("help"));
+    }
+
+    #[test]
+    fn command_line_argument_edge_cases() {
+        // Test empty string arguments
+        let result = run_diagnostics(&["--input".to_string(), "".to_string()]);
+        assert!(result.is_err());
+
+        // Test argument without value
+        let result = run_export(&["--input".to_string()]);
+        assert!(result.is_err());
+
+        // Test duplicate arguments (should use last one)
+        let temp_dir = unique_temp_dir("duplicate-args");
+        fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+        let input_path = temp_dir.join("input.json");
+        let input = RuntimeDiagnosticsCliInput {
+            target_session_id: "test".to_string(),
+            source_runtime_state_json_path: None,
+            source_module_resolution_bundle_json_path: None,
+            diagnostics_source_filter: None,
+            operator_context: None,
+        };
+        fs::write(&input_path, serde_json::to_vec_pretty(&input).unwrap()).unwrap();
+
+        let out_path = temp_dir.join("out.json");
+        let result = run_diagnostics(&[
+            "--input".to_string(),
+            "wrong.json".to_string(),
+            "--input".to_string(),
+            input_path.display().to_string(),
+            "--out".to_string(),
+            out_path.display().to_string(),
+        ]);
+        // Should succeed because last --input value is valid
+        assert!(result.is_ok());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

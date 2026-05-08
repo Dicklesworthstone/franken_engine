@@ -690,4 +690,506 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn topology_promotion_decision_serialization() {
+        let no_promo = TopologyPromotionDecision::NoPromotion;
+        let targeted = TopologyPromotionDecision::TargetedPromotion;
+        let broader = TopologyPromotionDecision::BroaderPromotion;
+
+        let no_promo_json = serde_json::to_string(&no_promo).unwrap();
+        let targeted_json = serde_json::to_string(&targeted).unwrap();
+        let broader_json = serde_json::to_string(&broader).unwrap();
+
+        assert_eq!(no_promo_json, r#""no_promotion""#);
+        assert_eq!(targeted_json, r#""targeted_promotion""#);
+        assert_eq!(broader_json, r#""broader_promotion""#);
+
+        // Test deserialization
+        assert_eq!(
+            serde_json::from_str::<TopologyPromotionDecision>(&no_promo_json).unwrap(),
+            no_promo
+        );
+        assert_eq!(
+            serde_json::from_str::<TopologyPromotionDecision>(&targeted_json).unwrap(),
+            targeted
+        );
+        assert_eq!(
+            serde_json::from_str::<TopologyPromotionDecision>(&broader_json).unwrap(),
+            broader
+        );
+    }
+
+    #[test]
+    fn topology_promotion_decision_display_formatting() {
+        assert_eq!(
+            TopologyPromotionDecision::NoPromotion.to_string(),
+            "no_promotion"
+        );
+        assert_eq!(
+            TopologyPromotionDecision::TargetedPromotion.to_string(),
+            "targeted_promotion"
+        );
+        assert_eq!(
+            TopologyPromotionDecision::BroaderPromotion.to_string(),
+            "broader_promotion"
+        );
+    }
+
+    #[test]
+    fn topology_promotion_decision_ordering() {
+        assert!(
+            TopologyPromotionDecision::NoPromotion < TopologyPromotionDecision::TargetedPromotion
+        );
+        assert!(
+            TopologyPromotionDecision::TargetedPromotion
+                < TopologyPromotionDecision::BroaderPromotion
+        );
+    }
+
+    #[test]
+    fn topology_seam_id_serialization() {
+        let lifecycle = TopologySeamId::ExtensionLifecycleManager;
+        let orchestrator = TopologySeamId::ExecutionOrchestrator;
+
+        let lifecycle_json = serde_json::to_string(&lifecycle).unwrap();
+        let orchestrator_json = serde_json::to_string(&orchestrator).unwrap();
+
+        assert_eq!(lifecycle_json, r#""extension_lifecycle_manager""#);
+        assert_eq!(orchestrator_json, r#""execution_orchestrator""#);
+    }
+
+    #[test]
+    fn topology_seam_id_all_contains_all_variants() {
+        assert!(TopologySeamId::ALL.contains(&TopologySeamId::ExtensionLifecycleManager));
+        assert!(TopologySeamId::ALL.contains(&TopologySeamId::ExecutionOrchestrator));
+        // Ensure we have the expected count
+        assert!(TopologySeamId::ALL.len() >= 2);
+    }
+
+    #[test]
+    fn promotion_trigger_all_variants_have_str_representation() {
+        let triggers = [
+            PromotionTrigger::LongLivedNamedWorker,
+            PromotionTrigger::ManualRestartPolicy,
+            PromotionTrigger::SingleOwnerState,
+            PromotionTrigger::AdHocRequestReply,
+            PromotionTrigger::ShutdownRecoveryComplexity,
+            PromotionTrigger::DiagnosticPolicyComplexity,
+        ];
+
+        for trigger in &triggers {
+            let str_rep = trigger.as_str();
+            assert!(
+                !str_rep.is_empty(),
+                "All triggers must have string representation"
+            );
+            assert!(
+                str_rep.contains('_'),
+                "Trigger strings should be snake_case"
+            );
+        }
+    }
+
+    #[test]
+    fn trigger_disposition_all_variants_have_str_representation_and_candidate_logic() {
+        let dispositions = [
+            TriggerDisposition::NotPresent,
+            TriggerDisposition::PresentManaged,
+            TriggerDisposition::PromotionCandidate,
+            TriggerDisposition::BlockedByPrerequisite,
+        ];
+
+        for disposition in &dispositions {
+            let str_rep = disposition.as_str();
+            assert!(
+                !str_rep.is_empty(),
+                "All dispositions must have string representation"
+            );
+        }
+
+        // Test is_candidate logic
+        assert!(!TriggerDisposition::NotPresent.is_candidate());
+        assert!(!TriggerDisposition::PresentManaged.is_candidate());
+        assert!(TriggerDisposition::PromotionCandidate.is_candidate());
+        assert!(!TriggerDisposition::BlockedByPrerequisite.is_candidate());
+    }
+
+    #[test]
+    fn seam_assessment_candidate_trigger_count() {
+        let seam = SeamAssessment {
+            seam_id: TopologySeamId::ExtensionLifecycleManager,
+            source_files: vec!["test.rs".to_string()],
+            decision: TopologyPromotionDecision::TargetedPromotion,
+            rationale: "test".to_string(),
+            trigger_assessments: vec![
+                TriggerAssessment {
+                    trigger: PromotionTrigger::LongLivedNamedWorker,
+                    disposition: TriggerDisposition::PromotionCandidate,
+                    evidence: "evidence1".to_string(),
+                    expected_benefit_micros: 100_000,
+                    migration_risk_micros: 50_000,
+                    rollback_cost_micros: 25_000,
+                    diagnostic_simplification_micros: 75_000,
+                },
+                TriggerAssessment {
+                    trigger: PromotionTrigger::ManualRestartPolicy,
+                    disposition: TriggerDisposition::NotPresent,
+                    evidence: "evidence2".to_string(),
+                    expected_benefit_micros: 200_000,
+                    migration_risk_micros: 100_000,
+                    rollback_cost_micros: 50_000,
+                    diagnostic_simplification_micros: 150_000,
+                },
+                TriggerAssessment {
+                    trigger: PromotionTrigger::SingleOwnerState,
+                    disposition: TriggerDisposition::PromotionCandidate,
+                    evidence: "evidence3".to_string(),
+                    expected_benefit_micros: 300_000,
+                    migration_risk_micros: 150_000,
+                    rollback_cost_micros: 75_000,
+                    diagnostic_simplification_micros: 225_000,
+                },
+            ],
+            required_upstream_primitives: vec![],
+            expected_benefits: vec![],
+            migration_risks: vec![],
+            rollback_plan: "".to_string(),
+            operator_diagnostic_benefit: "".to_string(),
+            implementation_order: vec![],
+        };
+
+        assert_eq!(seam.candidate_trigger_count(), 2);
+    }
+
+    #[test]
+    fn seam_assessment_total_expected_benefit_micros() {
+        let seam = SeamAssessment {
+            seam_id: TopologySeamId::ExecutionOrchestrator,
+            source_files: vec!["test.rs".to_string()],
+            decision: TopologyPromotionDecision::NoPromotion,
+            rationale: "test".to_string(),
+            trigger_assessments: vec![
+                TriggerAssessment {
+                    trigger: PromotionTrigger::AdHocRequestReply,
+                    disposition: TriggerDisposition::NotPresent,
+                    evidence: "evidence1".to_string(),
+                    expected_benefit_micros: 150_000,
+                    migration_risk_micros: 0,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                },
+                TriggerAssessment {
+                    trigger: PromotionTrigger::DiagnosticPolicyComplexity,
+                    disposition: TriggerDisposition::PresentManaged,
+                    evidence: "evidence2".to_string(),
+                    expected_benefit_micros: 250_000,
+                    migration_risk_micros: 0,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                },
+            ],
+            required_upstream_primitives: vec![],
+            expected_benefits: vec![],
+            migration_risks: vec![],
+            rollback_plan: "".to_string(),
+            operator_diagnostic_benefit: "".to_string(),
+            implementation_order: vec![],
+        };
+
+        assert_eq!(seam.total_expected_benefit_micros(), 400_000);
+    }
+
+    #[test]
+    fn seam_assessment_max_migration_risk_micros() {
+        let seam = SeamAssessment {
+            seam_id: TopologySeamId::DelegateCellFactory,
+            source_files: vec!["test.rs".to_string()],
+            decision: TopologyPromotionDecision::NoPromotion,
+            rationale: "test".to_string(),
+            trigger_assessments: vec![
+                TriggerAssessment {
+                    trigger: PromotionTrigger::LongLivedNamedWorker,
+                    disposition: TriggerDisposition::NotPresent,
+                    evidence: "evidence1".to_string(),
+                    expected_benefit_micros: 0,
+                    migration_risk_micros: 300_000,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                },
+                TriggerAssessment {
+                    trigger: PromotionTrigger::SingleOwnerState,
+                    disposition: TriggerDisposition::PresentManaged,
+                    evidence: "evidence2".to_string(),
+                    expected_benefit_micros: 0,
+                    migration_risk_micros: 150_000,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                },
+                TriggerAssessment {
+                    trigger: PromotionTrigger::ShutdownRecoveryComplexity,
+                    disposition: TriggerDisposition::BlockedByPrerequisite,
+                    evidence: "evidence3".to_string(),
+                    expected_benefit_micros: 0,
+                    migration_risk_micros: 200_000,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                },
+            ],
+            required_upstream_primitives: vec![],
+            expected_benefits: vec![],
+            migration_risks: vec![],
+            rollback_plan: "".to_string(),
+            operator_diagnostic_benefit: "".to_string(),
+            implementation_order: vec![],
+        };
+
+        assert_eq!(seam.max_migration_risk_micros(), 300_000);
+    }
+
+    #[test]
+    fn seam_assessment_empty_triggers_returns_zero_metrics() {
+        let empty_seam = SeamAssessment {
+            seam_id: TopologySeamId::FrankenlabReleaseGate,
+            source_files: vec![],
+            decision: TopologyPromotionDecision::NoPromotion,
+            rationale: "no triggers".to_string(),
+            trigger_assessments: vec![],
+            required_upstream_primitives: vec![],
+            expected_benefits: vec![],
+            migration_risks: vec![],
+            rollback_plan: "".to_string(),
+            operator_diagnostic_benefit: "".to_string(),
+            implementation_order: vec![],
+        };
+
+        assert_eq!(empty_seam.candidate_trigger_count(), 0);
+        assert_eq!(empty_seam.total_expected_benefit_micros(), 0);
+        assert_eq!(empty_seam.max_migration_risk_micros(), 0);
+    }
+
+    #[test]
+    fn topology_promotion_summary_from_seams_comprehensive() {
+        let seams = vec![
+            SeamAssessment {
+                seam_id: TopologySeamId::ExtensionLifecycleManager,
+                source_files: vec![],
+                decision: TopologyPromotionDecision::TargetedPromotion,
+                rationale: "".to_string(),
+                trigger_assessments: vec![
+                    TriggerAssessment {
+                        trigger: PromotionTrigger::LongLivedNamedWorker,
+                        disposition: TriggerDisposition::PromotionCandidate,
+                        evidence: "".to_string(),
+                        expected_benefit_micros: 200_000,
+                        migration_risk_micros: 100_000,
+                        rollback_cost_micros: 0,
+                        diagnostic_simplification_micros: 0,
+                    },
+                    TriggerAssessment {
+                        trigger: PromotionTrigger::SingleOwnerState,
+                        disposition: TriggerDisposition::PromotionCandidate,
+                        evidence: "".to_string(),
+                        expected_benefit_micros: 300_000,
+                        migration_risk_micros: 150_000,
+                        rollback_cost_micros: 0,
+                        diagnostic_simplification_micros: 0,
+                    },
+                ],
+                required_upstream_primitives: vec![],
+                expected_benefits: vec![],
+                migration_risks: vec![],
+                rollback_plan: "".to_string(),
+                operator_diagnostic_benefit: "".to_string(),
+                implementation_order: vec![],
+            },
+            SeamAssessment {
+                seam_id: TopologySeamId::ExecutionOrchestrator,
+                source_files: vec![],
+                decision: TopologyPromotionDecision::NoPromotion,
+                rationale: "".to_string(),
+                trigger_assessments: vec![],
+                required_upstream_primitives: vec![],
+                expected_benefits: vec![],
+                migration_risks: vec![],
+                rollback_plan: "".to_string(),
+                operator_diagnostic_benefit: "".to_string(),
+                implementation_order: vec![],
+            },
+            SeamAssessment {
+                seam_id: TopologySeamId::DelegateCellFactory,
+                source_files: vec![],
+                decision: TopologyPromotionDecision::BroaderPromotion,
+                rationale: "".to_string(),
+                trigger_assessments: vec![TriggerAssessment {
+                    trigger: PromotionTrigger::DiagnosticPolicyComplexity,
+                    disposition: TriggerDisposition::PromotionCandidate,
+                    evidence: "".to_string(),
+                    expected_benefit_micros: 100_000,
+                    migration_risk_micros: 80_000,
+                    rollback_cost_micros: 0,
+                    diagnostic_simplification_micros: 0,
+                }],
+                required_upstream_primitives: vec![],
+                expected_benefits: vec![],
+                migration_risks: vec![],
+                rollback_plan: "".to_string(),
+                operator_diagnostic_benefit: "".to_string(),
+                implementation_order: vec![],
+            },
+        ];
+
+        let summary = TopologyPromotionSummary::from_seams(&seams);
+
+        assert_eq!(summary.total_seams, 3);
+        assert_eq!(summary.no_promotion_count, 1);
+        assert_eq!(summary.targeted_promotion_count, 1);
+        assert_eq!(summary.broader_promotion_count, 1);
+        assert_eq!(summary.promotion_candidate_trigger_count, 3);
+        assert_eq!(summary.total_expected_benefit_micros, 600_000);
+        assert_eq!(summary.max_migration_risk_micros, 150_000);
+
+        // Verify decision counts map
+        assert_eq!(summary.decision_counts["no_promotion"], 1);
+        assert_eq!(summary.decision_counts["targeted_promotion"], 1);
+        assert_eq!(summary.decision_counts["broader_promotion"], 1);
+    }
+
+    #[test]
+    fn topology_promotion_summary_from_empty_seams() {
+        let summary = TopologyPromotionSummary::from_seams(&[]);
+
+        assert_eq!(summary.total_seams, 0);
+        assert_eq!(summary.no_promotion_count, 0);
+        assert_eq!(summary.targeted_promotion_count, 0);
+        assert_eq!(summary.broader_promotion_count, 0);
+        assert_eq!(summary.promotion_candidate_trigger_count, 0);
+        assert_eq!(summary.total_expected_benefit_micros, 0);
+        assert_eq!(summary.max_migration_risk_micros, 0);
+
+        // Decision counts should still be initialized with zeros
+        assert_eq!(summary.decision_counts["no_promotion"], 0);
+        assert_eq!(summary.decision_counts["targeted_promotion"], 0);
+        assert_eq!(summary.decision_counts["broader_promotion"], 0);
+    }
+
+    #[test]
+    fn trigger_assessment_serde_roundtrip() {
+        let assessment = TriggerAssessment {
+            trigger: PromotionTrigger::ShutdownRecoveryComplexity,
+            disposition: TriggerDisposition::BlockedByPrerequisite,
+            evidence: "Complex shutdown recovery patterns observed".to_string(),
+            expected_benefit_micros: 750_000,
+            migration_risk_micros: 300_000,
+            rollback_cost_micros: 150_000,
+            diagnostic_simplification_micros: 500_000,
+        };
+
+        let json = serde_json::to_string(&assessment).expect("serialize should succeed");
+        let deserialized: TriggerAssessment =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        assert_eq!(assessment, deserialized);
+    }
+
+    #[test]
+    fn seam_assessment_complete_serde_roundtrip() {
+        let seam = SeamAssessment {
+            seam_id: TopologySeamId::ControlPlanePolicyDiagnostics,
+            source_files: vec!["diagnostics.rs".to_string(), "policy.rs".to_string()],
+            decision: TopologyPromotionDecision::TargetedPromotion,
+            rationale: "Diagnostic complexity justifies targeted promotion".to_string(),
+            trigger_assessments: vec![TriggerAssessment {
+                trigger: PromotionTrigger::DiagnosticPolicyComplexity,
+                disposition: TriggerDisposition::PromotionCandidate,
+                evidence: "Complex policy mapping".to_string(),
+                expected_benefit_micros: 400_000,
+                migration_risk_micros: 200_000,
+                rollback_cost_micros: 100_000,
+                diagnostic_simplification_micros: 600_000,
+            }],
+            required_upstream_primitives: vec!["primitive1".to_string()],
+            expected_benefits: vec!["benefit1".to_string()],
+            migration_risks: vec!["risk1".to_string()],
+            rollback_plan: "rollback plan".to_string(),
+            operator_diagnostic_benefit: "diagnostic benefit".to_string(),
+            implementation_order: vec!["step1".to_string()],
+        };
+
+        let json = serde_json::to_string(&seam).expect("serialize should succeed");
+        let deserialized: SeamAssessment =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        assert_eq!(seam, deserialized);
+    }
+
+    #[test]
+    fn compute_content_hash_deterministic() {
+        let assessment = build_topology_promotion_assessment();
+
+        // Compute hash multiple times to ensure determinism
+        let hash1 = assessment.compute_content_hash();
+        let hash2 = assessment.compute_content_hash();
+
+        assert_eq!(hash1, hash2);
+        assert!(!hash1.is_empty());
+        assert_eq!(hash1.len(), 64); // SHA256 hex representation
+    }
+
+    #[test]
+    fn render_operator_rationale_comprehensive_formatting() {
+        let assessment = build_topology_promotion_assessment();
+        let rationale = render_operator_rationale(&assessment);
+
+        // Check key formatting elements
+        assert!(rationale.contains("# Extension-host topology promotion assessment"));
+        assert!(rationale.contains(&format!("- Bead: `{}`", assessment.bead_id)));
+        assert!(rationale.contains(&format!("- Decision: `{}`", assessment.decision)));
+        assert!(rationale.contains(&format!("- Content hash: `{}`", assessment.content_hash)));
+        assert!(rationale.contains("## Seam decisions"));
+
+        // Should contain seam-specific information
+        for seam in &assessment.seams {
+            assert!(rationale.contains(&format!("- `{}`: `{}`", seam.seam_id, seam.decision)));
+            assert!(rationale.contains(&seam.operator_diagnostic_benefit));
+        }
+    }
+
+    #[test]
+    fn content_hash_generation_deterministic() {
+        // Test that the same input produces the same hash
+        let first = build_topology_promotion_assessment();
+        let second = build_topology_promotion_assessment();
+
+        assert_eq!(first.content_hash, second.content_hash);
+        assert!(!first.content_hash.is_empty());
+    }
+
+    #[test]
+    fn schema_version_constants() {
+        assert_eq!(COMPONENT, "extension_host_topology_assessment");
+        assert_eq!(BEAD_ID, "bd-3nr.1.6");
+        assert_eq!(POLICY_ID, "policy-extension-host-topology-assessment-v1");
+        assert_eq!(
+            SCHEMA_VERSION,
+            "franken-engine.extension-host-topology-assessment.v1"
+        );
+        assert_eq!(FIXED_POINT_SCALE_MILLIONTHS, 1_000_000);
+    }
+
+    #[test]
+    fn fixed_point_scale_calculations() {
+        // Test common fixed-point calculations
+        let half = FIXED_POINT_SCALE_MILLIONTHS / 2;
+        let quarter = FIXED_POINT_SCALE_MILLIONTHS / 4;
+        let tenth = FIXED_POINT_SCALE_MILLIONTHS / 10;
+
+        assert_eq!(half, 500_000);
+        assert_eq!(quarter, 250_000);
+        assert_eq!(tenth, 100_000);
+
+        // Test that our scale is reasonable for precision
+        assert!(FIXED_POINT_SCALE_MILLIONTHS > 100_000);
+        assert!(FIXED_POINT_SCALE_MILLIONTHS <= 10_000_000);
+    }
 }

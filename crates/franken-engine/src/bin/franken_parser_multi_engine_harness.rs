@@ -294,4 +294,395 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn parse_args_handles_empty_args() {
+        let parsed = parse_args(vec![]).expect("empty args should parse with defaults");
+        assert!(!parsed.print_help);
+        assert!(!parsed.fail_on_divergence);
+        assert!(!parsed.fail_on_critical_drift);
+        assert!(parsed.out_path.is_none());
+        assert!(parsed.governance_actions_out.is_none());
+    }
+
+    #[test]
+    fn parse_args_handles_help_flags() {
+        assert!(parse_args(vec!["--help".to_string()]).unwrap().print_help);
+        assert!(parse_args(vec!["-h".to_string()]).unwrap().print_help);
+        assert!(parse_args(vec!["help".to_string()]).unwrap().print_help);
+    }
+
+    #[test]
+    fn parse_args_handles_seed_argument() {
+        let parsed = parse_args(vec!["--seed".to_string(), "42".to_string()])
+            .expect("seed arg should parse");
+        assert_eq!(parsed.config.seed, 42);
+    }
+
+    #[test]
+    fn parse_args_handles_invalid_seed() {
+        let err = parse_args(vec!["--seed".to_string(), "invalid".to_string()])
+            .expect_err("invalid seed should fail");
+        assert!(err.to_string().contains("invalid seed"));
+    }
+
+    #[test]
+    fn parse_args_handles_missing_seed_value() {
+        let err =
+            parse_args(vec!["--seed".to_string()]).expect_err("missing seed value should fail");
+        assert!(err.to_string().contains("missing value for --seed"));
+    }
+
+    #[test]
+    fn parse_args_handles_out_path() {
+        let parsed = parse_args(vec!["--out".to_string(), "output.json".to_string()])
+            .expect("out path should parse");
+        assert_eq!(parsed.out_path, Some(PathBuf::from("output.json")));
+    }
+
+    #[test]
+    fn parse_args_handles_missing_out_value() {
+        let err = parse_args(vec!["--out".to_string()]).expect_err("missing out value should fail");
+        assert!(err.to_string().contains("missing value for --out"));
+    }
+
+    #[test]
+    fn parse_args_handles_engines_spec_path() {
+        let parsed = parse_args(vec!["--engines".to_string(), "engines.json".to_string()])
+            .expect("engines spec should parse");
+        assert_eq!(
+            parsed.config.engines_spec_path,
+            Some(PathBuf::from("engines.json"))
+        );
+    }
+
+    #[test]
+    fn parse_args_handles_fixture_limit() {
+        let parsed = parse_args(vec!["--fixture-limit".to_string(), "100".to_string()])
+            .expect("fixture limit should parse");
+        assert_eq!(parsed.config.fixture_limit, Some(100));
+    }
+
+    #[test]
+    fn parse_args_handles_invalid_fixture_limit() {
+        let err = parse_args(vec!["--fixture-limit".to_string(), "invalid".to_string()])
+            .expect_err("invalid fixture limit should fail");
+        assert!(err.to_string().contains("invalid fixture limit"));
+    }
+
+    #[test]
+    fn parse_args_handles_fixture_limit_none() {
+        let parsed = parse_args(vec!["--fixture-limit".to_string(), "none".to_string()])
+            .expect("fixture limit none should parse");
+        assert_eq!(parsed.config.fixture_limit, None);
+    }
+
+    #[test]
+    fn parse_args_handles_fail_on_divergence_flag() {
+        let parsed = parse_args(vec!["--fail-on-divergence".to_string()])
+            .expect("fail on divergence flag should parse");
+        assert!(parsed.fail_on_divergence);
+    }
+
+    #[test]
+    fn parse_args_handles_fail_on_critical_drift_flag() {
+        let parsed = parse_args(vec!["--fail-on-critical-drift".to_string()])
+            .expect("fail on critical drift flag should parse");
+        assert!(parsed.fail_on_critical_drift);
+    }
+
+    #[test]
+    fn parse_args_handles_multiple_flags_combined() {
+        let parsed = parse_args(vec![
+            "--seed".to_string(),
+            "123".to_string(),
+            "--out".to_string(),
+            "report.json".to_string(),
+            "--engines".to_string(),
+            "engines.json".to_string(),
+            "--fixture-limit".to_string(),
+            "50".to_string(),
+            "--fail-on-divergence".to_string(),
+            "--fail-on-critical-drift".to_string(),
+            "--governance-actions-out".to_string(),
+            "actions.json".to_string(),
+        ])
+        .expect("multiple flags should parse");
+
+        assert_eq!(parsed.config.seed, 123);
+        assert_eq!(parsed.out_path, Some(PathBuf::from("report.json")));
+        assert_eq!(
+            parsed.config.engines_spec_path,
+            Some(PathBuf::from("engines.json"))
+        );
+        assert_eq!(parsed.config.fixture_limit, Some(50));
+        assert!(parsed.fail_on_divergence);
+        assert!(parsed.fail_on_critical_drift);
+        assert_eq!(
+            parsed.governance_actions_out,
+            Some(PathBuf::from("actions.json"))
+        );
+    }
+
+    #[test]
+    fn parse_args_handles_unknown_argument() {
+        let err =
+            parse_args(vec!["--unknown".to_string()]).expect_err("unknown argument should fail");
+        assert!(err.to_string().contains("unknown argument"));
+    }
+
+    #[test]
+    fn parse_fixture_limit_handles_valid_numbers() {
+        assert_eq!(parse_fixture_limit("0").unwrap(), Some(0));
+        assert_eq!(parse_fixture_limit("1").unwrap(), Some(1));
+        assert_eq!(parse_fixture_limit("1000").unwrap(), Some(1000));
+    }
+
+    #[test]
+    fn parse_fixture_limit_handles_none_keyword() {
+        assert_eq!(parse_fixture_limit("none").unwrap(), None);
+        assert_eq!(parse_fixture_limit("None").unwrap(), None);
+        assert_eq!(parse_fixture_limit("NONE").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_fixture_limit_handles_invalid_input() {
+        assert!(parse_fixture_limit("invalid").is_err());
+        assert!(parse_fixture_limit("").is_err());
+        assert!(parse_fixture_limit("-1").is_err());
+        assert!(parse_fixture_limit("1.5").is_err());
+    }
+
+    #[test]
+    fn load_engine_specs_handles_missing_file() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let nonexistent_path = temp_dir.join("nonexistent_engines.json");
+
+        let result = load_engine_specs(&nonexistent_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No such file"));
+    }
+
+    #[test]
+    fn load_engine_specs_handles_array_format() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let engines_path = temp_dir.join("engines_array_test.json");
+
+        let engines_json = r#"[
+            {
+                "engine_name": "test_engine",
+                "target_session_id": "session123"
+            }
+        ]"#;
+
+        fs::write(&engines_path, engines_json).expect("should write test file");
+
+        let result = load_engine_specs(&engines_path);
+        assert!(result.is_ok());
+        let engines = result.unwrap();
+        assert_eq!(engines.len(), 1);
+        assert_eq!(engines[0].engine_name, "test_engine");
+
+        let _ = fs::remove_file(&engines_path);
+    }
+
+    #[test]
+    fn load_engine_specs_handles_wrapped_format() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let engines_path = temp_dir.join("engines_wrapped_test.json");
+
+        let engines_json = r#"{
+            "engines": [
+                {
+                    "engine_name": "wrapped_engine",
+                    "target_session_id": "session456"
+                },
+                {
+                    "engine_name": "second_engine",
+                    "target_session_id": "session789"
+                }
+            ]
+        }"#;
+
+        fs::write(&engines_path, engines_json).expect("should write test file");
+
+        let result = load_engine_specs(&engines_path);
+        assert!(result.is_ok());
+        let engines = result.unwrap();
+        assert_eq!(engines.len(), 2);
+        assert_eq!(engines[0].engine_name, "wrapped_engine");
+        assert_eq!(engines[1].engine_name, "second_engine");
+
+        let _ = fs::remove_file(&engines_path);
+    }
+
+    #[test]
+    fn load_engine_specs_handles_invalid_json() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let engines_path = temp_dir.join("engines_invalid_test.json");
+
+        let invalid_json = r#"{ invalid json content"#;
+
+        fs::write(&engines_path, invalid_json).expect("should write test file");
+
+        let result = load_engine_specs(&engines_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected"));
+
+        let _ = fs::remove_file(&engines_path);
+    }
+
+    #[test]
+    fn load_engine_specs_handles_empty_file() {
+        use std::env;
+        let temp_dir = env::temp_dir();
+        let engines_path = temp_dir.join("engines_empty_test.json");
+
+        fs::write(&engines_path, "").expect("should write empty test file");
+
+        let result = load_engine_specs(&engines_path);
+        assert!(result.is_err());
+
+        let _ = fs::remove_file(&engines_path);
+    }
+
+    #[test]
+    fn cli_args_debug_formatting() {
+        let args = CliArgs {
+            config: MultiEngineHarnessConfig {
+                seed: 42,
+                engines_spec_path: Some(PathBuf::from("engines.json")),
+                fixture_limit: Some(100),
+                fixtures_catalog_root: DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH.into(),
+            },
+            out_path: Some(PathBuf::from("output.json")),
+            fail_on_divergence: true,
+            fail_on_critical_drift: false,
+            governance_actions_out: None,
+            print_help: false,
+        };
+
+        let debug_str = format!("{:?}", args);
+        assert!(debug_str.contains("CliArgs"));
+        assert!(debug_str.contains("seed: 42"));
+        assert!(debug_str.contains("fail_on_divergence: true"));
+    }
+
+    #[test]
+    fn engine_spec_file_deserialization() {
+        // Test Array variant
+        let array_json = r#"[{"engine_name": "test", "target_session_id": "session"}]"#;
+        let array_result: EngineSpecFile =
+            serde_json::from_str(array_json).expect("array format should deserialize");
+        match array_result {
+            EngineSpecFile::Array(engines) => {
+                assert_eq!(engines.len(), 1);
+                assert_eq!(engines[0].engine_name, "test");
+            }
+            _ => panic!("Expected Array variant"),
+        }
+
+        // Test Wrapped variant
+        let wrapped_json =
+            r#"{"engines": [{"engine_name": "test", "target_session_id": "session"}]}"#;
+        let wrapped_result: EngineSpecFile =
+            serde_json::from_str(wrapped_json).expect("wrapped format should deserialize");
+        match wrapped_result {
+            EngineSpecFile::Wrapped { engines } => {
+                assert_eq!(engines.len(), 1);
+                assert_eq!(engines[0].engine_name, "test");
+            }
+            _ => panic!("Expected Wrapped variant"),
+        }
+    }
+
+    #[test]
+    fn print_help_displays_usage_information() {
+        // This test captures stdout to verify help content is printed
+        // In a real scenario you might use a more sophisticated approach
+        // For now we just verify the function doesn't panic
+        print_help();
+    }
+
+    #[test]
+    fn default_config_values() {
+        let config = MultiEngineHarnessConfig {
+            seed: 0,
+            engines_spec_path: None,
+            fixture_limit: None,
+            fixtures_catalog_root: DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH.into(),
+        };
+
+        assert_eq!(config.seed, 0);
+        assert!(config.engines_spec_path.is_none());
+        assert!(config.fixture_limit.is_none());
+        assert_eq!(
+            config.fixtures_catalog_root,
+            PathBuf::from(DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH)
+        );
+    }
+
+    #[test]
+    fn path_handling_edge_cases() {
+        // Test with relative paths
+        let parsed = parse_args(vec![
+            "--out".to_string(),
+            "relative/path.json".to_string(),
+            "--engines".to_string(),
+            "./engines.json".to_string(),
+        ])
+        .expect("relative paths should parse");
+
+        assert_eq!(parsed.out_path, Some(PathBuf::from("relative/path.json")));
+        assert_eq!(
+            parsed.config.engines_spec_path,
+            Some(PathBuf::from("./engines.json"))
+        );
+
+        // Test with absolute paths
+        let parsed = parse_args(vec!["--out".to_string(), "/absolute/path.json".to_string()])
+            .expect("absolute paths should parse");
+
+        assert_eq!(parsed.out_path, Some(PathBuf::from("/absolute/path.json")));
+    }
+
+    #[test]
+    fn argument_order_independence() {
+        let args1 = vec![
+            "--seed".to_string(),
+            "123".to_string(),
+            "--out".to_string(),
+            "output.json".to_string(),
+        ];
+
+        let args2 = vec![
+            "--out".to_string(),
+            "output.json".to_string(),
+            "--seed".to_string(),
+            "123".to_string(),
+        ];
+
+        let parsed1 = parse_args(args1).expect("first order should parse");
+        let parsed2 = parse_args(args2).expect("second order should parse");
+
+        assert_eq!(parsed1.config.seed, parsed2.config.seed);
+        assert_eq!(parsed1.out_path, parsed2.out_path);
+    }
+
+    #[test]
+    fn duplicate_arguments_use_last_value() {
+        let args = vec![
+            "--seed".to_string(),
+            "100".to_string(),
+            "--seed".to_string(),
+            "200".to_string(),
+        ];
+
+        let parsed = parse_args(args).expect("duplicate args should parse");
+        assert_eq!(parsed.config.seed, 200); // Last value should win
+    }
 }

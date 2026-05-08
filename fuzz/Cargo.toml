@@ -121,4 +121,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "ts_module_resolution_resolve"
+path = "fuzz_targets/ts_module_resolution_resolve.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

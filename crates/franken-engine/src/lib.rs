@@ -425,6 +425,7 @@ pub mod shadow_adoption_gates;
 pub mod shadow_decision_composer;
 pub mod shadow_evidence_journal;
 pub mod shadow_handoff_contracts;
+#[cfg(test)]
 pub mod shadow_replay_fixtures;
 pub mod shadow_replay_verifier;
 pub mod shadow_service_interface;

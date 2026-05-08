@@ -1,4 +1,5 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -1431,7 +1432,7 @@ impl Default for ExecOptions {
 }
 
 fn execute_program(program: &Program, options: ExecOptions) -> Result<ExecutionResult, String> {
-    let mut env = HashMap::<String, Value>::new();
+    let mut env = BTreeMap::<String, Value>::new();
     let mut side_effect_trace = Vec::<String>::new();
     let mut return_value = Value::Int(0);
 
@@ -1455,7 +1456,7 @@ fn execute_program(program: &Program, options: ExecOptions) -> Result<ExecutionR
 
 fn execute_statement(
     statement: &Statement,
-    env: &mut HashMap<String, Value>,
+    env: &mut BTreeMap<String, Value>,
     side_effect_trace: &mut Vec<String>,
     return_value: &mut Value,
     options: ExecOptions,
@@ -1519,7 +1520,7 @@ fn execute_statement(
     }
 }
 
-fn eval_expression(expr: &Expression, env: &HashMap<String, Value>) -> Result<Value, String> {
+fn eval_expression(expr: &Expression, env: &BTreeMap<String, Value>) -> Result<Value, String> {
     match expr {
         Expression::Int { value } => Ok(Value::Int(*value)),
         Expression::Str { value } => Ok(Value::Str(value.clone())),

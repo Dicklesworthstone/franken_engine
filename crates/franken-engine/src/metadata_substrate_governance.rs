@@ -720,7 +720,10 @@ impl GovernanceEvaluator {
                 violations.iter().map(|v| v.category).collect();
             if categories.len() == 1 {
                 // Safe to unwrap since we just verified categories.len() == 1
-                *categories.iter().next().unwrap_or(&GovernanceVerdict::MultipleViolations)
+                *categories
+                    .iter()
+                    .next()
+                    .unwrap_or(&GovernanceVerdict::MultipleViolations)
             } else {
                 GovernanceVerdict::MultipleViolations
             }

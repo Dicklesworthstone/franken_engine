@@ -1700,7 +1700,11 @@ struct MutableArtNode {
 
 fn stable_fingerprint<T: Serialize>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_else(|e| {
-        panic!("stable_fingerprint failed on type {}: {}", std::any::type_name::<T>(), e)
+        panic!(
+            "stable_fingerprint failed on type {}: {}",
+            std::any::type_name::<T>(),
+            e
+        )
     });
     ContentHash::compute(&bytes).to_hex()
 }

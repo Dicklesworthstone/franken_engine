@@ -7240,9 +7240,7 @@ mod tests {
         for p in proofs {
             builder = builder.proof(p);
         }
-        let witness = builder
-            .build()
-            .expect("serde serialization should succeed");
+        let witness = builder.build().expect("serde serialization should succeed");
         assert_eq!(witness.required_capabilities.len(), 3);
         for cap in &caps {
             assert!(witness.required_capabilities.contains(cap));

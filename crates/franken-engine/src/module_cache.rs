@@ -1529,7 +1529,8 @@ struct S3FifoBaselineEvent {
     detail: String,
 }
 
-pub fn default_s3fifo_trace_corpus_manifest() -> Result<CacheTraceCorpusManifest, CachePolicyReportError> {
+pub fn default_s3fifo_trace_corpus_manifest()
+-> Result<CacheTraceCorpusManifest, CachePolicyReportError> {
     CacheTraceCorpusManifest::new(
         "corpus.s3fifo.baseline",
         vec![
@@ -1816,7 +1817,8 @@ pub fn default_s3fifo_baseline_report() -> Result<CachePolicyBaselineReport, Cac
 }
 
 pub fn default_s3fifo_baseline_contract_fixture() -> S3FifoBaselineComparatorContractFixture {
-    let manifest = default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid");
+    let manifest =
+        default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid");
     let adoption_wedge = S3FifoAdoptionWedgeContract::default();
     S3FifoBaselineComparatorContractFixture {
         schema_version: S3FIFO_BASELINE_CONTRACT_SCHEMA_VERSION.to_string(),
@@ -1898,7 +1900,8 @@ pub fn emit_default_s3fifo_baseline_bundle(
 ) -> io::Result<S3FifoBaselineBundleWriteReport> {
     fs::create_dir_all(&context.artifact_dir)?;
 
-    let manifest = default_s3fifo_trace_corpus_manifest().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let manifest = default_s3fifo_trace_corpus_manifest()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let baseline_config = default_s3fifo_baseline_config();
     let candidate_config = default_s3fifo_candidate_config();
     let adoption_wedge = S3FifoAdoptionWedgeContract::default();
@@ -5362,8 +5365,7 @@ mod tests {
     #[test]
     fn adaptive_config_default_validates() {
         let cfg = S3FifoAdaptiveConfig::default();
-        cfg.validate()
-            .expect("serde serialization should succeed");
+        cfg.validate().expect("serde serialization should succeed");
     }
 
     #[test]

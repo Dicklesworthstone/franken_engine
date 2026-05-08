@@ -652,8 +652,7 @@ pub fn compute_lowering_receipt(
     config: &ReactLoweringConfig,
 ) -> LoweringCompileReceipt {
     let input_bytes = serde_json::to_vec(input).unwrap_or_else(|_| b"{}".to_vec());
-    let output_bytes =
-        serde_json::to_vec(&result.element).unwrap_or_else(|_| b"{}".to_vec());
+    let output_bytes = serde_json::to_vec(&result.element).unwrap_or_else(|_| b"{}".to_vec());
 
     LoweringCompileReceipt {
         schema_version: REACT_LOWERING_SCHEMA_VERSION.to_string(),
@@ -1582,8 +1581,7 @@ pub fn run_lowering_corpus(config: &ReactLoweringConfig) -> LoweringRunManifest 
         });
     }
 
-    let evidence_bytes =
-        serde_json::to_vec(&evidence).unwrap_or_else(|_| b"[]".to_vec());
+    let evidence_bytes = serde_json::to_vec(&evidence).unwrap_or_else(|_| b"[]".to_vec());
     let manifest_hash = ContentHash::compute(&evidence_bytes);
 
     LoweringRunManifest {

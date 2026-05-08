@@ -569,9 +569,11 @@ impl GovernanceAuditLedger {
             }
             let recomputed_signature =
                 AuthenticityHash::compute_keyed(&preimage, &self.config.signer_key);
-            let entry_signature_bytes = crate::golden_vectors::from_hex(&entry.signature)
-                .map_err(|_| GovernanceLedgerError::SignatureMismatch {
-                    sequence: entry.sequence,
+            let entry_signature_bytes =
+                crate::golden_vectors::from_hex(&entry.signature).map_err(|_| {
+                    GovernanceLedgerError::SignatureMismatch {
+                        sequence: entry.sequence,
+                    }
                 })?;
             if entry_signature_bytes.len() != 32 {
                 return Err(GovernanceLedgerError::SignatureMismatch {

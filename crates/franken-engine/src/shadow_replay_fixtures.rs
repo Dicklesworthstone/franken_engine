@@ -6,12 +6,12 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::hash_tiers::ContentHash;
 use crate::shadow_evidence_journal::{
-    ShadowEvidenceJournalExport, ShadowEvidenceJournalExportRow,
-    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION,
+    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, ShadowEvidenceJournalExport,
+    ShadowEvidenceJournalExportRow,
 };
 
 /// Creates a deterministic healthy journal fixture for replay testing.
@@ -37,7 +37,10 @@ pub fn create_healthy_journal_fixture() -> ShadowEvidenceJournalExport {
 
         let mut metadata_map = BTreeMap::new();
         metadata_map.insert("event_index".to_string(), Value::Number(i.into()));
-        metadata_map.insert("journal_state".to_string(), Value::String("healthy".to_string()));
+        metadata_map.insert(
+            "journal_state".to_string(),
+            Value::String("healthy".to_string()),
+        );
         metadata_map.insert(
             "expected_decision_hash".to_string(),
             Value::String(compute_expected_decision_hash(&payload)),
@@ -96,8 +99,14 @@ pub fn create_degraded_journal_fixture() -> ShadowEvidenceJournalExport {
 
         let mut metadata_map = BTreeMap::new();
         metadata_map.insert("event_index".to_string(), Value::Number(i.into()));
-        metadata_map.insert("journal_state".to_string(), Value::String("degraded".to_string()));
-        metadata_map.insert("performance_warning".to_string(), Value::String("high_latency".to_string()));
+        metadata_map.insert(
+            "journal_state".to_string(),
+            Value::String("degraded".to_string()),
+        );
+        metadata_map.insert(
+            "performance_warning".to_string(),
+            Value::String("high_latency".to_string()),
+        );
         metadata_map.insert(
             "expected_decision_hash".to_string(),
             Value::String(compute_expected_decision_hash(&payload)),
@@ -165,8 +174,14 @@ pub fn create_contaminated_journal_fixture() -> ShadowEvidenceJournalExport {
 
         let mut metadata_map = BTreeMap::new();
         metadata_map.insert("event_index".to_string(), Value::Number(i.into()));
-        metadata_map.insert("journal_state".to_string(), Value::String("contaminated".to_string()));
-        metadata_map.insert("contamination_type".to_string(), Value::String("payload_hash_corruption".to_string()));
+        metadata_map.insert(
+            "journal_state".to_string(),
+            Value::String("contaminated".to_string()),
+        );
+        metadata_map.insert(
+            "contamination_type".to_string(),
+            Value::String("payload_hash_corruption".to_string()),
+        );
         metadata_map.insert(
             "expected_decision_hash".to_string(),
             Value::String(compute_expected_decision_hash(&payload)),
@@ -225,7 +240,10 @@ pub fn create_stale_source_journal_fixture() -> ShadowEvidenceJournalExport {
 
         let mut metadata_map = BTreeMap::new();
         metadata_map.insert("event_index".to_string(), Value::Number(i.into()));
-        metadata_map.insert("journal_state".to_string(), Value::String("stale_source".to_string()));
+        metadata_map.insert(
+            "journal_state".to_string(),
+            Value::String("stale_source".to_string()),
+        );
         metadata_map.insert("source_age_hours".to_string(), Value::Number(24.into()));
         metadata_map.insert(
             "expected_decision_hash".to_string(),
@@ -299,7 +317,10 @@ pub fn create_mixed_state_journal_fixture() -> ShadowEvidenceJournalExport {
 
         let mut metadata_map = BTreeMap::new();
         metadata_map.insert("event_index".to_string(), Value::Number(i.into()));
-        metadata_map.insert("journal_state".to_string(), Value::String(state.to_string()));
+        metadata_map.insert(
+            "journal_state".to_string(),
+            Value::String(state.to_string()),
+        );
         metadata_map.insert("mixed_fixture".to_string(), Value::Bool(true));
         metadata_map.insert(
             "expected_decision_hash".to_string(),
@@ -467,7 +488,10 @@ mod tests {
     fn test_healthy_journal_fixture() {
         let fixture = create_healthy_journal_fixture();
 
-        assert_eq!(fixture.schema_version, SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION);
+        assert_eq!(
+            fixture.schema_version,
+            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+        );
         assert_eq!(fixture.rows.len(), 5);
 
         // Verify proper parent linkage
@@ -487,7 +511,10 @@ mod tests {
     fn test_degraded_journal_fixture() {
         let fixture = create_degraded_journal_fixture();
 
-        assert_eq!(fixture.schema_version, SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION);
+        assert_eq!(
+            fixture.schema_version,
+            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+        );
         assert_eq!(fixture.rows.len(), 4);
 
         // Verify degraded characteristics
@@ -502,7 +529,10 @@ mod tests {
     fn test_contaminated_journal_fixture() {
         let fixture = create_contaminated_journal_fixture();
 
-        assert_eq!(fixture.schema_version, SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION);
+        assert_eq!(
+            fixture.schema_version,
+            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+        );
         assert_eq!(fixture.rows.len(), 3);
 
         // Verify contaminated characteristics
@@ -522,7 +552,10 @@ mod tests {
     fn test_stale_source_journal_fixture() {
         let fixture = create_stale_source_journal_fixture();
 
-        assert_eq!(fixture.schema_version, SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION);
+        assert_eq!(
+            fixture.schema_version,
+            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+        );
         assert_eq!(fixture.rows.len(), 6);
 
         // Verify stale characteristics
@@ -537,14 +570,22 @@ mod tests {
     fn test_mixed_state_journal_fixture() {
         let fixture = create_mixed_state_journal_fixture();
 
-        assert_eq!(fixture.schema_version, SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION);
+        assert_eq!(
+            fixture.schema_version,
+            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION
+        );
         assert_eq!(fixture.rows.len(), 5);
 
         // Verify mixed states
-        let states: Vec<&str> = fixture.rows.iter()
+        let states: Vec<&str> = fixture
+            .rows
+            .iter()
             .map(|r| r.degradation_state.as_str())
             .collect();
-        assert_eq!(states, vec!["healthy", "degraded", "healthy", "stale", "degraded"]);
+        assert_eq!(
+            states,
+            vec!["healthy", "degraded", "healthy", "stale", "degraded"]
+        );
     }
 
     #[test]

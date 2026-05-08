@@ -1115,7 +1115,7 @@ impl SharedBudgetEnforcer {
                 *guard = enforcer;
                 Ok(())
             }
-            Err(_) => Err("cannot replace enforcer: lock is busy (held by read guards)")
+            Err(_) => Err("cannot replace enforcer: lock is busy (held by read guards)"),
         }
     }
 }

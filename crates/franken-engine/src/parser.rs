@@ -9887,8 +9887,7 @@ mod tests {
             GrammarCoverageStatus::Unsupported,
             GrammarCoverageStatus::NotApplicable,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde serialization should succeed");
+            let json = serde_json::to_string(&status).expect("serde serialization should succeed");
             let restored: GrammarCoverageStatus =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, restored);

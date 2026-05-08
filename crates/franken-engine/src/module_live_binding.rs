@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Bound;
 use std::fmt;
+use std::ops::Bound;
 
 use serde::{Deserialize, Serialize};
 

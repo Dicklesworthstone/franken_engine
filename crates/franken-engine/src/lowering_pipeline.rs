@@ -7853,38 +7853,18 @@ fn push_constant_optimized(constant_pool: &mut ConstantPool, value: &str) -> u32
     constant_pool.push(value)
 }
 
-/// 2-parameter version of push_constant with internal index optimization.
-/// Avoids quadratic behavior by maintaining a thread-local BTreeMap index.
+/// 2-parameter dedup-and-append constant pool helper.
+///
+/// Linear scan is intentional: pools are per-lowering and small in practice;
+/// callers that need O(1) dedup should migrate to `push_constant_optimized`
+/// with `ConstantPool` (which keeps an internal index alongside the Vec).
 fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
-    use std::collections::BTreeMap;
-    use std::sync::Mutex;
-
-    // Thread-local index cache to avoid quadratic behavior
-    thread_local! {
-        static POOL_INDICES: Mutex<BTreeMap<*mut Vec<String>, BTreeMap<String, u32>>> =
-            const { Mutex::new(BTreeMap::new()) };
+    if let Some(index) = pool.iter().position(|entry| entry == value) {
+        return u32::try_from(index).unwrap_or(u32::MAX);
     }
 
-    POOL_INDICES.with(|indices| {
-        let mut indices = indices.lock().unwrap();
-        let pool_ptr = pool as *mut Vec<String>;
-        let pool_index = indices.entry(pool_ptr).or_insert_with(|| {
-            // Build index for existing pool contents
-            pool.iter()
-                .enumerate()
-                .map(|(i, s)| (s.clone(), i as u32))
-                .collect()
-        });
-
-        if let Some(&existing_index) = pool_index.get(value) {
-            return existing_index;
-        }
-
-        let new_index = u32::try_from(pool.len()).unwrap_or(u32::MAX);
-        pool.push(value.to_string());
-        pool_index.insert(value.to_string(), new_index);
-        new_index
-    })
+    pool.push(value.to_string());
+    u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {

@@ -266,7 +266,10 @@ impl PanelBundleBuilder {
     }
 
     pub fn add_recommended_action(mut self, action: RecommendedAction) -> Self {
-        if matches!(action.priority, ActionPriority::High | ActionPriority::Urgent) {
+        if matches!(
+            action.priority,
+            ActionPriority::High | ActionPriority::Urgent
+        ) {
             self.bundle.recommended_actions.priority_action_count += 1;
         }
         self.bundle.recommended_actions.actions.push(action);
@@ -293,7 +296,9 @@ pub fn create_missing_source_panel(
 }
 
 /// Serialize panel bundle to JSON for frankentui consumption
-pub fn serialize_panel_bundle(bundle: &ShadowStatusPanelBundle) -> Result<String, serde_json::Error> {
+pub fn serialize_panel_bundle(
+    bundle: &ShadowStatusPanelBundle,
+) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(bundle)
 }
 
@@ -355,7 +360,10 @@ mod tests {
             })
             .build();
 
-        assert!(matches!(bundle.shadow_status.daemon_health, DaemonHealth::Healthy));
+        assert!(matches!(
+            bundle.shadow_status.daemon_health,
+            DaemonHealth::Healthy
+        ));
         assert_eq!(bundle.shadow_status.active_journals, 5);
         assert_eq!(bundle.shadow_status.uptime_seconds, 3600);
         assert_eq!(bundle.shadow_status.last_decision_timestamp, Some(epoch));
@@ -372,11 +380,7 @@ mod tests {
     #[test]
     fn test_missing_source_panel() {
         let epoch = SecurityEpoch::GENESIS;
-        let panel = create_missing_source_panel(
-            "Test Source",
-            "Source unavailable",
-            Some(epoch)
-        );
+        let panel = create_missing_source_panel("Test Source", "Source unavailable", Some(epoch));
 
         assert_eq!(panel.title, "Test Source");
         assert_eq!(panel.message, "Source unavailable");
@@ -388,7 +392,7 @@ mod tests {
     fn test_serialization_roundtrip() {
         let bundle = PanelBundleBuilder::new()
             .with_daemon_health(DaemonHealth::Degraded {
-                reason: "Test degradation".to_string()
+                reason: "Test degradation".to_string(),
             })
             .with_active_journals(3)
             .build();
@@ -396,7 +400,10 @@ mod tests {
         let json = serialize_panel_bundle(&bundle).expect("Serialization should succeed");
         let deserialized = deserialize_panel_bundle(&json).expect("Deserialization should succeed");
 
-        assert_eq!(bundle.shadow_status.active_journals, deserialized.shadow_status.active_journals);
+        assert_eq!(
+            bundle.shadow_status.active_journals,
+            deserialized.shadow_status.active_journals
+        );
         if let DaemonHealth::Degraded { reason } = &deserialized.shadow_status.daemon_health {
             assert_eq!(reason, "Test degradation");
         } else {
@@ -417,8 +424,22 @@ mod tests {
         assert!(!bundle.bundle_version.is_empty());
 
         // Validate counts are consistent
-        assert_eq!(bundle.source_freshness.stale_source_count, bundle.source_freshness.sources.iter().filter(|s| s.is_stale).count() as u32);
-        assert_eq!(bundle.degraded_gates.degraded_count, bundle.degraded_gates.gates.len() as u32);
-        assert_eq!(bundle.replay_drift.total_drift_count, bundle.replay_drift.drift_entries.len() as u32);
+        assert_eq!(
+            bundle.source_freshness.stale_source_count,
+            bundle
+                .source_freshness
+                .sources
+                .iter()
+                .filter(|s| s.is_stale)
+                .count() as u32
+        );
+        assert_eq!(
+            bundle.degraded_gates.degraded_count,
+            bundle.degraded_gates.gates.len() as u32
+        );
+        assert_eq!(
+            bundle.replay_drift.total_drift_count,
+            bundle.replay_drift.drift_entries.len() as u32
+        );
     }
 }

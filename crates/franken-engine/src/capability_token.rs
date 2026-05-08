@@ -2192,15 +2192,12 @@ mod tests {
             builder = builder.add_audience(make_principal(i));
         }
 
-        let token = builder
-            .build()
-            .expect("serde serialization should succeed");
+        let token = builder.build().expect("serde serialization should succeed");
         assert_eq!(token.audience.len(), 50);
 
         // Verify any audience member can verify.
         let ctx = VerificationContext::new(100, 0, 0);
-        verify_token(&token, &make_principal(0), &ctx)
-            .expect("serde serialization should succeed");
+        verify_token(&token, &make_principal(0), &ctx).expect("serde serialization should succeed");
         verify_token(&token, &make_principal(25), &ctx)
             .expect("serde serialization should succeed");
         verify_token(&token, &make_principal(49), &ctx)
@@ -2751,8 +2748,7 @@ mod tests {
 
         assert_eq!(token.zone, "");
         let ctx = VerificationContext::new(500, 0, 0);
-        verify_token(&token, &make_principal(1), &ctx)
-            .expect("serde serialization should succeed");
+        verify_token(&token, &make_principal(1), &ctx).expect("serde serialization should succeed");
     }
 
     // -- Empty audience security tests (bd-3pa1u.3) --

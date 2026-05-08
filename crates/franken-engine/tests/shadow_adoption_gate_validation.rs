@@ -55,23 +55,31 @@ fn test_documentation_claim_validator_blocks_aspirational_claims() {
 
     // Should catch autonomous mutation claims
     let violations = validator.validate_documentation_text(
-        "The shadow daemon provides autonomous mutation capabilities for live environments."
+        "The shadow daemon provides autonomous mutation capabilities for live environments.",
     );
-    assert!(!violations.is_empty(), "Should detect autonomous mutation claim");
+    assert!(
+        !violations.is_empty(),
+        "Should detect autonomous mutation claim"
+    );
     assert_eq!(violations[0].claim_type, "autonomous_live_mutation");
 
     // Should catch production daemon claims
     let violations = validator.validate_documentation_text(
-        "Deploy the shadow daemon in production for automated operations."
+        "Deploy the shadow daemon in production for automated operations.",
     );
-    assert!(!violations.is_empty(), "Should detect production daemon claim");
+    assert!(
+        !violations.is_empty(),
+        "Should detect production daemon claim"
+    );
     assert_eq!(violations[0].claim_type, "production_daemon_status");
 
     // Should catch operator replacement claims
-    let violations = validator.validate_documentation_text(
-        "The shadow daemon can replace operators for routine tasks."
+    let violations = validator
+        .validate_documentation_text("The shadow daemon can replace operators for routine tasks.");
+    assert!(
+        !violations.is_empty(),
+        "Should detect operator replacement claim"
     );
-    assert!(!violations.is_empty(), "Should detect operator replacement claim");
     assert_eq!(violations[0].claim_type, "operator_replacement");
 
     // Should allow bounded advisory claims
@@ -245,8 +253,10 @@ fn test_shadow_daemon_contract_compliance() {
     println!("📋 Testing shadow daemon contract compliance...");
 
     // Read shadow daemon contract documentation
-    let contract_content = fs::read_to_string("/data/projects/franken_engine/docs/SWARM_AUTOPILOT_SHADOW_DAEMON_CONTRACT.md")
-        .expect("Should be able to read shadow daemon contract");
+    let contract_content = fs::read_to_string(
+        "/data/projects/franken_engine/docs/SWARM_AUTOPILOT_SHADOW_DAEMON_CONTRACT.md",
+    )
+    .expect("Should be able to read shadow daemon contract");
 
     let validator = DocumentationClaimValidator::new();
     let violations = validator.validate_documentation_text(&contract_content);
@@ -279,8 +289,9 @@ fn test_proof_state_documentation_accuracy() {
     println!("🔍 Testing proof state documentation accuracy...");
 
     // Read proof state documentation
-    let proof_state_content = fs::read_to_string("/data/projects/franken_engine/docs/SHADOW_DAEMON_PROOF_STATE.md")
-        .expect("Should be able to read proof state documentation");
+    let proof_state_content =
+        fs::read_to_string("/data/projects/franken_engine/docs/SHADOW_DAEMON_PROOF_STATE.md")
+            .expect("Should be able to read proof state documentation");
 
     // Should clearly state advisory-only status
     assert!(
@@ -296,15 +307,14 @@ fn test_proof_state_documentation_accuracy() {
 
     // Should list promotion requirements
     assert!(
-        proof_state_content.contains("Promotion Requirements") ||
-        proof_state_content.contains("promotion requirements"),
+        proof_state_content.contains("Promotion Requirements")
+            || proof_state_content.contains("promotion requirements"),
         "Proof state should document promotion requirements"
     );
 
     // Should mention current gate status
     assert!(
-        proof_state_content.contains("Gate Status") ||
-        proof_state_content.contains("gate status"),
+        proof_state_content.contains("Gate Status") || proof_state_content.contains("gate status"),
         "Proof state should document current gate status"
     );
 
@@ -317,8 +327,9 @@ fn test_handoff_contracts_advisory_semantics() {
     println!("🤝 Testing handoff contracts maintain advisory semantics...");
 
     // Read handoff contracts documentation
-    let handoff_content = fs::read_to_string("/data/projects/franken_engine/docs/handoff_contracts.md")
-        .expect("Should be able to read handoff contracts");
+    let handoff_content =
+        fs::read_to_string("/data/projects/franken_engine/docs/handoff_contracts.md")
+            .expect("Should be able to read handoff contracts");
 
     // Should emphasize advisory-only semantics
     assert!(
@@ -328,9 +339,9 @@ fn test_handoff_contracts_advisory_semantics() {
 
     // Should forbid direct mutations
     assert!(
-        handoff_content.contains("must not mutate") ||
-        handoff_content.contains("cannot mutate") ||
-        handoff_content.contains("no direct mutations"),
+        handoff_content.contains("must not mutate")
+            || handoff_content.contains("cannot mutate")
+            || handoff_content.contains("no direct mutations"),
         "Handoff contracts should forbid direct mutations"
     );
 
@@ -417,7 +428,7 @@ fn test_comprehensive_mutation_policy_validation() {
     // Test edge cases that should be allowed
     let edge_cases = [
         "echo 'Remember to run: br status'", // Mention but don't execute
-        "# br status - run this manually",    // Comment
+        "# br status - run this manually",   // Comment
         "grep 'br status' logfile.txt",      // Search for pattern
         "print('Use br status to check')",   // Code string
     ];
@@ -445,13 +456,22 @@ fn test_full_adoption_gate_workflow() {
     let summary = gates.get_summary();
 
     // Should have appropriate initial state
-    assert!(summary.total_gates >= 5, "Should have at least 5 adoption gates");
-    assert!(summary.red_gates > 0, "Should have some red gates initially");
+    assert!(
+        summary.total_gates >= 5,
+        "Should have at least 5 adoption gates"
+    );
+    assert!(
+        summary.red_gates > 0,
+        "Should have some red gates initially"
+    );
     assert!(!summary.all_green, "Should not be all green initially");
 
     // Gated capabilities should be blocked
     let gated_capabilities = gates.get_gated_capabilities();
-    assert!(!gated_capabilities.is_empty(), "Should have gated capabilities");
+    assert!(
+        !gated_capabilities.is_empty(),
+        "Should have gated capabilities"
+    );
 
     // Validator should catch violations
     let validator = DocumentationClaimValidator::new();

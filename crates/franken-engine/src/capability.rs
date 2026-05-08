@@ -644,15 +644,17 @@ mod tests {
     #[test]
     fn require_all_succeeds_when_all_granted() {
         let full = CapabilityProfile::full();
-        assert!(require_all(
-            &full,
-            &[
-                RuntimeCapability::VmDispatch,
-                RuntimeCapability::PolicyWrite
-            ],
-            "test"
-        )
-        .is_ok());
+        assert!(
+            require_all(
+                &full,
+                &[
+                    RuntimeCapability::VmDispatch,
+                    RuntimeCapability::PolicyWrite
+                ],
+                "test"
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -732,10 +734,8 @@ mod tests {
             CapabilityProfile::compute_only(),
         ];
         for profile in &profiles {
-            let json1 =
-                serde_json::to_string(profile).expect("serde serialization should succeed");
-            let json2 =
-                serde_json::to_string(profile).expect("serde serialization should succeed");
+            let json1 = serde_json::to_string(profile).expect("serde serialization should succeed");
+            let json2 = serde_json::to_string(profile).expect("serde serialization should succeed");
             assert_eq!(
                 json1, json2,
                 "non-deterministic serialization for {}",
@@ -1545,12 +1545,16 @@ mod tests {
         ];
         let denials = require_all(&ec, &caps, "mixed").unwrap_err();
         assert_eq!(denials.len(), 2);
-        assert!(denials
-            .iter()
-            .any(|d| d.required == RuntimeCapability::PolicyRead));
-        assert!(denials
-            .iter()
-            .any(|d| d.required == RuntimeCapability::NetworkEgress));
+        assert!(
+            denials
+                .iter()
+                .any(|d| d.required == RuntimeCapability::PolicyRead)
+        );
+        assert!(
+            denials
+                .iter()
+                .any(|d| d.required == RuntimeCapability::NetworkEgress)
+        );
     }
 
     // -- require_capability edge cases --------------------------------------

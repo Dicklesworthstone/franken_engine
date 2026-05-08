@@ -1118,12 +1118,8 @@ mod tests {
     fn clopper_pearson_matches_99_of_100_reference() {
         let ci = clopper_pearson_interval(99, 100, DEFAULT_CONFIDENCE_LEVEL)
             .expect("serde serialization should succeed");
-        let lower = ci
-            .lower_f64()
-            .expect("serde serialization should succeed");
-        let upper = ci
-            .upper_f64()
-            .expect("serde serialization should succeed");
+        let lower = ci.lower_f64().expect("serde serialization should succeed");
+        let upper = ci.upper_f64().expect("serde serialization should succeed");
         assert!((lower - 0.94554).abs() < 0.002);
         assert!((upper - 0.999746).abs() < 0.002);
     }
@@ -1225,8 +1221,8 @@ label_sha256 = "{hash}"
         );
         write_label(&root.join(SECURITY_CORPUS_MANIFEST_FILE_NAME), &manifest);
 
-        let parsed = validate_corpus_manifest(&root, &records)
-            .expect("serde serialization should succeed");
+        let parsed =
+            validate_corpus_manifest(&root, &records).expect("serde serialization should succeed");
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].workload_id, "benign-ok");
     }
@@ -1481,8 +1477,7 @@ label_sha256 = "{hash}"
             SecurityAttackTaxonomy::Staging,
         ];
         for variant in variants {
-            let json =
-                serde_json::to_string(&variant).expect("serde serialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityAttackTaxonomy =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, variant);
@@ -1529,8 +1524,7 @@ label_sha256 = "{hash}"
             SecurityOutcome::Terminate,
         ];
         for variant in variants {
-            let json =
-                serde_json::to_string(&variant).expect("serde serialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityOutcome =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, variant);
@@ -1753,16 +1747,14 @@ label_sha256 = "{hash}"
     fn observation_accepts_boundary_posterior_zero() {
         let mut obs = valid_observation();
         obs.sentinel_posterior = 0.0;
-        obs.validate()
-            .expect("serde serialization should succeed");
+        obs.validate().expect("serde serialization should succeed");
     }
 
     #[test]
     fn observation_accepts_boundary_posterior_one() {
         let mut obs = valid_observation();
         obs.sentinel_posterior = 1.0;
-        obs.validate()
-            .expect("serde serialization should succeed");
+        obs.validate().expect("serde serialization should succeed");
     }
 
     #[test]
@@ -1785,13 +1777,9 @@ label_sha256 = "{hash}"
             .confidence_level()
             .expect("serde serialization should succeed");
         assert!((cl - 0.95).abs() < 1e-6);
-        let tpr = t
-            .tpr_min_f64()
-            .expect("serde serialization should succeed");
+        let tpr = t.tpr_min_f64().expect("serde serialization should succeed");
         assert!((tpr - 0.99).abs() < 1e-6);
-        let fpr = t
-            .fpr_max_f64()
-            .expect("serde serialization should succeed");
+        let fpr = t.fpr_max_f64().expect("serde serialization should succeed");
         assert!((fpr - 0.01).abs() < 1e-6);
         assert_eq!(t.malicious_latency_p95_max_ms, 250);
     }
@@ -1813,12 +1801,8 @@ label_sha256 = "{hash}"
             lower_millionths: 500_000,
             upper_millionths: 950_000,
         };
-        let lower = ci
-            .lower_f64()
-            .expect("serde serialization should succeed");
-        let upper = ci
-            .upper_f64()
-            .expect("serde serialization should succeed");
+        let lower = ci.lower_f64().expect("serde serialization should succeed");
+        let upper = ci.upper_f64().expect("serde serialization should succeed");
         assert!((lower - 0.5).abs() < 1e-6);
         assert!((upper - 0.95).abs() < 1e-6);
     }
@@ -1829,19 +1813,8 @@ label_sha256 = "{hash}"
             lower_millionths: 0,
             upper_millionths: 1_000_000,
         };
-        assert!(
-            (ci.lower_f64()
-                .expect("serde serialization should succeed"))
-            .abs()
-                < 1e-9
-        );
-        assert!(
-            (ci.upper_f64()
-                .expect("serde serialization should succeed")
-                - 1.0)
-                .abs()
-                < 1e-9
-        );
+        assert!((ci.lower_f64().expect("serde serialization should succeed")).abs() < 1e-9);
+        assert!((ci.upper_f64().expect("serde serialization should succeed") - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1875,8 +1848,7 @@ label_sha256 = "{hash}"
                 < 1e-6
         );
         assert!(
-            (millionths_to_f64(1_000_000).expect("serde serialization should succeed") - 1.0)
-                .abs()
+            (millionths_to_f64(1_000_000).expect("serde serialization should succeed") - 1.0).abs()
                 < 1e-9
         );
     }
@@ -1967,13 +1939,11 @@ label_sha256 = "{hash}"
                 < 1e-6
         );
         assert!(
-            (parse_ratio_string("0.0", "test").expect("serde serialization should succeed"))
-                .abs()
+            (parse_ratio_string("0.0", "test").expect("serde serialization should succeed")).abs()
                 < 1e-9
         );
         assert!(
-            (parse_ratio_string("1.0", "test").expect("serde serialization should succeed")
-                - 1.0)
+            (parse_ratio_string("1.0", "test").expect("serde serialization should succeed") - 1.0)
                 .abs()
                 < 1e-9
         );
@@ -2024,11 +1994,7 @@ label_sha256 = "{hash}"
             clopper_pearson_interval(0, 100, 0.95).expect("serde serialization should succeed");
         assert_eq!(ci.lower_millionths, 0);
         assert!(ci.upper_millionths > 0);
-        assert!(
-            ci.upper_f64()
-                .expect("serde serialization should succeed")
-                < 0.1
-        );
+        assert!(ci.upper_f64().expect("serde serialization should succeed") < 0.1);
     }
 
     #[test]
@@ -2036,11 +2002,7 @@ label_sha256 = "{hash}"
         let ci =
             clopper_pearson_interval(100, 100, 0.95).expect("serde serialization should succeed");
         assert_eq!(ci.upper_millionths, 1_000_000);
-        assert!(
-            ci.lower_f64()
-                .expect("serde serialization should succeed")
-                > 0.9
-        );
+        assert!(ci.lower_f64().expect("serde serialization should succeed") > 0.9);
     }
 
     #[test]
@@ -2063,12 +2025,8 @@ label_sha256 = "{hash}"
     fn clopper_pearson_half_interval_reasonable() {
         let ci =
             clopper_pearson_interval(50, 100, 0.95).expect("serde serialization should succeed");
-        let lower = ci
-            .lower_f64()
-            .expect("serde serialization should succeed");
-        let upper = ci
-            .upper_f64()
-            .expect("serde serialization should succeed");
+        let lower = ci.lower_f64().expect("serde serialization should succeed");
+        let upper = ci.upper_f64().expect("serde serialization should succeed");
         assert!(lower > 0.35 && lower < 0.50);
         assert!(upper > 0.50 && upper < 0.65);
     }

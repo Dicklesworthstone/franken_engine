@@ -1764,8 +1764,8 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Warning,
         )];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(result.passed);
         assert!(result.advisory_count() > 0);
     }
@@ -1777,8 +1777,8 @@ mod tests {
             MismatchDomain::ServerSideRender,
             MismatchSeverity::Error,
         )];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(!result.passed);
         assert!(result.blocker_count() > 0);
     }
@@ -1790,8 +1790,8 @@ mod tests {
             MismatchDomain::HookSemantics,
             MismatchSeverity::Critical,
         )];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(!result.passed);
     }
 
@@ -1801,8 +1801,8 @@ mod tests {
             make_entry("e-1", MismatchDomain::CompileOutput, MismatchSeverity::Info),
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Info),
         ];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         assert_eq!(result.entries_analyzed, 2);
     }
 
@@ -1816,8 +1816,8 @@ mod tests {
             ),
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Error),
         ];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(result.total_findings() > 0);
     }
 
@@ -2059,10 +2059,8 @@ mod tests {
         report_b.checks[0].remediation = "switch to the automatic runtime and rebuild".to_string();
         report_b.recompute_hash();
 
-        let bundle_a =
-            build_support_bundle(&report_a).expect("serde serialization should succeed");
-        let bundle_b =
-            build_support_bundle(&report_b).expect("serde serialization should succeed");
+        let bundle_a = build_support_bundle(&report_a).expect("serde serialization should succeed");
+        let bundle_b = build_support_bundle(&report_b).expect("serde serialization should succeed");
         assert_ne!(bundle_a.guidance[0].steps, bundle_b.guidance[0].steps);
         assert_ne!(bundle_a.bundle_hash, bundle_b.bundle_hash);
     }
@@ -2318,8 +2316,8 @@ mod tests {
             MismatchDomain::HookSemantics,
             MismatchSeverity::Error,
         )];
-        let result = run_preflight(&default_config(), &entries)
-            .expect("serde serialization should succeed");
+        let result =
+            run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         let json = serde_json::to_string(&result).expect("serde serialization should succeed");
         let back: PreflightResult =
             serde_json::from_str(&json).expect("serde deserialization should succeed");

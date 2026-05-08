@@ -735,11 +735,12 @@ impl EcosystemCompatibilityReport {
             compatibility_threshold_millionths: self.compatibility_threshold_millionths,
         };
 
-        let encoded = serde_json::to_vec(&hash_view)
-            .map_err(|e| EcosystemCompatibilityError::SerializationError {
+        let encoded = serde_json::to_vec(&hash_view).map_err(|e| {
+            EcosystemCompatibilityError::SerializationError {
                 context: "ecosystem compatibility report hash view".to_string(),
                 error: e.to_string(),
-            })?;
+            }
+        })?;
         Ok(ContentHash::compute(&encoded))
     }
 

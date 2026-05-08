@@ -4,7 +4,7 @@
 //! and exits non-zero on nondeterminism or missing provenance as required by bd-djejh.5.
 
 use frankenengine_engine::shadow_replay_fixtures::*;
-use frankenengine_engine::shadow_replay_verifier::{ShadowReplayVerifier, ReplayConfig};
+use frankenengine_engine::shadow_replay_verifier::{ReplayConfig, ShadowReplayVerifier};
 
 /// Smoke test that exits non-zero on nondeterminism or missing provenance.
 /// This test ensures the replay verification system works as required.
@@ -36,54 +36,93 @@ fn shadow_replay_smoke_test() {
                 successful_replays += 1;
 
                 // Verify report has valid provenance
-                assert!(!report.replay_recipe.input_checkpoint.is_empty(),
-                       "Missing provenance in {} fixture replay recipe", case_name);
-                assert!(!report.replay_recipe.replay_command.is_empty(),
-                       "Missing replay command in {} fixture", case_name);
-                assert!(!report.replay_recipe.referenced_artifacts.is_empty(),
-                       "Missing referenced artifacts in {} fixture", case_name);
+                assert!(
+                    !report.replay_recipe.input_checkpoint.is_empty(),
+                    "Missing provenance in {} fixture replay recipe",
+                    case_name
+                );
+                assert!(
+                    !report.replay_recipe.replay_command.is_empty(),
+                    "Missing replay command in {} fixture",
+                    case_name
+                );
+                assert!(
+                    !report.replay_recipe.referenced_artifacts.is_empty(),
+                    "Missing referenced artifacts in {} fixture",
+                    case_name
+                );
 
                 // Verify report structure
-                assert!(!report.report_id.to_string().is_empty(),
-                       "Missing report ID for {} fixture", case_name);
-                assert!(report.detection_timestamp_ms > 0,
-                       "Invalid timestamp for {} fixture", case_name);
+                assert!(
+                    !report.report_id.to_string().is_empty(),
+                    "Missing report ID for {} fixture",
+                    case_name
+                );
+                assert!(
+                    report.detection_timestamp_ms > 0,
+                    "Invalid timestamp for {} fixture",
+                    case_name
+                );
 
                 // Test determinism by replaying twice
-                let second_result = verifier.replay_export(export, format!("smoke_test_{}_repeat", case_name));
+                let second_result =
+                    verifier.replay_export(export, format!("smoke_test_{}_repeat", case_name));
                 match second_result {
                     Ok(second_report) => {
                         // Verify deterministic behavior
-                        assert_eq!(report.detected_drift.len(), second_report.detected_drift.len(),
-                                  "Non-deterministic drift count in {} fixture", case_name);
-                        assert_eq!(report.is_expected_migration, second_report.is_expected_migration,
-                                  "Non-deterministic migration flag in {} fixture", case_name);
+                        assert_eq!(
+                            report.detected_drift.len(),
+                            second_report.detected_drift.len(),
+                            "Non-deterministic drift count in {} fixture",
+                            case_name
+                        );
+                        assert_eq!(
+                            report.is_expected_migration, second_report.is_expected_migration,
+                            "Non-deterministic migration flag in {} fixture",
+                            case_name
+                        );
                     }
                     Err(e) => {
-                        panic!("Non-deterministic behavior: {} fixture succeeded first time but failed second time: {}", case_name, e);
+                        panic!(
+                            "Non-deterministic behavior: {} fixture succeeded first time but failed second time: {}",
+                            case_name, e
+                        );
                     }
                 }
 
-                println!("    ✓ {} journal: replay successful, {} drift items detected",
-                         case_name, report.detected_drift.len());
+                println!(
+                    "    ✓ {} journal: replay successful, {} drift items detected",
+                    case_name,
+                    report.detected_drift.len()
+                );
 
                 // For contaminated fixtures, expect drift detection
                 if case_name == "contaminated" {
-                    assert!(!report.detected_drift.is_empty(),
-                           "Contaminated fixture should detect drift but found none");
-                    assert!(!report.is_expected_migration,
-                           "Contaminated fixture should not be considered expected migration");
+                    assert!(
+                        !report.detected_drift.is_empty(),
+                        "Contaminated fixture should detect drift but found none"
+                    );
+                    assert!(
+                        !report.is_expected_migration,
+                        "Contaminated fixture should not be considered expected migration"
+                    );
                 }
 
                 // Verify schema version consistency
-                assert_eq!(report.source_export.schema_version, export.schema_version,
-                          "Schema version mismatch in {} fixture", case_name);
+                assert_eq!(
+                    report.source_export.schema_version, export.schema_version,
+                    "Schema version mismatch in {} fixture",
+                    case_name
+                );
             }
             Err(e) => {
                 // Some fixtures (especially contaminated) may legitimately fail
                 if case_name == "contaminated" {
                     expected_failures += 1;
-                    println!("    ✓ {} journal: expected failure detected: {}", case_name, e);
+                    println!(
+                        "    ✓ {} journal: expected failure detected: {}",
+                        case_name, e
+                    );
                 } else {
                     panic!("Unexpected failure for {} fixture: {}", case_name, e);
                 }
@@ -97,7 +136,10 @@ fn shadow_replay_smoke_test() {
     println!("  ⚠️  Expected failures: {}", expected_failures);
 
     // Ensure we had some successful tests
-    assert!(successful_replays > 0, "No successful replays - this indicates a systemic issue");
+    assert!(
+        successful_replays > 0,
+        "No successful replays - this indicates a systemic issue"
+    );
 
     // Ensure proper coverage
     assert!(total_tests >= 4, "Expected at least 4 test fixtures");
@@ -143,36 +185,69 @@ fn test_replay_recipe_completeness() {
     let mut verifier = ShadowReplayVerifier::with_default_config();
     let export = create_healthy_journal_fixture();
 
-    let result = verifier.replay_export(export, "recipe_test".to_string()).unwrap();
+    let result = verifier
+        .replay_export(export, "recipe_test".to_string())
+        .unwrap();
     let recipe = &result.replay_recipe;
 
     // Verify recipe completeness
-    assert!(!recipe.input_checkpoint.is_empty(), "Recipe missing input checkpoint");
-    assert!(!recipe.replay_command.is_empty(), "Recipe missing replay command");
-    assert!(!recipe.environment_vars.is_empty(), "Recipe missing environment variables");
-    assert!(!recipe.expected_outputs.is_empty(), "Recipe missing expected outputs");
-    assert!(!recipe.referenced_artifacts.is_empty(), "Recipe missing referenced artifacts");
+    assert!(
+        !recipe.input_checkpoint.is_empty(),
+        "Recipe missing input checkpoint"
+    );
+    assert!(
+        !recipe.replay_command.is_empty(),
+        "Recipe missing replay command"
+    );
+    assert!(
+        !recipe.environment_vars.is_empty(),
+        "Recipe missing environment variables"
+    );
+    assert!(
+        !recipe.expected_outputs.is_empty(),
+        "Recipe missing expected outputs"
+    );
+    assert!(
+        !recipe.referenced_artifacts.is_empty(),
+        "Recipe missing referenced artifacts"
+    );
 
     // Verify command structure
-    assert!(recipe.replay_command.contains(&"cargo".to_string()),
-           "Recipe should contain cargo command");
-    assert!(recipe.replay_command.contains(&"test".to_string()),
-           "Recipe should contain test command");
-    assert!(recipe.replay_command.contains(&"frankenengine-engine".to_string()),
-           "Recipe should target frankenengine-engine package");
+    assert!(
+        recipe.replay_command.contains(&"cargo".to_string()),
+        "Recipe should contain cargo command"
+    );
+    assert!(
+        recipe.replay_command.contains(&"test".to_string()),
+        "Recipe should contain test command"
+    );
+    assert!(
+        recipe
+            .replay_command
+            .contains(&"frankenengine-engine".to_string()),
+        "Recipe should target frankenengine-engine package"
+    );
 
     // Verify environment variables include required ones
-    assert!(recipe.environment_vars.contains_key("RUST_BACKTRACE"),
-           "Recipe should include RUST_BACKTRACE");
-    assert!(recipe.environment_vars.contains_key("TARGET_ENV"),
-           "Recipe should include TARGET_ENV");
+    assert!(
+        recipe.environment_vars.contains_key("RUST_BACKTRACE"),
+        "Recipe should include RUST_BACKTRACE"
+    );
+    assert!(
+        recipe.environment_vars.contains_key("TARGET_ENV"),
+        "Recipe should include TARGET_ENV"
+    );
 
     // Verify referenced artifacts include core replay components
     let artifacts_str = recipe.referenced_artifacts.join(",");
-    assert!(artifacts_str.contains("shadow_replay_verifier.rs"),
-           "Recipe should reference shadow_replay_verifier.rs");
-    assert!(artifacts_str.contains("shadow_decision_composer.rs"),
-           "Recipe should reference shadow_decision_composer.rs");
+    assert!(
+        artifacts_str.contains("shadow_replay_verifier.rs"),
+        "Recipe should reference shadow_replay_verifier.rs"
+    );
+    assert!(
+        artifacts_str.contains("shadow_decision_composer.rs"),
+        "Recipe should reference shadow_decision_composer.rs"
+    );
 
     println!("✅ Replay recipe completeness test passed!");
 }

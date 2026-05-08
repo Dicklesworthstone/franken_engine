@@ -1783,6 +1783,9 @@ pub struct InterpreterConfig {
     pub max_scope_depth: u32,
     /// Optional module root used for resolving relative import specifiers.
     pub module_root: Option<String>,
+    /// Cached canonicalized module root to avoid repeated canonicalization.
+    #[serde(skip)]
+    pub canonical_module_root: Option<PathBuf>,
     /// Set of capabilities granted to this execution context.
     pub granted_capabilities: BTreeSet<RuntimeCapability>,
     /// Optional extension ID for logging and diagnostics.
@@ -1827,6 +1830,7 @@ impl InterpreterConfig {
             max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
+            canonical_module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -1846,6 +1850,7 @@ impl InterpreterConfig {
             max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
+            canonical_module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -1865,6 +1870,7 @@ impl InterpreterConfig {
             max_console_entries: DEFAULT_QUICKJS_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
+            canonical_module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
@@ -1884,11 +1890,21 @@ impl InterpreterConfig {
             max_console_entries: DEFAULT_V8_MAX_CONSOLE_ENTRIES,
             max_scope_depth: DEFAULT_MAX_SCOPE_DEPTH,
             module_root: None,
+            canonical_module_root: None,
             granted_capabilities: BTreeSet::new(),
             extension_id: None,
             cancellation_token: None,
             checkpoint_density: 1000,
         }
+    }
+
+    /// Set the module root, canonicalizing it once for reuse during module resolution.
+    pub fn set_module_root(&mut self, module_root: impl Into<String>) -> std::io::Result<()> {
+        let module_root_str = module_root.into();
+        let canonical = Path::new(&module_root_str).canonicalize()?;
+        self.module_root = Some(module_root_str);
+        self.canonical_module_root = Some(canonical);
+        Ok(())
     }
 }
 
@@ -3070,20 +3086,11 @@ impl InterpreterCore {
                     )),
                 })?;
 
-        let Some(module_root) = self.config.module_root.as_deref() else {
+        let Some(canonical_root) = self.config.canonical_module_root.as_ref() else {
             return Ok(canonical);
         };
 
-        let canonical_root = Path::new(module_root).canonicalize().map_err(|error| {
-            InterpreterError::ModuleResolutionFailed {
-                specifier: specifier.to_string(),
-                reason: ModuleResolutionFailureReason::Other(format!(
-                    "failed to canonicalize module root: {error}"
-                )),
-            }
-        })?;
-
-        if !canonical.starts_with(&canonical_root) {
+        if !canonical.starts_with(canonical_root) {
             return Err(InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
                 reason: ModuleResolutionFailureReason::Other(

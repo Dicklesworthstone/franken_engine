@@ -1,0 +1,27 @@
+{
+  "schema_version": "franken-engine.attack-surface-game.v1",
+  "epoch": 11,
+  "subsystem_summaries": {
+    "compiler": {
+      "subsystem": "compiler",
+      "attacker_actions": 2,
+      "defender_actions": 2,
+      "admissible_actions": 2,
+      "constraints": 0,
+      "minimax_recommendation": "isolate_module"
+    },
+    "runtime": {
+      "subsystem": "runtime",
+      "attacker_actions": 1,
+      "defender_actions": 3,
+      "admissible_actions": 2,
+      "constraints": 1,
+      "minimax_recommendation": "quarantine"
+    }
+  },
+  "total_models": 2,
+  "total_attacker_actions": 3,
+  "total_defender_actions": 5,
+  "total_constraints": 1,
+  "report_hash": "42cd1aef855a6cda1e631f1f146a5acd"
+}

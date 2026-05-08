@@ -1010,6 +1010,90 @@ mod tests {
         assert_eq!(report, back);
     }
 
+    #[test]
+    fn generate_report_golden_snapshot() {
+        let epoch = SecurityEpoch::from_raw(11);
+        let compiler = GameModelBuilder::new(Subsystem::Compiler, epoch)
+            .attacker_action(make_attacker_action("parse_poison", Subsystem::Compiler))
+            .attacker_action(make_attacker_action(
+                "binding_confusion",
+                Subsystem::Compiler,
+            ))
+            .defender_action(make_defender_action("reject_module", Subsystem::Compiler))
+            .defender_action(make_defender_action("isolate_module", Subsystem::Compiler))
+            .loss(LossEntry {
+                attacker_action: atk("parse_poison"),
+                defender_action: atk("reject_module"),
+                dimension: LossDimension::UserHarm,
+                loss_millionths: 400_000,
+            })
+            .loss(LossEntry {
+                attacker_action: atk("parse_poison"),
+                defender_action: atk("isolate_module"),
+                dimension: LossDimension::UserHarm,
+                loss_millionths: 100_000,
+            })
+            .loss(LossEntry {
+                attacker_action: atk("binding_confusion"),
+                defender_action: atk("reject_module"),
+                dimension: LossDimension::UserHarm,
+                loss_millionths: 200_000,
+            })
+            .loss(LossEntry {
+                attacker_action: atk("binding_confusion"),
+                defender_action: atk("isolate_module"),
+                dimension: LossDimension::UserHarm,
+                loss_millionths: 300_000,
+            })
+            .build();
+        let runtime = GameModelBuilder::new(Subsystem::Runtime, epoch)
+            .attacker_action(make_attacker_action(
+                "scheduler_starvation",
+                Subsystem::Runtime,
+            ))
+            .defender_action(make_defender_action("rate_limit", Subsystem::Runtime))
+            .defender_action(make_defender_action("quarantine", Subsystem::Runtime))
+            .defender_action(make_defender_action("shadow_only", Subsystem::Runtime))
+            .constraint(HardConstraint {
+                constraint_id: "runtime-shadow-only-forbidden".to_string(),
+                description: "Shadow-only defense cannot be selected for active runtime harm"
+                    .to_string(),
+                forbidden_actions: BTreeSet::from([atk("shadow_only")]),
+                active_conditions: vec!["active_runtime_harm".to_string()],
+            })
+            .loss(LossEntry {
+                attacker_action: atk("scheduler_starvation"),
+                defender_action: atk("rate_limit"),
+                dimension: LossDimension::AvailabilityCost,
+                loss_millionths: 200_000,
+            })
+            .loss(LossEntry {
+                attacker_action: atk("scheduler_starvation"),
+                defender_action: atk("quarantine"),
+                dimension: LossDimension::AvailabilityCost,
+                loss_millionths: 50_000,
+            })
+            .build();
+        let report = generate_report(&[compiler, runtime], &epoch);
+        let actual = serde_json::to_string_pretty(&report).expect("report should serialize") + "\n";
+        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden/attack_surface_game_model_generate_report_expected.json");
+
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(
+                golden_path
+                    .parent()
+                    .expect("golden fixture path should have a parent"),
+            )
+            .expect("golden directory should be writable");
+            std::fs::write(&golden_path, &actual).expect("golden fixture should be writable");
+        }
+
+        let expected =
+            std::fs::read_to_string(&golden_path).expect("golden fixture should be readable");
+        assert_eq!(expected, actual);
+    }
+
     // -- ActionSpace tests --
 
     #[test]

@@ -107,4 +107,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "capability_profile_deserialize"
+path = "fuzz_targets/capability_profile_deserialize.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

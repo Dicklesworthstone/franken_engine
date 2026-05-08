@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
+use crate::security_epoch::SecurityEpoch;
+
 /// Current version of the handoff contract schema
 pub const HANDOFF_CONTRACT_VERSION: &str = "1.0.0";
 
@@ -19,7 +21,7 @@ pub struct ShadowStatusPanelBundle {
     pub degraded_gates: DegradedGatesPanel,
     pub replay_drift: ReplayDriftPanel,
     pub recommended_actions: RecommendedActionsPanel,
-    pub generated_at: SystemTime,
+    pub generated_at: SecurityEpoch,
     pub bundle_version: String,
 }
 
@@ -31,7 +33,7 @@ impl Default for ShadowStatusPanelBundle {
             degraded_gates: DegradedGatesPanel::default(),
             replay_drift: ReplayDriftPanel::default(),
             recommended_actions: RecommendedActionsPanel::default(),
-            generated_at: SystemTime::now(),
+            generated_at: SecurityEpoch::GENESIS,
             bundle_version: HANDOFF_CONTRACT_VERSION.to_string(),
         }
     }
@@ -43,7 +45,7 @@ pub struct ShadowStatusPanel {
     pub title: String,
     pub daemon_health: DaemonHealth,
     pub active_journals: u32,
-    pub last_decision_timestamp: Option<SystemTime>,
+    pub last_decision_timestamp: Option<SecurityEpoch>,
     pub uptime_seconds: u64,
 }
 
@@ -88,7 +90,7 @@ impl Default for SourceFreshnessPanel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceFreshnessEntry {
     pub source_id: String,
-    pub last_update: SystemTime,
+    pub last_update: SecurityEpoch,
     pub staleness_seconds: u64,
     pub threshold_seconds: u64,
     pub is_stale: bool,
@@ -116,7 +118,7 @@ impl Default for DegradedGatesPanel {
 pub struct DegradedGateEntry {
     pub gate_id: String,
     pub degradation_reason: String,
-    pub degraded_since: SystemTime,
+    pub degraded_since: SecurityEpoch,
     pub severity: GateDegradationSeverity,
 }
 
@@ -201,7 +203,7 @@ pub enum ActionPriority {
 pub struct MissingSourcePanel {
     pub title: String,
     pub message: String,
-    pub last_successful_fetch: Option<SystemTime>,
+    pub last_successful_fetch: Option<SecurityEpoch>,
     pub retry_in_seconds: Option<u64>,
 }
 
@@ -238,7 +240,7 @@ impl PanelBundleBuilder {
         self
     }
 
-    pub fn with_last_decision(mut self, timestamp: SystemTime) -> Self {
+    pub fn with_last_decision(mut self, timestamp: SecurityEpoch) -> Self {
         self.bundle.shadow_status.last_decision_timestamp = Some(timestamp);
         self
     }
@@ -280,7 +282,7 @@ impl PanelBundleBuilder {
 pub fn create_missing_source_panel(
     title: &str,
     message: &str,
-    last_fetch: Option<SystemTime>,
+    last_fetch: Option<SecurityEpoch>,
 ) -> MissingSourcePanel {
     MissingSourcePanel {
         title: title.to_string(),
@@ -318,15 +320,15 @@ mod tests {
 
     #[test]
     fn test_panel_bundle_builder() {
-        let now = SystemTime::now();
+        let epoch = SecurityEpoch::GENESIS;
         let bundle = PanelBundleBuilder::new()
             .with_daemon_health(DaemonHealth::Healthy)
             .with_active_journals(5)
             .with_uptime(3600)
-            .with_last_decision(now)
+            .with_last_decision(epoch)
             .add_source_freshness(SourceFreshnessEntry {
                 source_id: "test-source".to_string(),
-                last_update: now,
+                last_update: epoch,
                 staleness_seconds: 120,
                 threshold_seconds: 300,
                 is_stale: false,
@@ -334,7 +336,7 @@ mod tests {
             .add_degraded_gate(DegradedGateEntry {
                 gate_id: "test-gate".to_string(),
                 degradation_reason: "Test degradation".to_string(),
-                degraded_since: now,
+                degraded_since: epoch,
                 severity: GateDegradationSeverity::Warning,
             })
             .add_replay_drift(ReplayDriftEntry {
@@ -356,7 +358,7 @@ mod tests {
         assert!(matches!(bundle.shadow_status.daemon_health, DaemonHealth::Healthy));
         assert_eq!(bundle.shadow_status.active_journals, 5);
         assert_eq!(bundle.shadow_status.uptime_seconds, 3600);
-        assert_eq!(bundle.shadow_status.last_decision_timestamp, Some(now));
+        assert_eq!(bundle.shadow_status.last_decision_timestamp, Some(epoch));
         assert_eq!(bundle.source_freshness.sources.len(), 1);
         assert_eq!(bundle.source_freshness.stale_source_count, 0);
         assert_eq!(bundle.degraded_gates.gates.len(), 1);
@@ -369,16 +371,16 @@ mod tests {
 
     #[test]
     fn test_missing_source_panel() {
-        let now = SystemTime::now();
+        let epoch = SecurityEpoch::GENESIS;
         let panel = create_missing_source_panel(
             "Test Source",
             "Source unavailable",
-            Some(now)
+            Some(epoch)
         );
 
         assert_eq!(panel.title, "Test Source");
         assert_eq!(panel.message, "Source unavailable");
-        assert_eq!(panel.last_successful_fetch, Some(now));
+        assert_eq!(panel.last_successful_fetch, Some(epoch));
         assert_eq!(panel.retry_in_seconds, Some(30));
     }
 

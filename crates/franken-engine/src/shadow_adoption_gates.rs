@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+use crate::security_epoch::SecurityEpoch;
+
 /// Gate status for shadow daemon capability verification
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GateStatus {
@@ -28,7 +30,7 @@ pub struct AdoptionGate {
     pub status: GateStatus,
     pub required_for: Vec<String>,
     pub verification_criteria: Vec<String>,
-    pub last_check: Option<std::time::SystemTime>,
+    pub last_check: Option<SecurityEpoch>,
     pub failure_reason: Option<String>,
 }
 
@@ -36,7 +38,7 @@ pub struct AdoptionGate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowAdoptionGates {
     pub gates: Vec<AdoptionGate>,
-    pub generated_at: std::time::SystemTime,
+    pub generated_at: SecurityEpoch,
 }
 
 impl ShadowAdoptionGates {
@@ -58,7 +60,7 @@ impl ShadowAdoptionGates {
                         "Truth gate validation passes".to_string(),
                         "End-to-end integration verified".to_string(),
                     ],
-                    last_check: Some(std::time::SystemTime::now()),
+                    last_check: Some(SecurityEpoch::GENESIS),
                     failure_reason: Some("Bead bd-djejh.6 not yet completed".to_string()),
                 },
                 AdoptionGate {
@@ -74,7 +76,7 @@ impl ShadowAdoptionGates {
                         "Drift detection functional".to_string(),
                         "Deterministic replay validated".to_string(),
                     ],
-                    last_check: Some(std::time::SystemTime::now()),
+                    last_check: Some(SecurityEpoch::GENESIS),
                     failure_reason: None,
                 },
                 AdoptionGate {
@@ -90,7 +92,7 @@ impl ShadowAdoptionGates {
                         "No-mutation enforcement verified".to_string(),
                         "Command preview functionality only".to_string(),
                     ],
-                    last_check: Some(std::time::SystemTime::now()),
+                    last_check: Some(SecurityEpoch::GENESIS),
                     failure_reason: None,
                 },
                 AdoptionGate {
@@ -106,7 +108,7 @@ impl ShadowAdoptionGates {
                         "FastAPI Rust service interface ready".to_string(),
                         "Advisory-only command surfaces verified".to_string(),
                     ],
-                    last_check: Some(std::time::SystemTime::now()),
+                    last_check: Some(SecurityEpoch::GENESIS),
                     failure_reason: None,
                 },
                 AdoptionGate {
@@ -122,11 +124,11 @@ impl ShadowAdoptionGates {
                         "Command validation enforced".to_string(),
                         "Documentation gates functional".to_string(),
                     ],
-                    last_check: Some(std::time::SystemTime::now()),
+                    last_check: Some(SecurityEpoch::GENESIS),
                     failure_reason: None,
                 },
             ],
-            generated_at: std::time::SystemTime::now(),
+            generated_at: SecurityEpoch::GENESIS,
         }
     }
 
@@ -219,6 +221,17 @@ pub const FORBIDDEN_MUTATION_COMMANDS: &[&str] = &[
     "queue",
 ];
 
+const SHELL_COMMAND_EXECUTORS: &[&str] = &[
+    "sh",
+    "bash",
+    "dash",
+    "zsh",
+    "fish",
+    "pwsh",
+    "powershell",
+    "cmd",
+];
+
 /// Command validation result
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandValidation {
@@ -302,7 +315,30 @@ fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenComma
             '\'' => in_single_quote = true,
             '"' => in_double_quote = true,
             '#' if token.is_empty() && previous_was_whitespace => break,
+            // Shell command separators and operators
             ';' | '|' | '&' | '\n' | '\r' => {
+                if let Some(usage) =
+                    finish_command_token(&mut token, &mut at_segment_start, saw_separator)
+                {
+                    return Ok(Some(usage));
+                }
+                at_segment_start = true;
+                saw_separator = true;
+                previous_was_whitespace = true;
+            }
+            // Shell redirections that can separate commands
+            '<' | '>' => {
+                if let Some(usage) =
+                    finish_command_token(&mut token, &mut at_segment_start, saw_separator)
+                {
+                    return Ok(Some(usage));
+                }
+                at_segment_start = true;
+                saw_separator = true;
+                previous_was_whitespace = true;
+            }
+            // Command substitution and subshell operators
+            '$' | '`' | '(' | ')' => {
                 if let Some(usage) =
                     finish_command_token(&mut token, &mut at_segment_start, saw_separator)
                 {
@@ -338,9 +374,117 @@ fn detect_forbidden_command_usage(command: &str) -> Result<Option<ForbiddenComma
     ))
 }
 
+fn shell_command_flag(token: &str) -> bool {
+    let token_lower = token.to_ascii_lowercase();
+    token_lower == "/c"
+        || token_lower == "-command"
+        || (token_lower.starts_with('-')
+            && !token_lower.starts_with("--")
+            && token_lower.chars().skip(1).any(|ch| ch == 'c'))
+}
+
+fn segment_invokes_shell_script(tokens: &[String]) -> bool {
+    tokens.iter().enumerate().any(|(index, token)| {
+        let executable = token.rsplit('/').next().unwrap_or(token);
+        SHELL_COMMAND_EXECUTORS
+            .iter()
+            .any(|shell| executable.eq_ignore_ascii_case(shell))
+            && tokens
+                .iter()
+                .skip(index + 1)
+                .any(|next| shell_command_flag(next))
+    })
+}
+
+fn finish_shell_token(token: &mut String, tokens: &mut Vec<String>) {
+    if !token.is_empty() {
+        tokens.push(std::mem::take(token));
+    }
+}
+
+fn detect_shell_command_execution(command: &str) -> Result<bool, String> {
+    let mut token = String::new();
+    let mut tokens = Vec::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped_in_double_quote = false;
+    let mut previous_was_whitespace = true;
+
+    for ch in command.chars() {
+        if in_single_quote {
+            if ch == '\'' {
+                in_single_quote = false;
+            } else {
+                token.push(ch);
+            }
+            continue;
+        }
+
+        if in_double_quote {
+            if escaped_in_double_quote {
+                token.push(ch);
+                escaped_in_double_quote = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped_in_double_quote = true;
+                continue;
+            }
+            if ch == '"' {
+                in_double_quote = false;
+            } else {
+                token.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single_quote = true,
+            '"' => in_double_quote = true,
+            '#' if token.is_empty() && previous_was_whitespace => break,
+            ';' | '|' | '&' | '\n' | '\r' => {
+                finish_shell_token(&mut token, &mut tokens);
+                if segment_invokes_shell_script(&tokens) {
+                    return Ok(true);
+                }
+                tokens.clear();
+                previous_was_whitespace = true;
+            }
+            ch if ch.is_whitespace() => {
+                finish_shell_token(&mut token, &mut tokens);
+                previous_was_whitespace = true;
+            }
+            _ => {
+                token.push(ch);
+                previous_was_whitespace = false;
+            }
+        }
+    }
+
+    if in_single_quote || in_double_quote {
+        return Err("Unterminated quote in operator action command".to_string());
+    }
+
+    finish_shell_token(&mut token, &mut tokens);
+    Ok(segment_invokes_shell_script(&tokens))
+}
+
 /// Validate that a command string is advisory-only and doesn't contain mutations
 pub fn validate_operator_action_command(command: &str) -> CommandValidation {
     let command_trimmed = command.trim();
+
+    match detect_shell_command_execution(command_trimmed) {
+        Ok(true) => {
+            return CommandValidation::ForbiddenMutation {
+                command: "shell_escape".to_string(),
+                reason: "Shell command execution is forbidden in operator actions".to_string(),
+            };
+        }
+        Ok(false) => {}
+        Err(reason) => {
+            return CommandValidation::ValidationFailed { reason };
+        }
+    }
 
     match detect_forbidden_command_usage(command_trimmed) {
         Ok(Some(ForbiddenCommandUsage { command, direct })) => {
@@ -574,6 +718,7 @@ mod tests {
         let advisory_commands = [
             "branch status should be reviewed",
             "grep 'br status' logfile.txt",
+            "grep 'sh -c br update' logfile.txt",
             "print('Use br status to check')",
             "# br status - run this manually",
         ];
@@ -604,6 +749,28 @@ mod tests {
                 reason: "Shell command substitution is forbidden in operator actions".to_string()
             }
         );
+    }
+
+    #[test]
+    fn test_command_validation_shell_command_execution() {
+        let shell_commands = [
+            "sh -c 'br update task-1'",
+            "/bin/bash -lc 'git status'",
+            "zsh -c \"rch exec -- cargo check\"",
+            "pwsh -Command \"agent-mail check\"",
+            "cmd /c br update task-1",
+        ];
+
+        for command in shell_commands {
+            assert_eq!(
+                validate_operator_action_command(command),
+                CommandValidation::ForbiddenMutation {
+                    command: "shell_escape".to_string(),
+                    reason: "Shell command execution is forbidden in operator actions".to_string()
+                },
+                "should reject shell command execution: {command}"
+            );
+        }
     }
 
     #[test]

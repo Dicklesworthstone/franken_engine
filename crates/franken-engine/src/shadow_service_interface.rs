@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
+use crate::security_epoch::SecurityEpoch;
+
 /// Service configuration for shadow daemon HTTP interface
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShadowServiceConfig {
@@ -65,7 +67,7 @@ pub struct FilteredPanelsResponse {
     pub degraded_gates: Option<crate::shadow_handoff_contracts::DegradedGatesPanel>,
     pub replay_drift: Option<crate::shadow_handoff_contracts::ReplayDriftPanel>,
     pub recommended_actions: Option<crate::shadow_handoff_contracts::RecommendedActionsPanel>,
-    pub generated_at: SystemTime,
+    pub generated_at: SecurityEpoch,
 }
 
 /// Action preview request
@@ -91,7 +93,7 @@ pub struct ServiceHealthResponse {
     pub uptime_seconds: u64,
     pub version: String,
     pub shadow_daemon_connected: bool,
-    pub last_panel_update: Option<SystemTime>,
+    pub last_panel_update: Option<SecurityEpoch>,
 }
 
 /// Error response for service endpoints
@@ -99,7 +101,7 @@ pub struct ServiceHealthResponse {
 pub struct ServiceErrorResponse {
     pub error: String,
     pub code: String,
-    pub timestamp: SystemTime,
+    pub timestamp: SecurityEpoch,
     pub advisory: Option<String>,
 }
 
@@ -145,36 +147,36 @@ impl std::error::Error for ServiceError {}
 /// Default implementation of shadow service interface
 pub struct DefaultShadowService {
     config: ShadowServiceConfig,
-    start_time: SystemTime,
+    start_time: SecurityEpoch,
 }
 
 impl DefaultShadowService {
     pub fn new(config: ShadowServiceConfig) -> Self {
         Self {
             config,
-            start_time: SystemTime::now(),
+            start_time: SecurityEpoch::GENESIS,
         }
     }
 
     /// Create mock panel bundle for demonstration
     fn create_mock_panel_bundle(&self) -> ShadowStatusPanelBundle {
-        let now = SystemTime::now();
+        let epoch = SecurityEpoch::GENESIS;
 
         PanelBundleBuilder::new()
             .with_daemon_health(DaemonHealth::Healthy)
             .with_active_journals(3)
-            .with_uptime(self.start_time.elapsed().unwrap_or_default().as_secs())
-            .with_last_decision(now)
+            .with_uptime(3600) // Fixed uptime for deterministic behavior
+            .with_last_decision(epoch)
             .add_source_freshness(SourceFreshnessEntry {
                 source_id: "git-journal".to_string(),
-                last_update: now,
+                last_update: epoch,
                 staleness_seconds: 45,
                 threshold_seconds: 300,
                 is_stale: false,
             })
             .add_source_freshness(SourceFreshnessEntry {
                 source_id: "evidence-journal".to_string(),
-                last_update: now,
+                last_update: epoch,
                 staleness_seconds: 420,
                 threshold_seconds: 300,
                 is_stale: true,
@@ -182,13 +184,13 @@ impl DefaultShadowService {
             .add_degraded_gate(DegradedGateEntry {
                 gate_id: "replay-verification".to_string(),
                 degradation_reason: "High replay drift detected".to_string(),
-                degraded_since: now,
+                degraded_since: epoch,
                 severity: crate::shadow_handoff_contracts::GateDegradationSeverity::Warning,
             })
             .add_replay_drift(ReplayDriftEntry {
                 journal_id: "journal-001".to_string(),
                 drift_type: "schema_drift".to_string(),
-                detected_at: now,
+                detected_at: epoch,
                 severity: crate::shadow_handoff_contracts::DriftSeverity::Minor,
                 expected_migration: true,
             })
@@ -283,10 +285,10 @@ impl ShadowServiceInterface for DefaultShadowService {
     fn get_health(&self) -> Result<ServiceHealthResponse, ServiceError> {
         Ok(ServiceHealthResponse {
             status: "healthy".to_string(),
-            uptime_seconds: self.start_time.elapsed().unwrap_or_default().as_secs(),
+            uptime_seconds: 3600, // Fixed uptime for deterministic behavior
             version: crate::shadow_handoff_contracts::HANDOFF_CONTRACT_VERSION.to_string(),
             shadow_daemon_connected: true, // Mock connection
-            last_panel_update: Some(SystemTime::now()),
+            last_panel_update: Some(SecurityEpoch::GENESIS),
         })
     }
 }
@@ -304,7 +306,7 @@ pub fn create_error_response(error: ServiceError) -> ServiceErrorResponse {
     ServiceErrorResponse {
         error: error.to_string(),
         code: code.to_string(),
-        timestamp: SystemTime::now(),
+        timestamp: SecurityEpoch::GENESIS,
         advisory: advisory.map(String::from),
     }
 }

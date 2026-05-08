@@ -907,8 +907,8 @@ pub fn compute_batch_mac(
     entries: &[BatchEntry],
     epoch: SecurityEpoch,
 ) -> AuthenticityHash {
-    let mut mac =
-        HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts 32-byte session keys");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
+        .expect("HMAC-SHA256 accepts 32-byte session keys");
     mac.update(b"franken::batch_transport::batch_mac::");
     mac.update(&batch_id.to_le_bytes());
     mac.update(&epoch.as_u64().to_le_bytes());

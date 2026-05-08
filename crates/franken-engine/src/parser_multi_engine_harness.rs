@@ -49,6 +49,16 @@ pub enum HarnessEngineKind {
     ExternalCommand,
 }
 
+impl HarnessEngineKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::FrankenCanonical => "franken_canonical",
+            Self::FixtureExpectedHash => "fixture_expected_hash",
+            Self::ExternalCommand => "external_command",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessEngineSpec {
     pub engine_id: String,
@@ -925,12 +935,7 @@ fn derive_run_id(
     for engine in &sorted_engines {
         hasher.update(engine.engine_id.as_bytes());
         hasher.update(engine.version_pin.as_bytes());
-        // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
-        hasher.update(
-            serde_json::to_string(&engine.kind)
-                .expect("serde deserialization should succeed")
-                .as_bytes(),
-        );
+        hasher.update(engine.kind.as_str().as_bytes());
         if let Some(command) = engine.command.as_ref() {
             hasher.update(command.as_bytes());
         }

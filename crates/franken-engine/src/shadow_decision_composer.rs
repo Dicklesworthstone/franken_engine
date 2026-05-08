@@ -666,9 +666,14 @@ static OUTPUT_DIR_LOCKS: std::sync::LazyLock<Mutex<BTreeMap<PathBuf, std::sync::
 
 /// Acquire a lock for the given output directory to ensure atomic artifact bundle writes.
 fn acquire_output_dir_lock(output_dir: &Path) -> std::sync::Arc<Mutex<()>> {
-    let canonical_path = output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf());
+    let canonical_path = output_dir
+        .canonicalize()
+        .unwrap_or_else(|_| output_dir.to_path_buf());
     let mut locks = OUTPUT_DIR_LOCKS.lock().unwrap();
-    locks.entry(canonical_path).or_insert_with(|| std::sync::Arc::new(Mutex::new(()))).clone()
+    locks
+        .entry(canonical_path)
+        .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
+        .clone()
 }
 
 /// Write content to a file atomically using temp file + rename.

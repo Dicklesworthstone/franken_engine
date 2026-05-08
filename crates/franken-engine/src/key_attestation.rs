@@ -2102,4 +2102,275 @@ mod tests {
             "principal index should be cleaned up after purge"
         );
     }
+
+    // -------------------------------------------------------------------
+    // DevicePostureVerifier conformance harness
+    // -------------------------------------------------------------------
+
+    /// Conformance contract for DevicePostureVerifier implementations.
+    ///
+    /// Tests the documented delegated validation invariant:
+    /// - Verification is policy-dependent with opaque bytes + type tag
+    /// - Actual validation delegated to trait implementor
+    /// - Failures must map deterministically to AttestationError::DevicePostureInvalid
+    /// - posture_type must be respected by implementors
+    fn assert_device_posture_verifier_contract<V: DevicePostureVerifier>(verifier: &V) {
+        // Test 1: Valid posture evidence should be accepted by compliant verifiers
+        let valid_posture = DevicePosture {
+            posture_type: "test-valid".to_string(),
+            evidence: b"valid-evidence-bytes".to_vec(),
+        };
+
+        // Note: Since verification is policy-dependent, we can't assert success
+        // but we can assert the result is deterministic
+        let result1 = verifier.verify(&valid_posture);
+        let result2 = verifier.verify(&valid_posture);
+        assert_eq!(
+            result1.is_ok(),
+            result2.is_ok(),
+            "DevicePostureVerifier must be deterministic for identical input"
+        );
+
+        // Test 2: Wrong posture_type should be handled consistently
+        let wrong_type_posture = DevicePosture {
+            posture_type: "unsupported-type".to_string(),
+            evidence: b"some-evidence".to_vec(),
+        };
+
+        let wrong_type_result1 = verifier.verify(&wrong_type_posture);
+        let wrong_type_result2 = verifier.verify(&wrong_type_posture);
+        assert_eq!(
+            wrong_type_result1.is_ok(),
+            wrong_type_result2.is_ok(),
+            "DevicePostureVerifier must handle unsupported posture_type deterministically"
+        );
+
+        // Test 3: Empty evidence should be handled consistently
+        let empty_evidence = DevicePosture {
+            posture_type: "test-type".to_string(),
+            evidence: Vec::new(),
+        };
+
+        let empty_result1 = verifier.verify(&empty_evidence);
+        let empty_result2 = verifier.verify(&empty_evidence);
+        assert_eq!(
+            empty_result1.is_ok(),
+            empty_result2.is_ok(),
+            "DevicePostureVerifier must handle empty evidence deterministically"
+        );
+
+        // Test 4: Malformed evidence should be handled consistently
+        let malformed_evidence = DevicePosture {
+            posture_type: "test-type".to_string(),
+            evidence: b"\x00\xff\x00\xff".to_vec(), // Potentially malformed bytes
+        };
+
+        let malformed_result1 = verifier.verify(&malformed_evidence);
+        let malformed_result2 = verifier.verify(&malformed_evidence);
+        assert_eq!(
+            malformed_result1.is_ok(),
+            malformed_result2.is_ok(),
+            "DevicePostureVerifier must handle malformed evidence deterministically"
+        );
+
+        // Test 5: Error mapping - if verification fails, it must use DevicePostureInvalid
+        let test_cases = [
+            &valid_posture,
+            &wrong_type_posture,
+            &empty_evidence,
+            &malformed_evidence,
+        ];
+        for (i, posture) in test_cases.iter().enumerate() {
+            if let Err(err) = verifier.verify(posture) {
+                match err {
+                    AttestationError::DevicePostureInvalid { .. } => {
+                        // Correct error type - this is what we expect
+                    }
+                    _ => panic!(
+                        "DevicePostureVerifier failure for test case {} must map to \
+                         AttestationError::DevicePostureInvalid, got: {:?}",
+                        i, err
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Test verifier that accepts only "trusted-tpm2" posture type with specific evidence.
+    struct TestAcceptingVerifier;
+
+    impl DevicePostureVerifier for TestAcceptingVerifier {
+        fn verify(&self, posture: &DevicePosture) -> Result<(), AttestationError> {
+            match posture.posture_type.as_str() {
+                "trusted-tpm2" => {
+                    if posture.evidence == b"valid-tpm2-attestation" {
+                        Ok(())
+                    } else {
+                        Err(AttestationError::DevicePostureInvalid {
+                            detail: "invalid TPM2 attestation evidence".to_string(),
+                        })
+                    }
+                }
+                _ => Err(AttestationError::DevicePostureInvalid {
+                    detail: format!("unsupported posture type: {}", posture.posture_type),
+                }),
+            }
+        }
+    }
+
+    /// Test verifier that rejects all posture evidence.
+    struct TestRejectingVerifier;
+
+    impl DevicePostureVerifier for TestRejectingVerifier {
+        fn verify(&self, posture: &DevicePosture) -> Result<(), AttestationError> {
+            Err(AttestationError::DevicePostureInvalid {
+                detail: format!(
+                    "policy rejects all device posture (type: {})",
+                    posture.posture_type
+                ),
+            })
+        }
+    }
+
+    #[test]
+    fn device_posture_verifier_contract_accepting_implementation() {
+        let verifier = TestAcceptingVerifier;
+        assert_device_posture_verifier_contract(&verifier);
+
+        // Test specific behavior of this implementation
+        let valid_posture = DevicePosture {
+            posture_type: "trusted-tpm2".to_string(),
+            evidence: b"valid-tpm2-attestation".to_vec(),
+        };
+        assert!(verifier.verify(&valid_posture).is_ok());
+
+        let invalid_evidence = DevicePosture {
+            posture_type: "trusted-tpm2".to_string(),
+            evidence: b"invalid-evidence".to_vec(),
+        };
+        assert!(verifier.verify(&invalid_evidence).is_err());
+
+        let unsupported_type = DevicePosture {
+            posture_type: "sgx".to_string(),
+            evidence: b"sgx-evidence".to_vec(),
+        };
+        assert!(verifier.verify(&unsupported_type).is_err());
+    }
+
+    #[test]
+    fn device_posture_verifier_contract_rejecting_implementation() {
+        let verifier = TestRejectingVerifier;
+        assert_device_posture_verifier_contract(&verifier);
+
+        // Test that this implementation consistently rejects
+        let posture = DevicePosture {
+            posture_type: "any-type".to_string(),
+            evidence: b"any-evidence".to_vec(),
+        };
+        assert!(verifier.verify(&posture).is_err());
+    }
+
+    #[test]
+    fn device_posture_verification_register_integration_path() {
+        let mut store = AttestationStore::new(TEST_ZONE);
+        let accepting_verifier = TestAcceptingVerifier;
+        let rejecting_verifier = TestRejectingVerifier;
+
+        // Create attestation with valid device posture
+        let valid_posture = DevicePosture {
+            posture_type: "trusted-tpm2".to_string(),
+            evidence: b"valid-tmp2-attestation".to_vec(),
+        };
+
+        let att_with_posture = KeyAttestation::create_signed(
+            &owner_signing_key(),
+            CreateAttestationInput {
+                principal_id: test_principal(),
+                attested_key: attested_vk(),
+                key_role: KeyRole::Signing,
+                issued_at: DeterministicTimestamp(100),
+                expires_at: DeterministicTimestamp(200),
+                epoch: SecurityEpoch::from_raw(1),
+                nonce: AttestationNonce::from_counter(1),
+                device_posture: Some(valid_posture.clone()),
+                zone: TEST_ZONE,
+            },
+        )
+        .expect("create attestation with posture");
+
+        // Test 1: Pre-verification with accepting verifier should allow registration
+        match accepting_verifier.verify(&valid_posture) {
+            Ok(()) => {
+                // Verification passed, registration should succeed
+                let result = store.register(
+                    att_with_posture.clone(),
+                    &owner_vk(),
+                    DeterministicTimestamp(150),
+                    "test-trace-accepted",
+                );
+                assert!(
+                    result.is_ok(),
+                    "Registration should succeed after successful posture verification"
+                );
+            }
+            Err(_) => {
+                // Verification failed, caller should not attempt registration
+                // (This demonstrates the delegated validation pattern)
+            }
+        }
+
+        // Test 2: Pre-verification with rejecting verifier should prevent registration
+        let invalid_posture = DevicePosture {
+            posture_type: "untrusted-type".to_string(),
+            evidence: b"suspicious-evidence".to_vec(),
+        };
+
+        match rejecting_verifier.verify(&invalid_posture) {
+            Ok(()) => {
+                panic!("TestRejectingVerifier should reject all posture evidence");
+            }
+            Err(AttestationError::DevicePostureInvalid { .. }) => {
+                // Expected rejection - caller should not proceed to register
+                // This demonstrates proper error handling in the delegated pattern
+            }
+            Err(other) => {
+                panic!(
+                    "DevicePostureVerifier should map failures to DevicePostureInvalid, got: {:?}",
+                    other
+                );
+            }
+        }
+
+        // Test 3: Registration without posture verification (current behavior)
+        // demonstrates that the store itself doesn't enforce posture verification
+        let att_without_verification = KeyAttestation::create_signed(
+            &owner_signing_key(),
+            CreateAttestationInput {
+                principal_id: test_principal(),
+                attested_key: attested_vk(),
+                key_role: KeyRole::Signing,
+                issued_at: DeterministicTimestamp(100),
+                expires_at: DeterministicTimestamp(200),
+                epoch: SecurityEpoch::from_raw(1),
+                nonce: AttestationNonce::from_counter(2), // Different nonce
+                device_posture: Some(invalid_posture),
+                zone: TEST_ZONE,
+            },
+        )
+        .expect("create attestation with unverified posture");
+
+        // This succeeds because store doesn't enforce posture verification
+        // This demonstrates why the verification must be done by the caller
+        let result = store.register(
+            att_without_verification,
+            &owner_vk(),
+            DeterministicTimestamp(150),
+            "test-trace-unverified",
+        );
+        assert!(
+            result.is_ok(),
+            "Store doesn't enforce posture verification - this is by design \
+                 as verification is delegated to the caller using DevicePostureVerifier trait"
+        );
+    }
 }

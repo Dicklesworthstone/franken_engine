@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Bound;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,38 @@ mod binding_cell_map_serde {
         Ok(entries
             .into_iter()
             .map(|entry| (entry.key, entry.value))
+            .collect())
+    }
+}
+
+/// Serde helper: preserve the artifact shape of `aliases` as a sorted Vec while
+/// keeping the runtime lookup path indexed by alias ID.
+mod binding_alias_map_serde {
+    use super::{BindingAlias, BindingId};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(
+        map: &BTreeMap<BindingId, BindingId>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let aliases: Vec<BindingAlias> = map
+            .iter()
+            .map(|(alias, source)| BindingAlias {
+                alias: alias.clone(),
+                source: source.clone(),
+            })
+            .collect();
+        aliases.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeMap<BindingId, BindingId>, D::Error> {
+        let aliases: Vec<BindingAlias> = Vec::deserialize(deserializer)?;
+        Ok(aliases
+            .into_iter()
+            .map(|entry| (entry.alias, entry.source))
             .collect())
     }
 }
@@ -353,8 +386,8 @@ pub struct LiveBindingMap {
     pub cells: BTreeMap<BindingId, BindingCell>,
     /// Alias indirections for re-exports so downstream importers observe the
     /// canonical source cell instead of a stale alias placeholder.
-    #[serde(default)]
-    pub aliases: Vec<BindingAlias>,
+    #[serde(default, with = "binding_alias_map_serde")]
+    pub aliases: BTreeMap<BindingId, BindingId>,
     /// All namespace objects indexed by module specifier.
     pub namespaces: BTreeMap<String, NamespaceObject>,
     /// All import bindings indexed by (importer, local_name).
@@ -368,7 +401,7 @@ impl LiveBindingMap {
         Self {
             schema_version: MODULE_LIVE_BINDING_SCHEMA_VERSION.to_string(),
             cells: BTreeMap::new(),
-            aliases: Vec::new(),
+            aliases: BTreeMap::new(),
             namespaces: BTreeMap::new(),
             imports: Vec::new(),
             events: Vec::new(),
@@ -388,12 +421,7 @@ impl LiveBindingMap {
 
     /// Register an alias indirection for a re-exported binding.
     pub fn register_alias(&mut self, alias: BindingId, source: BindingId) {
-        if let Some(existing) = self.aliases.iter_mut().find(|entry| entry.alias == alias) {
-            existing.source = source;
-        } else {
-            self.aliases.push(BindingAlias { alias, source });
-            self.aliases.sort();
-        }
+        self.aliases.insert(alias, source);
     }
 
     fn resolve_binding_id(&self, id: &BindingId) -> BindingId {
@@ -401,12 +429,7 @@ impl LiveBindingMap {
         let mut visited = BTreeSet::new();
 
         while visited.insert(current.clone()) {
-            let Some(next) = self
-                .aliases
-                .iter()
-                .find(|entry| entry.alias == current)
-                .map(|entry| entry.source.clone())
-            else {
+            let Some(next) = self.aliases.get(&current).cloned() else {
                 break;
             };
             current = next;
@@ -674,7 +697,7 @@ fn module_export_names(
 
 fn remove_star_re_export_surface(map: &mut LiveBindingMap, binding_id: &BindingId) {
     map.cells.remove(binding_id);
-    map.aliases.retain(|entry| entry.alias != *binding_id);
+    map.aliases.remove(binding_id);
 }
 
 fn ensure_re_export_surface(
@@ -844,11 +867,7 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                             progressed = true;
                         }
 
-                        let previous_source = map
-                            .aliases
-                            .iter()
-                            .find(|entry| entry.alias == alias_id)
-                            .map(|entry| entry.source.clone());
+                        let previous_source = map.aliases.get(&alias_id).cloned();
                         if previous_source.as_ref() != Some(&source_surface_id) {
                             map.register_alias(alias_id, source_surface_id);
                             progressed = true;
@@ -905,11 +924,7 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
                     progressed = true;
                 }
 
-                let previous_source = map
-                    .aliases
-                    .iter()
-                    .find(|entry| entry.alias == re_export_id)
-                    .map(|entry| entry.source.clone());
+                let previous_source = map.aliases.get(&re_export_id).cloned();
                 if previous_source.as_ref() != Some(&source_id) {
                     map.register_alias(re_export_id, source_id);
                     progressed = true;
@@ -922,16 +937,37 @@ pub fn build_live_bindings(graph: &ModuleGraph) -> Result<LiveBindingMap, LiveBi
         }
     }
 
+    /// Helper to create the next string for range bounds (increment last character)
+    fn increment_string(s: &str) -> String {
+        if s.is_empty() {
+            return "\u{1}".to_string(); // Smallest non-empty string
+        }
+
+        let mut bytes = s.as_bytes().to_vec();
+        // Try to increment the last byte; if it overflows, extend with a null byte
+        if let Some(last) = bytes.last_mut() {
+            if *last == 255 {
+                bytes.push(0); // Extend for overflow case
+            } else {
+                *last += 1;
+            }
+        }
+
+        // Convert back to string, handling invalid UTF-8 by falling back to append strategy
+        String::from_utf8(bytes).unwrap_or_else(|_| format!("{}\u{0}", s))
+    }
+
     // Phase 3: Build namespace objects for all modules
     for module in graph.modules() {
         let mut export_names = Vec::new();
         let mut bindings = BTreeMap::new();
 
-        for binding_id in map
-            .cells
-            .keys()
-            .filter(|id| id.module_specifier == module.specifier)
-        {
+        // Use range query to efficiently iterate only bindings for this module
+        // Since BindingId is ordered by (module_specifier, export_name), we can use range bounds
+        let start_bound = Bound::Included(BindingId::new(&module.specifier, ""));
+        let end_bound = Bound::Excluded(BindingId::new(&increment_string(&module.specifier), ""));
+
+        for binding_id in map.cells.range((start_bound, end_bound)).map(|(id, _)| id) {
             export_names.push(binding_id.export_name.clone());
             bindings.insert(binding_id.export_name.clone(), binding_id.clone());
         }
@@ -1362,6 +1398,32 @@ mod tests {
                 .expect("serde deserialization should succeed")
                 .value_millionths,
             Some(200)
+        );
+    }
+
+    #[test]
+    fn register_alias_updates_indexed_source_without_duplicate_entries() {
+        let mut map = LiveBindingMap::new();
+
+        let first_source = map.register_cell(make_cell("mod_a", "foo"));
+        let second_source = map.register_cell(make_cell("mod_b", "foo"));
+        let alias_id = map.register_cell(BindingCell::new(
+            "mod_c",
+            "foo",
+            "foo",
+            BindingType::ReExport,
+        ));
+
+        map.register_alias(alias_id.clone(), first_source);
+        map.register_alias(alias_id.clone(), second_source.clone());
+
+        assert_eq!(map.aliases.len(), 1);
+        assert_eq!(map.aliases.get(&alias_id), Some(&second_source));
+        assert_eq!(
+            map.get_cell(&alias_id)
+                .expect("alias should resolve through indexed source")
+                .source_module,
+            "mod_b"
         );
     }
 

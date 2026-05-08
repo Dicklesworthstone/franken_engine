@@ -14,20 +14,16 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::deterministic_serde::{CanonicalValue, SerdeError};
+use crate::deterministic_serde::SerdeError;
 use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::ContentHash;
 use crate::shadow_decision_composer::{
-    ShadowDecisionError, ShadowDecisionArtifacts, JournalSourceEvent, ShadowDecisionComposerInput,
+    JournalSourceEvent, ShadowDecisionComposerInput, ShadowDecisionError,
 };
 use crate::shadow_evidence_journal::{
-    ShadowEvidenceJournalExport, ShadowEvidenceJournalExportRow,
-    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION,
+    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, ShadowEvidenceJournalExport,
 };
-use crate::typed_persistence_models::ShadowEvidenceJournalEntry;
-use crate::signature_preimage::{
-    Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
-};
+use crate::signature_preimage::{Signature, SigningKey, sign_preimage};
 
 const SHADOW_REPLAY_COMPONENT: &str = "shadow_replay_verifier";
 
@@ -212,6 +208,8 @@ pub enum ReplayVerificationError {
     SignatureVerificationFailed,
     /// Unexpected IO error during replay.
     IoError(String),
+    /// Invalid configuration provided to replay verifier.
+    InvalidConfiguration(String),
 }
 
 impl fmt::Display for ReplayVerificationError {
@@ -238,6 +236,9 @@ impl fmt::Display for ReplayVerificationError {
             ReplayVerificationError::IoError(msg) => {
                 write!(f, "IO error: {}", msg)
             }
+            ReplayVerificationError::InvalidConfiguration(msg) => {
+                write!(f, "Invalid configuration: {}", msg)
+            }
         }
     }
 }
@@ -262,16 +263,23 @@ pub struct ShadowReplayVerifier {
 
 impl ShadowReplayVerifier {
     /// Creates a new replay verifier with the given configuration.
-    pub fn new(config: ReplayConfig, default_freshness_window_seconds: i64) -> Self {
-        Self {
+    pub fn new(config: ReplayConfig, default_freshness_window_seconds: i64) -> Result<Self, ReplayVerificationError> {
+        // Validate configuration
+        if config.max_events_per_batch == 0 {
+            return Err(ReplayVerificationError::InvalidConfiguration(
+                "max_events_per_batch must be greater than 0 to avoid panic in step_by()".to_string(),
+            ));
+        }
+
+        Ok(Self {
             config,
             default_freshness_window_seconds,
             signing_key: None,
-        }
+        })
     }
 
     /// Creates a new replay verifier with default configuration.
-    pub fn with_default_config() -> Self {
+    pub fn with_default_config() -> Result<Self, ReplayVerificationError> {
         Self::new(ReplayConfig::default(), 300) // 5 minutes default
     }
 
@@ -933,15 +941,31 @@ mod tests {
 
     #[test]
     fn test_replay_verifier_creation() {
-        let verifier = ShadowReplayVerifier::with_default_config();
+        let verifier = ShadowReplayVerifier::with_default_config().unwrap();
         assert_eq!(verifier.config.max_events_per_batch, 1000);
         assert!(verifier.signing_key.is_none());
         assert_eq!(verifier.default_freshness_window_seconds, 300);
     }
 
     #[test]
+    fn test_replay_verifier_zero_batch_size_validation() {
+        let mut config = ReplayConfig::default();
+        config.max_events_per_batch = 0;
+
+        let result = ShadowReplayVerifier::new(config, 300);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            ReplayVerificationError::InvalidConfiguration(msg) => {
+                assert!(msg.contains("max_events_per_batch must be greater than 0"));
+            }
+            _ => panic!("Expected InvalidConfiguration error"),
+        }
+    }
+
+    #[test]
     fn test_is_expected_migration() {
-        let verifier = ShadowReplayVerifier::with_default_config();
+        let verifier = ShadowReplayVerifier::with_default_config().unwrap();
 
         let schema_drift = vec![DriftType::SchemaDrift {
             expected_version: "1.0".to_string(),
@@ -967,7 +991,7 @@ mod tests {
         /// Test replay of healthy journal export to verify byte-stable outputs.
         #[test]
         fn test_replay_export_healthy_journal() {
-            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
             let export = create_healthy_journal_fixture();
 
             let result = verifier.replay_export(export.clone(), "test_environment".to_string());
@@ -998,7 +1022,7 @@ mod tests {
         /// Test replay of degraded journal to detect performance drift.
         #[test]
         fn test_replay_export_degraded_journal() {
-            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
             let export = create_degraded_journal_fixture();
 
             let result = verifier.replay_export(export.clone(), "test_environment".to_string());
@@ -1020,7 +1044,7 @@ mod tests {
         /// Test replay of contaminated journal to detect data corruption.
         #[test]
         fn test_replay_export_contaminated_journal() {
-            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
             let export = create_contaminated_journal_fixture();
 
             let result = verifier.replay_export(export.clone(), "test_environment".to_string());
@@ -1048,7 +1072,7 @@ mod tests {
         /// Test replay of stale-source journal for freshness verification.
         #[test]
         fn test_replay_export_stale_journal() {
-            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
             let export = create_stale_source_journal_fixture();
 
             let result = verifier.replay_export(export.clone(), "test_environment".to_string());
@@ -1069,7 +1093,7 @@ mod tests {
         /// Smoke test that exits non-zero on nondeterminism or missing provenance.
         #[test]
         fn smoke_test_replay_determinism() {
-            let mut verifier = ShadowReplayVerifier::with_default_config();
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
 
             // Test multiple fixture types for determinism
             let fixtures = vec![

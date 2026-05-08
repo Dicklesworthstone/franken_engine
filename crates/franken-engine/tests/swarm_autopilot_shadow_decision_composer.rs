@@ -1,10 +1,17 @@
-use std::{fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
+};
 
 use frankenengine_engine::shadow_decision_composer::{
     AdvisoryRecommendation, ExistingAutopilotOutput, JournalSourceEvent, MutationPolicy,
-    ShadowDecision, ShadowDecisionComposerInput, ShadowTruthState, compose_shadow_decision,
+    SHADOW_DECISION_EVENT_SCHEMA_VERSION, SHADOW_DECISION_RECOMMENDATIONS_SCHEMA_VERSION,
+    SHADOW_DECISION_STATUS_SCHEMA_VERSION, ShadowDecision, ShadowDecisionArtifacts,
+    ShadowDecisionComposerInput, ShadowTruthState, compose_shadow_decision,
     write_shadow_decision_artifacts,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 
 const NOW_EPOCH_SECONDS: i64 = 1_778_123_000;
@@ -100,6 +107,74 @@ fn shadow_decision_composer_rejects_output_paths_outside_directory() {
     assert!(error.to_string().contains("outside output dir"));
 }
 
+#[test]
+fn shadow_decision_composer_conformance_freezes_advisory_artifact_contract() {
+    let mut cases = BTreeMap::new();
+    cases.insert(
+        "confirmed",
+        ConformanceCase {
+            events: base_events(),
+            truth_state: ShadowTruthState::Confirmed,
+            decision: ShadowDecision::Pass,
+            required_error_code: None,
+            missing_sources: vec![],
+            max_recommendations: 4,
+        },
+    );
+    cases.insert(
+        "degraded",
+        ConformanceCase {
+            events: with_source_error("agent_mail", "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"),
+            truth_state: ShadowTruthState::Degraded,
+            decision: ShadowDecision::Degraded,
+            required_error_code: Some("FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE"),
+            missing_sources: vec![],
+            max_recommendations: 4,
+        },
+    );
+    cases.insert(
+        "blocked",
+        ConformanceCase {
+            events: without_source("agent_mail"),
+            truth_state: ShadowTruthState::Blocked,
+            decision: ShadowDecision::FailClosed,
+            required_error_code: Some("FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE"),
+            missing_sources: vec!["agent_mail".to_string()],
+            max_recommendations: 4,
+        },
+    );
+    cases.insert(
+        "contaminated",
+        ConformanceCase {
+            events: with_many_degraded_inputs(),
+            truth_state: ShadowTruthState::Contaminated,
+            decision: ShadowDecision::FailClosed,
+            required_error_code: Some("FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK"),
+            missing_sources: vec![],
+            max_recommendations: 4,
+        },
+    );
+
+    for (case_id, case) in cases {
+        let output_dir = output_dir_for(case_id);
+        let mut input = input_for_case(case_id, case.events.clone(), &output_dir);
+        input.max_recommendations = case.max_recommendations;
+
+        let artifacts = compose_shadow_decision(&input).expect(case_id);
+        let expected_contract_outputs = serialized_contract_outputs(&artifacts);
+        for _ in 0..3 {
+            let repeated = compose_shadow_decision(&input).expect(case_id);
+            assert_eq!(
+                serialized_contract_outputs(&repeated),
+                expected_contract_outputs,
+                "{case_id} output must be deterministic"
+            );
+        }
+
+        assert_conformance_artifacts(case_id, &case, &input, &artifacts);
+    }
+}
+
 struct ComposerCase {
     case_id: &'static str,
     events: Vec<JournalSourceEvent>,
@@ -108,6 +183,15 @@ struct ComposerCase {
     required_action: &'static str,
     required_error_code: Option<&'static str>,
     max_recommendations: Option<usize>,
+}
+
+struct ConformanceCase {
+    events: Vec<JournalSourceEvent>,
+    truth_state: ShadowTruthState,
+    decision: ShadowDecision,
+    required_error_code: Option<&'static str>,
+    missing_sources: Vec<String>,
+    max_recommendations: usize,
 }
 
 fn composer_cases() -> Vec<ComposerCase> {
@@ -392,6 +476,12 @@ fn with_many_degraded_inputs() -> Vec<JournalSourceEvent> {
     events
 }
 
+fn without_source(source_key: &str) -> Vec<JournalSourceEvent> {
+    let mut events = base_events();
+    events.retain(|event| event.source_key.as_deref() != Some(source_key));
+    events
+}
+
 fn event_mut<'a>(
     events: &'a mut [JournalSourceEvent],
     source_key: &str,
@@ -406,6 +496,251 @@ fn has_action(recommendations: &[AdvisoryRecommendation], action_class: &str) ->
     recommendations
         .iter()
         .any(|recommendation| recommendation.action_class == action_class)
+}
+
+fn assert_conformance_artifacts(
+    case_id: &str,
+    case: &ConformanceCase,
+    input: &ShadowDecisionComposerInput,
+    artifacts: &ShadowDecisionArtifacts,
+) {
+    assert_eq!(
+        artifacts.shadow_status.schema_version,
+        SHADOW_DECISION_STATUS_SCHEMA_VERSION
+    );
+    assert_eq!(
+        artifacts.recommendations.schema_version,
+        SHADOW_DECISION_RECOMMENDATIONS_SCHEMA_VERSION
+    );
+    assert_eq!(artifacts.shadow_status.truth_state, case.truth_state);
+    assert_eq!(artifacts.recommendations.truth_state, case.truth_state);
+    assert_eq!(artifacts.shadow_status.decision, case.decision);
+    assert_eq!(artifacts.recommendations.decision, case.decision);
+    assert_eq!(
+        artifacts.shadow_status.missing_sources,
+        case.missing_sources
+    );
+    assert!(artifacts.recommendations.recommendations.len() <= input.max_recommendations);
+    assert!(artifacts.shadow_status.advisory_recommendations.len() <= input.max_recommendations);
+
+    if let Some(error_code) = case.required_error_code {
+        assert!(
+            artifacts
+                .shadow_status
+                .error_codes
+                .iter()
+                .any(|code| code == error_code),
+            "{case_id} missing status error code {error_code}"
+        );
+        assert!(
+            artifacts
+                .recommendations
+                .error_codes
+                .iter()
+                .any(|code| code == error_code),
+            "{case_id} missing recommendation error code {error_code}"
+        );
+    }
+
+    assert_advisory_only(&artifacts.shadow_status.mutation_policy);
+    assert_eq!(
+        artifacts.shadow_status.mutation_policy,
+        artifacts.recommendations.mutation_policy
+    );
+    assert_eq!(
+        artifacts.commands_txt,
+        "frankenengine_engine::shadow_decision_composer::compose_shadow_decision\n"
+    );
+    for forbidden_command in [
+        "br ", "git ", "cargo ", "rch ", "rm ", "mv ", "cp ", "curl ", "bash ", "sh ",
+    ] {
+        assert!(
+            !artifacts.commands_txt.contains(forbidden_command),
+            "{case_id} commands.txt must stay inert preview text"
+        );
+    }
+
+    assert_serialized_keys(
+        &artifacts.shadow_status,
+        &[
+            "schema_version",
+            "shadow_run_id",
+            "source_revision",
+            "generated_epoch_seconds",
+            "truth_state",
+            "decision",
+            "source_snapshot_status",
+            "source_snapshot_ids",
+            "advisory_recommendations",
+            "rejected_mutation_claims",
+            "existing_autopilot_outputs",
+            "stale_sources",
+            "missing_sources",
+            "error_codes",
+            "mutation_policy",
+            "sibling_reuse",
+            "artifact_paths",
+        ],
+    );
+    assert_serialized_keys(
+        &artifacts.recommendations,
+        &[
+            "schema_version",
+            "shadow_run_id",
+            "truth_state",
+            "decision",
+            "recommendations",
+            "mutation_policy",
+            "source_snapshot_ids",
+            "error_codes",
+            "artifact_paths",
+        ],
+    );
+    assert_serialized_keys(
+        &artifacts.shadow_status.mutation_policy,
+        &[
+            "advisory_only",
+            "proof_only",
+            "mutates_br",
+            "reassigns_beads",
+            "releases_reservations",
+            "sends_agent_mail",
+            "runs_cargo",
+            "runs_rch",
+            "mutates_git",
+            "mutates_remote_workers",
+            "changes_live_queue_policy",
+            "writes_outside_output_dir",
+        ],
+    );
+    assert_serialized_keys(
+        &artifacts.shadow_status.artifact_paths,
+        &[
+            "shadow_status_json",
+            "recommendations_json",
+            "operator_notice_md",
+            "events_jsonl",
+            "commands_txt",
+            "report_md",
+        ],
+    );
+    assert_serialized_keys(
+        &artifacts.recommendations.artifact_paths,
+        &["shadow_status_json", "recommendations_json"],
+    );
+
+    for status in artifacts.shadow_status.source_snapshot_status.values() {
+        assert_serialized_keys(
+            status,
+            &[
+                "source_key",
+                "source_id",
+                "source_kind",
+                "schema_version",
+                "content_hash",
+                "collected_epoch_seconds",
+                "freshness_window_seconds",
+                "fresh",
+                "degraded",
+                "raw_payload_ref",
+                "local_fallback_contamination",
+                "error_codes",
+            ],
+        );
+    }
+
+    for recommendation in &artifacts.recommendations.recommendations {
+        assert_serialized_keys(
+            recommendation,
+            &[
+                "recommendation_id",
+                "rank",
+                "action_class",
+                "command_text",
+                "executes_mutation",
+                "remediation_only",
+                "source_event_ids",
+                "source_hashes",
+                "source_collected_epoch_seconds",
+                "degradation_state",
+                "reason_codes",
+                "evidence_paths",
+            ],
+        );
+        assert!(!recommendation.executes_mutation);
+        assert!(recommendation.remediation_only);
+        assert!(!recommendation.command_text.trim().is_empty());
+    }
+
+    let event_lines = artifacts
+        .events_jsonl
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("event jsonl line"))
+        .collect::<Vec<_>>();
+    assert_eq!(event_lines.len(), 2);
+    assert_eq!(event_lines[0]["event_name"], "inputs_loaded");
+    assert_eq!(event_lines[1]["event_name"], "artifacts_written");
+    for event in event_lines {
+        assert_object_keys(
+            &event,
+            &[
+                "schema_version",
+                "shadow_run_id",
+                "event_name",
+                "outcome",
+                "detail",
+            ],
+        );
+        assert_eq!(
+            event["schema_version"],
+            Value::String(SHADOW_DECISION_EVENT_SCHEMA_VERSION.to_string())
+        );
+        assert_eq!(
+            event["shadow_run_id"],
+            Value::String(input.shadow_run_id.clone())
+        );
+    }
+}
+
+fn serialized_contract_outputs(
+    artifacts: &ShadowDecisionArtifacts,
+) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        (
+            "shadow_status",
+            serde_json::to_string(&artifacts.shadow_status).expect("status json"),
+        ),
+        (
+            "recommendations",
+            serde_json::to_string(&artifacts.recommendations).expect("recommendations json"),
+        ),
+        ("operator_notice_md", artifacts.operator_notice_md.clone()),
+        ("events_jsonl", artifacts.events_jsonl.clone()),
+        ("commands_txt", artifacts.commands_txt.clone()),
+        ("report_md", artifacts.report_md.clone()),
+    ])
+}
+
+fn assert_serialized_keys<T>(value: &T, expected_keys: &[&str])
+where
+    T: Serialize,
+{
+    let value = serde_json::to_value(value).expect("serializable contract value");
+    assert_object_keys(&value, expected_keys);
+}
+
+fn assert_object_keys(value: &Value, expected_keys: &[&str]) {
+    let actual_keys = value
+        .as_object()
+        .expect("contract value must be an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let expected_keys = expected_keys
+        .iter()
+        .map(|key| (*key).to_string())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_keys, expected_keys);
 }
 
 fn assert_advisory_only(policy: &MutationPolicy) {

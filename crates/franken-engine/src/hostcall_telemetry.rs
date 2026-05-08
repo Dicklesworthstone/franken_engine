@@ -168,31 +168,72 @@ pub struct HostcallTelemetryRecord {
     pub content_hash: ContentHash,
 }
 
+struct HostcallTelemetryRecordHashFields<'a> {
+    record_id: u64,
+    timestamp_ns: u64,
+    extension_id: &'a str,
+    hostcall_type: HostcallType,
+    capability_used: &'a RuntimeCapability,
+    arguments_hash: &'a ContentHash,
+    result_status: &'a HostcallResult,
+    duration_ns: u64,
+    resource_delta: ResourceDelta,
+    flow_label: &'a FlowLabel,
+    decision_id: Option<&'a str>,
+    epoch: SecurityEpoch,
+}
+
 impl HostcallTelemetryRecord {
+    fn hash_fields(&self) -> HostcallTelemetryRecordHashFields<'_> {
+        HostcallTelemetryRecordHashFields {
+            record_id: self.record_id,
+            timestamp_ns: self.timestamp_ns,
+            extension_id: &self.extension_id,
+            hostcall_type: self.hostcall_type,
+            capability_used: &self.capability_used,
+            arguments_hash: &self.arguments_hash,
+            result_status: &self.result_status,
+            duration_ns: self.duration_ns,
+            resource_delta: self.resource_delta,
+            flow_label: &self.flow_label,
+            decision_id: self.decision_id.as_deref(),
+            epoch: self.epoch,
+        }
+    }
+
+    fn content_hash_for_fields(fields: HostcallTelemetryRecordHashFields<'_>) -> ContentHash {
+        ContentHash::compute(&Self::canonical_bytes_from_fields(fields))
+    }
+
     /// Compute canonical bytes for hashing (all fields except content_hash).
-    fn canonical_bytes(&self) -> Vec<u8> {
+    fn canonical_bytes_from_fields(fields: HostcallTelemetryRecordHashFields<'_>) -> Vec<u8> {
         let mut buf = Vec::with_capacity(256);
-        append_u64(&mut buf, self.record_id);
-        append_u64(&mut buf, self.timestamp_ns);
-        append_len_prefixed(&mut buf, self.extension_id.as_bytes());
-        append_len_prefixed(&mut buf, self.hostcall_type.to_string().as_bytes());
-        append_len_prefixed(&mut buf, self.capability_used.to_string().as_bytes());
-        append_len_prefixed(&mut buf, self.arguments_hash.as_bytes());
-        append_result_status(&mut buf, &self.result_status);
-        append_u64(&mut buf, self.duration_ns);
-        buf.extend_from_slice(&self.resource_delta.memory_bytes.to_le_bytes());
-        buf.extend_from_slice(&self.resource_delta.fd_count.to_le_bytes());
-        buf.extend_from_slice(&self.resource_delta.network_bytes.to_le_bytes());
-        append_len_prefixed(&mut buf, self.flow_label.label_class.as_bytes());
-        append_len_prefixed(&mut buf, self.flow_label.clearance_class.as_bytes());
-        if let Some(ref did) = self.decision_id {
+        append_u64(&mut buf, fields.record_id);
+        append_u64(&mut buf, fields.timestamp_ns);
+        append_len_prefixed(&mut buf, fields.extension_id.as_bytes());
+        append_len_prefixed(&mut buf, fields.hostcall_type.to_string().as_bytes());
+        append_len_prefixed(&mut buf, fields.capability_used.to_string().as_bytes());
+        append_len_prefixed(&mut buf, fields.arguments_hash.as_bytes());
+        append_result_status(&mut buf, fields.result_status);
+        append_u64(&mut buf, fields.duration_ns);
+        buf.extend_from_slice(&fields.resource_delta.memory_bytes.to_le_bytes());
+        buf.extend_from_slice(&fields.resource_delta.fd_count.to_le_bytes());
+        buf.extend_from_slice(&fields.resource_delta.network_bytes.to_le_bytes());
+        append_len_prefixed(&mut buf, fields.flow_label.label_class.as_bytes());
+        append_len_prefixed(&mut buf, fields.flow_label.clearance_class.as_bytes());
+        if let Some(did) = fields.decision_id {
             buf.push(1);
             append_len_prefixed(&mut buf, did.as_bytes());
         } else {
             buf.push(0);
         }
-        append_u64(&mut buf, self.epoch.as_u64());
+        append_u64(&mut buf, fields.epoch.as_u64());
         buf
+    }
+
+    /// Compute canonical bytes for hashing (all fields except content_hash).
+    fn canonical_bytes(&self) -> Vec<u8> {
+        Self::canonical_bytes_from_fields(self.hash_fields())
     }
 
     /// Verify that content_hash matches the record's fields.
@@ -388,25 +429,49 @@ impl TelemetryRecorder {
         self.next_record_id = self.next_record_id.saturating_add(1);
         self.last_timestamp_ns = timestamp_ns;
 
-        // Build the record.
-        let mut record = HostcallTelemetryRecord {
+        let RecordInput {
+            extension_id,
+            hostcall_type,
+            capability_used,
+            arguments_hash,
+            result_status,
+            duration_ns,
+            resource_delta,
+            flow_label,
+            decision_id,
+        } = input;
+
+        let content_hash =
+            HostcallTelemetryRecord::content_hash_for_fields(HostcallTelemetryRecordHashFields {
+                record_id,
+                timestamp_ns,
+                extension_id: &extension_id,
+                hostcall_type,
+                capability_used: &capability_used,
+                arguments_hash: &arguments_hash,
+                result_status: &result_status,
+                duration_ns,
+                resource_delta,
+                flow_label: &flow_label,
+                decision_id: decision_id.as_deref(),
+                epoch: self.current_epoch,
+            });
+
+        let record = HostcallTelemetryRecord {
             record_id,
             timestamp_ns,
-            extension_id: input.extension_id,
-            hostcall_type: input.hostcall_type,
-            capability_used: input.capability_used,
-            arguments_hash: input.arguments_hash,
-            result_status: input.result_status,
-            duration_ns: input.duration_ns,
-            resource_delta: input.resource_delta,
-            flow_label: input.flow_label,
-            decision_id: input.decision_id,
+            extension_id,
+            hostcall_type,
+            capability_used,
+            arguments_hash,
+            result_status,
+            duration_ns,
+            resource_delta,
+            flow_label,
+            decision_id,
             epoch: self.current_epoch,
-            content_hash: ContentHash::compute(b"placeholder"),
+            content_hash,
         };
-
-        // Compute content hash.
-        record.content_hash = ContentHash::compute(&record.canonical_bytes());
 
         // Update rolling hash.
         if self.config.enable_rolling_hash {
@@ -977,6 +1042,20 @@ mod tests {
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .expect("serde deserialization should succeed");
         let record = &recorder.records()[0];
+        assert!(record.verify_integrity());
+    }
+
+    #[test]
+    fn record_content_hash_is_canonical_on_insert() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .expect("serde deserialization should succeed");
+        let record = &recorder.records()[0];
+        assert_eq!(
+            record.content_hash,
+            ContentHash::compute(&record.canonical_bytes())
+        );
         assert!(record.verify_integrity());
     }
 

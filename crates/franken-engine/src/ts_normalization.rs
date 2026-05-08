@@ -1917,9 +1917,8 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
             &namespace_name,
             &namespace_assignments
                 .remove(&namespace_name)
-                .ok_or_else(|| TsNormalizationError {
-                    kind: "namespace_processing".to_string(),
-                    detail: format!("namespace '{}' not found in assignments map", namespace_name),
+                .ok_or_else(|| TsNormalizationError::UnsupportedSyntax {
+                    feature: "namespace processing with missing assignment"
                 })?,
         )
         .join("\n");

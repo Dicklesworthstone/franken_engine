@@ -7,11 +7,12 @@
 //! reporting of pass/fail/skip/error rates with detailed categorization.
 //!
 //! Test262 is the official conformance test suite for JavaScript (ECMAScript).
-//! This runner executes tests through the full franken_engine pipeline:
+//! The main Test262 runner executes tests through the full franken_engine pipeline:
 //! parse -> lower -> execute, providing concrete metrics for JS compatibility.
 //!
-//! Note: The differential harness currently uses simulated execution for comparison
-//! rather than the full pipeline. See DifferentialConformanceHarness implementation.
+//! The differential harness currently uses simulated execution for cross-runtime
+//! comparison rather than the full pipeline. See DifferentialConformanceHarness
+//! implementation for details.
 
 use std::collections::BTreeMap;
 use std::fmt;

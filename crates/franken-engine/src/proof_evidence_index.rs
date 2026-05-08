@@ -1097,12 +1097,52 @@ fn dashboard_entry_order(
         .then(a.evidence_id.cmp(&b.evidence_id))
 }
 
+// Maximum JSON document size (1MB) to prevent DoS via large payloads
+const MAX_JSON_DOCUMENT_SIZE: usize = 1024 * 1024;
+
 fn parse_json_document(input: &str, document_kind: &str) -> StorageResult<Value> {
-    serde_json::from_str(input).map_err(|err| {
+    // Check size limit before parsing to prevent memory exhaustion
+    if input.len() > MAX_JSON_DOCUMENT_SIZE {
+        return Err(integrity(format!(
+            "{document_kind} exceeds maximum size limit of {} bytes (actual: {} bytes)",
+            MAX_JSON_DOCUMENT_SIZE, input.len()
+        )));
+    }
+
+    // Parse with recursion limit to prevent stack overflow
+    parse_json_with_recursion_limit(input).map_err(|err| {
         integrity(format!(
             "{document_kind} is not valid JSON and cannot be indexed: {err}"
         ))
     })
+}
+
+fn parse_json_with_recursion_limit(input: &str) -> Result<Value, serde_json::Error> {
+    // Use a simple nested depth counter to detect and reject deeply nested structures
+    let mut depth = 0;
+
+    // Quick scan for nesting depth before expensive parsing
+    for ch in input.chars() {
+        match ch {
+            '{' | '[' => {
+                depth += 1;
+                // Reject if deeper than safe threshold (128 levels)
+                if depth > 128 {
+                    use serde::de::Error;
+                    return Err(serde_json::Error::custom("JSON nesting depth exceeds maximum allowed (128 levels)"));
+                }
+            }
+            '}' | ']' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Now parse the JSON normally since we've verified safe nesting depth
+    serde_json::from_str(input)
 }
 
 fn require_schema(document: &Value, expected: &str) -> StorageResult<()> {

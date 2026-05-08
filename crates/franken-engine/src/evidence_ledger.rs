@@ -1057,18 +1057,51 @@ pub struct StitchingArtifactContext {
 }
 
 impl StitchingArtifactContext {
+    /// Creates a new stitching context with deterministic defaults.
+    /// For CLI usage with observational timestamps, use `with_timestamps()` instead.
     pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            artifact_dir: artifact_dir.into(),
-            run_id: format!(
-                "run-{}-{}",
+        Self::with_timestamps(
+            artifact_dir,
+            None, // Use deterministic run_id
+            None, // Use deterministic generated_at_utc
+        )
+    }
+
+    /// Creates a new stitching context with explicit timestamps.
+    /// Use this from CLI wrappers when wall-clock stamping is needed for observational purposes.
+    /// For deterministic replay/evidence, use `new()` instead.
+    pub fn with_timestamps(
+        artifact_dir: impl Into<PathBuf>,
+        run_id: Option<String>,
+        generated_at_utc: Option<String>,
+    ) -> Self {
+        let artifact_path = artifact_dir.into();
+
+        // Generate deterministic run_id if not provided
+        let final_run_id = run_id.unwrap_or_else(|| {
+            // Use artifact directory path for deterministic ID generation
+            let path_hash = ContentHash::compute(artifact_path.as_os_str().as_encoded_bytes());
+            let path_hash_hex = path_hash.to_hex();
+            format!(
+                "run-{}-deterministic-{}",
                 EVIDENCE_LEDGER_STITCHING_COMPONENT,
-                Utc::now().format("%Y%m%dT%H%M%SZ")
-            ),
+                &path_hash_hex[..16] // First 16 hex chars (8 bytes) for shorter ID
+            )
+        });
+
+        // Generate deterministic timestamp if not provided
+        let final_generated_at_utc = generated_at_utc.unwrap_or_else(|| {
+            // Use deterministic timestamp for SecurityEpoch::GENESIS
+            "2024-01-01T00:00:00Z".to_string()
+        });
+
+        Self {
+            artifact_dir: artifact_path,
+            run_id: final_run_id,
             trace_id: "trace.rgc.811b".to_string(),
             decision_id: "decision.rgc.811b".to_string(),
             policy_id: "policy.rgc.811b".to_string(),
-            generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            generated_at_utc: final_generated_at_utc,
             source_commit: "unknown".to_string(),
             toolchain: std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string()),
             command_invocation: "cargo run -p frankenengine-engine --bin franken_evidence_ledger_stitching -- --artifact-dir <path>".to_string(),

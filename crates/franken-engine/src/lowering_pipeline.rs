@@ -7843,21 +7843,12 @@ fn lower_literal_to_ir3_optimized(
     }
 }
 
-fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
-    if let Some(index) = pool.iter().position(|entry| entry == value) {
-        return u32::try_from(index).unwrap_or(u32::MAX);
-    }
-
-    pool.push(value.to_string());
-    u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
-}
-
 fn push_constant_optimized(constant_pool: &mut ConstantPool, value: &str) -> u32 {
     constant_pool.push(value)
 }
 
-/// Legacy 2-parameter version of push_constant with internal index optimization.
-/// This avoids the quadratic behavior by maintaining an internal BTreeMap.
+/// 2-parameter version of push_constant with internal index optimization.
+/// Avoids quadratic behavior by maintaining a thread-local BTreeMap index.
 fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
     use std::collections::BTreeMap;
     use std::sync::Mutex;

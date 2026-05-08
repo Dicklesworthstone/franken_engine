@@ -890,9 +890,9 @@ fn ecosystem_compatibility_report_hash_consistency() {
     report.finalize().unwrap();
 
     // Compute hash multiple times and ensure consistency
-    let hash1 = report.compute_hash();
-    let hash2 = report.compute_hash();
-    let hash3 = report.compute_hash();
+    let hash1 = report.compute_hash().unwrap();
+    let hash2 = report.compute_hash().unwrap();
+    let hash3 = report.compute_hash().unwrap();
 
     assert_eq!(hash1, hash2);
     assert_eq!(hash2, hash3);

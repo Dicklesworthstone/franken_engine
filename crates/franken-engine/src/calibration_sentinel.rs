@@ -1401,8 +1401,12 @@ mod tests {
         let cell1 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
         let cell2 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
         assert_eq!(
-            cell1.compute_hash().expect("calibration cell hash should not fail"),
-            cell2.compute_hash().expect("calibration cell hash should not fail")
+            cell1
+                .compute_hash()
+                .expect("calibration cell hash should not fail"),
+            cell2
+                .compute_hash()
+                .expect("calibration cell hash should not fail")
         );
     }
 
@@ -1826,8 +1830,10 @@ mod tests {
         let c1 = build_cell("same", "domain_a", vec![s1], PromotionRule::FailClosed);
         let c2 = build_cell("same", "domain_b", vec![s2], PromotionRule::FailClosed);
         assert_ne!(
-            c1.compute_hash().expect("calibration cell hash should not fail"),
-            c2.compute_hash().expect("calibration cell hash should not fail")
+            c1.compute_hash()
+                .expect("calibration cell hash should not fail"),
+            c2.compute_hash()
+                .expect("calibration cell hash should not fail")
         );
     }
 

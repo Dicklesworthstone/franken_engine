@@ -719,12 +719,8 @@ impl GovernanceEvaluator {
             let categories: BTreeSet<GovernanceVerdict> =
                 violations.iter().map(|v| v.category).collect();
             if categories.len() == 1 {
-                // SAFETY: Just checked categories.len() == 1, so iterator is guaranteed to have exactly one element.
-                // next() unwrap is safe since the collection is non-empty.
-                *categories
-                    .iter()
-                    .next()
-                    .expect("serde deserialization should succeed")
+                // Safe to unwrap since we just verified categories.len() == 1
+                *categories.iter().next().unwrap_or(&GovernanceVerdict::MultipleViolations)
             } else {
                 GovernanceVerdict::MultipleViolations
             }

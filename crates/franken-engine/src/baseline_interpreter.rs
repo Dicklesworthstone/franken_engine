@@ -36,7 +36,7 @@
 )]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1321,7 +1321,7 @@ impl EvidenceLog {
         // SAFETY: We just pushed a receipt above, so receipts is non-empty and last() cannot return None
         self.receipts
             .last()
-            .expect("serde deserialization should succeed")
+            .expect("receipt chain should have at least one entry after push")
     }
 
     /// Verify the integrity of the entire receipt chain.
@@ -1431,7 +1431,7 @@ impl EvidenceLog {
     /// Compute HMAC-SHA256 of a message.
     fn compute_hmac(&self, message: &str) -> String {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key)
-            .expect("HMAC-SHA256 accepts fixed-size evidence signing keys");
+            .unwrap_or_else(|_| panic!("32-byte signing key should always be valid for HMAC-SHA256"));
         mac.update(message.as_bytes());
         format!("hmac-sha256-{}", hex::encode(mac.finalize().into_bytes()))
     }
@@ -2039,7 +2039,7 @@ struct LoopIterationCounters {
 #[derive(Debug, Clone)]
 enum LoopIterationCounterStorage {
     Inline(Vec<(usize, u64)>),
-    Hashed(HashMap<usize, u64>),
+    Hashed(BTreeMap<usize, u64>),
 }
 
 impl Default for LoopIterationCounters {
@@ -2067,7 +2067,7 @@ impl LoopIterationCounters {
                     return 1;
                 }
 
-                let mut promoted = HashMap::with_capacity(entries.len() + 1);
+                let mut promoted = BTreeMap::new();
                 for (index, count) in entries.drain(..) {
                     promoted.insert(index, count);
                 }

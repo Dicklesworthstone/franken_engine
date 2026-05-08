@@ -463,6 +463,34 @@ impl SafetyMembrane {
             );
         }
 
+        // 2b. Optional per-entry MAC verification. When configured, every
+        // entry must carry a valid MAC bound to the session key, epoch,
+        // sequence, content hash, and trace id.
+        if config.require_per_entry_mac {
+            for entry in &batch.entries {
+                let expected_entry_mac = compute_entry_mac(session_key, entry, batch.epoch);
+                match entry.entry_mac {
+                    Some(actual) if actual == expected_entry_mac => {}
+                    Some(_) => {
+                        return self.record_rejection(
+                            batch,
+                            MembraneRejectionReason::MacVerificationFailed,
+                            format!("entry {} MAC mismatch", entry.sequence),
+                            tick,
+                        );
+                    }
+                    None => {
+                        return self.record_rejection(
+                            batch,
+                            MembraneRejectionReason::MacVerificationFailed,
+                            format!("entry {} missing required MAC", entry.sequence),
+                            tick,
+                        );
+                    }
+                }
+            }
+        }
+
         // 3. Batch size check
         if batch.entries.is_empty() {
             return self.record_rejection(
@@ -900,6 +928,22 @@ pub fn compute_entry_content_hash(
     finish_content_hash(hasher)
 }
 
+/// Compute the per-entry MAC for authenticated entry transport.
+pub fn compute_entry_mac(
+    session_key: &[u8; 32],
+    entry: &BatchEntry,
+    epoch: SecurityEpoch,
+) -> AuthenticityHash {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(session_key)
+        .expect("HMAC-SHA256 accepts 32-byte session keys");
+    mac.update(b"franken::batch_transport::entry_mac::");
+    mac.update(&epoch.as_u64().to_le_bytes());
+    mac.update(&entry.sequence.to_le_bytes());
+    mac.update(entry.content_hash.as_bytes());
+    mac.update(entry.trace_id.as_bytes());
+    finish_authenticity_hash(mac)
+}
+
 /// Compute the batch-level MAC over all entries.
 pub fn compute_batch_mac(
     session_key: &[u8; 32],
@@ -1071,7 +1115,7 @@ impl BatchTransportState {
     /// Build a batch from entries, computing MAC and assigning batch_id.
     pub fn build_batch(
         &mut self,
-        entries: Vec<BatchEntry>,
+        mut entries: Vec<BatchEntry>,
         session_key: &[u8; 32],
         epoch: SecurityEpoch,
         tick: u64,
@@ -1130,6 +1174,12 @@ impl BatchTransportState {
 
         let batch_id = self.next_batch_id;
         self.next_batch_id = self.next_batch_id.saturating_add(1);
+
+        if self.config.require_per_entry_mac {
+            for entry in &mut entries {
+                entry.entry_mac = Some(compute_entry_mac(session_key, entry, epoch));
+            }
+        }
 
         let batch_mac = compute_batch_mac(session_key, batch_id, &entries, epoch);
         let credits_consumed = entries.len() as u64;
@@ -2046,6 +2096,30 @@ mod tests {
     }
 
     #[test]
+    fn entry_mac_deterministic_and_key_sensitive() {
+        let entry = make_entry(1, b"test");
+        let m1 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch());
+        let m2 = compute_entry_mac(&[0xAA; 32], &entry, test_epoch());
+        let m3 = compute_entry_mac(&[0xBB; 32], &entry, test_epoch());
+        assert_eq!(m1, m2);
+        assert_ne!(m1, m3);
+    }
+
+    #[test]
+    fn batch_build_populates_required_entry_macs() {
+        let config = BatchTransportConfig {
+            require_per_entry_mac: true,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
+        let batch = ts
+            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .expect("serde serialization should succeed");
+        let expected = compute_entry_mac(&session_key(), &batch.entries[0], test_epoch());
+        assert_eq!(batch.entries[0].entry_mac, Some(expected));
+    }
+
+    #[test]
     fn entry_content_hash_deterministic() {
         let p = BatchPayload::Inline(b"data".to_vec());
         let h1 = compute_entry_content_hash(1, &p, "t");
@@ -2187,6 +2261,54 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn submit_batch_rejects_missing_required_entry_mac() {
+        let config = BatchTransportConfig {
+            require_per_entry_mac: true,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
+        let mut protocol = established_protocol();
+        let mut batch = ts
+            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .expect("serde serialization should succeed");
+        batch.entries[0].entry_mac = None;
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::MacVerificationFailed,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
+    }
+
+    #[test]
+    fn submit_batch_rejects_invalid_required_entry_mac() {
+        let config = BatchTransportConfig {
+            require_per_entry_mac: true,
+            ..Default::default()
+        };
+        let mut ts = BatchTransportState::new("test-sess".into(), config, test_epoch());
+        let mut protocol = established_protocol();
+        let mut batch = ts
+            .build_batch(vec![make_entry(1, b"data")], &session_key(), test_epoch(), 100)
+            .expect("serde serialization should succeed");
+        batch.entries[0].entry_mac = Some(compute_entry_mac(&[0xCD; 32], &batch.entries[0], test_epoch()));
+
+        let err = ts.submit_batch(batch, &mut protocol, &session_key(), 100);
+        assert!(matches!(
+            err,
+            Err(BatchTransportError::MembraneRejection {
+                reason: MembraneRejectionReason::MacVerificationFailed,
+                ..
+            })
+        ));
+        assert_eq!(protocol.replay_ledger.total_accepted(), 0);
     }
 
     #[test]

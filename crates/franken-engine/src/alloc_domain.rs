@@ -336,37 +336,37 @@ impl DomainRegistry {
     /// Create a standard runtime domain set with configurable budgets.
     pub fn with_standard_domains(extension_heap_bytes: u64) -> Self {
         let mut reg = Self::new();
-        // These are safe to unwrap because we know there are no duplicates.
+        // Standard domains should never conflict - fail loudly if they do
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             extension_heap_bytes,
         )
-        .ok();
+        .expect("ExtensionHeap domain should register successfully");
         reg.register(
             AllocationDomain::RuntimeHeap,
             LifetimeClass::Global,
             u64::MAX, // runtime heap is bounded externally
         )
-        .ok();
+        .expect("RuntimeHeap domain should register successfully");
         reg.register(
             AllocationDomain::IrArena,
             LifetimeClass::Arena,
             512 * 1024 * 1024, // 512 MB default for IR arena
         )
-        .ok();
+        .expect("IrArena domain should register successfully");
         reg.register(
             AllocationDomain::EvidenceArena,
             LifetimeClass::SessionScoped,
             128 * 1024 * 1024, // 128 MB default for evidence
         )
-        .ok();
+        .expect("EvidenceArena domain should register successfully");
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
             64 * 1024 * 1024, // 64 MB default for scratch
         )
-        .ok();
+        .expect("ScratchBuffer domain should register successfully");
         reg
     }
 }

@@ -209,7 +209,8 @@ collect_live_json() {
       br list --status=blocked --json | jq -cS . >"$output_path"
       ;;
     bv_robot_plan_json)
-      if bv --recipe actionable --robot-plan --json >"${output_path}.raw" 2>/dev/null; then
+      # Use filtered bv output to exclude blocked/in-progress beads per bd-5oef0
+      if "$root_dir/scripts/bv_actionable_filter.sh" --json >"${output_path}.raw" 2>/dev/null; then
         jq -cS . "${output_path}.raw" >"$output_path"
       elif bv --recipe actionable --robot-plan >"${output_path}.raw" 2>/dev/null && jq empty "${output_path}.raw" >/dev/null 2>&1; then
         jq -cS . "${output_path}.raw" >"$output_path"

@@ -1,0 +1,121 @@
+{
+  "schema_version": "franken-engine.swarm-benchmark-runbook-truth-contract.v1",
+  "bead_id": "bd-k2prt",
+  "parent_bead_id": "bd-2n9",
+  "track": "SWARM-BENCH-I-F",
+  "contract_purpose": "Compose swarm benchmark workload catalog, bundle normalizer, responsiveness scorer, and operator-status handoff into no-mock drill and runbook truth gate",
+  "docs": {
+    "runbook": "docs/SWARM_BENCH_OPERATOR_RUNBOOK.md",
+    "contract": "docs/swarm_benchmark_runbook_truth_contract_v1.json"
+  },
+  "required_drill_deliverables": [
+    "scripts/e2e/swarm_benchmark_no_mock_drill.sh",
+    "scripts/e2e/swarm_benchmark_runbook_truth_gate.sh",
+    "docs/SWARM_BENCH_OPERATOR_RUNBOOK.md",
+    "docs/swarm_benchmark_runbook_truth_contract_v1.json"
+  ],
+  "drill_cases": [
+    {
+      "case_id": "healthy_observed_benchmark",
+      "purpose": "Healthy observed benchmark suggests warm-cache or throughput-optimized action",
+      "producer_scripts": [
+        "scripts/swarm_benchmark_workload_catalog_normalizer.sh",
+        "scripts/swarm_benchmark_bundle_replay_normalizer.sh",
+        "scripts/swarm_benchmark_responsiveness_scorer.sh",
+        "scripts/swarm_operator_status_report.sh"
+      ],
+      "expected_routing": "warm_cache_or_throughput_optimized_action",
+      "required_artifacts": [
+        "swarm_benchmark_responsiveness_advisory.json",
+        "swarm_operator_status_report.json"
+      ]
+    },
+    {
+      "case_id": "blocked_frankenengine_measurement",
+      "purpose": "Blocked FrankenEngine measurement routes to prerequisite guidance",
+      "producer_scripts": [
+        "scripts/swarm_benchmark_workload_catalog_normalizer.sh",
+        "scripts/swarm_benchmark_responsiveness_scorer.sh"
+      ],
+      "expected_routing": "prerequisite_guidance",
+      "required_artifacts": [
+        "blocked_measurement_guidance.json"
+      ]
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "purpose": "Local-fallback contaminated results fail closed",
+      "producer_scripts": [
+        "scripts/swarm_benchmark_bundle_replay_normalizer.sh",
+        "scripts/swarm_benchmark_responsiveness_scorer.sh"
+      ],
+      "expected_routing": "fail_closed",
+      "required_artifacts": [
+        "contamination_failure_receipt.json"
+      ]
+    },
+    {
+      "case_id": "resource_saturation",
+      "purpose": "Resource saturation routes to resource-envelope/fair-share follow-up",
+      "producer_scripts": [
+        "scripts/swarm_benchmark_responsiveness_scorer.sh",
+        "scripts/swarm_operator_status_report.sh"
+      ],
+      "expected_routing": "resource_envelope_fair_share_followup",
+      "required_artifacts": [
+        "resource_saturation_advisory.json"
+      ]
+    },
+    {
+      "case_id": "stale_baseline_evidence",
+      "purpose": "Stale baseline evidence degrades without inventing throughput",
+      "producer_scripts": [
+        "scripts/swarm_benchmark_workload_catalog_normalizer.sh",
+        "scripts/swarm_benchmark_responsiveness_scorer.sh"
+      ],
+      "expected_routing": "degraded",
+      "required_artifacts": [
+        "stale_evidence_degradation.json"
+      ]
+    }
+  ],
+  "truth_gate_rejections": [
+    "benchmark_surfaces_execute_cargo",
+    "benchmark_surfaces_execute_rch",
+    "benchmark_surfaces_mutate_beads",
+    "benchmark_surfaces_mutate_reservations",
+    "benchmark_surfaces_change_queue_policy",
+    "benchmark_surfaces_replace_operator_status"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reassigns_beads": false,
+    "closes_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "replaces_operator_status_report": false
+  },
+  "validation_commands": [
+    "jq empty docs/swarm_benchmark_runbook_truth_contract_v1.json",
+    "bash -n scripts/e2e/swarm_benchmark_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_benchmark_runbook_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_benchmark_no_mock_drill.sh",
+    "shellcheck -x scripts/e2e/swarm_benchmark_runbook_truth_gate.sh",
+    "./scripts/e2e/swarm_benchmark_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_benchmark_runbook_truth_gate.sh check",
+    "./scripts/e2e/swarm_benchmark_no_mock_drill.sh selftest",
+    "./scripts/e2e/swarm_benchmark_runbook_truth_gate.sh selftest",
+    "br dep cycles",
+    "git diff --check"
+  ]
+}

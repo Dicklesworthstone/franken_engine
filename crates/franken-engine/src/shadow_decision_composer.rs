@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt, fs,
-    path::Path,
+    path::{Component, Path},
 };
 
 use serde::{Deserialize, Serialize};
@@ -1212,6 +1212,8 @@ fn ensure_artifact_paths_under(
     output_dir: &Path,
     paths: &ArtifactPaths,
 ) -> Result<(), ShadowDecisionError> {
+    reject_parent_dir_component("output dir", output_dir)?;
+    let output_dir_is_absolute = output_dir.is_absolute();
     let artifact_paths = [
         &paths.shadow_status_json,
         &paths.recommendations_json,
@@ -1222,13 +1224,27 @@ fn ensure_artifact_paths_under(
     ];
     for artifact_path in artifact_paths {
         let artifact_path = Path::new(artifact_path);
-        if !artifact_path.starts_with(output_dir) {
+        reject_parent_dir_component("artifact path", artifact_path)?;
+        if artifact_path.is_absolute() != output_dir_is_absolute || !artifact_path.starts_with(output_dir) {
             return Err(ShadowDecisionError::InvalidInput(format!(
                 "artifact path `{}` is outside output dir `{}`",
                 artifact_path.display(),
                 output_dir.display()
             )));
         }
+    }
+    Ok(())
+}
+
+fn reject_parent_dir_component(label: &str, path: &Path) -> Result<(), ShadowDecisionError> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ShadowDecisionError::InvalidInput(format!(
+            "{label} `{}` must not contain parent-directory traversal",
+            path.display()
+        )));
     }
     Ok(())
 }
@@ -1244,4 +1260,33 @@ where
 fn dedupe_sorted(values: &mut Vec<String>) {
     values.sort();
     values.dedup();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn artifact_path_guard_accepts_canonical_paths_under_output_dir() {
+        let output_dir = Path::new("/tmp/franken-shadow-output");
+        let paths = ArtifactPaths::for_output_dir(output_dir);
+
+        ensure_artifact_paths_under(output_dir, &paths)
+            .expect("canonical artifact paths under output dir should be accepted");
+    }
+
+    #[test]
+    fn artifact_path_guard_rejects_parent_dir_escape() {
+        let output_dir = Path::new("/tmp/franken-shadow-output");
+        let mut paths = ArtifactPaths::for_output_dir(output_dir);
+        paths.shadow_status_json =
+            "/tmp/franken-shadow-output/../escape/shadow_status.json".to_string();
+
+        let err = ensure_artifact_paths_under(output_dir, &paths)
+            .expect_err("parent traversal must not pass the output-dir guard");
+        assert!(
+            err.to_string().contains("parent-directory traversal"),
+            "unexpected error: {err}"
+        );
+    }
 }

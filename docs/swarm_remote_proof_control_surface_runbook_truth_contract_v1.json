@@ -1,0 +1,156 @@
+{
+  "schema_version": "franken-engine.swarm-remote-proof-control-surface-runbook-truth-contract.v1",
+  "bead_id": "bd-in9cl",
+  "parent_bead_id": "bd-az4j0",
+  "track": "SWARM-CTRL-XVIII-E",
+  "contract_purpose": "Compose expanded catalog, router, drift gate, and operator-status handoff into no-mock drill for remote-proof/proof-economy control surfaces",
+  "docs": {
+    "runbook": "docs/SWARM_REMOTE_PROOF_CONTROL_SURFACE_OPERATOR_RUNBOOK.md",
+    "contract": "docs/swarm_remote_proof_control_surface_runbook_truth_contract_v1.json"
+  },
+  "required_drill_deliverables": [
+    "scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh",
+    "scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh",
+    "docs/SWARM_REMOTE_PROOF_CONTROL_SURFACE_OPERATOR_RUNBOOK.md",
+    "docs/swarm_remote_proof_control_surface_runbook_truth_contract_v1.json"
+  ],
+  "drill_cases": [
+    {
+      "case_id": "resident_remote_proof",
+      "purpose": "Remote proof residency and artifact retrieval optimization",
+      "producer_scripts": [
+        "scripts/swarm_control_surface_catalog_normalizer.sh",
+        "scripts/swarm_control_surface_intent_router.sh"
+      ],
+      "expected_routing": "remote_proof_artifact_retrieval",
+      "required_artifacts": [
+        "routing_decision.json",
+        "catalog_normalizer.log",
+        "intent_router.log"
+      ]
+    },
+    {
+      "case_id": "proof_economy_replay",
+      "purpose": "Proof-economy policy evaluator and replay trace surfaces",
+      "producer_scripts": [
+        "scripts/proof_economy_policy_evaluator.sh",
+        "scripts/proof_economy_replay_trace_normalizer.sh"
+      ],
+      "expected_routing": "proof_economy_policy_evaluation",
+      "required_artifacts": [
+        "routing_decision.json",
+        "policy_evaluator.log",
+        "replay_trace.log"
+      ]
+    },
+    {
+      "case_id": "warm_target_roi",
+      "purpose": "Warm-target ROI and sticky worker lease optimization",
+      "producer_scripts": [
+        "scripts/swarm_warm_target_prefetch_roi_advisory.sh",
+        "scripts/sticky_worker_warm_target_lease_planner.sh"
+      ],
+      "expected_routing": "warm_target_roi_optimization",
+      "required_artifacts": [
+        "routing_decision.json",
+        "warm_target_roi.log",
+        "sticky_worker.log"
+      ]
+    },
+    {
+      "case_id": "build_storm_qos",
+      "purpose": "Build-storm QoS batching and worker capability normalization",
+      "producer_scripts": [
+        "scripts/build_storm_qos_batch_planner.sh",
+        "scripts/swarm_worker_capability_toolchain_normalizer.sh"
+      ],
+      "expected_routing": "build_storm_qos_batching",
+      "required_artifacts": [
+        "routing_decision.json",
+        "build_storm_qos.log",
+        "worker_capability.log"
+      ]
+    },
+    {
+      "case_id": "uncataloged_script_fail_closed",
+      "purpose": "Drift gate fail-closed behavior on uncataloged remote-proof scripts",
+      "producer_scripts": [
+        "scripts/swarm_control_surface_drift_gate.sh"
+      ],
+      "expected_routing": "fail_closed",
+      "required_artifacts": [
+        "routing_decision.json",
+        "drift_gate.log"
+      ]
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "purpose": "Local-fallback contamination detection and fail-closed response",
+      "producer_scripts": [
+        "scripts/swarm_control_surface_catalog_normalizer.sh",
+        "scripts/swarm_control_surface_drift_gate.sh"
+      ],
+      "expected_routing": "fail_closed",
+      "required_artifacts": [
+        "routing_decision.json",
+        "catalog_normalizer.log",
+        "drift_gate.log"
+      ]
+    }
+  ],
+  "truth_gate_rejections": [
+    "drill_mutates_br",
+    "drill_queries_sends_agent_mail",
+    "drill_releases_reservations",
+    "drill_runs_cargo_rch_directly",
+    "drill_mutates_remote_workers",
+    "drill_changes_queue_policy",
+    "drill_replaces_operator_status"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reassigns_beads": false,
+    "closes_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "queries_live_agent_mail": false,
+    "mutates_git": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "replaces_operator_status_report": false
+  },
+  "remote_proof_surface_family": [
+    "resident_remote_proof_bundle",
+    "remote_proof_archive_exporter",
+    "remote_proof_compaction_planner",
+    "remote_proof_gc_guard",
+    "remote_proof_salvage_receipt",
+    "proof_economy_policy_evaluator",
+    "proof_economy_replay_trace_normalizer",
+    "proof_economy_counterfactual_replay_runner",
+    "proof_economy_operator_what_if_report",
+    "swarm_warm_target_prefetch_roi_advisory",
+    "sticky_worker_warm_target_lease_planner",
+    "warm_target_roi_eviction_ledger",
+    "build_storm_qos_batch_planner",
+    "swarm_worker_capability_toolchain_normalizer"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_remote_proof_control_surface_runbook_truth_contract_v1.json",
+    "bash -n scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh",
+    "shellcheck -x scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh",
+    "shellcheck -x scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh",
+    "./scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh check",
+    "./scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh check",
+    "./scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh selftest",
+    "./scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh selftest",
+    "git diff --check"
+  ]
+}

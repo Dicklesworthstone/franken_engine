@@ -15,7 +15,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::typed_persistence_models::{
-    TypedFrankenSqliteSession, open_typed_frankensqlite_memory_session,
+    IfcProvenanceEntry, ReplacementLineageEntry, ShadowEvidenceJournalEntry,
+    SpecializationIndexEntry, TypedFrankenSqliteSession, TypedStoreRecord,
+    open_typed_frankensqlite_memory_session,
 };
 
 /// Current schema version for storage-adapter contracts.
@@ -154,6 +156,7 @@ fn typed_heavy_key_is_recognized(store: StoreKind, key: &str) -> bool {
 fn typed_heavy_put_is_current_typed_envelope(
     store: StoreKind,
     key: &str,
+    value: &[u8],
     metadata: &BTreeMap<String, String>,
 ) -> bool {
     let Some(expected_model) = typed_heavy_expected_model(store) else {
@@ -180,6 +183,36 @@ fn typed_heavy_put_is_current_typed_envelope(
             .get(TYPED_STORE_KIND_KEY)
             .is_some_and(|store_kind| store_kind == store.as_str())
         && metadata_record_id == Some(key_record_id)
+        && typed_heavy_payload_matches_typed_model(store, key, value, metadata)
+}
+
+fn typed_heavy_payload_matches_typed_model(
+    store: StoreKind,
+    key: &str,
+    value: &[u8],
+    metadata: &BTreeMap<String, String>,
+) -> bool {
+    let record = StoreRecord {
+        store,
+        key: key.to_string(),
+        value: value.to_vec(),
+        metadata: metadata.clone(),
+        revision: 0,
+    };
+
+    match store {
+        StoreKind::ShadowEvidenceJournal => {
+            ShadowEvidenceJournalEntry::from_store_record(&record).is_ok()
+        }
+        StoreKind::ReplacementLineage => {
+            ReplacementLineageEntry::from_store_record(&record).is_ok()
+        }
+        StoreKind::IfcProvenance => IfcProvenanceEntry::from_store_record(&record).is_ok(),
+        StoreKind::SpecializationIndex => {
+            SpecializationIndexEntry::from_store_record(&record).is_ok()
+        }
+        _ => false,
+    }
 }
 
 fn typed_heavy_put_is_explicit_legacy_compat(
@@ -219,12 +252,13 @@ fn typed_heavy_read_policy_error(
 fn enforce_typed_heavy_put_policy(
     store: StoreKind,
     key: &str,
+    value: &[u8],
     metadata: &BTreeMap<String, String>,
 ) -> Result<(), StorageError> {
     if !is_typed_heavy_store(store) {
         return Ok(());
     }
-    if typed_heavy_put_is_current_typed_envelope(store, key, metadata)
+    if typed_heavy_put_is_current_typed_envelope(store, key, value, metadata)
         || typed_heavy_put_is_explicit_legacy_compat(store, key, metadata)
     {
         return Ok(());
@@ -703,7 +737,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
                 });
             }
             Self::validate_key(&key)?;
-            enforce_typed_heavy_put_policy(store, &key, &metadata)?;
+            enforce_typed_heavy_put_policy(store, &key, &value, &metadata)?;
             Ok(self
                 .get_or_insert_state(store)
                 .put(store, key, value, metadata))
@@ -842,7 +876,7 @@ impl StorageAdapter for InMemoryStorageAdapter {
             let mut out = Vec::with_capacity(entries.len());
             for entry in entries {
                 Self::validate_key(&entry.key)?;
-                enforce_typed_heavy_put_policy(store, &entry.key, &entry.metadata)?;
+                enforce_typed_heavy_put_policy(store, &entry.key, &entry.value, &entry.metadata)?;
                 out.push(staged.put(store, entry.key, entry.value, entry.metadata));
             }
             self.stores.insert(store, staged);
@@ -1089,7 +1123,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<StoreRecord, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(&key)?;
-            enforce_typed_heavy_put_policy(store, &key, &metadata)?;
+            enforce_typed_heavy_put_policy(store, &key, &value, &metadata)?;
             self.backend
                 .put_record(store, &key, &value, &metadata)
                 .map_err(Self::map_backend_error)
@@ -1203,7 +1237,7 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
         let result = (|| {
             for entry in &entries {
                 InMemoryStorageAdapter::validate_key(&entry.key)?;
-                enforce_typed_heavy_put_policy(store, &entry.key, &entry.metadata)?;
+                enforce_typed_heavy_put_policy(store, &entry.key, &entry.value, &entry.metadata)?;
             }
             self.backend
                 .put_batch(store, &entries)
@@ -2114,8 +2148,8 @@ mod tests {
     #[test]
     fn frankensqlite_crud_operations() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let context = ctx();
 
         let record = adapter
@@ -2153,8 +2187,8 @@ mod tests {
     #[test]
     fn frankensqlite_query_limit_zero_errors() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let query = StoreQuery {
             limit: Some(0),
             ..Default::default()
@@ -2171,8 +2205,8 @@ mod tests {
             fail_put: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let _ = adapter.put(
             StoreKind::ReplayIndex,
             "k".into(),
@@ -2194,8 +2228,8 @@ mod tests {
             fail_get: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter
             .get(StoreKind::ReplayIndex, "k", &ctx())
             .unwrap_err();
@@ -2208,8 +2242,8 @@ mod tests {
             fail_query: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter
             .query(StoreKind::ReplayIndex, &StoreQuery::default(), &ctx())
             .unwrap_err();
@@ -2222,8 +2256,8 @@ mod tests {
             fail_delete: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter
             .delete(StoreKind::ReplayIndex, "k", &ctx())
             .unwrap_err();
@@ -2236,8 +2270,8 @@ mod tests {
             fail_batch: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let entries = vec![BatchPutEntry {
             key: "k".into(),
             value: vec![1],
@@ -2252,8 +2286,8 @@ mod tests {
     #[test]
     fn frankensqlite_migrate_downgrade_rejected() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
             .expect("serde serialization should succeed");
@@ -2264,8 +2298,8 @@ mod tests {
     #[test]
     fn frankensqlite_migrate_skip_rejected() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 5).unwrap_err();
         assert!(matches!(err, StorageError::MigrationFailed { .. }));
     }
@@ -2276,8 +2310,8 @@ mod tests {
             fail_migrate: true,
             ..Default::default()
         };
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter.migrate_to(STORAGE_SCHEMA_VERSION + 1).unwrap_err();
         assert!(matches!(err, StorageError::BackendUnavailable { .. }));
     }
@@ -2285,8 +2319,8 @@ mod tests {
     #[test]
     fn frankensqlite_ensure_schema_version() {
         let backend = MockFrankenSqlite::default();
-        let adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         assert!(
             adapter
                 .ensure_schema_version(STORAGE_SCHEMA_VERSION)
@@ -2299,16 +2333,16 @@ mod tests {
     #[test]
     fn frankensqlite_backend_name() {
         let backend = MockFrankenSqlite::default();
-        let adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         assert_eq!(adapter.backend_name(), "frankensqlite");
     }
 
     #[test]
     fn frankensqlite_batch_put_success() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let entries = vec![
             BatchPutEntry {
                 key: "a".into(),
@@ -2330,8 +2364,8 @@ mod tests {
     #[test]
     fn frankensqlite_invalid_key_on_put() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let err = adapter
             .put(
                 StoreKind::ReplayIndex,
@@ -2347,8 +2381,8 @@ mod tests {
     #[test]
     fn frankensqlite_invalid_key_on_batch() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let entries = vec![
             BatchPutEntry {
                 key: "ok".into(),
@@ -2971,8 +3005,8 @@ mod tests {
     #[test]
     fn frankensqlite_migrate_success_receipt() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         let receipt = adapter
             .migrate_to(STORAGE_SCHEMA_VERSION + 1)
             .expect("serde serialization should succeed");
@@ -2985,8 +3019,8 @@ mod tests {
     #[test]
     fn frankensqlite_events_accessor() {
         let backend = MockFrankenSqlite::default();
-        let mut adapter = FrankensqliteStorageAdapter::new(backend)
-            .expect("serde serialization should succeed");
+        let mut adapter =
+            FrankensqliteStorageAdapter::new(backend).expect("serde serialization should succeed");
         assert!(adapter.events().is_empty());
         adapter
             .put(
@@ -3268,7 +3302,7 @@ mod tests {
         assert!(adapter.typed_session_mut().is_some());
     }
 
-    fn typed_replacement_metadata() -> BTreeMap<String, String> {
+    fn typed_replacement_metadata_for_id(typed_record_id: i64) -> BTreeMap<String, String> {
         BTreeMap::from([
             (
                 TYPED_RECORD_FORMAT_KEY.to_string(),
@@ -3282,8 +3316,27 @@ mod tests {
                 TYPED_STORE_KIND_KEY.to_string(),
                 StoreKind::ReplacementLineage.as_str().to_string(),
             ),
-            (TYPED_RECORD_ID_KEY.to_string(), "7".to_string()),
+            (TYPED_RECORD_ID_KEY.to_string(), typed_record_id.to_string()),
         ])
+    }
+
+    fn typed_replacement_metadata() -> BTreeMap<String, String> {
+        typed_replacement_metadata_for_id(7)
+    }
+
+    fn typed_replacement_payload(sequence_id: i64) -> Vec<u8> {
+        serde_json::to_vec(&ReplacementLineageEntry {
+            sequence_id,
+            slot_id: "slot-alpha".to_string(),
+            operation_type: "promotion".to_string(),
+            source_state: "candidate".to_string(),
+            target_state: "active".to_string(),
+            receipt_artifact_id: "receipt-7".to_string(),
+            receipt_signature: "sig-7".to_string(),
+            timestamp_ms: 1_700_000_000_007,
+            metadata_json: r#"{"trace_id":"trace-replacement"}"#.to_string(),
+        })
+        .expect("typed replacement payload should serialize")
     }
 
     fn legacy_replacement_key() -> &'static str {
@@ -3410,7 +3463,7 @@ mod tests {
             .put(
                 StoreKind::ReplacementLineage,
                 "typed/replacement_lineage/00000000000000000007".to_string(),
-                b"{\"typed_record_id\":7}".to_vec(),
+                typed_replacement_payload(7),
                 typed_replacement_metadata(),
                 &ctx(),
             )
@@ -3432,7 +3485,7 @@ mod tests {
             .put(
                 StoreKind::ReplacementLineage,
                 "typed/replacement_lineage/00000000000000000007".to_string(),
-                b"{\"typed_record_id\":7}".to_vec(),
+                typed_replacement_payload(7),
                 metadata,
                 &ctx(),
             )
@@ -3450,11 +3503,29 @@ mod tests {
             .put(
                 StoreKind::ReplacementLineage,
                 "typed/replacement_lineage/00000000000000000008".to_string(),
-                b"{\"typed_record_id\":7}".to_vec(),
+                typed_replacement_payload(7),
                 typed_replacement_metadata(),
                 &ctx(),
             )
             .expect_err("typed metadata id must match the typed key id");
+
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_rejects_payload_record_id_mismatch() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+
+        let err = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "typed/replacement_lineage/00000000000000000007".to_string(),
+                typed_replacement_payload(8),
+                typed_replacement_metadata(),
+                &ctx(),
+            )
+            .expect_err("typed payload id must match the typed key id");
 
         assert!(matches!(err, StorageError::WriteRejected { .. }));
     }

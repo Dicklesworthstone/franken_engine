@@ -515,7 +515,14 @@ fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
 /// Validate minimum engine-version constraints.
 pub fn validate_engine_version(min_engine_version: &str) -> Result<(), ManifestValidationError> {
     let requested = parse_semver(min_engine_version.trim());
-    let supported = parse_semver(CURRENT_ENGINE_VERSION).expect("static engine version is valid");
+    let Some(supported) = parse_semver(CURRENT_ENGINE_VERSION) else {
+        // This should never happen since CURRENT_ENGINE_VERSION is compile-time constant,
+        // but handle gracefully to avoid panics in production
+        return Err(ManifestValidationError::UnsupportedEngineVersion {
+            min_engine_version: min_engine_version.to_string(),
+            supported_engine_version: CURRENT_ENGINE_VERSION,
+        });
+    };
     let Some((requested_major, requested_minor, requested_patch)) = requested else {
         return Err(ManifestValidationError::UnsupportedEngineVersion {
             min_engine_version: min_engine_version.to_string(),

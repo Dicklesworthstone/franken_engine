@@ -5,12 +5,14 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const BEAD_ID: &str = "bd-1lsy.7.21.2";
 pub const PREDECESSOR_BEAD_ID: &str = "bd-1lsy.7.21.1";
 pub const COMPONENT: &str = "seqlock_candidate_inventory";
+pub const DEFAULT_GENERATED_AT_UTC: &str = "2026-01-01T00:00:00Z";
 pub const INVENTORY_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-candidate-inventory.v1";
 pub const RETRY_SAFETY_SCHEMA_VERSION: &str = "franken-engine.rgc-seqlock-retry-safety-matrix.v1";
 pub const BASELINE_COMPARATOR_SCHEMA_VERSION: &str =
@@ -359,22 +361,45 @@ pub struct ArtifactContext {
 
 impl ArtifactContext {
     pub fn new(artifact_dir: impl Into<PathBuf>) -> Self {
-        Self::new_with_timestamp(artifact_dir, "2026-01-01T00:00:00Z")
+        Self::new_with_timestamp(artifact_dir, DEFAULT_GENERATED_AT_UTC)
     }
 
     pub fn new_with_timestamp(artifact_dir: impl Into<PathBuf>, timestamp: &str) -> Self {
+        let generated_at_utc = canonical_generated_at_utc(timestamp)
+            .expect("default seqlock candidate inventory timestamp must be valid RFC3339");
+        let run_id = run_id_for_timestamp(&generated_at_utc)
+            .expect("canonical seqlock candidate inventory timestamp must produce a run id");
         Self {
             artifact_dir: artifact_dir.into(),
-            run_id: format!("run-{}-{}", COMPONENT, timestamp.replace([':', '-'], "").replace("Z", "")),
+            run_id,
             trace_id: "trace.rgc.621b".to_string(),
             decision_id: "decision.rgc.621b".to_string(),
             policy_id: "policy.rgc.621b".to_string(),
-            generated_at_utc: timestamp.to_string(),
+            generated_at_utc,
             source_commit: "unknown".to_string(),
             toolchain: std::env::var("RUSTUP_TOOLCHAIN").unwrap_or_else(|_| "nightly".to_string()),
             command_invocation: "cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- --artifact-dir <path>".to_string(),
         }
     }
+}
+
+pub fn canonical_generated_at_utc(timestamp: &str) -> Result<String, String> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|parsed| {
+            parsed
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Secs, true)
+        })
+        .map_err(|error| format!("generated_at_utc must be RFC3339: {error}"))
+}
+
+pub fn run_id_for_timestamp(timestamp: &str) -> Result<String, String> {
+    let canonical = canonical_generated_at_utc(timestamp)?;
+    Ok(format!(
+        "run-{}-{}",
+        COMPONENT,
+        canonical.replace([':', '-'], "").replace('Z', "")
+    ))
 }
 
 #[cfg(test)]
@@ -2022,6 +2047,22 @@ mod tests {
         assert_eq!(ctx.decision_id, "decision.rgc.621b");
         assert_eq!(ctx.policy_id, "policy.rgc.621b");
         assert_eq!(ctx.source_commit, "unknown");
+    }
+
+    #[test]
+    fn artifact_context_timestamp_is_canonical_utc() {
+        let ctx = ArtifactContext::new_with_timestamp("/tmp/test", "2026-01-01T01:02:03+01:00");
+        assert_eq!(ctx.generated_at_utc, "2026-01-01T00:02:03Z");
+        assert_eq!(
+            ctx.run_id,
+            "run-seqlock_candidate_inventory-20260101T000203"
+        );
+    }
+
+    #[test]
+    fn generated_at_utc_rejects_invalid_timestamp() {
+        assert!(canonical_generated_at_utc("not-a-timestamp").is_err());
+        assert!(run_id_for_timestamp("not-a-timestamp").is_err());
     }
 
     #[test]

@@ -15,6 +15,13 @@ serde_json = "1.0"
 tempfile = "3"
 
 [[bin]]
+name = "audit_markdown_parser"
+path = "fuzz_targets/audit_markdown_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "architecture_inventory"
 path = "fuzz_targets/architecture_inventory.rs"
 test = false
@@ -59,6 +66,27 @@ bench = false
 [[bin]]
 name = "parallel_parser"
 path = "fuzz_targets/parallel_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_js_ts"
+path = "fuzz_targets/parse_js_ts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "deterministic_decode"
+path = "fuzz_targets/deterministic_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_fixture_with_migration"
+path = "fuzz_targets/parse_fixture_with_migration.rs"
 test = false
 doc = false
 bench = false

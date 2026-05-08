@@ -144,6 +144,31 @@ write_event() {
 
 fail_closed_count=0
 
+catalog_family_basis() {
+  local row="$1"
+  jq -r '
+    [
+      (.surface_id // ""),
+      (.track // ""),
+      (.implementation_script // ""),
+      (.smoke_script // ""),
+      (.contract_json // "")
+    ] | join("|") | ascii_downcase
+  ' <<<"$row"
+}
+
+requires_remote_proof_family_contracts() {
+  local basis="$1"
+  case "$basis" in
+    *remote_proof*|*remote-proof*|*proof_economy*|*proof-economy*|*warm_target*|*warm-target*|*build_storm*|*build-storm*|*sticky_worker*|*sticky-worker*|*swarm_worker_capability*|*swarm-worker-capability*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 append_finding() {
   local code="$1"
   local surface_id="$2"
@@ -179,21 +204,41 @@ jq -r '.surfaces[] | .implementation_script?, .smoke_script? | select(. != null)
   | sort -u >"$catalog_scripts_path"
 
 if [[ -n "$script_inventory_json" ]]; then
+  inventory_entries_path="${run_dir}/inventory_entries.tsv"
+  : >"$inventory_entries_path"
   jq -r '
     if type == "array" then .[]
     elif has("scripts") then .scripts[]
     elif has("paths") then .paths[]
     else empty end
-    | if type == "object" then .path else . end
-    | select(type == "string")
-  ' "$script_inventory_json" | sort -u >"$inventory_scripts_path"
+    | if type == "object" then
+        [
+          (.path // ""),
+          ((.catalog_exclusion // .exclude_from_catalog // .excluded_from_catalog // .excluded // false) | tostring),
+          (.exclusion_reason // .reason // "")
+        ]
+      else
+        [., "false", ""]
+      end
+    | select(.[0] | type == "string" and length > 0)
+    | @tsv
+  ' "$script_inventory_json" | sort -u >"$inventory_entries_path"
+  cut -f1 "$inventory_entries_path" | sort -u >"$inventory_scripts_path"
 
-  while IFS= read -r script_path; do
+  while IFS=$'\t' read -r script_path excluded exclusion_reason; do
     [[ -z "$script_path" ]] && continue
+    if [[ "$excluded" == "true" ]]; then
+      if [[ -z "$exclusion_reason" ]]; then
+        append_finding "FE-SWARM-DRIFT-INVALID-SCRIPT-EXCLUSION" "$script_path" "script inventory exclusion lacks an explicit reason" "Add an exclusion_reason for ${script_path} or catalog the surface."
+      else
+        write_event "catalog_exclusion" "${script_path}:${exclusion_reason}"
+      fi
+      continue
+    fi
     if ! grep -Fxq "$script_path" "$catalog_scripts_path"; then
       append_finding "FE-SWARM-DRIFT-UNCATALOGED-SCRIPT" "$script_path" "script inventory path is absent from catalog" "Add ${script_path} to docs/swarm_control_surface_catalog_contract_v1.json or explicitly exclude it from the inventory."
     fi
-  done <"$inventory_scripts_path"
+  done <"$inventory_entries_path"
 fi
 
 jq -r '
@@ -234,9 +279,11 @@ surface_count="$(jq '.surfaces | length' "$catalog_json")"
 for ((idx = 0; idx < surface_count; idx++)); do
   row="$(jq -c ".surfaces[$idx]" "$catalog_json")"
   surface_id="$(jq -r '.surface_id // "unknown"' <<<"$row")"
+  family_basis="$(catalog_family_basis "$row")"
 
   if jq -e '
     (.mutation_policy // {}) as $m
+    | (.rch_policy // {}) as $r
     | any([
         "mutates_br",
         "claims_beads",
@@ -252,6 +299,19 @@ for ((idx = 0; idx < surface_count; idx++)); do
         "changes_live_queue_policy",
         "replaces_operator_status_report"
       ][]; $m[.] == true)
+      or any([
+        "runs_cargo",
+        "runs_rch",
+        "executes_cargo",
+        "executes_rch",
+        "releases_reservations",
+        "sends_agent_mail",
+        "queries_live_agent_mail",
+        "mutates_remote_workers",
+        "remote_worker_mutation_allowed",
+        "live_worker_mutation_allowed",
+        "changes_live_queue_policy"
+      ][]; $r[.] == true)
   ' <<<"$row" >/dev/null; then
     append_finding "FE-SWARM-DRIFT-MUTATION-POLICY-CONTRADICTION" "$surface_id" "catalog row contains unsupported mutation policy" "Keep ${surface_id} advisory-only or move live mutation claims to a separate reviewed bead."
   fi
@@ -266,6 +326,22 @@ for ((idx = 0; idx < surface_count; idx++)); do
   fi
 
   smoke_script="$(jq -r '.smoke_script // empty' <<<"$row")"
+  if requires_remote_proof_family_contracts "$family_basis"; then
+    contract_json="$(jq -r '.contract_json // empty' <<<"$row")"
+    if [[ -z "$smoke_script" ]]; then
+      append_finding "FE-SWARM-DRIFT-MISSING-SMOKE" "$surface_id" "remote-proof/proof-economy family row lacks smoke_script" "Add a smoke_script for ${surface_id} before routing this surface."
+    elif [[ ! -f "${workspace_root}/${smoke_script}" ]]; then
+      append_finding "FE-SWARM-DRIFT-MISSING-SMOKE" "$surface_id" "smoke script not found: ${smoke_script}" "Add ${smoke_script} before routing ${surface_id}."
+    fi
+    if [[ -z "$contract_json" ]]; then
+      append_finding "FE-SWARM-DRIFT-MISSING-CONTRACT" "$surface_id" "remote-proof/proof-economy family row lacks contract_json" "Add a contract_json for ${surface_id} before routing this surface."
+    elif [[ ! -f "${workspace_root}/${contract_json}" ]]; then
+      append_finding "FE-SWARM-DRIFT-MISSING-CONTRACT" "$surface_id" "contract JSON not found: ${contract_json}" "Add ${contract_json} before routing ${surface_id}."
+    elif ! jq empty "${workspace_root}/${contract_json}" >/dev/null 2>&1; then
+      append_finding "FE-SWARM-DRIFT-MALFORMED-CONTRACT" "$surface_id" "contract JSON is not parseable: ${contract_json}" "Fix ${contract_json} before routing ${surface_id}."
+    fi
+  fi
+
   if [[ -n "$smoke_script" && -f "${workspace_root}/${smoke_script}" ]]; then
     if ! grep -Eq '(^|[[:space:]])check\)' "${workspace_root}/${smoke_script}" \
       || ! grep -Eq '(^|[[:space:]])selftest\)' "${workspace_root}/${smoke_script}"; then
@@ -331,9 +407,11 @@ jq -n \
       proof_only: true,
       fixture_fed_only: true,
       mutates_br: false,
+      releases_reservations: false,
       sends_agent_mail: false,
       runs_cargo: false,
       runs_rch: false,
+      mutates_remote_workers: false,
       changes_live_queue_policy: false
     }
   }' >"$report_path"

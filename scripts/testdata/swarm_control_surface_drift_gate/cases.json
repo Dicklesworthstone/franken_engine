@@ -189,6 +189,211 @@
           }
         ]
       }
+    },
+    {
+      "case_id": "healthy_remote_proof_family",
+      "expected": {"decision": "pass", "exit_code": 0},
+      "workspace_files": [
+        {"path": "scripts/remote_proof_contract_catalog_gate.sh", "kind": "shell"},
+        {"path": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh", "kind": "smoke"},
+        {"path": "docs/remote_proof_contract_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/proof_economy_policy_evaluator.sh", "kind": "shell"},
+        {"path": "scripts/e2e/proof_economy_policy_evaluator_smoke.sh", "kind": "smoke"},
+        {"path": "docs/proof_economy_policy_evaluator_contract_v1.json", "kind": "contract"}
+      ],
+      "script_inventory": {
+        "scripts": [
+          "scripts/remote_proof_contract_catalog_gate.sh",
+          "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+          "scripts/proof_economy_policy_evaluator.sh",
+          "scripts/e2e/proof_economy_policy_evaluator_smoke.sh"
+        ]
+      },
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "remote_proof_contract_catalog_gate",
+            "track": "REMOTE-PROOF",
+            "intent_tags": ["remote-proof", "contract-catalog"],
+            "implementation_script": "scripts/remote_proof_contract_catalog_gate.sh",
+            "smoke_script": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+            "contract_json": "docs/remote_proof_contract_catalog_contract_v1.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": ["proof_economy_policy_evaluator"],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "releases_reservations": false, "sends_agent_mail": false, "runs_cargo": false, "runs_rch": false, "mutates_remote_workers": false, "changes_live_queue_policy": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/remote_proof_contract_catalog_contract_v1.json", "bash scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh check"]
+          },
+          {
+            "surface_id": "proof_economy_policy_evaluator",
+            "track": "PROOF-ECONOMY",
+            "intent_tags": ["proof-economy", "policy"],
+            "implementation_script": "scripts/proof_economy_policy_evaluator.sh",
+            "smoke_script": "scripts/e2e/proof_economy_policy_evaluator_smoke.sh",
+            "contract_json": "docs/proof_economy_policy_evaluator_contract_v1.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": ["remote_proof_contract_catalog_gate"],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "releases_reservations": false, "sends_agent_mail": false, "runs_cargo": false, "runs_rch": false, "mutates_remote_workers": false, "changes_live_queue_policy": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/proof_economy_policy_evaluator_contract_v1.json", "bash scripts/e2e/proof_economy_policy_evaluator_smoke.sh check"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "remote_proof_uncataloged_script",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-UNCATALOGED-SCRIPT"},
+      "workspace_files": [
+        {"path": "scripts/remote_proof_contract_catalog_gate.sh", "kind": "shell"},
+        {"path": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh", "kind": "smoke"},
+        {"path": "docs/remote_proof_contract_catalog_contract_v1.json", "kind": "contract"},
+        {"path": "scripts/remote_proof_orphan_surface.sh", "kind": "shell"}
+      ],
+      "script_inventory": {
+        "scripts": [
+          "scripts/remote_proof_contract_catalog_gate.sh",
+          "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+          "scripts/remote_proof_orphan_surface.sh"
+        ]
+      },
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "remote_proof_contract_catalog_gate",
+            "track": "REMOTE-PROOF",
+            "intent_tags": ["remote-proof", "contract-catalog"],
+            "implementation_script": "scripts/remote_proof_contract_catalog_gate.sh",
+            "smoke_script": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+            "contract_json": "docs/remote_proof_contract_catalog_contract_v1.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/remote_proof_contract_catalog_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "excluded_sticky_worker_script",
+      "expected": {"decision": "pass", "exit_code": 0},
+      "workspace_files": [
+        {"path": "scripts/sticky_worker_cache_probe.sh", "kind": "shell"}
+      ],
+      "script_inventory": {
+        "scripts": [
+          {
+            "path": "scripts/sticky_worker_cache_probe.sh",
+            "catalog_exclusion": true,
+            "exclusion_reason": "diagnostic helper intentionally outside the routed control-surface catalog"
+          }
+        ]
+      },
+      "bead_status": {"issues": []},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": []
+      }
+    },
+    {
+      "case_id": "live_rch_policy_claim",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-MUTATION-POLICY-CONTRADICTION"},
+      "workspace_files": [
+        {"path": "scripts/proof_economy_policy_evaluator.sh", "kind": "shell"},
+        {"path": "scripts/e2e/proof_economy_policy_evaluator_smoke.sh", "kind": "smoke"},
+        {"path": "docs/proof_economy_policy_evaluator_contract_v1.json", "kind": "contract"}
+      ],
+      "script_inventory": {"scripts": ["scripts/proof_economy_policy_evaluator.sh", "scripts/e2e/proof_economy_policy_evaluator_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "proof_economy_policy_evaluator",
+            "track": "PROOF-ECONOMY",
+            "intent_tags": ["proof-economy", "policy"],
+            "implementation_script": "scripts/proof_economy_policy_evaluator.sh",
+            "smoke_script": "scripts/e2e/proof_economy_policy_evaluator_smoke.sh",
+            "contract_json": "docs/proof_economy_policy_evaluator_contract_v1.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"runs_rch": true, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/proof_economy_policy_evaluator_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_required_contract",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-MISSING-CONTRACT"},
+      "workspace_files": [
+        {"path": "scripts/remote_proof_contract_catalog_gate.sh", "kind": "shell"},
+        {"path": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh", "kind": "smoke"}
+      ],
+      "script_inventory": {"scripts": ["scripts/remote_proof_contract_catalog_gate.sh", "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh"]},
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "remote_proof_contract_catalog_gate",
+            "track": "REMOTE-PROOF",
+            "intent_tags": ["remote-proof", "contract-catalog"],
+            "implementation_script": "scripts/remote_proof_contract_catalog_gate.sh",
+            "smoke_script": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/remote_proof_contract_catalog_contract_v1.json"]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_required_smoke",
+      "expected": {"decision": "fail_closed", "exit_code": 42, "reason_code": "FE-SWARM-DRIFT-MISSING-SMOKE"},
+      "workspace_files": [
+        {"path": "scripts/remote_proof_contract_catalog_gate.sh", "kind": "shell"},
+        {"path": "docs/remote_proof_contract_catalog_contract_v1.json", "kind": "contract"}
+      ],
+      "script_inventory": {"scripts": ["scripts/remote_proof_contract_catalog_gate.sh"]},
+      "bead_status": {"issues": [{"id": "bd-4obje", "status": "closed"}]},
+      "catalog": {
+        "schema_version": "franken-engine.swarm-control-surface-catalog.v1",
+        "decision": "pass",
+        "surfaces": [
+          {
+            "surface_id": "remote_proof_contract_catalog_gate",
+            "track": "REMOTE-PROOF",
+            "intent_tags": ["remote-proof", "contract-catalog"],
+            "implementation_script": "scripts/remote_proof_contract_catalog_gate.sh",
+            "smoke_script": "scripts/e2e/remote_proof_contract_catalog_gate_smoke.sh",
+            "contract_json": "docs/remote_proof_contract_catalog_contract_v1.json",
+            "owning_bead_id": "bd-4obje",
+            "upstream_surface_ids": [],
+            "downstream_surface_ids": [],
+            "mutation_policy": {"advisory_only": true, "mutates_br": false, "runs_cargo": false, "runs_rch": false},
+            "rch_policy": {"runs_rch": false, "runs_cargo": false},
+            "validation_commands": ["jq empty docs/remote_proof_contract_catalog_contract_v1.json"]
+          }
+        ]
+      }
     }
   ]
 }

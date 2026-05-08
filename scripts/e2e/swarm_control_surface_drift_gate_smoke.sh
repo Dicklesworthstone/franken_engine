@@ -30,6 +30,12 @@ write_workspace_file() {
 
   mkdir -p "$(dirname "$full_path")"
   case "$kind" in
+    contract)
+      jq -n --arg schema_version "franken-engine.test-contract.v1" '{schema_version:$schema_version}' >"$full_path"
+      ;;
+    malformed_contract)
+      printf '{not-json\n' >"$full_path"
+      ;;
     smoke)
       {
         printf '%s\n' '#!/usr/bin/env bash'
@@ -132,7 +138,7 @@ run_check() {
   bash -n "$gate"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$fixtures_path"
-  jq -e '.cases | length == 6' "$fixtures_path" >/dev/null
+  jq -e '.cases | length == 12' "$fixtures_path" >/dev/null
   grep -Fq 'The gate is artifact-fed and advisory only.' "$docs_path" \
     || record_failure "missing advisory-only docs wording"
   record_pass "check"

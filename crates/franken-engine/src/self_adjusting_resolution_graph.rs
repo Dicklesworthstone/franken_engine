@@ -358,11 +358,10 @@ fn compute_graph_hash(
     for (id, node) in nodes {
         hasher.update(b"node:");
         hasher.update(id.as_bytes());
-        hasher.update(node.compute_hash()
-            .expect("node hash computation should not fail").as_bytes());
+        hasher.update(node.compute_hash().as_bytes());
     }
     let mut sorted_edge_hashes: Vec<ContentHash> = edges.iter()
-        .map(|e| e.compute_hash().expect("edge hash computation should not fail"))
+        .map(|e| e.compute_hash())
         .collect();
     sorted_edge_hashes.sort();
     for h in &sorted_edge_hashes {
@@ -1961,8 +1960,8 @@ mod tests {
         let n1 = make_node("a");
         let n2 = make_node("a");
         assert_eq!(
-            n1.compute_hash().expect("node hash should not fail"),
-            n2.compute_hash().expect("node hash should not fail")
+            n1.compute_hash(),
+            n2.compute_hash()
         );
     }
 
@@ -1972,8 +1971,8 @@ mod tests {
         let mut n2 = make_node("a");
         n2.version = "2.0.0".to_string();
         assert_ne!(
-            n1.compute_hash().expect("node hash should not fail"),
-            n2.compute_hash().expect("node hash should not fail")
+            n1.compute_hash(),
+            n2.compute_hash()
         );
     }
 
@@ -1984,8 +1983,8 @@ mod tests {
         let e1 = make_edge("a", "b");
         let e2 = make_edge("a", "b");
         assert_eq!(
-            e1.compute_hash().expect("edge hash should not fail"),
-            e2.compute_hash().expect("edge hash should not fail")
+            e1.compute_hash(),
+            e2.compute_hash()
         );
     }
 
@@ -1994,8 +1993,8 @@ mod tests {
         let e1 = make_edge_with_kind("a", "b", EdgeKind::StaticImport);
         let e2 = make_edge_with_kind("a", "b", EdgeKind::DynamicImport);
         assert_ne!(
-            e1.compute_hash().expect("edge hash should not fail"),
-            e2.compute_hash().expect("edge hash should not fail")
+            e1.compute_hash(),
+            e2.compute_hash()
         );
     }
 
@@ -2108,8 +2107,8 @@ mod tests {
             content_hash: ContentHash::compute(b"same"),
         };
         assert_ne!(
-            node_a.compute_hash().expect("node hash should not fail"),
-            node_b.compute_hash().expect("node hash should not fail")
+            node_a.compute_hash(),
+            node_b.compute_hash()
         );
     }
 

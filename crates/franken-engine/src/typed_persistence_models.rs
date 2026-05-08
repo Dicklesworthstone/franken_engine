@@ -17,6 +17,8 @@ use std::path::Path;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use sqlmodel::prelude::*;
 use sqlmodel::{Connection, Cx, Outcome, Session, SessionConfig, SessionDebugInfo, create_table};
 use sqlmodel_core::error::ConfigError;
@@ -157,15 +159,55 @@ fn require_repo_relative_path_typed<T: TypedStoreRecord>(
     Ok(())
 }
 
-fn require_sha256_typed<T: TypedStoreRecord>(field_name: &str, value: &str) -> StorageResult<()> {
+fn normalize_sha256_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &str,
+) -> StorageResult<String> {
     require_non_empty_typed::<T>(field_name, value)?;
     let digest = value.strip_prefix("sha256:").unwrap_or(value);
     if digest.len() == 64 && digest.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-        return Ok(());
+        return Ok(digest.to_ascii_lowercase());
     }
     Err(typed_integrity_error::<T>(format!(
         "`{field_name}` must be a 64-hex SHA-256 digest or `sha256:<digest>`"
     )))
+}
+
+fn require_sha256_typed<T: TypedStoreRecord>(field_name: &str, value: &str) -> StorageResult<()> {
+    normalize_sha256_typed::<T>(field_name, value).map(|_| ())
+}
+
+fn sha256_hex_typed(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn canonical_json_string_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &JsonValue,
+) -> StorageResult<String> {
+    serde_json::to_string(&canonicalize_json_typed(value)).map_err(|err| {
+        typed_integrity_error::<T>(format!(
+            "`{field_name}` failed canonical JSON serialization: {err}"
+        ))
+    })
+}
+
+fn canonicalize_json_typed(value: &JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(map) => {
+            let mut ordered = Map::new();
+            for (key, value) in map.iter().collect::<BTreeMap<_, _>>() {
+                ordered.insert(key.clone(), canonicalize_json_typed(value));
+            }
+            JsonValue::Object(ordered)
+        }
+        JsonValue::Array(items) => {
+            JsonValue::Array(items.iter().map(canonicalize_json_typed).collect())
+        }
+        _ => value.clone(),
+    }
 }
 
 fn require_typed_metadata<T: TypedStoreRecord>(
@@ -2020,12 +2062,13 @@ impl TypedStoreRecord for ShadowEvidenceJournalEntry {
                 "`sequence_id` must match `journal_event_id` for deterministic replay ordering",
             ));
         }
-        require_sha256_typed::<Self>("payload_content_hash", &self.payload_content_hash)?;
+        let payload_content_hash =
+            normalize_sha256_typed::<Self>("payload_content_hash", &self.payload_content_hash)?;
         if let Some(path) = &self.normalized_payload_path {
             require_repo_relative_path_typed::<Self>("normalized_payload_path", path)?;
         }
-        let normalized_payload: serde_json::Value =
-            serde_json::from_str(&self.normalized_payload_json).map_err(|err| {
+        let normalized_payload: JsonValue = serde_json::from_str(&self.normalized_payload_json)
+            .map_err(|err| {
                 typed_integrity_error::<Self>(format!(
                     "`normalized_payload_json` must be valid JSON: {err}"
                 ))
@@ -2037,7 +2080,21 @@ impl TypedStoreRecord for ShadowEvidenceJournalEntry {
                 "`normalized_payload_json` must be a JSON object or array",
             ));
         }
-        require_sha256_typed::<Self>("normalized_payload_hash", &self.normalized_payload_hash)?;
+        let normalized_payload_hash = normalize_sha256_typed::<Self>(
+            "normalized_payload_hash",
+            &self.normalized_payload_hash,
+        )?;
+        let normalized_payload_json =
+            canonical_json_string_typed::<Self>("normalized_payload_json", &normalized_payload)?;
+        let computed_payload_hash = sha256_hex_typed(normalized_payload_json.as_bytes());
+        if payload_content_hash != computed_payload_hash
+            || normalized_payload_hash != computed_payload_hash
+        {
+            return Err(typed_integrity_error::<Self>(format!(
+                "payload hash mismatch for journal event {}",
+                self.journal_event_id
+            )));
+        }
         let raw_evidence_hashes: Vec<String> = serde_json::from_str(&self.raw_evidence_hashes_json)
             .map_err(|err| {
                 typed_integrity_error::<Self>(format!(
@@ -2422,12 +2479,12 @@ mod tests {
             collected_timestamp_ms: 1_700_000_000_023,
             sequence_id: journal_event_id,
             payload_content_hash:
-                "sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216"
+                "sha256:0277a79f84690d36b4fabc8986caa314fa3bf841a6008857c1ba0fedaf268551"
                     .to_string(),
             normalized_payload_path: Some("artifacts/shadow/br_queue_snapshot.json".to_string()),
             normalized_payload_json: r#"[{"id":"bd-a","status":"ready"}]"#.to_string(),
             normalized_payload_hash:
-                "sha256:60341f65f17dd7d05ce3d1206b6b8e7cbac12d171d9788e674bb317f1f1f34c1"
+                "sha256:0277a79f84690d36b4fabc8986caa314fa3bf841a6008857c1ba0fedaf268551"
                     .to_string(),
             raw_evidence_hashes_json:
                 r#"["sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216"]"#
@@ -3087,6 +3144,29 @@ mod tests {
         let err = invalid.to_store_record(0).unwrap_err();
         assert_eq!(err.code(), "FE-STOR-0007");
         assert!(err.to_string().contains("metadata_json"));
+    }
+
+    #[test]
+    fn shadow_evidence_boundary_rejects_payload_hash_mismatches() {
+        let raw_fixture_hash =
+            "sha256:40d47631ec52fba5f92357f7d466ad5b789718d98ba0717f09063770c7bb0216";
+
+        let mut invalid = shadow_evidence_entry(23);
+        invalid.normalized_payload_hash = raw_fixture_hash.to_string();
+        let err = invalid.to_store_record(0).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("payload hash mismatch"));
+
+        let mut stored = shadow_evidence_entry(23)
+            .to_store_record(0)
+            .expect("valid shadow evidence serializes");
+        let mut corrupt_payload = shadow_evidence_entry(23);
+        corrupt_payload.payload_content_hash = raw_fixture_hash.to_string();
+        stored.value = serde_json::to_vec(&corrupt_payload).expect("test payload serializes");
+
+        let err = ShadowEvidenceJournalEntry::from_store_record(&stored).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("payload hash mismatch"));
     }
 
     #[test]

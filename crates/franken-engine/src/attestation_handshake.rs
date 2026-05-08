@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::attested_execution_cell::{
     AttestationQuote, CellFunction, MeasurementDigest, TrustLevel, TrustRootBackend,
@@ -203,7 +204,7 @@ impl CellAuthorization {
         buf.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
         buf.extend_from_slice(&self.policy_version.to_be_bytes());
         buf.extend_from_slice(self.verified_measurement.as_bytes()); // fixed 32 bytes
-        // authorized_operations is BTreeSet — deterministic iteration.
+                                                                     // authorized_operations is BTreeSet — deterministic iteration.
         buf.extend_from_slice(&(self.authorized_operations.len() as u64).to_be_bytes());
         for op in &self.authorized_operations {
             buf.extend_from_slice(&(op.len() as u64).to_be_bytes());
@@ -507,7 +508,11 @@ impl PolicyPlaneVerifier {
     ) -> Result<CellAuthorization, HandshakeError> {
         // 1. Verify challenge authenticity before using any of its fields.
         let expected_challenge_signature = self.sign(&challenge.canonical_bytes());
-        if challenge.policy_plane_signature != expected_challenge_signature {
+        if !challenge
+            .policy_plane_signature
+            .ct_eq(&expected_challenge_signature)
+            .into()
+        {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::SignatureFailed,
@@ -582,7 +587,7 @@ impl PolicyPlaneVerifier {
 
         // 6. Verify key binding proof.
         let expected_binding = compute_key_binding(&response.signer_public_key, measurement);
-        if response.key_binding_proof != expected_binding {
+        if !response.key_binding_proof.ct_eq(&expected_binding).into() {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::KeyBindingFailed,
@@ -596,7 +601,7 @@ impl PolicyPlaneVerifier {
         // 7. Verify response signature.
         let expected_sig =
             compute_response_signature(&response.signer_public_key, &response.canonical_bytes());
-        if response.response_signature != expected_sig {
+        if !response.response_signature.ct_eq(&expected_sig).into() {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::SignatureFailed,
@@ -645,7 +650,11 @@ impl PolicyPlaneVerifier {
         })?;
 
         let expected_signature = self.sign(&auth.canonical_bytes());
-        if auth.authorization_signature != expected_signature {
+        if !auth
+            .authorization_signature
+            .ct_eq(&expected_signature)
+            .into()
+        {
             return Err(HandshakeError::AuthorizationSignatureInvalid);
         }
 
@@ -1247,11 +1256,9 @@ mod tests {
         do_full_handshake(&mut verifier, &client, &root, &measurement, 1000)
             .expect("serde deserialization should succeed");
 
-        assert!(
-            verifier
-                .check_authorization("cell-001", "sign_receipts", 2000)
-                .is_ok()
-        );
+        assert!(verifier
+            .check_authorization("cell-001", "sign_receipts", 2000)
+            .is_ok());
     }
 
     #[test]

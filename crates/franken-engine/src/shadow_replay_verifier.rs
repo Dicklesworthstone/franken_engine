@@ -72,21 +72,35 @@ pub enum DriftType {
 impl fmt::Display for DriftType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DriftType::SchemaDrift { expected_version, actual_version, migration_compatible } => {
+            DriftType::SchemaDrift {
+                expected_version,
+                actual_version,
+                migration_compatible,
+            } => {
                 write!(
                     f,
                     "Schema drift from {} to {} (migration compatible: {})",
                     expected_version, actual_version, migration_compatible
                 )
             }
-            DriftType::MissingEventLinks { expected_count, actual_count, missing_ids } => {
+            DriftType::MissingEventLinks {
+                expected_count,
+                actual_count,
+                missing_ids,
+            } => {
                 write!(
                     f,
                     "Missing event links: expected {} events, found {}, missing {}",
-                    expected_count, actual_count, missing_ids.len()
+                    expected_count,
+                    actual_count,
+                    missing_ids.len()
                 )
             }
-            DriftType::NonDeterministicOrdering { expected_hash, actual_hash, divergence_point } => {
+            DriftType::NonDeterministicOrdering {
+                expected_hash,
+                actual_hash,
+                divergence_point,
+            } => {
                 write!(
                     f,
                     "Non-deterministic ordering: expected hash {}, actual {}, diverged at position {}",
@@ -95,14 +109,22 @@ impl fmt::Display for DriftType {
                     divergence_point
                 )
             }
-            DriftType::FreshnessInterpretationChange { expected_threshold_ms, actual_threshold_ms, affected_decisions } => {
+            DriftType::FreshnessInterpretationChange {
+                expected_threshold_ms,
+                actual_threshold_ms,
+                affected_decisions,
+            } => {
                 write!(
                     f,
                     "Freshness interpretation change: threshold {}ms -> {}ms, {} decisions affected",
                     expected_threshold_ms, actual_threshold_ms, affected_decisions
                 )
             }
-            DriftType::PayloadHashMismatch { event_id, expected_hash, actual_hash } => {
+            DriftType::PayloadHashMismatch {
+                event_id,
+                expected_hash,
+                actual_hash,
+            } => {
                 write!(
                     f,
                     "Payload hash mismatch for event {}: expected {}, actual {}",
@@ -111,7 +133,12 @@ impl fmt::Display for DriftType {
                     hex_encode(actual_hash.as_bytes())
                 )
             }
-            DriftType::BehavioralRegression { decision_id, expected_output, actual_output, reproducible } => {
+            DriftType::BehavioralRegression {
+                decision_id,
+                expected_output,
+                actual_output,
+                reproducible,
+            } => {
                 write!(
                     f,
                     "Behavioral regression for decision {}: expected {}, actual {} (reproducible: {})",
@@ -168,6 +195,9 @@ pub struct ReplayConfig {
     pub max_events_per_batch: usize,
     /// Timeout for each replay operation in milliseconds.
     pub replay_timeout_ms: u64,
+    /// Optional deterministic timestamp for replay reports and composer input.
+    #[serde(default)]
+    pub replay_timestamp_ms: Option<u64>,
     /// Whether to treat schema version changes as expected drift.
     pub allow_schema_migration: bool,
     /// Freshness threshold tolerance in milliseconds.
@@ -183,6 +213,7 @@ impl Default for ReplayConfig {
         Self {
             max_events_per_batch: 1000,
             replay_timeout_ms: 30_000,
+            replay_timestamp_ms: None,
             allow_schema_migration: true,
             freshness_tolerance_ms: 1000,
             verify_payload_hashes: true,
@@ -247,7 +278,10 @@ impl std::error::Error for ReplayVerificationError {}
 
 impl From<ShadowDecisionError> for ReplayVerificationError {
     fn from(err: ShadowDecisionError) -> Self {
-        ReplayVerificationError::NonDeterministicBehavior(format!("Decision composition error: {}", err))
+        ReplayVerificationError::NonDeterministicBehavior(format!(
+            "Decision composition error: {}",
+            err
+        ))
     }
 }
 
@@ -263,11 +297,15 @@ pub struct ShadowReplayVerifier {
 
 impl ShadowReplayVerifier {
     /// Creates a new replay verifier with the given configuration.
-    pub fn new(config: ReplayConfig, default_freshness_window_seconds: i64) -> Result<Self, ReplayVerificationError> {
+    pub fn new(
+        config: ReplayConfig,
+        default_freshness_window_seconds: i64,
+    ) -> Result<Self, ReplayVerificationError> {
         // Validate configuration
         if config.max_events_per_batch == 0 {
             return Err(ReplayVerificationError::InvalidConfiguration(
-                "max_events_per_batch must be greater than 0 to avoid panic in step_by()".to_string(),
+                "max_events_per_batch must be greater than 0 to avoid panic in step_by()"
+                    .to_string(),
             ));
         }
 
@@ -295,19 +333,16 @@ impl ShadowReplayVerifier {
         export: ShadowEvidenceJournalExport,
         target_environment: String,
     ) -> Result<DriftReport, ReplayVerificationError> {
-        let start_time = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-
         // Verify export integrity
         self.verify_export_integrity(&export)?;
+        let replay_timestamp_ms = self.replay_timestamp_ms(&export)?;
+        let generated_epoch_seconds = replay_epoch_seconds(replay_timestamp_ms);
 
         // Convert export rows to journal events for composition
         let journal_events = self.convert_export_to_journal_events(&export)?;
 
         // Replay events through decision composer
-        let replay_result = self.replay_events(&journal_events)?;
+        let replay_result = self.replay_events(&journal_events, generated_epoch_seconds)?;
 
         // Detect drift in the replayed results
         let detected_drift = self.detect_drift(&export, &replay_result)?;
@@ -316,12 +351,13 @@ impl ShadowReplayVerifier {
         let is_expected_migration = self.is_expected_migration(&detected_drift);
 
         // Generate replay recipe
-        let replay_recipe = self.generate_replay_recipe(&export, &target_environment);
+        let replay_recipe =
+            self.generate_replay_recipe(&export, &target_environment, replay_timestamp_ms);
 
         // Create drift report
         let mut report = DriftReport {
-            report_id: self.generate_report_id(&export, start_time)?,
-            detection_timestamp_ms: start_time,
+            report_id: self.generate_report_id(&export, replay_timestamp_ms)?,
+            detection_timestamp_ms: replay_timestamp_ms,
             source_export: export,
             target_environment,
             detected_drift,
@@ -333,25 +369,46 @@ impl ShadowReplayVerifier {
         // Sign the report if signing key is available
         if let Some(signing_key) = &self.signing_key {
             let report_hash = self.compute_report_hash(&report)?;
-            let signature = sign_preimage(
-                signing_key,
-                report_hash.as_bytes(),
-            )?;
+            let signature = sign_preimage(signing_key, report_hash.as_bytes())?;
             report.verification_signature = Some(signature);
         }
 
         Ok(report)
     }
 
+    fn replay_timestamp_ms(
+        &self,
+        export: &ShadowEvidenceJournalExport,
+    ) -> Result<u64, ReplayVerificationError> {
+        if let Some(replay_timestamp_ms) = self.config.replay_timestamp_ms {
+            return Ok(replay_timestamp_ms);
+        }
+
+        let mut latest_timestamp_ms = 0u64;
+        for row in &export.rows {
+            if row.collected_timestamp_ms < 0 {
+                return Err(ReplayVerificationError::InvalidCheckpoint(format!(
+                    "Negative collected timestamp for event {}: {}",
+                    row.journal_event_id, row.collected_timestamp_ms
+                )));
+            }
+            latest_timestamp_ms = latest_timestamp_ms.max(row.collected_timestamp_ms as u64);
+        }
+        Ok(latest_timestamp_ms)
+    }
+
     /// Verifies the integrity of a journal export before replay.
-    fn verify_export_integrity(&self, export: &ShadowEvidenceJournalExport) -> Result<(), ReplayVerificationError> {
+    fn verify_export_integrity(
+        &self,
+        export: &ShadowEvidenceJournalExport,
+    ) -> Result<(), ReplayVerificationError> {
         // Check schema version compatibility
         if export.schema_version != SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION {
             if !self.config.allow_schema_migration {
-                return Err(ReplayVerificationError::InvalidCheckpoint(
-                    format!("Schema version mismatch: expected {}, got {}",
-                            SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, export.schema_version),
-                ));
+                return Err(ReplayVerificationError::InvalidCheckpoint(format!(
+                    "Schema version mismatch: expected {}, got {}",
+                    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, export.schema_version
+                )));
             }
         }
 
@@ -361,9 +418,10 @@ impl ShadowReplayVerifier {
 
         for row in &export.rows {
             if seen_ids.contains(&row.journal_event_id) {
-                return Err(ReplayVerificationError::InvalidCheckpoint(
-                    format!("Duplicate event ID: {}", row.journal_event_id),
-                ));
+                return Err(ReplayVerificationError::InvalidCheckpoint(format!(
+                    "Duplicate event ID: {}",
+                    row.journal_event_id
+                )));
             }
             seen_ids.insert(row.journal_event_id);
 
@@ -376,26 +434,24 @@ impl ShadowReplayVerifier {
         // Verify all parent links are satisfied (except for events with no parents)
         for expected_link in expected_links {
             if !seen_ids.contains(&expected_link) {
-                return Err(ReplayVerificationError::InvalidCheckpoint(
-                    format!("Missing parent event: {}", expected_link),
-                ));
+                return Err(ReplayVerificationError::InvalidCheckpoint(format!(
+                    "Missing parent event: {}",
+                    expected_link
+                )));
             }
         }
 
-        // Verify payload hashes if configured
+        // Verify basic payload serializability (payload hash mismatches handled by drift detection)
         if self.config.verify_payload_hashes {
             for row in &export.rows {
-                let payload_bytes = serde_json::to_vec(&row.normalized_payload)
-                    .map_err(|e| ReplayVerificationError::InvalidCheckpoint(
-                        format!("Failed to serialize payload: {}", e)))?;
-                let computed_hash = ContentHash::compute(&payload_bytes);
-                let computed_hex = hex_encode(computed_hash.as_bytes());
-                if computed_hex != row.normalized_payload_hash {
-                    return Err(ReplayVerificationError::InvalidCheckpoint(
-                        format!("Payload hash mismatch for event {}: expected {}, got {}",
-                                row.journal_event_id, row.normalized_payload_hash, computed_hex),
-                    ));
-                }
+                let _payload_bytes = serde_json::to_vec(&row.normalized_payload).map_err(|e| {
+                    ReplayVerificationError::InvalidCheckpoint(format!(
+                        "Failed to serialize payload for event {}: {}",
+                        row.journal_event_id, e
+                    ))
+                })?;
+                // Note: Payload hash mismatches are handled by detect_payload_hash_drift
+                // as DriftType::PayloadHashMismatch rather than fatal integrity errors
             }
         }
 
@@ -432,10 +488,14 @@ impl ShadowReplayVerifier {
 
         // Sort by sequence ID for deterministic replay
         events.sort_by(|a, b| {
-            let a_id = a.journal_event_id.as_ref()
+            let a_id = a
+                .journal_event_id
+                .as_ref()
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
-            let b_id = b.journal_event_id.as_ref()
+            let b_id = b
+                .journal_event_id
+                .as_ref()
                 .and_then(|v| v.as_i64())
                 .unwrap_or(0);
             a_id.cmp(&b_id)
@@ -445,7 +505,11 @@ impl ShadowReplayVerifier {
     }
 
     /// Replays journal events through the decision composer.
-    fn replay_events(&mut self, events: &[JournalSourceEvent]) -> Result<ReplayResult, ReplayVerificationError> {
+    fn replay_events(
+        &mut self,
+        events: &[JournalSourceEvent],
+        generated_epoch_seconds: i64,
+    ) -> Result<ReplayResult, ReplayVerificationError> {
         let mut artifact_results = BTreeMap::new();
         let mut event_ordering = Vec::new();
 
@@ -460,22 +524,23 @@ impl ShadowReplayVerifier {
             let input = ShadowDecisionComposerInput {
                 shadow_run_id: format!("replay_batch_{}", batch_start),
                 source_revision: "replay_verification".to_string(),
-                generated_epoch_seconds: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64,
+                generated_epoch_seconds,
                 default_freshness_window_seconds: self.default_freshness_window_seconds,
                 max_recommendations: 16,
                 journal_events: batch.to_vec(),
                 existing_autopilot_outputs: Vec::new(),
-                artifact_paths: crate::shadow_decision_composer::ArtifactPaths::for_output_dir("/tmp/replay"),
+                artifact_paths: crate::shadow_decision_composer::ArtifactPaths::for_output_dir(
+                    "/tmp/replay",
+                ),
             };
 
             // Compose decisions for this batch
             let artifacts = crate::shadow_decision_composer::compose_shadow_decision(&input)?;
 
             for event in batch {
-                let event_id_str = event.journal_event_id.as_ref()
+                let event_id_str = event
+                    .journal_event_id
+                    .as_ref()
                     .and_then(|v| v.as_i64())
                     .map(|id| id.to_string())
                     .unwrap_or_default();
@@ -576,9 +641,7 @@ impl ShadowReplayVerifier {
         }
 
         // Compute hash of expected ordering (preserve original export order)
-        let expected_ids: Vec<i64> = export.rows.iter()
-            .map(|row| row.journal_event_id)
-            .collect();
+        let expected_ids: Vec<i64> = export.rows.iter().map(|row| row.journal_event_id).collect();
 
         let mut expected_ordering_bytes = Vec::new();
         for id in &expected_ids {
@@ -587,7 +650,9 @@ impl ShadowReplayVerifier {
         let expected_hash = ContentHash::compute(&expected_ordering_bytes);
 
         // Compute hash of actual ordering (preserve replay result order)
-        let actual_ids: Vec<i64> = replay_result.event_ordering.iter()
+        let actual_ids: Vec<i64> = replay_result
+            .event_ordering
+            .iter()
             .filter_map(|id_str| id_str.parse().ok())
             .collect();
 
@@ -618,7 +683,10 @@ impl ShadowReplayVerifier {
     }
 
     /// Detects payload hash drift across events.
-    fn detect_payload_hash_drift(&self, export: &ShadowEvidenceJournalExport) -> Result<Vec<DriftType>, ReplayVerificationError> {
+    fn detect_payload_hash_drift(
+        &self,
+        export: &ShadowEvidenceJournalExport,
+    ) -> Result<Vec<DriftType>, ReplayVerificationError> {
         let mut drift_types = Vec::new();
 
         if !self.config.verify_payload_hashes {
@@ -626,16 +694,21 @@ impl ShadowReplayVerifier {
         }
 
         for row in &export.rows {
-            let payload_bytes = serde_json::to_vec(&row.normalized_payload)
-                .map_err(|e| ReplayVerificationError::InvalidCheckpoint(
-                    format!("Failed to serialize payload: {}", e)))?;
+            let payload_bytes = serde_json::to_vec(&row.normalized_payload).map_err(|e| {
+                ReplayVerificationError::InvalidCheckpoint(format!(
+                    "Failed to serialize payload: {}",
+                    e
+                ))
+            })?;
             let computed_hash = ContentHash::compute(&payload_bytes);
             let computed_hex = hex_encode(computed_hash.as_bytes());
 
             if computed_hex != row.normalized_payload_hash {
-                let expected_hash = hex_decode(&row.normalized_payload_hash)
-                    .map_err(|_| ReplayVerificationError::InvalidCheckpoint(
-                        "Invalid payload hash format".to_string()))?;
+                let expected_hash = hex_decode(&row.normalized_payload_hash).map_err(|_| {
+                    ReplayVerificationError::InvalidCheckpoint(
+                        "Invalid payload hash format".to_string(),
+                    )
+                })?;
                 if expected_hash.len() == 32 {
                     let mut hash_array = [0u8; 32];
                     hash_array.copy_from_slice(&expected_hash);
@@ -670,7 +743,9 @@ impl ShadowReplayVerifier {
 
                 // Check for expected output hash in metadata
                 if let Value::Object(metadata_obj) = &row.metadata {
-                    if let Some(Value::String(expected_hash_str)) = metadata_obj.get("expected_decision_hash") {
+                    if let Some(Value::String(expected_hash_str)) =
+                        metadata_obj.get("expected_decision_hash")
+                    {
                         if let Ok(expected_hash_bytes) = hex_decode(expected_hash_str) {
                             if expected_hash_bytes.len() == 32 {
                                 let mut hash_array = [0u8; 32];
@@ -679,13 +754,17 @@ impl ShadowReplayVerifier {
 
                                 if artifacts_hash != expected_hash {
                                     // Create decision ID from event data
-                                    let decision_id_bytes = format!("decision_{}", row.journal_event_id).into_bytes();
-                                    let schema_id = crate::engine_object_id::SchemaId::from_definition(b"shadow_replay_drift_detection_v1");
+                                    let decision_id_bytes =
+                                        format!("decision_{}", row.journal_event_id).into_bytes();
+                                    let schema_id =
+                                        crate::engine_object_id::SchemaId::from_definition(
+                                            b"shadow_replay_drift_detection_v1",
+                                        );
                                     let decision_id = crate::engine_object_id::derive_id(
                                         crate::engine_object_id::ObjectDomain::EvidenceRecord,
                                         "shadow_replay",
                                         &schema_id,
-                                        &decision_id_bytes
+                                        &decision_id_bytes,
                                     )?;
 
                                     drift_types.push(DriftType::BehavioralRegression {
@@ -714,7 +793,10 @@ impl ShadowReplayVerifier {
         // Check if all drift is schema-related and migration-compatible
         for drift in drift_types {
             match drift {
-                DriftType::SchemaDrift { migration_compatible, .. } => {
+                DriftType::SchemaDrift {
+                    migration_compatible,
+                    ..
+                } => {
                     if !migration_compatible {
                         return false;
                     }
@@ -727,15 +809,26 @@ impl ShadowReplayVerifier {
         }
 
         // If we have schema drift, consider it expected migration
-        drift_types.iter().any(|d| matches!(d, DriftType::SchemaDrift { .. }))
+        drift_types
+            .iter()
+            .any(|d| matches!(d, DriftType::SchemaDrift { .. }))
     }
 
     /// Generates a replay recipe for reproducing the drift.
-    fn generate_replay_recipe(&self, export: &ShadowEvidenceJournalExport, target_environment: &str) -> ReplayRecipe {
+    fn generate_replay_recipe(
+        &self,
+        export: &ShadowEvidenceJournalExport,
+        target_environment: &str,
+        replay_timestamp_ms: u64,
+    ) -> ReplayRecipe {
         let mut environment_vars = BTreeMap::new();
         environment_vars.insert("RUST_BACKTRACE".to_string(), "1".to_string());
         environment_vars.insert("TARGET_ENV".to_string(), target_environment.to_string());
         environment_vars.insert("SCHEMA_VERSION".to_string(), export.schema_version.clone());
+        environment_vars.insert(
+            "REPLAY_TIMESTAMP_MS".to_string(),
+            replay_timestamp_ms.to_string(),
+        );
 
         let replay_command = vec![
             "cargo".to_string(),
@@ -755,9 +848,11 @@ impl ShadowReplayVerifier {
             expected_outputs.insert(output_key, payload_hash);
         }
 
-        let export_filename = format!("export_{}_{}.json",
-                                    export.schema_version.replace('.', "_"),
-                                    export.rows.len());
+        let export_filename = format!(
+            "export_{}_{}.json",
+            export.schema_version.replace('.', "_"),
+            export.rows.len()
+        );
 
         ReplayRecipe {
             input_checkpoint: export_filename,
@@ -774,7 +869,11 @@ impl ShadowReplayVerifier {
     }
 
     /// Generates a unique report ID based on export and timestamp.
-    fn generate_report_id(&self, export: &ShadowEvidenceJournalExport, timestamp_ms: u64) -> Result<EngineObjectId, ReplayVerificationError> {
+    fn generate_report_id(
+        &self,
+        export: &ShadowEvidenceJournalExport,
+        timestamp_ms: u64,
+    ) -> Result<EngineObjectId, ReplayVerificationError> {
         let mut id_bytes = Vec::new();
         id_bytes.extend_from_slice(b"shadow-replay-report|");
         id_bytes.extend_from_slice(export.schema_version.as_bytes());
@@ -782,19 +881,26 @@ impl ShadowReplayVerifier {
         id_bytes.extend_from_slice(&(export.rows.len() as u32).to_le_bytes());
         id_bytes.extend_from_slice(b"|");
         id_bytes.extend_from_slice(&timestamp_ms.to_le_bytes());
+        id_bytes.extend_from_slice(b"|");
+        let export_hash = ContentHash::compute(&to_canonical_json_bytes(export)?);
+        id_bytes.extend_from_slice(export_hash.as_bytes());
 
-        let schema_id = crate::engine_object_id::SchemaId::from_definition(b"shadow_replay_report_v1");
+        let schema_id =
+            crate::engine_object_id::SchemaId::from_definition(b"shadow_replay_report_v1");
         let object_id = crate::engine_object_id::derive_id(
             crate::engine_object_id::ObjectDomain::EvidenceRecord,
             "shadow_replay_reports",
             &schema_id,
-            &id_bytes
+            &id_bytes,
         )?;
         Ok(object_id)
     }
 
     /// Computes hash of a drift report for signature verification.
-    fn compute_report_hash(&self, report: &DriftReport) -> Result<ContentHash, ReplayVerificationError> {
+    fn compute_report_hash(
+        &self,
+        report: &DriftReport,
+    ) -> Result<ContentHash, ReplayVerificationError> {
         // Create a signable representation excluding the signature field
         let mut signable_report = report.clone();
         signable_report.verification_signature = None;
@@ -802,6 +908,11 @@ impl ShadowReplayVerifier {
         let report_bytes = to_canonical_json_bytes(&signable_report)?;
         Ok(ContentHash::compute(&report_bytes))
     }
+}
+
+fn replay_epoch_seconds(timestamp_ms: u64) -> i64 {
+    // Every possible u64 millisecond timestamp fits after converting to whole seconds.
+    (timestamp_ms / 1000) as i64
 }
 
 /// Result of replaying journal events.
@@ -832,10 +943,12 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, ReplayVerificationError> {
 
     let mut bytes = Vec::with_capacity(hex.len() / 2);
     for chunk in hex.as_bytes().chunks(2) {
-        let chunk_str = std::str::from_utf8(chunk)
-            .map_err(|_| ReplayVerificationError::InvalidCheckpoint("Invalid hex string".to_string()))?;
-        let byte = u8::from_str_radix(chunk_str, 16)
-            .map_err(|_| ReplayVerificationError::InvalidCheckpoint("Invalid hex digit".to_string()))?;
+        let chunk_str = std::str::from_utf8(chunk).map_err(|_| {
+            ReplayVerificationError::InvalidCheckpoint("Invalid hex string".to_string())
+        })?;
+        let byte = u8::from_str_radix(chunk_str, 16).map_err(|_| {
+            ReplayVerificationError::InvalidCheckpoint("Invalid hex digit".to_string())
+        })?;
         bytes.push(byte);
     }
 
@@ -865,13 +978,15 @@ impl From<crate::engine_object_id::IdError> for ReplayVerificationError {
 /// This ensures that identical data structures always produce identical hash values
 /// by sorting object keys lexicographically, which is critical for replay verification.
 fn to_canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, ReplayVerificationError> {
-    let json_value = serde_json::to_value(value)
-        .map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("JSON conversion error: {}", e)))?;
+    let json_value = serde_json::to_value(value).map_err(|e| {
+        ReplayVerificationError::InvalidCheckpoint(format!("JSON conversion error: {}", e))
+    })?;
 
     let canonical_value = canonicalize_json_value(json_value);
 
-    serde_json::to_vec(&canonical_value)
-        .map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Canonical serialization error: {}", e)))
+    serde_json::to_vec(&canonical_value).map_err(|e| {
+        ReplayVerificationError::InvalidCheckpoint(format!("Canonical serialization error: {}", e))
+    })
 }
 
 /// Recursively sort JSON object keys to ensure deterministic ordering.
@@ -884,9 +999,7 @@ fn canonicalize_json_value(value: Value) -> Value {
             }
             Value::Object(sorted_map)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.into_iter().map(canonicalize_json_value).collect())
-        }
+        Value::Array(arr) => Value::Array(arr.into_iter().map(canonicalize_json_value).collect()),
         other => other,
     }
 }
@@ -915,6 +1028,7 @@ mod tests {
 
         assert_eq!(config.max_events_per_batch, 1000);
         assert_eq!(config.replay_timeout_ms, 30_000);
+        assert_eq!(config.replay_timestamp_ms, None);
         assert!(config.allow_schema_migration);
         assert_eq!(config.freshness_tolerance_ms, 1000);
         assert!(config.verify_payload_hashes);
@@ -1002,19 +1116,82 @@ mod tests {
                     assert_eq!(report.source_export.schema_version, export.schema_version);
 
                     // Healthy journal should have minimal drift
-                    assert!(report.detected_drift.len() <= 1, "Healthy journal should have minimal drift");
+                    assert!(
+                        report.detected_drift.len() <= 1,
+                        "Healthy journal should have minimal drift"
+                    );
 
                     // Replay recipe should be valid
                     assert!(!report.replay_recipe.input_checkpoint.is_empty());
                     assert!(!report.replay_recipe.replay_command.is_empty());
 
-                    println!("✓ Healthy journal replay succeeded with {} drift items",
-                             report.detected_drift.len());
+                    println!(
+                        "✓ Healthy journal replay succeeded with {} drift items",
+                        report.detected_drift.len()
+                    );
                 }
                 Err(e) => {
                     panic!("Failed to replay healthy journal: {}", e);
                 }
             }
+        }
+
+        #[test]
+        fn test_replay_export_uses_deterministic_input_timestamp() {
+            let export = create_healthy_journal_fixture();
+            let expected_timestamp_ms = export
+                .rows
+                .iter()
+                .map(|row| row.collected_timestamp_ms as u64)
+                .max()
+                .unwrap();
+
+            let mut verifier = ShadowReplayVerifier::with_default_config().unwrap();
+            let first_report = verifier
+                .replay_export(export.clone(), "test_environment".to_string())
+                .unwrap();
+            let second_report = verifier
+                .replay_export(export, "test_environment".to_string())
+                .unwrap();
+
+            assert_eq!(first_report.detection_timestamp_ms, expected_timestamp_ms);
+            assert_eq!(second_report.detection_timestamp_ms, expected_timestamp_ms);
+            assert_eq!(first_report.report_id, second_report.report_id);
+            assert_eq!(
+                first_report
+                    .replay_recipe
+                    .environment_vars
+                    .get("REPLAY_TIMESTAMP_MS"),
+                Some(&expected_timestamp_ms.to_string())
+            );
+        }
+
+        #[test]
+        fn test_detect_ordering_drift_preserves_event_order() {
+            let verifier = ShadowReplayVerifier::with_default_config().unwrap();
+            let export = create_healthy_journal_fixture();
+            let mut reversed_order = export
+                .rows
+                .iter()
+                .map(|row| row.journal_event_id.to_string())
+                .collect::<Vec<_>>();
+            reversed_order.swap(0, 1);
+
+            let replay_result = ReplayResult {
+                artifact_results: BTreeMap::new(),
+                event_ordering: reversed_order,
+            };
+
+            let drift = verifier
+                .detect_ordering_drift(&export, &replay_result)
+                .unwrap();
+            assert!(matches!(
+                drift,
+                Some(DriftType::NonDeterministicOrdering {
+                    divergence_point: 0,
+                    ..
+                })
+            ));
         }
 
         /// Test replay of degraded journal to detect performance drift.
@@ -1030,8 +1207,10 @@ mod tests {
                     assert_eq!(report.target_environment, "test_environment");
                     assert_eq!(report.source_export.schema_version, export.schema_version);
 
-                    println!("✓ Degraded journal replay succeeded with {} drift items",
-                             report.detected_drift.len());
+                    println!(
+                        "✓ Degraded journal replay succeeded with {} drift items",
+                        report.detected_drift.len()
+                    );
                 }
                 Err(e) => {
                     panic!("Failed to replay degraded journal: {}", e);
@@ -1050,19 +1229,28 @@ mod tests {
             match result {
                 Ok(report) => {
                     // Contaminated journal should have detected drift
-                    assert!(!report.detected_drift.is_empty(),
-                            "Contaminated journal should detect drift");
+                    assert!(
+                        !report.detected_drift.is_empty(),
+                        "Contaminated journal should detect drift"
+                    );
 
                     // Should not be considered expected migration
-                    assert!(!report.is_expected_migration,
-                            "Contaminated journal should not be expected migration");
+                    assert!(
+                        !report.is_expected_migration,
+                        "Contaminated journal should not be expected migration"
+                    );
 
-                    println!("✓ Contaminated journal replay detected {} drift items",
-                             report.detected_drift.len());
+                    println!(
+                        "✓ Contaminated journal replay detected {} drift items",
+                        report.detected_drift.len()
+                    );
                 }
                 Err(e) => {
                     // Contaminated journal may fail verification
-                    println!("✓ Contaminated journal correctly failed verification: {}", e);
+                    println!(
+                        "✓ Contaminated journal correctly failed verification: {}",
+                        e
+                    );
                 }
             }
         }
@@ -1079,8 +1267,10 @@ mod tests {
                 Ok(report) => {
                     assert_eq!(report.target_environment, "test_environment");
 
-                    println!("✓ Stale journal replay succeeded with {} drift items",
-                             report.detected_drift.len());
+                    println!(
+                        "✓ Stale journal replay succeeded with {} drift items",
+                        report.detected_drift.len()
+                    );
                 }
                 Err(e) => {
                     panic!("Failed to replay stale journal: {}", e);
@@ -1108,27 +1298,43 @@ mod tests {
                 match (result1, result2) {
                     (Ok(report1), Ok(report2)) => {
                         // Compare deterministic aspects (drift count should be same)
-                        assert_eq!(report1.detected_drift.len(), report2.detected_drift.len(),
-                                   "Non-deterministic drift detection in {} fixture", fixture_name);
+                        assert_eq!(
+                            report1.detected_drift.len(),
+                            report2.detected_drift.len(),
+                            "Non-deterministic drift detection in {} fixture",
+                            fixture_name
+                        );
 
                         // Both should have valid provenance
-                        assert!(!report1.replay_recipe.input_checkpoint.is_empty(),
-                                "Missing provenance in {} fixture", fixture_name);
-                        assert!(!report2.replay_recipe.input_checkpoint.is_empty(),
-                                "Missing provenance in {} fixture", fixture_name);
+                        assert!(
+                            !report1.replay_recipe.input_checkpoint.is_empty(),
+                            "Missing provenance in {} fixture",
+                            fixture_name
+                        );
+                        assert!(
+                            !report2.replay_recipe.input_checkpoint.is_empty(),
+                            "Missing provenance in {} fixture",
+                            fixture_name
+                        );
 
                         println!("✓ {} fixture determinism verified", fixture_name);
                     }
                     (Err(e1), Err(e2)) => {
                         // Both should fail in the same way
-                        assert_eq!(format!("{:?}", e1), format!("{:?}", e2),
-                                   "Non-deterministic error behavior in {} fixture", fixture_name);
+                        assert_eq!(
+                            format!("{:?}", e1),
+                            format!("{:?}", e2),
+                            "Non-deterministic error behavior in {} fixture",
+                            fixture_name
+                        );
 
                         println!("✓ {} fixture consistently failed: {}", fixture_name, e1);
                     }
                     _ => {
-                        panic!("Non-deterministic result for {} fixture: one succeeded, one failed",
-                               fixture_name);
+                        panic!(
+                            "Non-deterministic result for {} fixture: one succeeded, one failed",
+                            fixture_name
+                        );
                     }
                 }
             }

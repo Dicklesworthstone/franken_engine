@@ -106,6 +106,22 @@ fn typed_store_prefix(store: StoreKind) -> String {
     format!("typed/{}/", store.as_str())
 }
 
+fn typed_heavy_expected_model(store: StoreKind) -> Option<&'static str> {
+    match store {
+        StoreKind::ShadowEvidenceJournal => Some("ShadowEvidenceJournalEntry"),
+        StoreKind::ReplacementLineage => Some("ReplacementLineageEntry"),
+        StoreKind::IfcProvenance => Some("IfcProvenanceEntry"),
+        StoreKind::SpecializationIndex => Some("SpecializationIndexEntry"),
+        _ => None,
+    }
+}
+
+fn typed_heavy_record_id_from_key(store: StoreKind, key: &str) -> Option<i64> {
+    let typed_prefix = typed_store_prefix(store);
+    let raw_record_id = key.strip_prefix(&typed_prefix)?;
+    raw_record_id.parse::<i64>().ok()
+}
+
 fn typed_heavy_legacy_prefixes(store: StoreKind) -> &'static [&'static str] {
     match store {
         StoreKind::ReplacementLineage => &[
@@ -140,16 +156,30 @@ fn typed_heavy_put_is_current_typed_envelope(
     key: &str,
     metadata: &BTreeMap<String, String>,
 ) -> bool {
+    let Some(expected_model) = typed_heavy_expected_model(store) else {
+        return false;
+    };
+    let Some(key_record_id) = typed_heavy_record_id_from_key(store, key) else {
+        return false;
+    };
+    if key_record_id < 0 {
+        return false;
+    }
+    let metadata_record_id = metadata
+        .get(TYPED_RECORD_ID_KEY)
+        .and_then(|record_id| record_id.parse::<i64>().ok());
     let typed_prefix = typed_store_prefix(store);
     key.starts_with(&typed_prefix)
         && metadata
             .get(TYPED_RECORD_FORMAT_KEY)
             .is_some_and(|format| format == TYPED_RECORD_FORMAT_VALUE)
-        && metadata.contains_key(TYPED_MODEL_KEY)
+        && metadata
+            .get(TYPED_MODEL_KEY)
+            .is_some_and(|model| model == expected_model)
         && metadata
             .get(TYPED_STORE_KIND_KEY)
             .is_some_and(|store_kind| store_kind == store.as_str())
-        && metadata.contains_key(TYPED_RECORD_ID_KEY)
+        && metadata_record_id == Some(key_record_id)
 }
 
 fn typed_heavy_put_is_explicit_legacy_compat(
@@ -218,6 +248,43 @@ fn enforce_typed_heavy_key_access_policy(
             typed_store_prefix(store)
         ),
     ))
+}
+
+fn enforce_typed_heavy_delete_policy(
+    store: StoreKind,
+    key: &str,
+    existing: Option<&StoreRecord>,
+) -> Result<(), StorageError> {
+    if !is_typed_heavy_store(store) {
+        return Ok(());
+    }
+
+    let typed_prefix = typed_store_prefix(store);
+    if key.starts_with(&typed_prefix) {
+        return Ok(());
+    }
+
+    if !typed_heavy_legacy_prefixes(store)
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+    {
+        return Err(typed_heavy_read_policy_error(
+            store,
+            "delete",
+            format!(
+                "key `{key}` is neither a typed `{}` envelope nor a recognized compatibility prefix",
+                typed_store_prefix(store)
+            ),
+        ));
+    }
+
+    match existing {
+        None => Ok(()),
+        Some(record) if typed_heavy_put_is_explicit_legacy_compat(store, key, &record.metadata) => {
+            Ok(())
+        }
+        Some(_) => Err(typed_heavy_write_policy_error(store, "delete", key)),
+    }
 }
 
 fn enforce_typed_heavy_query_policy(
@@ -735,7 +802,14 @@ impl StorageAdapter for InMemoryStorageAdapter {
                 });
             }
             Self::validate_key(key)?;
-            enforce_typed_heavy_key_access_policy(store, key, "delete")?;
+            let existing = self
+                .stores
+                .get(&store)
+                .and_then(|state| state.records.get(key).cloned());
+            enforce_typed_heavy_delete_policy(store, key, existing.as_ref())?;
+            if existing.is_none() {
+                return Ok(false);
+            }
             Ok(self
                 .stores
                 .get_mut(&store)
@@ -1096,7 +1170,16 @@ impl<B: FrankensqliteBackend> StorageAdapter for FrankensqliteStorageAdapter<B> 
     ) -> Result<bool, StorageError> {
         let result = (|| {
             InMemoryStorageAdapter::validate_key(key)?;
-            enforce_typed_heavy_key_access_policy(store, key, "delete")?;
+            if is_typed_heavy_store(store) {
+                let existing = self
+                    .backend
+                    .get_record(store, key)
+                    .map_err(Self::map_backend_error)?;
+                enforce_typed_heavy_delete_policy(store, key, existing.as_ref())?;
+                if existing.is_none() {
+                    return Ok(false);
+                }
+            }
             self.backend
                 .delete_record(store, key)
                 .map_err(Self::map_backend_error)
@@ -3203,6 +3286,10 @@ mod tests {
         ])
     }
 
+    fn legacy_replacement_key() -> &'static str {
+        "replacement_receipts/slot-a/00000000000000000001/receipt-a"
+    }
+
     #[test]
     fn frankensqlite_typed_heavy_put_rejects_unmarked_generic_legacy_rows() {
         let backend = MockFrankenSqlite::default();
@@ -3210,7 +3297,7 @@ mod tests {
         let err = adapter
             .put(
                 StoreKind::ReplacementLineage,
-                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                legacy_replacement_key().to_string(),
                 vec![1],
                 BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
                 &ctx(),
@@ -3229,16 +3316,72 @@ mod tests {
         let stored = adapter
             .put(
                 StoreKind::ReplacementLineage,
-                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                legacy_replacement_key().to_string(),
                 vec![1],
                 metadata,
                 &ctx(),
             )
             .expect("explicit compatibility row should be accepted");
-        assert_eq!(
-            stored.key,
-            "replacement_receipts/slot-a/00000000000000000001/receipt-a"
-        );
+        assert_eq!(stored.key, legacy_replacement_key());
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_delete_rejects_unmarked_legacy_rows() {
+        let mut backend = MockFrankenSqlite::default();
+        backend
+            .put_record(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &[1],
+                &BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
+            )
+            .expect("seed unmarked legacy row");
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+
+        let err = adapter
+            .delete(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &ctx(),
+            )
+            .expect_err("unmarked legacy delete should fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+
+        let stored = adapter
+            .get(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &ctx(),
+            )
+            .expect("recognized compatibility get should still succeed")
+            .expect("row should remain");
+        assert_eq!(stored.value, vec![1]);
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_delete_allows_explicit_compat_rows() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let mut metadata = BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]);
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
+        adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key().to_string(),
+                vec![1],
+                metadata,
+                &ctx(),
+            )
+            .expect("explicit compatibility row should be accepted");
+
+        let deleted = adapter
+            .delete(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &ctx(),
+            )
+            .expect("explicit compatibility delete should be accepted");
+        assert!(deleted);
     }
 
     #[test]
@@ -3273,6 +3416,47 @@ mod tests {
             )
             .expect("current typed envelope should be accepted");
         assert_eq!(stored.key, "typed/replacement_lineage/00000000000000000007");
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_rejects_cross_model_typed_envelopes() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+        let mut metadata = typed_replacement_metadata();
+        metadata.insert(
+            TYPED_MODEL_KEY.to_string(),
+            "IfcProvenanceEntry".to_string(),
+        );
+
+        let err = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "typed/replacement_lineage/00000000000000000007".to_string(),
+                b"{\"typed_record_id\":7}".to_vec(),
+                metadata,
+                &ctx(),
+            )
+            .expect_err("cross-model typed envelope should fail closed");
+
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+    }
+
+    #[test]
+    fn frankensqlite_typed_heavy_put_rejects_typed_record_id_mismatch() {
+        let backend = MockFrankenSqlite::default();
+        let mut adapter = FrankensqliteStorageAdapter::new(backend).expect("adapter init");
+
+        let err = adapter
+            .put(
+                StoreKind::ReplacementLineage,
+                "typed/replacement_lineage/00000000000000000008".to_string(),
+                b"{\"typed_record_id\":7}".to_vec(),
+                typed_replacement_metadata(),
+                &ctx(),
+            )
+            .expect_err("typed metadata id must match the typed key id");
+
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
     }
 
     #[test]
@@ -3332,7 +3516,7 @@ mod tests {
         let err = adapter
             .put(
                 StoreKind::ReplacementLineage,
-                "replacement_receipts/slot-a/00000000000000000001/receipt-a".to_string(),
+                legacy_replacement_key().to_string(),
                 vec![1],
                 BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
                 &ctx(),
@@ -3367,6 +3551,40 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_typed_heavy_delete_rejects_unmarked_legacy_rows() {
+        let mut adapter = InMemoryStorageAdapter::new();
+        adapter
+            .stores
+            .entry(StoreKind::ReplacementLineage)
+            .or_default()
+            .put(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key().to_string(),
+                vec![1],
+                BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]),
+            );
+
+        let err = adapter
+            .delete(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &ctx(),
+            )
+            .expect_err("unmarked legacy delete should fail closed");
+        assert!(matches!(err, StorageError::WriteRejected { .. }));
+
+        let stored = adapter
+            .get(
+                StoreKind::ReplacementLineage,
+                legacy_replacement_key(),
+                &ctx(),
+            )
+            .expect("recognized compatibility get should still succeed")
+            .expect("row should remain");
+        assert_eq!(stored.value, vec![1]);
+    }
+
+    #[test]
     fn in_memory_typed_heavy_batch_put_is_atomic_when_policy_rejects_entry() {
         let mut adapter = InMemoryStorageAdapter::new();
         let mut metadata = BTreeMap::from([("slot_id".to_string(), "slot-a".to_string())]);
@@ -3377,8 +3595,7 @@ mod tests {
                 StoreKind::ReplacementLineage,
                 vec![
                     BatchPutEntry {
-                        key: "replacement_receipts/slot-a/00000000000000000001/receipt-a"
-                            .to_string(),
+                        key: legacy_replacement_key().to_string(),
                         value: vec![1],
                         metadata,
                     },

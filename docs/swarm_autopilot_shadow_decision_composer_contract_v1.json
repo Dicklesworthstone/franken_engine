@@ -1,0 +1,97 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-shadow-decision-composer-contract.v1",
+  "bead_id": "bd-djejh.4",
+  "parent_bead_id": "bd-djejh",
+  "script": "scripts/swarm_autopilot_shadow_decision_composer.sh",
+  "rust_module": "crates/franken-engine/src/shadow_decision_composer.rs",
+  "smoke_script": "scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh",
+  "docs": "docs/SWARM_AUTOPILOT_SHADOW_DECISION_COMPOSER.md",
+  "fixture_bundle": "scripts/testdata/swarm_autopilot_shadow_decision_composer/cases.json",
+  "input_schema": "jsonl-normalized-shadow-journal-events",
+  "shadow_status_schema_version": "franken-engine.swarm-autopilot-shadow-status.v1",
+  "recommendation_bundle_schema_version": "franken-engine.swarm-autopilot-shadow-recommendations.v1",
+  "required_sources": [
+    "br_queue",
+    "bv_robot_plan",
+    "agent_mail",
+    "rch_status",
+    "git_state",
+    "artifact_bundles"
+  ],
+  "required_artifacts": [
+    "shadow_status.json",
+    "recommendations.json",
+    "operator_notice.md",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "recommendation_required_fields": [
+    "recommendation_id",
+    "rank",
+    "action_class",
+    "command_text",
+    "executes_mutation",
+    "remediation_only",
+    "source_event_ids",
+    "source_hashes",
+    "source_collected_epoch_seconds",
+    "degradation_state",
+    "reason_codes",
+    "evidence_paths"
+  ],
+  "truth_states": [
+    "confirmed",
+    "degraded",
+    "blocked",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "degraded",
+    "fail_closed"
+  ],
+  "covered_operator_conditions": [
+    "healthy_idle_queue",
+    "active_owned_lane",
+    "stale_reservation",
+    "contradictory_ownership",
+    "agent_mail_degraded",
+    "dirty_worktree",
+    "rch_fallback_contamination",
+    "missing_no_mock_proof"
+  ],
+  "required_error_codes": [
+    "FE-SWARM-AUTOPILOT-SHADOW-MISSING-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-STALE-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-CONTRADICTORY-OWNERSHIP",
+    "FE-SWARM-AUTOPILOT-SHADOW-UNSUPPORTED-MUTATION",
+    "FE-SWARM-AUTOPILOT-SHADOW-RCH-LOCAL-FALLBACK",
+    "FE-SWARM-AUTOPILOT-SHADOW-DEGRADED-SOURCE",
+    "FE-SWARM-AUTOPILOT-SHADOW-DIRTY-WORKTREE",
+    "FE-SWARM-AUTOPILOT-SHADOW-STALE-RESERVATION",
+    "FE-SWARM-AUTOPILOT-SHADOW-MISSING-NO-MOCK-PROOF"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "writes_outside_output_dir": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_autopilot_shadow_decision_composer_contract_v1.json scripts/testdata/swarm_autopilot_shadow_decision_composer/cases.json",
+    "bash -n scripts/swarm_autopilot_shadow_decision_composer.sh scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh",
+    "shellcheck -x scripts/swarm_autopilot_shadow_decision_composer.sh scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh",
+    "bash scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh check",
+    "bash scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AUTOPILOT_SHADOW_DECISION_COMPOSER.md docs/swarm_autopilot_shadow_decision_composer_contract_v1.json scripts/swarm_autopilot_shadow_decision_composer.sh scripts/e2e/swarm_autopilot_shadow_decision_composer_smoke.sh scripts/testdata/swarm_autopilot_shadow_decision_composer/cases.json"
+  ]
+}

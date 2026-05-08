@@ -1430,8 +1430,9 @@ impl EvidenceLog {
 
     /// Compute HMAC-SHA256 of a message.
     fn compute_hmac(&self, message: &str) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key)
-            .unwrap_or_else(|_| panic!("32-byte signing key should always be valid for HMAC-SHA256"));
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key).unwrap_or_else(|_| {
+            panic!("32-byte signing key should always be valid for HMAC-SHA256")
+        });
         mac.update(message.as_bytes());
         format!("hmac-sha256-{}", hex::encode(mac.finalize().into_bytes()))
     }
@@ -3009,7 +3010,29 @@ impl InterpreterCore {
     }
 
     fn resolve_specifier_base(&self, specifier: &str) -> Result<PathBuf, InterpreterError> {
+        if Path::new(specifier).is_absolute() {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "absolute paths not allowed in module specifiers".to_string(),
+                ),
+            });
+        }
+
         if specifier.starts_with("./") || specifier.starts_with("../") {
+            if self.config.module_root.is_none()
+                && Path::new(specifier)
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err(InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: ModuleResolutionFailureReason::Other(
+                        "parent-directory imports require a configured module root".to_string(),
+                    ),
+                });
+            }
+
             let base = self
                 .current_module_specifier
                 .as_deref()
@@ -3024,14 +3047,52 @@ impl InterpreterCore {
                     ),
                 })?;
             Ok(base.join(specifier))
-        } else if specifier.starts_with('/') {
-            Ok(PathBuf::from(specifier))
         } else {
             Err(InterpreterError::ModuleResolutionFailed {
                 specifier: specifier.to_string(),
                 reason: ModuleResolutionFailureReason::BareSpecifiersNotSupported,
             })
         }
+    }
+
+    fn canonicalize_module_candidate(
+        &self,
+        specifier: &str,
+        candidate: &Path,
+    ) -> Result<PathBuf, InterpreterError> {
+        let canonical =
+            candidate
+                .canonicalize()
+                .map_err(|error| InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: ModuleResolutionFailureReason::Other(format!(
+                        "failed to canonicalize module path: {error}"
+                    )),
+                })?;
+
+        let Some(module_root) = self.config.module_root.as_deref() else {
+            return Ok(canonical);
+        };
+
+        let canonical_root = Path::new(module_root).canonicalize().map_err(|error| {
+            InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(format!(
+                    "failed to canonicalize module root: {error}"
+                )),
+            }
+        })?;
+
+        if !canonical.starts_with(&canonical_root) {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "module specifier escapes module root".to_string(),
+                ),
+            });
+        }
+
+        Ok(canonical)
     }
 
     fn resolve_module_specifier(&self, specifier: &str) -> Result<String, InterpreterError> {
@@ -3042,15 +3103,7 @@ impl InterpreterCore {
                 reason: ModuleResolutionFailureReason::ModuleNotFound,
             }
         })?;
-        let canonical =
-            candidate
-                .canonicalize()
-                .map_err(|error| InterpreterError::ModuleResolutionFailed {
-                    specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other(format!(
-                        "failed to canonicalize module path: {error}"
-                    )),
-                })?;
+        let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
         Ok(canonical.display().to_string())
     }
 
@@ -3063,15 +3116,7 @@ impl InterpreterCore {
                 specifier: specifier.to_string(),
                 reason: ModuleResolutionFailureReason::ModuleNotFound,
             })?;
-        let canonical =
-            candidate
-                .canonicalize()
-                .map_err(|error| InterpreterError::ModuleResolutionFailed {
-                    specifier: specifier.to_string(),
-                    reason: ModuleResolutionFailureReason::Other(format!(
-                        "failed to canonicalize module path: {error}"
-                    )),
-                })?;
+        let canonical = self.canonicalize_module_candidate(specifier, &candidate)?;
         Ok(canonical.display().to_string())
     }
 
@@ -20950,6 +20995,91 @@ mod execution_engine_contract_tests {
     fn lane_wrappers_are_swappable_execution_engines() {
         assert!(accepts_engine_trait_object(&QuickJsLane::new()));
         assert!(accepts_engine_trait_object(&V8Lane::new()));
+    }
+}
+
+#[cfg(test)]
+mod module_resolution_security_tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    fn core_with_root(root: &Path, entry: &Path) -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.module_root = Some(root.display().to_string());
+        let mut core = InterpreterCore::new(config, "module-resolution-security-test");
+        core.current_module_specifier = Some(entry.display().to_string());
+        core
+    }
+
+    #[test]
+    fn module_resolution_keeps_extension_probe_inside_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("app");
+        fs::create_dir_all(&root)?;
+        let entry = root.join("entry.js");
+        let dep = root.join("dep.js");
+        fs::write(&entry, "import './dep';")?;
+        fs::write(&dep, "export const value = 1;")?;
+
+        let core = core_with_root(&root, &entry);
+        let resolved = core.resolve_module_specifier("./dep")?;
+
+        assert_eq!(Path::new(&resolved), dep.canonicalize()?.as_path());
+        Ok(())
+    }
+
+    #[test]
+    fn module_resolution_rejects_parent_escape_from_module_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("app");
+        fs::create_dir_all(&root)?;
+        let entry = root.join("entry.js");
+        let outside = temp.path().join("outside.js");
+        fs::write(&entry, "import '../outside';")?;
+        fs::write(&outside, "export const secret = 1;")?;
+
+        let core = core_with_root(&root, &entry);
+        let err = core
+            .resolve_module_specifier("../outside")
+            .expect_err("parent import must not escape configured module root");
+
+        assert!(matches!(
+            err,
+            InterpreterError::ModuleResolutionFailed {
+                reason: ModuleResolutionFailureReason::Other(reason),
+                ..
+            } if reason.contains("escapes module root")
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn module_resolution_rejects_absolute_specifiers() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("app");
+        fs::create_dir_all(&root)?;
+        let entry = root.join("entry.js");
+        let outside = temp.path().join("outside.js");
+        fs::write(&entry, "import '/tmp/outside.js';")?;
+        fs::write(&outside, "export const secret = 1;")?;
+
+        let core = core_with_root(&root, &entry);
+        let outside_specifier = outside.display().to_string();
+        let err = core
+            .resolve_module_specifier(&outside_specifier)
+            .expect_err("absolute import must be rejected before filesystem probing");
+
+        assert!(matches!(
+            err,
+            InterpreterError::ModuleResolutionFailed {
+                reason: ModuleResolutionFailureReason::Other(reason),
+                ..
+            } if reason.contains("absolute paths not allowed")
+        ));
+        Ok(())
     }
 }
 

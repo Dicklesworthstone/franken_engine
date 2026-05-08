@@ -2271,7 +2271,7 @@ mod tests {
                     .require_capability(RuntimeCapability::FsRead)
                     .with_provenance("builtin:franken:std/fs"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let mut granted = BTreeSet::new();
         granted.insert(RuntimeCapability::FsRead);
@@ -2282,11 +2282,11 @@ mod tests {
         // resolve() only fails for unknown modules or policy violations (both impossible here).
         let first = resolver
             .resolve(&request, &context(), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         // SAFETY: Same module request as above, guaranteed to succeed for same reasons.
         let second = resolver
             .resolve(&request, &context(), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         assert_eq!(first.module.canonical_specifier, "franken:std/fs");
         assert_eq!(first.module.record.id, "builtin:franken:std/fs");
@@ -2306,19 +2306,19 @@ mod tests {
                 "/app/main.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let import_error = resolver
             .resolve(
@@ -2352,7 +2352,7 @@ mod tests {
             ModuleRequest::new("./lib", ImportStyle::Require).with_referrer("/app/main.mjs");
         let require_outcome = resolver
             .resolve(&require_request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(require_outcome.module.canonical_specifier, "/app/lib.cjs");
         assert_eq!(
             require_outcome.module.probe_sequence,
@@ -2368,7 +2368,7 @@ mod tests {
                 "some-pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'sub';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let native_error = resolver
             .resolve(
@@ -2417,13 +2417,13 @@ mod tests {
                 "some-pkg/entry.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import '../other-pkg/private.mjs';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "other-pkg/private.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'secret';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -2453,13 +2453,13 @@ mod tests {
                     "module.exports = require('../other-pkg/private.cjs');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "other-pkg/private.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 42;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -2495,7 +2495,7 @@ mod tests {
                 "/repo/pkg/index.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -2522,7 +2522,7 @@ mod tests {
                 "/repo/pkg/index.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -2566,13 +2566,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/repo/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -2600,7 +2600,7 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 7;")
                     .require_capability(RuntimeCapability::FsWrite),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let mut granted = BTreeSet::new();
         granted.insert(RuntimeCapability::FsRead);
@@ -2632,13 +2632,13 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = function(){};")
                     .with_provenance("registry:npm:left-pad@1.3.0"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("left-pad", ImportStyle::Require);
         // SAFETY: Test scenario with valid request and registered module; resolution should succeed
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         assert_eq!(
             outcome.module.record.provenance.kind,
@@ -2785,14 +2785,14 @@ mod tests {
                     fallback_target: None,
                 },
             ))
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         // SAFETY: Test scenario with valid module definition; registration should succeed
         resolver
             .register_external_module(
                 "other-pkg/private.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'secret';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -2820,13 +2820,13 @@ mod tests {
                     fallback_target: Some("./dist/index.js".to_string()),
                 },
             ))
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "fallback-pkg/dist/index.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 'fallback';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         for style in [ImportStyle::Import, ImportStyle::Require] {
             let outcome = resolver
@@ -2880,7 +2880,7 @@ mod tests {
                 "/app/main.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, ""),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request =
             ModuleRequest::new("./missing", ImportStyle::Import).with_referrer("/app/main.js");
         let error = resolver
@@ -2901,12 +2901,12 @@ mod tests {
                 "/app/lib/util.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const x = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/lib/util.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/app/lib/util.js");
     }
 
@@ -2922,12 +2922,12 @@ mod tests {
                 "/app/utils.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 42;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("utils", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/app/utils.js");
         assert_eq!(
             outcome.module.probe_sequence,
@@ -2956,20 +2956,20 @@ mod tests {
                 "/app/main.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib/index.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("./lib", ImportStyle::Import)
             .with_referrer("/app/main.mjs")
             .with_compatibility_mode(CompatibilityMode::BunCompat);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/app/lib/index.mjs");
     }
 
@@ -2981,19 +2981,19 @@ mod tests {
                 "/app/main.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './lib';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib/index.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request =
             ModuleRequest::new("./lib", ImportStyle::Require).with_referrer("/app/main.js");
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/app/lib/index.cjs");
     }
 
@@ -3009,7 +3009,7 @@ mod tests {
                 "franken:fs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const read = true;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request =
             ModuleRequest::new("./sub", ImportStyle::Import).with_referrer("builtin:franken:fs");
@@ -3028,7 +3028,7 @@ mod tests {
                 "/app/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request =
             ModuleRequest::new("./sub.mjs", ImportStyle::Import).with_referrer("/app/missing.mjs");
@@ -3048,7 +3048,7 @@ mod tests {
                 "pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("./sub.mjs", ImportStyle::Import)
             .with_referrer("external:pkg/missing.mjs");
@@ -3068,13 +3068,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./sub');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/sub.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3100,13 +3100,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -3138,13 +3138,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -3175,13 +3175,13 @@ mod tests {
                     "module.exports = require('./lib.mjs');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -3209,13 +3209,13 @@ mod tests {
                     "module.exports = require('./lib.js');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -3243,13 +3243,13 @@ mod tests {
                     "module.exports = require('./lib.js');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3277,13 +3277,13 @@ mod tests {
                     "module.exports = require('./lib.mjs');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3311,13 +3311,13 @@ mod tests {
                     "module.exports = require('./lib.js');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3345,13 +3345,13 @@ mod tests {
                     "module.exports = require('./lib.js');",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3376,19 +3376,19 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3415,19 +3415,19 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3454,19 +3454,19 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3493,13 +3493,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3526,13 +3526,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -3564,13 +3564,13 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3603,19 +3603,19 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3642,19 +3642,19 @@ mod tests {
                 "pkg/entry.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = require('./lib');"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.js",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib/index.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -3692,18 +3692,18 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './dep.js';")
                     .with_dependency(ModuleDependency::new("./dep.js", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/dep.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/entry.js", ImportStyle::Import);
         let chain = resolver
             .resolve_chain(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].module.canonical_specifier, "/app/entry.js");
@@ -3719,19 +3719,19 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './b.js';")
                     .with_dependency(ModuleDependency::new("./b.js", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/b.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './a.js';")
                     .with_dependency(ModuleDependency::new("./a.js", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/a.js", ImportStyle::Import);
         let chain = resolver
             .resolve_chain(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         // Should resolve both but not loop infinitely
         assert_eq!(chain.len(), 2);
@@ -3745,12 +3745,12 @@ mod tests {
                 "/app/leaf.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const x = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/leaf.js", ImportStyle::Import);
         let chain = resolver
             .resolve_chain(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(chain.len(), 1);
     }
 
@@ -3766,7 +3766,7 @@ mod tests {
                 "/app/allowed.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let policy = CapabilityPolicyHook::new(BTreeSet::new()).deny_specifier("/app/allowed.js");
 
@@ -3791,12 +3791,12 @@ mod tests {
                     .require_capability(RuntimeCapability::FsWrite)
                     .require_capability(RuntimeCapability::NetworkEgress),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/anything.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.event.outcome, "allow");
     }
 
@@ -3839,15 +3839,15 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;")
                     .with_provenance("workspace:/app/det.js"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/det.js", ImportStyle::Import);
         let r1 = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r2 = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(r1.module.content_hash, r2.module.content_hash);
         assert_eq!(
             r1.module.record.canonical_bytes(),
@@ -3916,7 +3916,7 @@ mod tests {
     #[test]
     fn module_syntax_serde_round_trip() {
         for syntax in &[ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
-            let json = serde_json::to_string(syntax).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(syntax).expect("serde serialization should succeed");
             let decoded: ModuleSyntax =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, syntax);
@@ -3926,7 +3926,7 @@ mod tests {
     #[test]
     fn import_style_serde_round_trip() {
         for style in &[ImportStyle::Import, ImportStyle::Require] {
-            let json = serde_json::to_string(style).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(style).expect("serde serialization should succeed");
             let decoded: ImportStyle =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, style);
@@ -3943,7 +3943,7 @@ mod tests {
             ResolutionErrorCode::PolicyDenied,
         ];
         for code in &codes {
-            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(code).expect("serde serialization should succeed");
             let decoded: ResolutionErrorCode =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, code);
@@ -4002,12 +4002,12 @@ mod tests {
                 "src/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/workspace/src/lib.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/workspace/src/lib.js");
     }
 
@@ -4023,18 +4023,18 @@ mod tests {
                 "franken:util",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const v = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_builtin(
                 "franken:util",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const v = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("franken:util", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.record.source, "export const v = 2;");
     }
 
@@ -4113,7 +4113,7 @@ mod tests {
             kind: ModuleSourceKind::BuiltIn,
             origin: "franken:core".to_string(),
         };
-        let json = serde_json::to_string(&mp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mp).expect("serde serialization should succeed");
         let restored: ModuleProvenance =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mp, restored);
@@ -4125,7 +4125,7 @@ mod tests {
             specifier: "./utils.js".to_string(),
             style: ImportStyle::Import,
         };
-        let json = serde_json::to_string(&md).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&md).expect("serde serialization should succeed");
         let restored: ModuleDependency =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(md, restored);
@@ -4134,7 +4134,7 @@ mod tests {
     #[test]
     fn module_request_serde_roundtrip() {
         let mr = ModuleRequest::new("franken:core", ImportStyle::Import);
-        let json = serde_json::to_string(&mr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mr, restored);
@@ -4145,7 +4145,7 @@ mod tests {
         let mr = ModuleRequest::new("pkg", ImportStyle::Require)
             .with_referrer("/repo/main.cjs")
             .with_compatibility_mode(CompatibilityMode::BunCompat);
-        let json = serde_json::to_string(&mr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mr, restored);
@@ -4157,7 +4157,7 @@ mod tests {
         let restored: ModuleRequest = serde_json::from_str(
             r#"{"specifier":"pkg","referrer":"/repo/main.cjs","style":"require"}"#,
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert_eq!(restored.compatibility_mode, CompatibilityMode::Native);
     }
 
@@ -4168,7 +4168,7 @@ mod tests {
             decision_id: "d".to_string(),
             policy_id: "p".to_string(),
         };
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serde serialization should succeed");
         let restored: ResolutionContext =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
@@ -4180,7 +4180,7 @@ mod tests {
             code: RegistryErrorCode::EmptyKey,
             message: "key must not be empty".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: RegistryError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
@@ -4189,7 +4189,7 @@ mod tests {
     #[test]
     fn allow_all_policy_default_serde() {
         let p = AllowAllPolicy;
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serde serialization should succeed");
         let restored: AllowAllPolicy =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, restored);
@@ -4202,7 +4202,7 @@ mod tests {
             ModuleSourceKind::Workspace,
             ModuleSourceKind::ExternalRegistry,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ModuleSourceKind =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
@@ -4278,7 +4278,7 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;")
                     .require_capability(RuntimeCapability::FsWrite),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let policy = CapabilityPolicyHook::new(BTreeSet::new()); // no caps granted
         let request = ModuleRequest::new("/app/restricted.js", ImportStyle::Import);
@@ -4293,7 +4293,7 @@ mod tests {
     #[test]
     fn registry_error_code_serde_roundtrip() {
         let code = RegistryErrorCode::EmptyKey;
-        let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&code).expect("serde serialization should succeed");
         let back: RegistryErrorCode =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(code, back);
@@ -4311,7 +4311,7 @@ mod tests {
                     .require_capability(RuntimeCapability::FsRead)
                     .require_capability(RuntimeCapability::FsWrite),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let mut granted = BTreeSet::new();
         granted.insert(RuntimeCapability::FsRead);
@@ -4321,7 +4321,7 @@ mod tests {
         let request = ModuleRequest::new("/app/multi.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.event.outcome, "allow");
     }
 
@@ -4333,7 +4333,7 @@ mod tests {
             .with_dependency(ModuleDependency::new("./util", ImportStyle::Import))
             .require_capability(RuntimeCapability::FsRead)
             .with_provenance("test:origin");
-        let json = serde_json::to_string(&def).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&def).expect("serde serialization should succeed");
         let restored: ModuleDefinition =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(def, restored);
@@ -4350,7 +4350,7 @@ mod tests {
             outcome: "allow".to_string(),
             error_code: "none".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serde serialization should succeed");
         let restored: ResolutionEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
@@ -4364,22 +4364,22 @@ mod tests {
                 "/app/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let request = ModuleRequest::new("/app/lib", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let value =
-            serde_json::to_value(&outcome.module).expect("serde deserialization should succeed");
+            serde_json::to_value(&outcome.module).expect("serde serialization should succeed");
         assert_eq!(
             value.get("probe_sequence"),
             Some(&serde_json::json!(["/app/lib", "/app/lib.mjs"]))
         );
 
         let restored: ResolvedModule =
-            serde_json::from_value(value).expect("serde deserialization should succeed");
+            serde_json::from_value(value).expect("serde serialization should succeed");
         assert_eq!(outcome.module, restored);
     }
 
@@ -4398,11 +4398,11 @@ mod tests {
             probe_sequence: Vec::new(),
         };
 
-        let value = serde_json::to_value(&module).expect("serde deserialization should succeed");
+        let value = serde_json::to_value(&module).expect("serde serialization should succeed");
         assert!(value.get("probe_sequence").is_none());
 
         let restored: ResolvedModule =
-            serde_json::from_value(value).expect("serde deserialization should succeed");
+            serde_json::from_value(value).expect("serde serialization should succeed");
         assert!(restored.probe_sequence.is_empty());
     }
 
@@ -4414,13 +4414,13 @@ mod tests {
                 "left-pad",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = pad;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("left-pad", ImportStyle::Require);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serde serialization should succeed");
         let restored: ResolutionOutcome =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, restored);
@@ -4435,13 +4435,13 @@ mod tests {
                 "/app/main.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import x from './lib';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -4451,7 +4451,7 @@ mod tests {
                 &context(),
                 &AllowAllPolicy,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let trace = outcome.trace_record();
         assert_eq!(trace.schema_version, MODULE_RESOLUTION_TRACE_SCHEMA_VERSION);
@@ -4465,9 +4465,9 @@ mod tests {
         let restored: ModuleResolutionTraceRecord = serde_json::from_str(
             &trace
                 .to_json_line()
-                .expect("serde deserialization should succeed"),
+                .expect("serde serialization should succeed"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
         assert_eq!(restored, trace);
     }
 
@@ -4479,7 +4479,7 @@ mod tests {
                 "/app/main.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './missing';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -4511,7 +4511,7 @@ mod tests {
         let hook = CapabilityPolicyHook::new(granted)
             .deny_specifier("evil-pkg")
             .deny_specifier("malware");
-        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hook).expect("serde serialization should succeed");
         let restored: CapabilityPolicyHook =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hook, restored);
@@ -4525,20 +4525,20 @@ mod tests {
                 "franken:fs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const read = true;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/lib.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "left-pad",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = pad;"),
             )
-            .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&resolver).expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
+        let json = serde_json::to_string(&resolver).expect("serde serialization should succeed");
         let restored: DeterministicModuleResolver =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(resolver, restored);
@@ -4567,7 +4567,7 @@ mod tests {
             probe_sequence: Vec::new(),
             event: ev,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: ResolutionError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
@@ -4583,18 +4583,18 @@ mod tests {
                 "/app/shared/util.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const x = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/src/main.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import '../shared/util.js';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("../shared/util.js", ImportStyle::Import)
             .with_referrer("/app/src/main.js");
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "/app/shared/util.js");
     }
 
@@ -4609,24 +4609,24 @@ mod tests {
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './b.js';")
                     .with_dependency(ModuleDependency::new("./b.js", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/b.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import './c.js';")
                     .with_dependency(ModuleDependency::new("./c.js", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/c.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 3;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("/app/a.js", ImportStyle::Import);
         let chain = resolver
             .resolve_chain(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(chain.len(), 3);
         assert_eq!(chain[0].module.canonical_specifier, "/app/a.js");
         assert_eq!(chain[1].module.canonical_specifier, "/app/b.js");
@@ -4647,14 +4647,14 @@ mod tests {
                         ImportStyle::Import,
                     )),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/restricted.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;")
                     .require_capability(RuntimeCapability::FsWrite),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let policy = CapabilityPolicyHook::new(BTreeSet::new());
         let request = ModuleRequest::new("/app/entry.js", ImportStyle::Import);
         let err = resolver
@@ -4673,7 +4673,7 @@ mod tests {
                 "/app/target.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let policy = CapabilityPolicyHook::new(BTreeSet::new()).deny_specifier("/app/target.js");
         let request = ModuleRequest::new("/app/target.js", ImportStyle::Import);
         let err = resolver
@@ -4705,27 +4705,27 @@ mod tests {
                 "/app/v1.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/v2.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r1 = resolver
             .resolve(
                 &ModuleRequest::new("/app/v1.js", ImportStyle::Import),
                 &context(),
                 &AllowAllPolicy,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r2 = resolver
             .resolve(
                 &ModuleRequest::new("/app/v2.js", ImportStyle::Import),
                 &context(),
                 &AllowAllPolicy,
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_ne!(r1.module.content_hash, r2.module.content_hash);
     }
 
@@ -4768,17 +4768,17 @@ mod tests {
                 "/app/mod.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const v = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_workspace_module(
                 "/app/mod.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const v = 2;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("/app/mod.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.record.source, "export const v = 2;");
     }
 
@@ -4790,17 +4790,17 @@ mod tests {
                 "lodash",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "v1"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "lodash",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "v2"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("lodash", ImportStyle::Require);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.record.source, "v2");
     }
 
@@ -4814,11 +4814,11 @@ mod tests {
                 "my-pkg.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let request = ModuleRequest::new("my-pkg", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &AllowAllPolicy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.module.canonical_specifier, "my-pkg.js");
     }
 
@@ -4832,13 +4832,13 @@ mod tests {
                 "some-pkg",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export { default } from './sub';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "some-pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -4860,7 +4860,7 @@ mod tests {
                 "some-pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcome = resolver
             .resolve(
@@ -4887,13 +4887,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./sub", ImportStyle::Require)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/sub.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -4921,13 +4921,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./sub", ImportStyle::Require)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "@scope/pkg/sub.cjs",
                 ModuleDefinition::new(ModuleSyntax::CommonJs, "module.exports = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -4954,13 +4954,13 @@ mod tests {
                 "@scope/pkg.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export { default } from './sub';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "@scope/pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let native_error = resolver
             .resolve(
@@ -5011,13 +5011,13 @@ mod tests {
                 "@scope/pkg.js",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "import '../other-pkg/private.mjs';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "@scope/other-pkg/private.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'secret';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let error = resolver
             .resolve(
@@ -5048,13 +5048,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./lib.mjs", ImportStyle::Require)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/lib.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export default 'esm';"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -5083,13 +5083,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -5123,13 +5123,13 @@ mod tests {
                 )
                 .with_dependency(ModuleDependency::new("./sub.mjs", ImportStyle::Import)),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         resolver
             .register_external_module(
                 "@scope/pkg/sub.mjs",
                 ModuleDefinition::new(ModuleSyntax::EsModule, "export const value = 1;"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         let outcomes = resolver
             .resolve_chain(
@@ -5164,7 +5164,7 @@ mod tests {
     #[test]
     fn module_request_with_referrer_serde_roundtrip() {
         let mr = ModuleRequest::new("./dep", ImportStyle::Import).with_referrer("/app/main.js");
-        let json = serde_json::to_string(&mr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mr, restored);
@@ -5184,14 +5184,14 @@ mod tests {
                     .require_capability(RuntimeCapability::FsRead)
                     .with_provenance("workspace:/app/full.js"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let mut granted = BTreeSet::new();
         granted.insert(RuntimeCapability::FsRead);
         let policy = CapabilityPolicyHook::new(granted);
         let request = ModuleRequest::new("/app/full.js", ImportStyle::Import);
         let outcome = resolver
             .resolve(&request, &context(), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let cv = outcome.module.record.canonical_value();
         let bytes = outcome.module.record.canonical_bytes();
         assert!(!bytes.is_empty());
@@ -5591,7 +5591,7 @@ mod tests {
         let request = HostApiRequest::new("node:fs", "read_file");
         let outcome = surface
             .authorize(&request, &context(), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(outcome.event.outcome, "allow");
         assert_eq!(outcome.event.error_code, "none");
         assert!(outcome.event.decision_stable_id.starts_with("hostapi-dec-"));

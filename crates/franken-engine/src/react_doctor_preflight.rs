@@ -1599,7 +1599,7 @@ mod tests {
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Error),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(report.aggregate_score() > 0);
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
     #[test]
     fn run_doctor_empty_entries_returns_empty_report() {
         let report =
-            run_doctor(&default_config(), &[]).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &[]).expect("serde serialization should succeed");
         assert!(report.is_empty());
     }
 
@@ -1620,7 +1620,7 @@ mod tests {
             MismatchSeverity::Info,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(!report.is_empty());
         assert_eq!(report.blocking_count(), 0);
     }
@@ -1633,7 +1633,7 @@ mod tests {
             MismatchSeverity::Critical,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(report.blocking_count() > 0);
     }
 
@@ -1646,7 +1646,7 @@ mod tests {
             MismatchDomain::ServerSideRender,
             MismatchSeverity::Error,
         )];
-        let report = run_doctor(&cfg, &entries).expect("serde deserialization should succeed");
+        let report = run_doctor(&cfg, &entries).expect("serde serialization should succeed");
         let ssr_checks = report.checks_by_category(CheckCategory::SsrConfig);
         assert!(ssr_checks.is_empty());
     }
@@ -1664,7 +1664,7 @@ mod tests {
                 )
             })
             .collect();
-        let report = run_doctor(&cfg, &entries).expect("serde deserialization should succeed");
+        let report = run_doctor(&cfg, &entries).expect("serde serialization should succeed");
         assert!(report.len() <= 2);
     }
 
@@ -1689,7 +1689,7 @@ mod tests {
             RemediationStatus::Resolved,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(report.is_empty());
     }
 
@@ -1704,7 +1704,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         )];
-        let report = run_doctor(&cfg, &entries).expect("serde deserialization should succeed");
+        let report = run_doctor(&cfg, &entries).expect("serde serialization should succeed");
         assert!(!report.is_empty());
     }
 
@@ -1724,7 +1724,7 @@ mod tests {
             make_entry("e-3", MismatchDomain::ModuleGraph, MismatchSeverity::Info),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(report.len() >= 3);
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
             MismatchSeverity::Warning,
         );
         e.verified_epoch = epoch(5); // 45 epochs behind
-        let report = run_doctor(&cfg, &[e]).expect("serde deserialization should succeed");
+        let report = run_doctor(&cfg, &[e]).expect("serde serialization should succeed");
         let stale: Vec<_> = report
             .checks
             .iter()
@@ -1752,7 +1752,7 @@ mod tests {
     #[test]
     fn preflight_passes_on_empty() {
         let result =
-            run_preflight(&default_config(), &[]).expect("serde deserialization should succeed");
+            run_preflight(&default_config(), &[]).expect("serde serialization should succeed");
         assert!(result.passed);
         assert_eq!(result.blocker_count(), 0);
     }
@@ -1765,7 +1765,7 @@ mod tests {
             MismatchSeverity::Warning,
         )];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(result.passed);
         assert!(result.advisory_count() > 0);
     }
@@ -1778,7 +1778,7 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(!result.passed);
         assert!(result.blocker_count() > 0);
     }
@@ -1791,7 +1791,7 @@ mod tests {
             MismatchSeverity::Critical,
         )];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(!result.passed);
     }
 
@@ -1802,7 +1802,7 @@ mod tests {
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Info),
         ];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert_eq!(result.entries_analyzed, 2);
     }
 
@@ -1817,7 +1817,7 @@ mod tests {
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Error),
         ];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(result.total_findings() > 0);
     }
 
@@ -1837,9 +1837,9 @@ mod tests {
         );
 
         let result_one = run_preflight(&default_config(), std::slice::from_ref(&warning))
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let result_two = run_preflight(&default_config(), &[warning, filtered_resolved])
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
 
         assert_eq!(result_one.blockers, result_two.blockers);
         assert_eq!(result_one.advisories, result_two.advisories);
@@ -1852,7 +1852,7 @@ mod tests {
     #[test]
     fn support_bundle_from_empty_report() {
         let report = DoctorReport::new(epoch(1));
-        let bundle = build_support_bundle(&report).expect("serde deserialization should succeed");
+        let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
         assert!(bundle.is_empty());
         assert_eq!(bundle.schema_version, DOCTOR_PREFLIGHT_SCHEMA_VERSION);
     }
@@ -1872,8 +1872,8 @@ mod tests {
             ),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let bundle = build_support_bundle(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
         assert!(!bundle.is_empty());
         let doctor_checks = bundle.entries_by_category("doctor_checks");
         assert!(!doctor_checks.is_empty());
@@ -1887,8 +1887,8 @@ mod tests {
             MismatchSeverity::Warning,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let bundle = build_support_bundle(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
         let severity = bundle.entries_by_category("severity_breakdown");
         assert!(!severity.is_empty());
     }
@@ -1901,8 +1901,8 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let bundle = build_support_bundle(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
         let guidance = bundle.entries_by_category("guidance");
         assert!(!guidance.is_empty());
     }
@@ -1912,7 +1912,7 @@ mod tests {
     #[test]
     fn guidance_empty_report() {
         let report = DoctorReport::new(epoch(1));
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         assert!(guidance.is_empty());
     }
 
@@ -1931,8 +1931,8 @@ mod tests {
             ),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         // Both map to JsxTransform, should be consolidated
         let jsx_guidance: Vec<_> = guidance
             .iter()
@@ -1956,8 +1956,8 @@ mod tests {
             ),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         if guidance.len() >= 2 {
             assert!(guidance[0].priority <= guidance[1].priority);
         }
@@ -1971,8 +1971,8 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         assert!(!guidance.is_empty());
         assert!(!guidance[0].steps.is_empty());
     }
@@ -1985,11 +1985,11 @@ mod tests {
             MismatchSeverity::Warning,
         )];
         let r1 =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let r2 =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let g1 = generate_guidance(&r1).expect("serde deserialization should succeed");
-        let g2 = generate_guidance(&r2).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let g1 = generate_guidance(&r1).expect("serde serialization should succeed");
+        let g2 = generate_guidance(&r2).expect("serde serialization should succeed");
         assert_eq!(g1.len(), g2.len());
         for (a, b) in g1.iter().zip(g2.iter()) {
             assert_eq!(a.content_hash(), b.content_hash());
@@ -2034,8 +2034,8 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         assert!(!guidance.is_empty());
         for entry in &guidance {
             assert_eq!(entry.guidance_hash, entry.content_hash());
@@ -2060,9 +2060,9 @@ mod tests {
         report_b.recompute_hash();
 
         let bundle_a =
-            build_support_bundle(&report_a).expect("serde deserialization should succeed");
+            build_support_bundle(&report_a).expect("serde serialization should succeed");
         let bundle_b =
-            build_support_bundle(&report_b).expect("serde deserialization should succeed");
+            build_support_bundle(&report_b).expect("serde serialization should succeed");
         assert_ne!(bundle_a.guidance[0].steps, bundle_b.guidance[0].steps);
         assert_ne!(bundle_a.bundle_hash, bundle_b.bundle_hash);
     }
@@ -2083,7 +2083,7 @@ mod tests {
             MismatchSeverity::Critical,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         assert!(!is_react_ready(&report));
     }
 
@@ -2114,7 +2114,7 @@ mod tests {
             make_entry("e-3", MismatchDomain::Diagnostics, MismatchSeverity::Info),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let summary = summarize(&report);
         assert_eq!(
             summary.total_checks,
@@ -2134,7 +2134,7 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let summary = summarize(&report);
         assert!(!summary.is_ready);
     }
@@ -2167,9 +2167,9 @@ mod tests {
             ),
         ];
         let r_light = run_doctor(&default_config(), &entries_light)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         let r_heavy = run_doctor(&default_config(), &entries_heavy)
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         assert!(readiness_score(&r_light) > readiness_score(&r_heavy));
     }
 
@@ -2186,7 +2186,7 @@ mod tests {
             make_entry("e-2", MismatchDomain::Diagnostics, MismatchSeverity::Error),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let ids = referenced_mismatch_ids(&report);
         assert!(ids.contains("e-1"));
         assert!(ids.contains("e-2"));
@@ -2209,7 +2209,7 @@ mod tests {
             ),
         ];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let cats: BTreeSet<_> = [CheckCategory::HookOrdering].into_iter().collect();
         let filtered = filter_by_categories(&report, &cats);
         for c in &filtered {
@@ -2272,7 +2272,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_check_category() {
         for cat in ALL_CATEGORIES {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serde serialization should succeed");
             let back: CheckCategory =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
@@ -2288,7 +2288,7 @@ mod tests {
             CheckSeverity::Error,
             CheckSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serde serialization should succeed");
             let back: CheckSeverity =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
@@ -2303,8 +2303,8 @@ mod tests {
             MismatchSeverity::Warning,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde serialization should succeed");
         let back: DoctorReport =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.len(), back.len());
@@ -2319,8 +2319,8 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let result = run_preflight(&default_config(), &entries)
-            .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde serialization should succeed");
         let back: PreflightResult =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.passed, back.passed);
@@ -2335,10 +2335,10 @@ mod tests {
             MismatchSeverity::Error,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let guidance = generate_guidance(&report).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let guidance = generate_guidance(&report).expect("serde serialization should succeed");
         for g in &guidance {
-            let json = serde_json::to_string(g).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(g).expect("serde serialization should succeed");
             let back: GuidanceEntry =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(g.guidance_id, back.guidance_id);
@@ -2353,9 +2353,9 @@ mod tests {
             MismatchSeverity::Warning,
         )];
         let report =
-            run_doctor(&default_config(), &entries).expect("serde deserialization should succeed");
-        let bundle = build_support_bundle(&report).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+            run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
+        let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serde serialization should succeed");
         let back: SupportBundle =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.len(), back.len());
@@ -2364,7 +2364,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_doctor_config() {
         let cfg = DoctorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serde serialization should succeed");
         let back: DoctorConfig =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
@@ -2373,7 +2373,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_doctor_error() {
         let err = DoctorError::EmptyInput;
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let back: DoctorError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);

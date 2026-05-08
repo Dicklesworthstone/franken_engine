@@ -447,14 +447,14 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_parse_compound_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::Resolved,
+            status: ZeroPlaceholderStatus::Blocked,
             severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.parse.compound".to_string(),
-            source_reference: "crates/franken-engine/src/stdlib.rs::json_parse".to_string(),
+            source_reference: "crates/franken-engine/src/baseline_interpreter.rs::builtin:JsonParse".to_string(),
             observed_behavior:
-                "JSON.parse now materializes arrays and objects as heap-backed runtime values, including nested compound structures, without descriptor placeholders."
+                "baseline_interpreter builtin:JsonParse only handles primitives (null/bool/string/number), returns Value::Undefined for arrays/objects. stdlib::json_parse supports compound structures but is not used by baseline."
                     .to_string(),
             required_behavior:
                 "Parse arrays and objects into deterministic runtime values without placeholder descriptors."
@@ -1406,7 +1406,7 @@ mod tests {
             .iter()
             .find(|finding| finding.finding_id == "runtime::json_parse_compound_placeholder")
             .expect("json parse runtime finding");
-        assert_eq!(parse_finding.status, ZeroPlaceholderStatus::Resolved);
+        assert_eq!(parse_finding.status, ZeroPlaceholderStatus::Blocked);
         assert_eq!(parse_finding.owner_bead_id, JSON_RUNTIME_BEAD_ID);
     }
 

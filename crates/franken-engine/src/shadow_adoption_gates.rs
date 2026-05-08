@@ -49,7 +49,7 @@ impl ShadowAdoptionGates {
                 AdoptionGate {
                     gate_id: "no_mock_drill".to_string(),
                     description: "No-mock shadow daemon lifecycle drill completion".to_string(),
-                    status: GateStatus::Red, // TODO: Update when bd-djejh.6 completed
+                    status: GateStatus::Green, // Completed in bd-djejh.6
                     required_for: vec![
                         "autonomous_live_mutation".to_string(),
                         "production_daemon_status".to_string(),
@@ -61,7 +61,7 @@ impl ShadowAdoptionGates {
                         "End-to-end integration verified".to_string(),
                     ],
                     last_check: Some(SecurityEpoch::GENESIS),
-                    failure_reason: Some("Bead bd-djejh.6 not yet completed".to_string()),
+                    failure_reason: None,
                 },
                 AdoptionGate {
                     gate_id: "replay_verification".to_string(),

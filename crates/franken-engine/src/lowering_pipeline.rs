@@ -3,6 +3,36 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// Optimized constant pool with O(log n) deduplication instead of O(n) linear search.
+struct ConstantPool {
+    pool: Vec<String>,
+    index: BTreeMap<String, u32>,
+}
+
+impl ConstantPool {
+    fn new() -> Self {
+        Self {
+            pool: Vec::new(),
+            index: BTreeMap::new(),
+        }
+    }
+
+    fn push(&mut self, value: &str) -> u32 {
+        if let Some(&existing_index) = self.index.get(value) {
+            return existing_index;
+        }
+
+        let new_index = u32::try_from(self.pool.len()).unwrap_or(u32::MAX);
+        self.pool.push(value.to_string());
+        self.index.insert(value.to_string(), new_index);
+        new_index
+    }
+
+    fn into_vec(self) -> Vec<String> {
+        self.pool
+    }
+}
+
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
@@ -2964,6 +2994,7 @@ pub fn lower_ir2_to_ir3(
 
     let ir2_hash = ir2.content_hash();
     let mut ir3 = Ir3Module::new(ir2_hash, ir2.header.source_label.clone());
+    let mut constant_pool = ConstantPool::new();
     // perf: pre-size instruction Vec based on IR2 ops count to avoid reallocations
     // Heuristic: ~2-3 IR3 instructions per IR2 op on average
     let estimated_instruction_count = ir2.ops.len().saturating_mul(3).max(64);
@@ -3129,7 +3160,7 @@ pub fn lower_ir2_to_ir3(
         match &op.inner {
             Ir1Op::LoadLiteral { value } => {
                 let dst = alloc_register(&mut register_cursor);
-                lower_literal_to_ir3(value, dst, &mut ir3.instructions, &mut ir3.constant_pool);
+                lower_literal_to_ir3_optimized(value, dst, &mut ir3.instructions, &mut constant_pool);
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
@@ -3139,7 +3170,7 @@ pub fn lower_ir2_to_ir3(
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{binding_id}"));
                     let dst = alloc_register(&mut register_cursor);
-                    let pool_index = push_constant(&mut ir3.constant_pool, &name);
+                    let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::LoadScoped {
                         dst,
                         name_pool_index: pool_index,
@@ -3164,7 +3195,7 @@ pub fn lower_ir2_to_ir3(
                         .get(binding_id)
                         .cloned()
                         .unwrap_or_else(|| format!("__binding_{binding_id}"));
-                    let pool_index = push_constant(&mut ir3.constant_pool, &name);
+                    let pool_index = push_constant_optimized(&mut constant_pool, &name);
                     ir3.instructions.push(Ir3Instruction::StoreScoped {
                         src,
                         name_pool_index: pool_index,
@@ -3240,7 +3271,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ImportModule { specifier } => {
                 let string_reg = alloc_register(&mut register_cursor);
-                let pool_index = push_constant(&mut ir3.constant_pool, specifier);
+                let pool_index = push_constant_optimized(&mut constant_pool, specifier);
                 ir3.instructions.push(Ir3Instruction::LoadStr {
                     dst: string_reg,
                     pool_index,
@@ -3254,7 +3285,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::ExportBinding { name, .. } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                let pool_index = push_constant(&mut ir3.constant_pool, name);
+                let pool_index = push_constant_optimized(&mut constant_pool, name);
                 ir3.instructions.push(Ir3Instruction::ExportBinding {
                     name_pool_index: pool_index,
                     src,
@@ -3591,7 +3622,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3618,7 +3649,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3643,7 +3674,7 @@ pub fn lower_ir2_to_ir3(
                     Ir1PropertyKey::Static(key) => {
                         let obj = pop_lowering_value(&mut value_stack)?;
                         let key_reg = alloc_register(&mut register_cursor);
-                        let pool_index = push_constant(&mut ir3.constant_pool, key);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key);
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -3679,7 +3710,7 @@ pub fn lower_ir2_to_ir3(
                 for (i, val_reg) in elements.into_iter().enumerate() {
                     let key_str = i.to_string();
                     let key_reg = alloc_register(&mut register_cursor);
-                    let pool_index = push_constant(&mut ir3.constant_pool, &key_str);
+                    let pool_index = push_constant_optimized(&mut constant_pool, &key_str);
                     ir3.instructions.push(Ir3Instruction::LoadStr {
                         dst: key_reg,
                         pool_index,
@@ -3792,7 +3823,7 @@ pub fn lower_ir2_to_ir3(
                     if !free_vars.is_empty() {
                         ir3.instructions.push(Ir3Instruction::PushScope);
                         for fv in free_vars {
-                            let pool_idx = push_constant(&mut ir3.constant_pool, fv);
+                            let pool_idx = push_constant_optimized(&mut constant_pool, fv);
                             ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                 name_pool_index: pool_idx,
                                 kind: 0, // var
@@ -3848,7 +3879,7 @@ pub fn lower_ir2_to_ir3(
                 if !free_vars.is_empty() {
                     ir3.instructions.push(Ir3Instruction::PushScope);
                     for fv in free_vars {
-                        let pool_idx = push_constant(&mut ir3.constant_pool, fv);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, fv);
                         ir3.instructions.push(Ir3Instruction::DeclareBinding {
                             name_pool_index: pool_idx,
                             kind: 0,
@@ -4229,7 +4260,7 @@ pub fn lower_ir2_to_ir3(
         if !free_vars.is_empty() {
             ir3.instructions.push(Ir3Instruction::PushScope);
             for (i, pname) in param_names.iter().enumerate() {
-                let pool_idx = push_constant(&mut ir3.constant_pool, pname);
+                let pool_idx = push_constant_optimized(&mut constant_pool, pname);
                 ir3.instructions.push(Ir3Instruction::DeclareBinding {
                     name_pool_index: pool_idx,
                     kind: 0,
@@ -4322,7 +4353,7 @@ pub fn lower_ir2_to_ir3(
             // Put parameters on the scope chain too (children may capture them).
             for (i, pname) in param_names.iter().enumerate() {
                 if child_captured_names.contains(pname) {
-                    let pool_idx = push_constant(&mut ir3.constant_pool, pname);
+                    let pool_idx = push_constant_optimized(&mut constant_pool, pname);
                     ir3.instructions.push(Ir3Instruction::DeclareBinding {
                         name_pool_index: pool_idx,
                         kind: 0,
@@ -4358,7 +4389,7 @@ pub fn lower_ir2_to_ir3(
                                 .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
                         }
                         Ir1Literal::String(s) => {
-                            let pool_index = push_constant(&mut ir3.constant_pool, s);
+                            let pool_index = push_constant_optimized(&mut constant_pool, s);
                             ir3.instructions
                                 .push(Ir3Instruction::LoadStr { dst, pool_index });
                         }
@@ -4379,7 +4410,7 @@ pub fn lower_ir2_to_ir3(
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         // Free variable: load from scope chain by name.
                         let dst = alloc_register(&mut fn_reg);
-                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::LoadScoped {
                             dst,
                             name_pool_index: pool_idx,
@@ -4397,7 +4428,7 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::StoreBinding { binding_id } => {
                     if let Some(name) = fv_id_to_name.get(binding_id) {
                         let src = pop_lowering_value(&mut fn_value_stack)?;
-                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         ir3.instructions.push(Ir3Instruction::StoreScoped {
                             src,
                             name_pool_index: pool_idx,
@@ -4422,7 +4453,7 @@ pub fn lower_ir2_to_ir3(
                         // as a counter into the captured names.
                         let var_idx = (*binding_id as usize).saturating_sub(param_names.len());
                         if let Some(name) = child_captured_names.iter().nth(var_idx) {
-                            let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                            let pool_idx = push_constant_optimized(&mut constant_pool, name);
                             if is_first_store {
                                 ir3.instructions.push(Ir3Instruction::DeclareBinding {
                                     name_pool_index: pool_idx,
@@ -4572,7 +4603,7 @@ pub fn lower_ir2_to_ir3(
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
                     if let Some(name) = fv_id_to_name.get(binding_id) {
-                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        let pool_idx = push_constant_optimized(&mut constant_pool, name);
                         if *operator == AssignmentOperator::Assign {
                             ir3.instructions.push(Ir3Instruction::StoreScoped {
                                 src,
@@ -4624,7 +4655,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k);
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -4651,7 +4682,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(k) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let kr = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant(&mut ir3.constant_pool, k);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k);
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: kr,
                                 pool_index,
@@ -4693,7 +4724,7 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions.push(Ir3Instruction::NewArray { dst });
                     for (i, val_reg) in elems.into_iter().enumerate() {
                         let key_reg = alloc_register(&mut fn_reg);
-                        let pool_index = push_constant(&mut ir3.constant_pool, &i.to_string());
+                        let pool_index = push_constant_optimized(&mut constant_pool, &i.to_string());
                         ir3.instructions.push(Ir3Instruction::LoadStr {
                             dst: key_reg,
                             pool_index,
@@ -4889,7 +4920,7 @@ pub fn lower_ir2_to_ir3(
                         Ir1PropertyKey::Static(key) => {
                             let obj = pop_lowering_value(&mut fn_value_stack)?;
                             let key_reg = alloc_register(&mut fn_reg);
-                            let pool_index = push_constant(&mut ir3.constant_pool, key);
+                            let pool_index = push_constant_optimized(&mut constant_pool, key);
                             ir3.instructions.push(Ir3Instruction::LoadStr {
                                 dst: key_reg,
                                 pool_index,
@@ -7784,6 +7815,31 @@ fn lower_literal_to_ir3(
     }
 }
 
+fn lower_literal_to_ir3_optimized(
+    value: &Ir1Literal,
+    dst: Reg,
+    instructions: &mut Vec<Ir3Instruction>,
+    constant_pool: &mut ConstantPool,
+) {
+    match value {
+        Ir1Literal::String(text) => {
+            let pool_index = push_constant_optimized(constant_pool, text);
+            instructions.push(Ir3Instruction::LoadStr { dst, pool_index });
+        }
+        Ir1Literal::Integer(value) => {
+            instructions.push(Ir3Instruction::LoadInt { dst, value: *value })
+        }
+        Ir1Literal::Float(bits) => {
+            instructions.push(Ir3Instruction::LoadFloat { dst, bits: *bits })
+        }
+        Ir1Literal::Boolean(value) => {
+            instructions.push(Ir3Instruction::LoadBool { dst, value: *value })
+        }
+        Ir1Literal::Null => instructions.push(Ir3Instruction::LoadNull { dst }),
+        Ir1Literal::Undefined => instructions.push(Ir3Instruction::LoadUndefined { dst }),
+    }
+}
+
 fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
     if let Some(index) = pool.iter().position(|entry| entry == value) {
         return u32::try_from(index).unwrap_or(u32::MAX);
@@ -7791,6 +7847,44 @@ fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
 
     pool.push(value.to_string());
     u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
+}
+
+fn push_constant_optimized(constant_pool: &mut ConstantPool, value: &str) -> u32 {
+    constant_pool.push(value)
+}
+
+/// Legacy 2-parameter version of push_constant with internal index optimization.
+/// This avoids the quadratic behavior by maintaining an internal BTreeMap.
+fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    // Thread-local index cache to avoid quadratic behavior
+    thread_local! {
+        static POOL_INDICES: Mutex<BTreeMap<*mut Vec<String>, BTreeMap<String, u32>>> =
+            Mutex::new(BTreeMap::new());
+    }
+
+    POOL_INDICES.with(|indices| {
+        let mut indices = indices.lock().unwrap();
+        let pool_ptr = pool.as_mut_ptr();
+        let pool_index = indices.entry(pool_ptr).or_insert_with(|| {
+            // Build index for existing pool contents
+            pool.iter()
+                .enumerate()
+                .map(|(i, s)| (s.clone(), i as u32))
+                .collect()
+        });
+
+        if let Some(&existing_index) = pool_index.get(value) {
+            return existing_index;
+        }
+
+        let new_index = u32::try_from(pool.len()).unwrap_or(u32::MAX);
+        pool.push(value.to_string());
+        pool_index.insert(value.to_string(), new_index);
+        new_index
+    })
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {

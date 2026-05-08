@@ -3111,7 +3111,7 @@ fn is_named_import_clause(clause: &str) -> bool {
 
         let mut parts = specifier.split_whitespace();
         // SAFETY: specifier is non-empty after early return check above
-        let first = parts.next().expect("serde deserialization should succeed");
+        let first = parts.next().expect("serde serialization should succeed");
         let second = parts.next();
         let third = parts.next();
         let fourth = parts.next();
@@ -3171,7 +3171,7 @@ fn parse_named_import_specifiers(
 
         let mut parts = specifier.split_whitespace();
         // SAFETY: specifier is non-empty after early return check above
-        let import_name = parts.next().expect("serde deserialization should succeed");
+        let import_name = parts.next().expect("serde serialization should succeed");
         let second = parts.next();
         let third = parts.next();
         let fourth = parts.next();
@@ -3320,7 +3320,7 @@ fn validate_named_export_specifiers(
 
         let mut parts = specifier.split_whitespace();
         // SAFETY: specifier is non-empty after early return check above
-        let local = parts.next().expect("serde deserialization should succeed");
+        let local = parts.next().expect("serde serialization should succeed");
         let second = parts.next();
         let third = parts.next();
         let fourth = parts.next();
@@ -3713,7 +3713,7 @@ fn parse_variable_declaration_kind(statement: &str) -> Option<VariableDeclaratio
         let next_char = rest
             .chars()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("serde serialization should succeed");
         if next_char.is_whitespace() || next_char == '[' || next_char == '{' {
             return Some(kind);
         }
@@ -3732,7 +3732,7 @@ fn parse_variable_declaration(
     let body = statement
         .strip_prefix(keyword)
         .map(str::trim_start)
-        .expect("serde deserialization should succeed");
+        .expect("serde serialization should succeed");
     if body.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -9656,7 +9656,7 @@ mod tests {
             "<inline>",
             None,
         );
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let decoded: ParseError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, err);
@@ -9847,7 +9847,7 @@ mod tests {
             ParseErrorCode::SourceTooLarge,
             ParseErrorCode::BudgetExceeded,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serde serialization should succeed");
             let restored: ParseErrorCode =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, restored);
@@ -9857,7 +9857,7 @@ mod tests {
     #[test]
     fn parser_mode_serde_roundtrip() {
         let mode = ParserMode::ScalarReference;
-        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mode).expect("serde serialization should succeed");
         let restored: ParserMode =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, restored);
@@ -9872,7 +9872,7 @@ mod tests {
             ParseBudgetKind::TokenCount,
             ParseBudgetKind::RecursionDepth,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ParseBudgetKind =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
@@ -9888,7 +9888,7 @@ mod tests {
             GrammarCoverageStatus::NotApplicable,
         ] {
             let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+                serde_json::to_string(&status).expect("serde serialization should succeed");
             let restored: GrammarCoverageStatus =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, restored);
@@ -9902,7 +9902,7 @@ mod tests {
     #[test]
     fn parser_budget_serde_roundtrip() {
         let budget = ParserBudget::default();
-        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&budget).expect("serde serialization should succeed");
         let restored: ParserBudget =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
@@ -9911,7 +9911,7 @@ mod tests {
     #[test]
     fn parser_options_serde_roundtrip() {
         let opts = ParserOptions::default();
-        let json = serde_json::to_string(&opts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&opts).expect("serde serialization should succeed");
         let restored: ParserOptions =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(opts, restored);
@@ -9929,7 +9929,7 @@ mod tests {
             max_token_count: 65_536,
             max_recursion_depth: 256,
         };
-        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&witness).expect("serde serialization should succeed");
         let restored: ParseFailureWitness =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(witness, restored);
@@ -9944,7 +9944,7 @@ mod tests {
             module_goal: GrammarCoverageStatus::Partial,
             notes: "test".to_string(),
         };
-        let json = serde_json::to_string(&gfc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gfc).expect("serde serialization should succeed");
         let restored: GrammarFamilyCoverage =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gfc, restored);
@@ -9959,7 +9959,7 @@ mod tests {
             unsupported_families: 2,
             completeness_millionths: 700_000,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serde serialization should succeed");
         let restored: GrammarCompletenessSummary =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
@@ -9968,7 +9968,7 @@ mod tests {
     #[test]
     fn grammar_completeness_matrix_serde_roundtrip() {
         let matrix = CanonicalEs2020Parser.scalar_reference_grammar_matrix();
-        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&matrix).expect("serde serialization should succeed");
         let restored: GrammarCompletenessMatrix =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix, restored);
@@ -10035,7 +10035,7 @@ mod tests {
             span: None,
             witness: None,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         assert!(!json.contains("witness"));
         let restored: ParseError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
@@ -10061,7 +10061,7 @@ mod tests {
                 max_recursion_depth: 256,
             })),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         assert!(json.contains("witness"));
         let restored: ParseError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
@@ -10069,7 +10069,7 @@ mod tests {
         assert_eq!(
             restored
                 .witness
-                .expect("serde deserialization should succeed")
+                .expect("serde serialization should succeed")
                 .source_bytes,
             2_000_000
         );
@@ -10219,7 +10219,7 @@ mod tests {
         };
         let left = normalize_parse_error(&err);
         let right = normalize_parse_error(&err);
-        let json = serde_json::to_string(&left).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&left).expect("serde serialization should succeed");
         let restored: ParseDiagnosticEnvelope =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, left);
@@ -10238,7 +10238,7 @@ mod tests {
             ParseEventKind::ParseCompleted,
             ParseEventKind::ParseFailed,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ParseEventKind =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
@@ -10344,7 +10344,7 @@ mod tests {
             .parse("export default true", ParseGoal::Module)
             .expect("parse");
         let ir = ParseEventIr::from_syntax_tree(&tree, "fixture.js", ParserMode::ScalarReference);
-        let json = serde_json::to_string(&ir).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ir).expect("serde serialization should succeed");
         let restored: ParseEventIr =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, ir);
@@ -10773,7 +10773,7 @@ mod tests {
             severity: ParseDiagnosticSeverity::Error,
             message_template: "source is empty".to_string(),
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serde serialization should succeed");
         let restored: ParseDiagnosticRule =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, restored);
@@ -10782,7 +10782,7 @@ mod tests {
     #[test]
     fn parse_diagnostic_taxonomy_serde_roundtrip() {
         let taxonomy = ParseDiagnosticTaxonomy::v1();
-        let json = serde_json::to_string(&taxonomy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&taxonomy).expect("serde serialization should succeed");
         let restored: ParseDiagnosticTaxonomy =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(taxonomy, restored);
@@ -10795,7 +10795,7 @@ mod tests {
             "bad seq".to_string(),
             Some(3),
         );
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: ParseEventMaterializationError =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
@@ -10895,7 +10895,7 @@ mod tests {
             ParseDiagnosticCategory::Resource,
             ParseDiagnosticCategory::System,
         ] {
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serde serialization should succeed");
             let back: ParseDiagnosticCategory =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
@@ -10908,7 +10908,7 @@ mod tests {
             ParseDiagnosticSeverity::Error,
             ParseDiagnosticSeverity::Fatal,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serde serialization should succeed");
             let back: ParseDiagnosticSeverity =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
@@ -10940,7 +10940,7 @@ mod tests {
             let rule = taxonomy.rule_for(*code);
             assert!(rule.is_some(), "rule_for({:?}) returned None", code);
             assert_eq!(
-                rule.expect("serde deserialization should succeed")
+                rule.expect("serde serialization should succeed")
                     .parse_error_code,
                 *code
             );
@@ -10953,7 +10953,7 @@ mod tests {
         for code in &ParseErrorCode::ALL {
             let rule = taxonomy
                 .rule_for(*code)
-                .expect("serde deserialization should succeed");
+                .expect("serde serialization should succeed");
             assert_eq!(rule.severity, code.diagnostic_severity());
             assert_eq!(rule.category, code.diagnostic_category());
         }
@@ -10969,7 +10969,7 @@ mod tests {
         ];
         let mut names = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: GrammarCoverageStatus =
                 serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, &back);
@@ -10987,7 +10987,7 @@ mod tests {
             module_goal: GrammarCoverageStatus::Unsupported,
             notes: "WIP".to_string(),
         };
-        let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fam).expect("serde serialization should succeed");
         let back: GrammarFamilyCoverage =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fam, back);
@@ -11136,7 +11136,7 @@ mod tests {
         );
         assert!(
             parse_f64_numeric_literal("NaN")
-                .expect("serde deserialization should succeed")
+                .expect("serde serialization should succeed")
                 .is_nan()
         );
     }
@@ -11629,7 +11629,7 @@ mod tests {
             payload_kind: Some("statement".to_string()),
             payload_hash: Some("abc123".to_string()),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serde serialization should succeed");
         let back: ParseEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
@@ -11654,7 +11654,7 @@ mod tests {
             payload_kind: None,
             payload_hash: None,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serde serialization should succeed");
         let back: ParseEvent =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
@@ -11669,7 +11669,7 @@ mod tests {
             payload_hash: "hash-abc".to_string(),
             span: SourceSpan::new(0, 20, 1, 1, 1, 21),
         };
-        let json = serde_json::to_string(&n).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&n).expect("serde serialization should succeed");
         let back: MaterializedStatementNode =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(n, back);
@@ -11701,7 +11701,7 @@ mod tests {
                 span: SourceSpan::new(0, 10, 1, 1, 1, 11),
             },
         };
-        let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tree).expect("serde serialization should succeed");
         let back: MaterializedSyntaxTree =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tree, back);
@@ -12545,7 +12545,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn extract_balanced_simple_parens() {
         let (inner, rest) =
-            extract_balanced("(abc)def", '(', ')').expect("serde deserialization should succeed");
+            extract_balanced("(abc)def", '(', ')').expect("serde serialization should succeed");
         assert_eq!(inner, "abc");
         assert_eq!(rest, "def");
     }
@@ -12553,7 +12553,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn extract_balanced_nested() {
         let (inner, rest) =
-            extract_balanced("((a))", '(', ')').expect("serde deserialization should succeed");
+            extract_balanced("((a))", '(', ')').expect("serde serialization should succeed");
         assert_eq!(inner, "(a)");
         assert_eq!(rest, "");
     }
@@ -12727,7 +12727,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 let init = decl.declarations[0]
                     .initializer
                     .as_ref()
-                    .expect("serde deserialization should succeed");
+                    .expect("serde serialization should succeed");
                 assert!(matches!(init, Expression::New { .. }));
             }
             other => panic!("expected VariableDeclaration, got {other:?}"),
@@ -12746,7 +12746,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 let init = decl.declarations[0]
                     .initializer
                     .as_ref()
-                    .expect("serde deserialization should succeed");
+                    .expect("serde serialization should succeed");
                 if let Expression::TemplateLiteral {
                     quasis,
                     expressions,
@@ -12770,7 +12770,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 let init = decl.declarations[0]
                     .initializer
                     .as_ref()
-                    .expect("serde deserialization should succeed");
+                    .expect("serde serialization should succeed");
                 if let Expression::TemplateLiteral {
                     quasis,
                     expressions,
@@ -12794,7 +12794,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 let init = decl.declarations[0]
                     .initializer
                     .as_ref()
-                    .expect("serde deserialization should succeed");
+                    .expect("serde serialization should succeed");
                 if let Expression::TemplateLiteral {
                     quasis,
                     expressions,
@@ -12818,7 +12818,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 let init = decl.declarations[0]
                     .initializer
                     .as_ref()
-                    .expect("serde deserialization should succeed");
+                    .expect("serde serialization should succeed");
                 if let Expression::TemplateLiteral {
                     quasis,
                     expressions,
@@ -12895,12 +12895,12 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(matches!(
                     elements[0]
                         .as_ref()
-                        .expect("serde deserialization should succeed"),
+                        .expect("serde serialization should succeed"),
                     Expression::NumericLiteral(1)
                 ));
                 match elements[1]
                     .as_ref()
-                    .expect("serde deserialization should succeed")
+                    .expect("serde serialization should succeed")
                 {
                     Expression::SpreadElement(inner) => {
                         assert!(matches!(inner.as_ref(), Expression::Identifier(n) if n == "arr"));
@@ -12910,7 +12910,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(matches!(
                     elements[2]
                         .as_ref()
-                        .expect("serde deserialization should succeed"),
+                        .expect("serde serialization should succeed"),
                     Expression::NumericLiteral(3)
                 ));
             }
@@ -12927,7 +12927,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(matches!(
                     elements[0]
                         .as_ref()
-                        .expect("serde deserialization should succeed"),
+                        .expect("serde serialization should succeed"),
                     Expression::SpreadElement(_)
                 ));
             }
@@ -13020,13 +13020,13 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(matches!(
                     elements[0]
                         .as_ref()
-                        .expect("serde deserialization should succeed"),
+                        .expect("serde serialization should succeed"),
                     Expression::SpreadElement(_)
                 ));
                 assert!(matches!(
                     elements[1]
                         .as_ref()
-                        .expect("serde deserialization should succeed"),
+                        .expect("serde serialization should succeed"),
                     Expression::SpreadElement(_)
                 ));
             }

@@ -1,9 +1,250 @@
 use frankenengine_engine::composable_gate_framework::{
     BEAD_ID, COMPONENT, ExampleEvidence, ExampleGate, ExamplePolicy, Gate, GateEvidence,
-    GatePolicy, GateReceipt, GateRunner, GateSeverity, GateVerdict, GateViolation, MILLIONTHS,
-    SCHEMA_VERSION,
+    GatePolicy, GateReceipt, GateResult, GateRunner, GateSeverity, GateVerdict, GateViolation,
+    MILLIONTHS, SCHEMA_VERSION,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use std::sync::Mutex;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ContractPolicy {
+    policy_id: String,
+    strict_mode: bool,
+    valid: bool,
+}
+
+impl GatePolicy for ContractPolicy {
+    fn policy_id(&self) -> &str {
+        &self.policy_id
+    }
+
+    fn is_strict(&self) -> bool {
+        self.strict_mode
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ContractEvidence {
+    evidence_type: String,
+    sufficient: bool,
+    timestamp_utc: String,
+}
+
+impl GateEvidence for ContractEvidence {
+    fn evidence_type(&self) -> &str {
+        &self.evidence_type
+    }
+
+    fn is_sufficient(&self) -> bool {
+        self.sufficient
+    }
+
+    fn timestamp(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        chrono::DateTime::parse_from_rfc3339(&self.timestamp_utc)
+            .ok()
+            .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+    }
+}
+
+trait ContractCallLog {
+    fn calls(&self) -> Vec<&'static str>;
+    fn clear_calls(&self);
+}
+
+struct ContractGate {
+    gate_id: &'static str,
+    dependencies: Vec<String>,
+    verdict: GateVerdict,
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl ContractGate {
+    fn new(gate_id: &'static str, verdict: GateVerdict) -> Self {
+        Self {
+            gate_id,
+            dependencies: Vec::new(),
+            verdict,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_dependencies(
+        gate_id: &'static str,
+        verdict: GateVerdict,
+        dependencies: &[&str],
+    ) -> Self {
+        Self {
+            gate_id,
+            dependencies: dependencies
+                .iter()
+                .map(|dependency| (*dependency).to_string())
+                .collect(),
+            verdict,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn record_call(&self, call: &'static str) {
+        self.calls
+            .lock()
+            .expect("contract call log lock should not be poisoned")
+            .push(call);
+    }
+}
+
+impl ContractCallLog for ContractGate {
+    fn calls(&self) -> Vec<&'static str> {
+        self.calls
+            .lock()
+            .expect("contract call log lock should not be poisoned")
+            .clone()
+    }
+
+    fn clear_calls(&self) {
+        self.calls
+            .lock()
+            .expect("contract call log lock should not be poisoned")
+            .clear();
+    }
+}
+
+impl Gate<ContractPolicy, ContractEvidence> for ContractGate {
+    fn gate_id(&self) -> &str {
+        self.gate_id
+    }
+
+    fn dependency_gate_ids(&self) -> Vec<String> {
+        self.dependencies.clone()
+    }
+
+    fn display_name(&self) -> &str {
+        self.gate_id
+    }
+
+    fn description(&self) -> &str {
+        "contract-test gate implementation"
+    }
+
+    fn validate_policy(&self, policy: &ContractPolicy) -> Result<(), String> {
+        self.record_call("validate_policy");
+        if !policy.valid {
+            return Err("contract policy is invalid".to_string());
+        }
+        Ok(())
+    }
+
+    fn validate_evidence(&self, evidence: &ContractEvidence) -> Result<(), String> {
+        self.record_call("validate_evidence");
+        if !evidence.is_sufficient() {
+            return Err("contract evidence is insufficient".to_string());
+        }
+        Ok(())
+    }
+
+    fn evaluate(
+        &self,
+        policy: &ContractPolicy,
+        evidence: &ContractEvidence,
+    ) -> GateResult<ContractPolicy, ContractEvidence> {
+        self.record_call("evaluate");
+
+        let mut result = GateResult::new(self.verdict, policy.clone(), evidence.clone())
+            .with_metadata("policy_id".to_string(), policy.policy_id().to_string())
+            .with_metadata(
+                "evidence_type".to_string(),
+                evidence.evidence_type().to_string(),
+            );
+
+        if self.verdict == GateVerdict::Conditional {
+            result = result.with_condition("contract condition".to_string());
+        }
+
+        if self.verdict == GateVerdict::Rejected {
+            result = result.with_violation(GateViolation::new(
+                GateSeverity::Error,
+                "contract_rejection".to_string(),
+                "contract gate rejected the evidence".to_string(),
+            ));
+        }
+
+        result
+    }
+}
+
+fn valid_contract_policy() -> ContractPolicy {
+    ContractPolicy {
+        policy_id: "contract-policy".to_string(),
+        strict_mode: true,
+        valid: true,
+    }
+}
+
+fn valid_contract_evidence() -> ContractEvidence {
+    ContractEvidence {
+        evidence_type: "contract-evidence".to_string(),
+        sufficient: true,
+        timestamp_utc: "2024-01-01T00:00:00Z".to_string(),
+    }
+}
+
+fn assert_gate_trait_contract<G>(gate: &G, expected_gate_id: &str)
+where
+    G: Gate<ContractPolicy, ContractEvidence> + ContractCallLog,
+{
+    let runner = GateRunner::new(SecurityEpoch::from_raw(7));
+    let policy = valid_contract_policy();
+    let evidence = valid_contract_evidence();
+
+    let receipt = runner
+        .run_gate(gate, &policy, &evidence)
+        .expect("valid policy and evidence must pass validation");
+    assert_eq!(
+        gate.calls(),
+        vec!["validate_policy", "validate_evidence", "evaluate"]
+    );
+    assert_eq!(receipt.schema_version, SCHEMA_VERSION);
+    assert_eq!(receipt.component, COMPONENT);
+    assert_eq!(receipt.bead_id, BEAD_ID);
+    assert_eq!(receipt.gate_id, expected_gate_id);
+    assert_eq!(receipt.security_epoch, SecurityEpoch::from_raw(7));
+    assert_eq!(receipt.verdict, GateVerdict::Approved);
+    assert_eq!(
+        receipt.metadata.get("policy_id").map(String::as_str),
+        Some("contract-policy")
+    );
+    assert_eq!(
+        receipt.metadata.get("evidence_type").map(String::as_str),
+        Some("contract-evidence")
+    );
+
+    gate.clear_calls();
+    let repeated_receipt = runner
+        .run_gate(gate, &policy, &evidence)
+        .expect("identical input must remain evaluable");
+    assert_eq!(receipt.content_hash, repeated_receipt.content_hash);
+    assert_eq!(
+        gate.calls(),
+        vec!["validate_policy", "validate_evidence", "evaluate"]
+    );
+
+    gate.clear_calls();
+    let mut invalid_policy = policy.clone();
+    invalid_policy.valid = false;
+    let err = runner
+        .run_gate(gate, &invalid_policy, &evidence)
+        .expect_err("invalid policy must fail closed before evidence validation");
+    assert!(err.contains("policy is invalid"));
+    assert_eq!(gate.calls(), vec!["validate_policy"]);
+
+    gate.clear_calls();
+    let mut insufficient_evidence = evidence;
+    insufficient_evidence.sufficient = false;
+    let err = runner
+        .run_gate(gate, &policy, &insufficient_evidence)
+        .expect_err("insufficient evidence must fail closed before evaluation");
+    assert!(err.contains("evidence is insufficient"));
+    assert_eq!(gate.calls(), vec!["validate_policy", "validate_evidence"]);
+}
 
 #[test]
 fn test_schema_version_format() {
@@ -488,4 +729,58 @@ fn test_framework_extensibility() {
     let receipt = result.unwrap();
     assert_eq!(receipt.verdict, GateVerdict::Approved);
     assert_eq!(receipt.gate_id, "custom-gate");
+}
+
+#[test]
+fn gate_trait_contract_harness_enforces_validation_and_receipts() {
+    let gate = ContractGate::new("contract-gate", GateVerdict::Approved);
+
+    assert_gate_trait_contract(&gate, "contract-gate");
+}
+
+#[test]
+fn gate_trait_contract_harness_enforces_dependency_ordering() {
+    let runner = GateRunner::new(SecurityEpoch::from_raw(11));
+    let policy = valid_contract_policy();
+    let evidence = valid_contract_evidence();
+
+    let ordered_gates = vec![
+        ContractGate::with_dependencies("contract-parent", GateVerdict::Approved, &[]),
+        ContractGate::with_dependencies(
+            "contract-child",
+            GateVerdict::Conditional,
+            &["contract-parent"],
+        ),
+    ];
+    let receipts = runner
+        .run_gate_batch(&ordered_gates, &policy, &evidence)
+        .expect("declared dependency order must be accepted");
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(receipts[0].gate_id, "contract-parent");
+    assert_eq!(receipts[1].gate_id, "contract-child");
+    assert_eq!(receipts[1].verdict, GateVerdict::Conditional);
+    assert_eq!(receipts[1].conditions, vec!["contract condition"]);
+    assert_eq!(
+        ordered_gates[0].calls(),
+        vec!["validate_policy", "validate_evidence", "evaluate"]
+    );
+    assert_eq!(
+        ordered_gates[1].calls(),
+        vec!["validate_policy", "validate_evidence", "evaluate"]
+    );
+
+    let out_of_order_gates = vec![
+        ContractGate::with_dependencies(
+            "contract-child",
+            GateVerdict::Approved,
+            &["contract-parent"],
+        ),
+        ContractGate::with_dependencies("contract-parent", GateVerdict::Approved, &[]),
+    ];
+    let err = runner
+        .run_gate_batch(&out_of_order_gates, &policy, &evidence)
+        .expect_err("out-of-order dependency must fail closed before evaluation");
+    assert!(err.contains("contract-child depends on contract-parent"));
+    assert!(out_of_order_gates[0].calls().is_empty());
+    assert!(out_of_order_gates[1].calls().is_empty());
 }

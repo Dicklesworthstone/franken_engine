@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::hash_tiers::ContentHash;
-use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::hindsight_boundary_capture::{
@@ -1710,16 +1709,62 @@ fn required_artifact_names() -> Vec<String> {
 
 fn acquire_bundle_write_lock(artifact_dir: &Path) -> io::Result<BundleWriteLock> {
     let lock_path = artifact_dir.join(".evidence_ledger_stitching.lock");
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
-        Err(source) if source.kind() == ErrorKind::AlreadyExists => Err(io::Error::new(
-            ErrorKind::AlreadyExists,
-            format!("bundle already being written: {}", lock_path.display()),
-        )),
+
+    // Check for existing lock and validate if owner is still alive
+    if lock_path.exists() {
+        if let Ok(lock_content) = fs::read_to_string(&lock_path) {
+            if let Ok(lock_pid) = lock_content.trim().parse::<u32>() {
+                // Check if the process is still running
+                #[cfg(unix)]
+                {
+                    use std::process::Command;
+                    let is_alive = Command::new("kill")
+                        .arg("-0")
+                        .arg(lock_pid.to_string())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if is_alive {
+                        return Err(io::Error::new(
+                            ErrorKind::AlreadyExists,
+                            format!(
+                                "bundle already being written by PID {}: {}",
+                                lock_pid,
+                                lock_path.display()
+                            ),
+                        ));
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    // On non-Unix platforms, assume stale if older than 5 minutes
+                    if let Ok(metadata) = lock_path.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if modified.elapsed().unwrap_or(std::time::Duration::MAX)
+                                < std::time::Duration::from_secs(300)
+                            {
+                                return Err(io::Error::new(
+                                    ErrorKind::AlreadyExists,
+                                    format!(
+                                        "bundle recently locked by PID {}: {}",
+                                        lock_pid,
+                                        lock_path.display()
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Lock exists but is stale, remove it
+        let _ = fs::remove_file(&lock_path);
+    }
+
+    // Write our PID to the lock file
+    let current_pid = std::process::id();
+    match fs::write(&lock_path, current_pid.to_string()) {
+        Ok(()) => Ok(BundleWriteLock { path: lock_path }),
         Err(source) => Err(io::Error::new(
             source.kind(),
             format!(
@@ -1777,16 +1822,14 @@ impl BundleFileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value)
-                .expect("serde serialization should succeed"),
+            contents: serde_json::to_vec_pretty(value).expect("serde serialization should succeed"),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line =
-                serde_json::to_vec(record).expect("serde serialization should succeed");
+            let mut line = serde_json::to_vec(record).expect("serde serialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -3231,11 +3274,9 @@ mod tests {
     #[test]
     fn ledger_by_decision_type_empty_result() {
         let ledger = InMemoryLedger::new();
-        assert!(
-            ledger
-                .by_decision_type(DecisionType::SecurityAction)
-                .is_empty()
-        );
+        assert!(ledger
+            .by_decision_type(DecisionType::SecurityAction)
+            .is_empty());
     }
 
     #[test]

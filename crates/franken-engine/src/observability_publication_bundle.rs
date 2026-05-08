@@ -17,23 +17,23 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::calibration_sentinel::{
-    ObservabilityCell, PromotionDecision, PromotionRule, SentinelKind, build_cell, build_report,
-    create_sentinel, update_sentinel,
+    build_cell, build_report, create_sentinel, update_sentinel, ObservabilityCell,
+    PromotionDecision, PromotionRule, SentinelKind,
 };
 use crate::deterministic_probabilistic_telemetry::{
     CaptureMode as TelemetryCaptureMode, TelemetryBudget, TelemetryEvent, TelemetryPlane,
     TelemetryReport, ThinningConfig as PlaneThinningConfig, ThinningPolicy as PlaneThinningPolicy,
 };
 use crate::hot_path_telemetry_kernel::{
-    ExactShadowCounter, HotPathEvidenceEntry, KernelRegistry, SketchWriterKind,
-    TelemetryError as HotPathTelemetryError, TelemetryManifest, ThinningPolicy, ThinningStrategy,
     apply_thinning, build_manifest, build_registry, calibrate_kernel, create_kernel,
-    register_kernel, submit_observation,
+    register_kernel, submit_observation, ExactShadowCounter, HotPathEvidenceEntry, KernelRegistry,
+    SketchWriterKind, TelemetryError as HotPathTelemetryError, TelemetryManifest, ThinningPolicy,
+    ThinningStrategy,
 };
 use crate::observability_quality_sentinel::{
-    DegradationArtifact, DemotionReceipt, DemotionTarget, ObservabilityQualitySentinel,
-    QualityDimension, QualityObservation, SentinelReport as QualitySentinelReport,
-    canonical_demotion_policy, generate_report as generate_quality_report,
+    canonical_demotion_policy, generate_report as generate_quality_report, DegradationArtifact,
+    DemotionReceipt, DemotionTarget, ObservabilityQualitySentinel, QualityDimension,
+    QualityObservation, SentinelReport as QualitySentinelReport,
 };
 use crate::security_epoch::SecurityEpoch;
 
@@ -1311,17 +1311,60 @@ fn acquire_bundle_write_lock(
     out_dir: &Path,
 ) -> Result<BundleWriteLock, ObservabilityPublicationBundleError> {
     let lock_path = out_dir.join(".observability_publication_bundle.lock");
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)
-    {
-        Ok(_) => Ok(BundleWriteLock { path: lock_path }),
-        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
-            Err(ObservabilityPublicationBundleError::Busy {
-                path: lock_path.display().to_string(),
-            })
+
+    // Check for existing lock and validate if owner is still alive
+    if lock_path.exists() {
+        if let Ok(lock_content) = fs::read_to_string(&lock_path) {
+            if let Ok(lock_pid) = lock_content.trim().parse::<u32>() {
+                // Check if the process is still running
+                #[cfg(unix)]
+                {
+                    use std::process::Command;
+                    let is_alive = Command::new("kill")
+                        .arg("-0")
+                        .arg(lock_pid.to_string())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    if is_alive {
+                        return Err(ObservabilityPublicationBundleError::Busy {
+                            path: format!(
+                                "bundle already being written by PID {}: {}",
+                                lock_pid,
+                                lock_path.display()
+                            ),
+                        });
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    // On non-Unix platforms, assume stale if older than 5 minutes
+                    if let Ok(metadata) = lock_path.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if modified.elapsed().unwrap_or(std::time::Duration::MAX)
+                                < std::time::Duration::from_secs(300)
+                            {
+                                return Err(ObservabilityPublicationBundleError::Busy {
+                                    path: format!(
+                                        "bundle recently locked by PID {}: {}",
+                                        lock_pid,
+                                        lock_path.display()
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
+        // Lock exists but is stale, remove it
+        let _ = fs::remove_file(&lock_path);
+    }
+
+    // Write our PID to the lock file
+    let current_pid = std::process::id();
+    match fs::write(&lock_path, current_pid.to_string()) {
+        Ok(()) => Ok(BundleWriteLock { path: lock_path }),
         Err(source) => Err(ObservabilityPublicationBundleError::Io {
             path: lock_path.display().to_string(),
             source,
@@ -1993,7 +2036,8 @@ mod tests {
                     suppression_reasons: vec![format!("suppressed {}", mode.as_str())],
                     content_hash: ContentHash::default(),
                 };
-                decision.content_hash = decision.compute_hash()
+                decision.content_hash = decision
+                    .compute_hash()
                     .expect("promotion decision hash computation should not fail");
 
                 ObservabilitySupremacyCellSnapshot {

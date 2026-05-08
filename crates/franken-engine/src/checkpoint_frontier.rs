@@ -658,6 +658,111 @@ mod tests {
             .expect("serde deserialization should succeed")
     }
 
+    fn conformance_frontier_state(zone: &str, frontier_seq: u64, id_byte: u8) -> FrontierState {
+        FrontierState {
+            zone: zone.to_string(),
+            frontier_seq,
+            frontier_checkpoint_id: EngineObjectId([id_byte; 32]),
+            frontier_epoch: SecurityEpoch::from_raw(frontier_seq),
+            accept_count: frontier_seq.saturating_add(1),
+            recent_ids: vec![FrontierEntry {
+                checkpoint_seq: frontier_seq,
+                checkpoint_id: EngineObjectId([id_byte; 32]),
+                epoch: SecurityEpoch::from_raw(frontier_seq),
+            }],
+        }
+    }
+
+    fn load_all_by_zone<B: PersistenceBackend>(
+        backend: &B,
+    ) -> std::collections::BTreeMap<String, u64> {
+        backend
+            .load_all()
+            .expect("backend load_all should succeed")
+            .into_iter()
+            .map(|state| (state.zone, state.frontier_seq))
+            .collect()
+    }
+
+    fn assert_persistence_backend_atomic_update_contract<B, FailPersist>(
+        mut backend: B,
+        fail_persist: FailPersist,
+    ) where
+        B: PersistenceBackend,
+        FailPersist: FnOnce(&mut B, &FrontierState) -> Result<(), String>,
+    {
+        let zone_a_initial = conformance_frontier_state("zone-a", 1, 0xA1);
+        let zone_b_initial = conformance_frontier_state("zone-b", 4, 0xB4);
+        backend
+            .persist(&zone_a_initial)
+            .expect("initial zone-a persist should succeed");
+        backend
+            .persist(&zone_b_initial)
+            .expect("initial zone-b persist should succeed");
+
+        assert_eq!(
+            backend.load("zone-a").expect("zone-a load should succeed"),
+            Some(zone_a_initial.clone())
+        );
+        assert_eq!(
+            backend.load("zone-b").expect("zone-b load should succeed"),
+            Some(zone_b_initial.clone())
+        );
+
+        let before_failure = backend
+            .load_all()
+            .expect("pre-failure load_all should succeed");
+        let before_failure_by_zone = load_all_by_zone(&backend);
+        let regressed_zone_a = conformance_frontier_state("zone-a", 0, 0xAC);
+        assert!(
+            fail_persist(&mut backend, &regressed_zone_a).is_err(),
+            "fault injection must produce a failed persist"
+        );
+
+        assert_eq!(
+            backend.load("zone-a").expect("zone-a load should succeed"),
+            Some(zone_a_initial),
+            "failed persist must not regress the stored zone-a frontier"
+        );
+        assert_eq!(
+            backend
+                .load_all()
+                .expect("post-failure load_all should succeed"),
+            before_failure,
+            "failed persist must leave load_all unchanged"
+        );
+        assert_eq!(load_all_by_zone(&backend), before_failure_by_zone);
+
+        let zone_a_advanced = conformance_frontier_state("zone-a", 6, 0xA6);
+        backend
+            .persist(&zone_a_advanced)
+            .expect("advanced zone-a persist should succeed");
+
+        let first_load_all = backend.load_all().expect("load_all should succeed");
+        let second_load_all = backend.load_all().expect("load_all should succeed");
+        assert_eq!(
+            first_load_all, second_load_all,
+            "load_all must be deterministic for an unchanged backend"
+        );
+
+        let final_by_zone = load_all_by_zone(&backend);
+        assert_eq!(final_by_zone.get("zone-a"), Some(&6));
+        assert_eq!(final_by_zone.get("zone-b"), Some(&4));
+    }
+
+    #[test]
+    fn in_memory_backend_satisfies_atomic_update_contract() {
+        assert_persistence_backend_atomic_update_contract(
+            InMemoryBackend::new(),
+            |backend, state| {
+                backend.fail_on_persist = true;
+                let result = backend.persist(state);
+                backend.fail_on_persist = false;
+                result
+            },
+        );
+    }
+
     // -- Genesis acceptance --
 
     #[test]

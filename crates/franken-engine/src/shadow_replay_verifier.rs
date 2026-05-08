@@ -828,8 +828,8 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, ReplayVerificationError> {
     Ok(bytes)
 }
 
-impl From<deterministic_serde::SerializationError> for ReplayVerificationError {
-    fn from(err: deterministic_serde::SerializationError) -> Self {
+impl From<deterministic_serde::SerdeError> for ReplayVerificationError {
+    fn from(err: deterministic_serde::SerdeError) -> Self {
         ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", err))
     }
 }

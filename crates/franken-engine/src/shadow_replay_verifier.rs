@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::deterministic_serde::{CanonicalValue, SerdeError};
 use crate::engine_object_id::EngineObjectId;
@@ -659,7 +659,7 @@ impl ShadowReplayVerifier {
             let event_id_str = row.journal_event_id.to_string();
             if let Some(artifacts) = replay_result.artifact_results.get(&event_id_str) {
                 // Check if decision output matches expected
-                let artifacts_bytes = serde_json::to_vec(artifacts).map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", e)))?;
+                let artifacts_bytes = to_canonical_json_bytes(artifacts)?;
                 let artifacts_hash = ContentHash::compute(&artifacts_bytes);
 
                 // Check for expected output hash in metadata
@@ -793,7 +793,7 @@ impl ShadowReplayVerifier {
         let mut signable_report = report.clone();
         signable_report.verification_signature = None;
 
-        let report_bytes = serde_json::to_vec(&signable_report).map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Serialization error: {}", e)))?;
+        let report_bytes = to_canonical_json_bytes(&signable_report)?;
         Ok(ContentHash::compute(&report_bytes))
     }
 }
@@ -851,6 +851,37 @@ impl From<crate::signature_preimage::SignatureError> for ReplayVerificationError
 impl From<crate::engine_object_id::IdError> for ReplayVerificationError {
     fn from(err: crate::engine_object_id::IdError) -> Self {
         ReplayVerificationError::InvalidCheckpoint(format!("ID derivation error: {}", err))
+    }
+}
+
+/// Convert a serializable value to canonical JSON bytes with deterministic field ordering.
+///
+/// This ensures that identical data structures always produce identical hash values
+/// by sorting object keys lexicographically, which is critical for replay verification.
+fn to_canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, ReplayVerificationError> {
+    let json_value = serde_json::to_value(value)
+        .map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("JSON conversion error: {}", e)))?;
+
+    let canonical_value = canonicalize_json_value(json_value);
+
+    serde_json::to_vec(&canonical_value)
+        .map_err(|e| ReplayVerificationError::InvalidCheckpoint(format!("Canonical serialization error: {}", e)))
+}
+
+/// Recursively sort JSON object keys to ensure deterministic ordering.
+fn canonicalize_json_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut sorted_map = Map::new();
+            for (k, v) in map {
+                sorted_map.insert(k, canonicalize_json_value(v));
+            }
+            Value::Object(sorted_map)
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(canonicalize_json_value).collect())
+        }
+        other => other,
     }
 }
 

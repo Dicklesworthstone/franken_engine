@@ -1,0 +1,264 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-miner-fixtures.v1",
+  "base_input": {
+    "policy": {
+      "min_success_count": 3,
+      "min_current_success_count": 2,
+      "min_refusal_count": 1
+    }
+  },
+  "cases": [
+    {
+      "case_id": "promotable_repeated_proof_template",
+      "proof_history": [
+        {
+          "template_key": "lib-test-filter",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p {package} {filter} --lib -- --nocapture",
+          "lane": "lib-test-filter",
+          "status": "passed",
+          "source_proof_link": "proofs/lib-test-filter/pass-1.json"
+        },
+        {
+          "template_key": "lib-test-filter",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p {package} {filter} --lib -- --nocapture",
+          "lane": "lib-test-filter",
+          "status": "passed",
+          "source_proof_link": "proofs/lib-test-filter/pass-2.json"
+        },
+        {
+          "template_key": "lib-test-filter",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p {package} {filter} --lib -- --nocapture",
+          "lane": "lib-test-filter",
+          "status": "passed",
+          "source_proof_link": "proofs/lib-test-filter/pass-3.json"
+        },
+        {
+          "template_key": "lib-test-filter",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p {package} {filter} --lib -- --nocapture",
+          "lane": "lib-test-filter",
+          "status": "reuse_refused",
+          "reason_codes": [
+            "env_allowlist_mismatch"
+          ],
+          "source_proof_link": "proofs/lib-test-filter/refusal-env.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-lib-test-filter",
+        "decision": "promotion_candidate",
+        "reason_code": "promote",
+        "promotion_candidate_count": 1,
+        "non_promotion_count": 0,
+        "success_count": 3,
+        "refusal_count": 1
+      }
+    },
+    {
+      "case_id": "insufficient_evidence",
+      "proof_history": [
+        {
+          "template_key": "script-smoke-gate",
+          "command_template": "bash scripts/e2e/{name}_smoke.sh selftest",
+          "lane": "script-smoke-gate",
+          "status": "passed",
+          "source_proof_link": "proofs/script-smoke/pass-1.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-script-smoke-gate",
+        "decision": "non_promotion",
+        "reason_code": "insufficient_evidence",
+        "promotion_candidate_count": 0,
+        "non_promotion_count": 1,
+        "success_count": 1,
+        "refusal_count": 0
+      }
+    },
+    {
+      "case_id": "stale_artifact_refusal",
+      "proof_history": [
+        {
+          "template_key": "golden-proof",
+          "command_template": "bash scripts/e2e/{golden}_smoke.sh check",
+          "lane": "golden-proof",
+          "status": "passed",
+          "source_proof_link": "proofs/golden/pass-1.json"
+        },
+        {
+          "template_key": "golden-proof",
+          "command_template": "bash scripts/e2e/{golden}_smoke.sh check",
+          "lane": "golden-proof",
+          "status": "passed",
+          "source_proof_link": "proofs/golden/pass-2.json"
+        },
+        {
+          "template_key": "golden-proof",
+          "command_template": "bash scripts/e2e/{golden}_smoke.sh check",
+          "lane": "golden-proof",
+          "status": "passed",
+          "source_proof_link": "proofs/golden/pass-3.json"
+        },
+        {
+          "template_key": "golden-proof",
+          "command_template": "bash scripts/e2e/{golden}_smoke.sh check",
+          "lane": "golden-proof",
+          "status": "stale",
+          "freshness": "expired",
+          "reason_codes": [
+            "expired_ttl"
+          ],
+          "source_proof_link": "proofs/golden/stale.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-golden-proof",
+        "decision": "non_promotion",
+        "reason_code": "stale_artifact_refusal",
+        "promotion_candidate_count": 0,
+        "non_promotion_count": 1,
+        "success_count": 3,
+        "refusal_count": 1
+      }
+    },
+    {
+      "case_id": "contradictory_failure_history",
+      "proof_history": [
+        {
+          "template_key": "no-default-features-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p {package} --no-default-features",
+          "lane": "no-default-features",
+          "status": "passed",
+          "source_proof_link": "proofs/no-default/pass-1.json"
+        },
+        {
+          "template_key": "no-default-features-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p {package} --no-default-features",
+          "lane": "no-default-features",
+          "status": "passed",
+          "source_proof_link": "proofs/no-default/pass-2.json"
+        },
+        {
+          "template_key": "no-default-features-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p {package} --no-default-features",
+          "lane": "no-default-features",
+          "status": "passed",
+          "source_proof_link": "proofs/no-default/pass-3.json"
+        },
+        {
+          "template_key": "no-default-features-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p {package} --no-default-features",
+          "lane": "no-default-features",
+          "status": "failed",
+          "contradictory": true,
+          "reason_codes": [
+            "contradictory_failure_history"
+          ],
+          "source_proof_link": "proofs/no-default/contradiction.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-no-default-features-check",
+        "decision": "non_promotion",
+        "reason_code": "contradictory_failure_history",
+        "promotion_candidate_count": 0,
+        "non_promotion_count": 1,
+        "success_count": 3,
+        "refusal_count": 1
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "proof_history": [
+        {
+          "template_key": "workspace-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+          "lane": "workspace-check",
+          "status": "passed",
+          "source_proof_link": "proofs/workspace/pass-1.json"
+        },
+        {
+          "template_key": "workspace-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+          "lane": "workspace-check",
+          "status": "passed",
+          "source_proof_link": "proofs/workspace/pass-2.json"
+        },
+        {
+          "template_key": "workspace-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+          "lane": "workspace-check",
+          "status": "passed",
+          "source_proof_link": "proofs/workspace/pass-3.json"
+        },
+        {
+          "template_key": "workspace-check",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+          "lane": "workspace-check",
+          "status": "contaminated",
+          "reason_codes": [
+            "local_fallback_contamination"
+          ],
+          "source_proof_link": "proofs/workspace/local-fallback.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-workspace-check",
+        "decision": "non_promotion",
+        "reason_code": "local_fallback_contamination",
+        "promotion_candidate_count": 0,
+        "non_promotion_count": 1,
+        "success_count": 3,
+        "refusal_count": 1
+      }
+    },
+    {
+      "case_id": "stable_non_promotion",
+      "proof_history": [
+        {
+          "template_key": "wide-human-review",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+          "lane": "wide-human-review",
+          "status": "passed",
+          "stable_non_promotion": true,
+          "source_proof_link": "proofs/wide/pass-1.json"
+        },
+        {
+          "template_key": "wide-human-review",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+          "lane": "wide-human-review",
+          "status": "passed",
+          "stable_non_promotion": true,
+          "source_proof_link": "proofs/wide/pass-2.json"
+        },
+        {
+          "template_key": "wide-human-review",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+          "lane": "wide-human-review",
+          "status": "passed",
+          "stable_non_promotion": true,
+          "source_proof_link": "proofs/wide/pass-3.json"
+        },
+        {
+          "template_key": "wide-human-review",
+          "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+          "lane": "wide-human-review",
+          "status": "reuse_refused",
+          "stable_non_promotion": true,
+          "reason_codes": [
+            "candidate_wider_than_requested"
+          ],
+          "source_proof_link": "proofs/wide/refusal.json"
+        }
+      ],
+      "expected": {
+        "candidate_id": "spt-wide-human-review",
+        "decision": "non_promotion",
+        "reason_code": "stable_non_promotion",
+        "promotion_candidate_count": 0,
+        "non_promotion_count": 1,
+        "success_count": 3,
+        "refusal_count": 1
+      }
+    }
+  ]
+}

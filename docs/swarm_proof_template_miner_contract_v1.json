@@ -1,0 +1,59 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-miner-contract.v1",
+  "bead_id": "bd-ua5n2.10",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.4",
+    "bd-ua5n2.7",
+    "bd-ua5n2.8"
+  ],
+  "script": "scripts/swarm_proof_template_miner.sh",
+  "operator_docs": "docs/SWARM_PROOF_TEMPLATE_MINER.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_template_miner/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_template_miner_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "required_outputs": [
+    "template_mining_report.json",
+    "promotion_candidates.jsonl",
+    "non_promotion_receipts.jsonl",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "decision_kinds": [
+    "promotion_candidate",
+    "non_promotion"
+  ],
+  "non_promotion_reasons": [
+    "insufficient_evidence",
+    "stale_artifact_refusal",
+    "contradictory_failure_history",
+    "local_fallback_contamination",
+    "stable_non_promotion"
+  ],
+  "promotion_policy": {
+    "min_success_count": 3,
+    "min_current_success_count": 2,
+    "min_refusal_count": 1,
+    "edits_agents_md": false,
+    "edits_scripts": false,
+    "advisory_only": true
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_template_miner_contract_v1.json scripts/testdata/swarm_proof_template_miner/cases.json",
+    "bash -n scripts/swarm_proof_template_miner.sh",
+    "bash -n scripts/e2e/swarm_proof_template_miner_smoke.sh",
+    "bash scripts/e2e/swarm_proof_template_miner_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_template_miner_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_proof_template_miner.sh docs/SWARM_PROOF_TEMPLATE_MINER.md docs/swarm_proof_template_miner_contract_v1.json scripts/testdata/swarm_proof_template_miner/cases.json scripts/e2e/swarm_proof_template_miner_smoke.sh"
+  ]
+}

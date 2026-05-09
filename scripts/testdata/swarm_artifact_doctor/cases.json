@@ -1,0 +1,96 @@
+{
+  "schema_version": "franken-engine.swarm-artifact-doctor-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "complete_bundle",
+      "contract": true,
+      "expected": {
+        "status": "pass",
+        "errors": 0,
+        "warnings": 0,
+        "required_codes": [],
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "missing_manifest",
+      "contract": true,
+      "expected": {
+        "status": "fail",
+        "errors": 3,
+        "warnings": 0,
+        "required_codes": [
+          "missing_required_artifact",
+          "missing_manifest"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "missing_commands",
+      "contract": true,
+      "expected": {
+        "status": "fail",
+        "errors": 2,
+        "warnings": 0,
+        "required_codes": [
+          "missing_required_artifact",
+          "missing_commands"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "incomplete_replay_directory",
+      "contract": true,
+      "expected": {
+        "status": "fail",
+        "errors": 1,
+        "warnings": 0,
+        "required_codes": [
+          "missing_required_artifact"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "local_fallback_marker",
+      "contract": true,
+      "expected": {
+        "status": "fail",
+        "errors": 1,
+        "warnings": 0,
+        "required_codes": [
+          "local_fallback_marker"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "stale_hash",
+      "contract": true,
+      "expected": {
+        "status": "fail",
+        "errors": 1,
+        "warnings": 0,
+        "required_codes": [
+          "stale_hash"
+        ],
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "unknown_contract",
+      "contract": false,
+      "expected": {
+        "status": "warn",
+        "errors": 0,
+        "warnings": 1,
+        "required_codes": [
+          "unknown_contract"
+        ],
+        "exit_code": 0
+      }
+    }
+  ]
+}

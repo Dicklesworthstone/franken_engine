@@ -1,0 +1,7 @@
+{
+  "artifact_paths": {
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  }
+}

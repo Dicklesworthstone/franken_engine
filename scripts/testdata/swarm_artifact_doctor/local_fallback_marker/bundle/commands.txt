@@ -1,0 +1,2 @@
+Failed to query daemon; running locally
+Executing command locally

@@ -1,0 +1,12 @@
+{
+  "schema_version": "franken-engine.fixture-bundle-manifest.v1",
+  "artifact_paths": {
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md",
+    "step_log": "step_logs/step_001_generate.log"
+  },
+  "content_hashes": {
+    "commands.txt": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

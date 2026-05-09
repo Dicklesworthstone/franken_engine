@@ -1,0 +1,10 @@
+{
+  "schema_version": "franken-engine.swarm-artifact-doctor-fixture-contract.v1",
+  "required_files": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md",
+    "step_logs/step_001_generate.log"
+  ]
+}

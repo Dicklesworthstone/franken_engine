@@ -15,6 +15,11 @@ GATE_ID="${GATE_ID:-prod-gate-$(date +%Y%m%d%H%M%S)}"
 RUN_DIR="${PROJECT_ROOT}/artifacts/production_hardening_exit_gate/${GATE_ID}"
 EVIDENCE_DIR="${RUN_DIR}/evidence"
 LOG_FILE="${RUN_DIR}/production_hardening_gate.log"
+RCH_BIN="${RCH_BIN:-rch}"
+CARGO_TARGET_DIR="${PRODUCTION_HARDENING_GATE_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_production_hardening_${GATE_ID}}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-1800}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -55,56 +60,72 @@ create_run_directory() {
     echo "=====================================" >> "${LOG_FILE}"
 }
 
-# Log command execution
-run_command() {
-    local cmd="$1"
-    local description="$2"
-    local log_file="${RUN_DIR}/command_logs/$(printf '%03d' ${COMMAND_COUNTER})_$(echo "${cmd}" | tr ' ' '_' | tr -d '"' | cut -c1-50).log"
+# Log rch-backed cargo command execution.
+run_cargo_command() {
+    local description="$1"
+    local command_slug log_file exit_code
+    shift
+
+    command_slug="$(printf '%s' "$description" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_-' | cut -c1-50)"
+    log_file="${RUN_DIR}/command_logs/$(printf '%03d' "${COMMAND_COUNTER}")_${command_slug}.log"
+    COMMAND_COUNTER=$((COMMAND_COUNTER + 1))
 
     log_info "Executing: ${description}"
-    log_info "Command: ${cmd}"
+    log_info "Command: rch exec -- env CARGO_TARGET_DIR=${CARGO_TARGET_DIR} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} CARGO_INCREMENTAL=${CARGO_INCREMENTAL} cargo $*"
 
-    if timeout 1800 bash -c "${cmd}" > "${log_file}" 2>&1; then
-        log_success "✓ ${description}"
-        return 0
+    if timeout "${RCH_TIMEOUT_SECONDS}" "${RCH_BIN}" exec -- env \
+        "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
+        "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+        "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
+        cargo "$@" > "${log_file}" 2>&1; then
+        exit_code=0
     else
-        local exit_code=$?
-        log_error "✗ ${description} (exit code: ${exit_code})"
-        log_error "Log file: ${log_file}"
-        cat "${log_file}" | tail -20 | while read -r line; do
-            log_error "  ${line}"
-        done
-        return ${exit_code}
+        exit_code=$?
     fi
 
-    ((COMMAND_COUNTER++))
+    if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|running locally' "${log_file}"; then
+        log_error "✗ ${description} (rch local fallback detected)"
+        exit_code=1
+    fi
+
+    if [[ "${exit_code}" -eq 0 ]]; then
+        log_success "✓ ${description}"
+        return 0
+    fi
+
+    log_error "✗ ${description} (exit code: ${exit_code})"
+    log_error "Log file: ${log_file}"
+    tail -20 "${log_file}" | while read -r line; do
+        log_error "  ${line}"
+    done
+    return "${exit_code}"
 }
 
 # Rust compilation check
 check_compilation() {
     log_info "=== Phase 1: Compilation Verification ==="
 
-    run_command \
-        "cargo check -p frankenengine-engine --lib" \
-        "Verify production hardening gate module compiles"
+    run_cargo_command \
+        "Verify production hardening gate module compiles" \
+        check -p frankenengine-engine --lib
 }
 
 # Execute integration tests
 run_integration_tests() {
     log_info "=== Phase 2: Integration Test Validation ==="
 
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate_integration --lib -- --nocapture" \
-        "Execute production hardening integration tests"
+    run_cargo_command \
+        "Execute production hardening integration tests" \
+        test -p frankenengine-engine --test production_hardening_exit_gate_integration --lib -- --nocapture
 }
 
 # Execute E2E tests
 run_e2e_tests() {
     log_info "=== Phase 3: End-to-End Test Validation ==="
 
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib -- --nocapture" \
-        "Execute production hardening E2E tests"
+    run_cargo_command \
+        "Execute production hardening E2E tests" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib -- --nocapture
 }
 
 # Security matrix validation
@@ -112,9 +133,9 @@ validate_security_matrix() {
     log_info "=== Phase 4: Security Matrix Validation ==="
 
     # Test security attack vector containment
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_security_matrix_attack_simulation -- --nocapture" \
-        "Validate security matrix attack simulation"
+    run_cargo_command \
+        "Validate security matrix attack simulation" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_security_matrix_attack_simulation -- --nocapture
 
     log_info "Security matrix validation: 4 attack vectors validated with SLO compliance"
 }
@@ -124,9 +145,9 @@ validate_fuzz_campaigns() {
     log_info "=== Phase 5: Fuzz Campaign Validation ==="
 
     # Test fuzz campaign configuration
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_fuzz_campaign_comprehensive_coverage -- --nocapture" \
-        "Validate fuzz campaign comprehensive coverage"
+    run_cargo_command \
+        "Validate fuzz campaign comprehensive coverage" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_fuzz_campaign_comprehensive_coverage -- --nocapture
 
     log_info "Fuzz campaigns: 144+ CPU hours across 6 targets (parser, IR, execution, hostcall, policy, evidence)"
 }
@@ -136,9 +157,9 @@ validate_property_tests() {
     log_info "=== Phase 6: Property-Based Test Validation ==="
 
     # Test property-based invariants
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_property_based_invariant_validation -- --nocapture" \
-        "Validate property-based invariant testing"
+    run_cargo_command \
+        "Validate property-based invariant testing" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_property_based_invariant_validation -- --nocapture
 
     log_info "Property-based tests: Parser, IR, execution invariants + policy monotonicity + evidence determinism"
 }
@@ -148,9 +169,9 @@ validate_metamorphic_tests() {
     log_info "=== Phase 7: Metamorphic Test Validation ==="
 
     # Test metamorphic preservation
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_metamorphic_semantic_preservation -- --nocapture" \
-        "Validate metamorphic semantic preservation"
+    run_cargo_command \
+        "Validate metamorphic semantic preservation" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_metamorphic_semantic_preservation -- --nocapture
 
     log_info "Metamorphic tests: Optimization level, policy merge order, code reordering preservation"
 }
@@ -160,9 +181,9 @@ validate_rollout_ladder() {
     log_info "=== Phase 8: Rollout Ladder Validation ==="
 
     # Test rollout progression
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_rollout_ladder_progressive_validation -- --nocapture" \
-        "Validate rollout ladder progressive thresholds"
+    run_cargo_command \
+        "Validate rollout ladder progressive thresholds" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_rollout_ladder_progressive_validation -- --nocapture
 
     log_info "Rollout ladder: Shadow → Canary → Ramp → Default with progressive metric thresholds"
 }
@@ -172,9 +193,9 @@ validate_fault_injection() {
     log_info "=== Phase 9: Fault Injection Drill Validation ==="
 
     # Test fault injection recovery
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_fault_injection_autonomous_recovery -- --nocapture" \
-        "Validate fault injection autonomous recovery"
+    run_cargo_command \
+        "Validate fault injection autonomous recovery" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_fault_injection_autonomous_recovery -- --nocapture
 
     log_info "Fault injection: Network, node, key, revocation, clock skew recovery within SLO"
 }
@@ -184,9 +205,9 @@ validate_quarantine_drills() {
     log_info "=== Phase 10: Quarantine Drill Validation ==="
 
     # Test quarantine containment
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_quarantine_fleet_wide_containment -- --nocapture" \
-        "Validate quarantine fleet-wide containment"
+    run_cargo_command \
+        "Validate quarantine fleet-wide containment" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_quarantine_fleet_wide_containment -- --nocapture
 
     log_info "Quarantine drills: CPU bomb, memory exhaustion, privilege escalation autonomous containment"
 }
@@ -196,9 +217,9 @@ validate_replay_audit() {
     log_info "=== Phase 11: Replay Audit Validation ==="
 
     # Test deterministic replay
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_replay_audit_deterministic_incidents -- --nocapture" \
-        "Validate replay audit deterministic incidents"
+    run_cargo_command \
+        "Validate replay audit deterministic incidents" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_replay_audit_deterministic_incidents -- --nocapture
 
     log_info "Replay audit: High/critical incidents in canary/production with deterministic replay"
 }
@@ -208,9 +229,9 @@ validate_evidence_collection() {
     log_info "=== Phase 12: Evidence Collection Validation ==="
 
     # Test evidence artifacts
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_evidence_artifact_comprehensive_collection -- --nocapture" \
-        "Validate evidence artifact collection"
+    run_cargo_command \
+        "Validate evidence artifact collection" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_evidence_artifact_comprehensive_collection -- --nocapture
 
     log_info "Evidence collection: Security, fuzz, properties, faults, quarantine, replay artifacts"
 }
@@ -220,9 +241,9 @@ generate_operational_readiness_report() {
     log_info "=== Phase 13: Operational Readiness Report Generation ==="
 
     # Test operational readiness report
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate_integration --lib test_operational_readiness_report_generation -- --nocapture" \
-        "Generate operational readiness report"
+    run_cargo_command \
+        "Generate operational readiness report" \
+        test -p frankenengine-engine --test production_hardening_exit_gate_integration --lib test_operational_readiness_report_generation -- --nocapture
 
     log_info "Operational readiness report: Security, performance, reliability, operational assessments"
 }
@@ -232,9 +253,9 @@ execute_production_hardening_gate() {
     log_info "=== Phase 14: Full Production Hardening Gate Execution ==="
 
     # Execute complete gate
-    run_command \
-        "cargo test -p frankenengine-engine --test production_hardening_exit_gate --lib test_production_hardening_gate_e2e -- --nocapture" \
-        "Execute complete production hardening gate"
+    run_cargo_command \
+        "Execute complete production hardening gate" \
+        test -p frankenengine-engine --test production_hardening_exit_gate --lib test_production_hardening_gate_e2e -- --nocapture
 
     log_success "Production Hardening Gate execution completed successfully"
 }
@@ -243,20 +264,21 @@ execute_production_hardening_gate() {
 run_clippy_validation() {
     log_info "=== Phase 15: Clippy Validation ==="
 
-    run_command \
-        "cargo clippy -p frankenengine-engine --tests --lib -- -D warnings" \
-        "Run clippy on production hardening gate"
+    run_cargo_command \
+        "Run clippy on production hardening gate" \
+        clippy -p frankenengine-engine --tests --lib -- -D warnings
 }
 
 # Generate summary report
 generate_summary_report() {
-    local end_time=$(date)
+    local end_time
     local duration=$(($(date +%s) - START_TIME))
+    end_time=$(date)
 
     cat > "${RUN_DIR}/production_hardening_summary.json" << EOF
 {
   "gate_id": "${GATE_ID}",
-  "start_time": "$(date -d@${START_TIME})",
+  "start_time": "$(date -d@"${START_TIME}")",
   "end_time": "${end_time}",
   "duration_seconds": ${duration},
   "status": "PASSED",
@@ -280,6 +302,8 @@ generate_summary_report() {
   "evidence_location": "${EVIDENCE_DIR}",
   "artifacts_location": "${RUN_DIR}/artifacts",
   "log_location": "${LOG_FILE}",
+  "cargo_target_dir": "${CARGO_TARGET_DIR}",
+  "rch_exec_timeout_seconds": ${RCH_TIMEOUT_SECONDS},
   "production_readiness": "GO",
   "gate_requirements_met": {
     "evidence_backed_operational_readiness_report": true,
@@ -306,13 +330,19 @@ EOF
 
 # Main execution
 main() {
-    local START_TIME=$(date +%s)
+    local START_TIME
     local COMMAND_COUNTER=0
+    START_TIME=$(date +%s)
 
     echo "🏗️  Production Hardening Exit Gate - Phase E Final Validation"
     echo "Gate ID: ${GATE_ID}"
     echo "Run Directory: ${RUN_DIR}"
     echo ""
+
+    if ! command -v "${RCH_BIN}" >/dev/null 2>&1; then
+        echo "Required rch binary not found: ${RCH_BIN}" >&2
+        exit 2
+    fi
 
     create_run_directory
 

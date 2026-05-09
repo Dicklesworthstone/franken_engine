@@ -32,12 +32,13 @@ else
     exit 1
 fi
 
-# 3. Verify binary exists
-echo "3. Checking gate binary..."
-if cargo metadata --format-version 1 | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' | grep -q "franken_zero_placeholder_gate"; then
-    echo "   ✅ Zero-placeholder gate binary defined in Cargo.toml"
+# 3. Verify binary source exists. Cargo discovers src/bin/*.rs targets
+# without needing a cargo metadata call or an explicit Cargo.toml [[bin]].
+echo "3. Checking gate binary source..."
+if [[ -f "crates/franken-engine/src/bin/franken_zero_placeholder_gate.rs" ]]; then
+    echo "   ✅ Zero-placeholder gate binary source exists"
 else
-    echo "   ❌ Zero-placeholder gate binary NOT found in Cargo.toml"
+    echo "   ❌ Zero-placeholder gate binary source NOT found"
     exit 1
 fi
 
@@ -70,8 +71,11 @@ done
 
 if [[ $placeholder_count -eq 0 ]]; then
     echo "   ✅ No placeholder patterns found in gate modules"
+    module_placeholder_summary="COMPLETE (no placeholder patterns)"
 else
     echo "   ⚠️  Found $placeholder_count placeholder pattern(s) in gate modules"
+    echo "      These may be scanner test fixtures; review the lines before treating this as clean."
+    module_placeholder_summary="REVIEW ($placeholder_count scanner pattern(s) present)"
 fi
 
 # 6. Test script help/usage
@@ -86,9 +90,9 @@ echo
 echo "=== Verification Summary ==="
 echo "✅ GitHub CI workflow integration: COMPLETE"
 echo "✅ Gate script implementation: COMPLETE"
-echo "✅ Gate binary definition: COMPLETE"
+echo "✅ Gate binary source: COMPLETE"
 echo "✅ Supporting modules: COMPLETE"
-echo "✅ Module implementation: COMPLETE (no placeholders)"
+echo "✅ Module implementation: $module_placeholder_summary"
 echo "✅ Script functionality: VERIFIED"
 echo
 echo "🎉 bd-1lsy.9.5.2 Zero-placeholder CI enforcement: IMPLEMENTATION COMPLETE"

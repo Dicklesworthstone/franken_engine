@@ -326,6 +326,7 @@ mod tests {
     #[test]
     fn test_panel_bundle_builder() {
         let epoch = SecurityEpoch::GENESIS;
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let bundle = PanelBundleBuilder::new()
             .with_daemon_health(DaemonHealth::Healthy)
             .with_active_journals(5)

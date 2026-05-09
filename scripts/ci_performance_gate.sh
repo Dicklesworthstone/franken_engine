@@ -17,6 +17,11 @@ echo ""
 # Create artifacts directory
 mkdir -p "$ARTIFACTS_DIR"
 
+echo "🔌 Checking benchmark suite index wiring..."
+"$PROJECT_ROOT/scripts/e2e/benchmark_suite_index_wiring_smoke.sh" check \
+    2>&1 | tee "$ARTIFACTS_DIR/benchmark_suite_index_wiring_smoke.log"
+echo ""
+
 # Check if baseline performance data exists
 BASELINE_DIR="$PROJECT_ROOT/artifacts/performance_baselines"
 if [[ ! -d "$BASELINE_DIR" ]] || [[ -z "$(ls -A "$BASELINE_DIR" 2>/dev/null || true)" ]]; then
@@ -27,9 +32,7 @@ if [[ ! -d "$BASELINE_DIR" ]] || [[ -z "$(ls -A "$BASELINE_DIR" 2>/dev/null || t
 
     # Run baseline benchmark collection
     echo "📊 Collecting performance baseline..."
-    node "$SCRIPT_DIR/run_baseline_benchmarks.js" 2>&1 | tee "$ARTIFACTS_DIR/baseline_generation.log"
-
-    if [[ $? -eq 0 ]]; then
+    if node "$SCRIPT_DIR/run_baseline_benchmarks.js" 2>&1 | tee "$ARTIFACTS_DIR/baseline_generation.log"; then
         echo ""
         echo "✅ Performance baseline generated successfully!"
         echo "📁 Artifacts saved to: $(find "$BASELINE_DIR" -type d -name "2026-*" | tail -1)"

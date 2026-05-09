@@ -331,6 +331,21 @@ guard fails closed on blocked or divergent claimability evidence, and
 `contaminated` when stale exported state or unsafe mutation claims invalidate
 the guidance.
 
+The same operator report now also integrates the first-error conveyor handoff:
+
+- Planner script: `scripts/rch_first_error_conveyor.sh`
+- Plan schema: `franken-engine.rch-first-error-conveyor-plan.v1`
+- Operator status argument: `--first-error-conveyor-plan-json`
+- Operator status section: `first_error_conveyor`
+
+That handoff carries the next first-error recommendation, affected bead when a
+duplicate or stale owner exists, active owner state, duplicate/defer reason
+codes, proof-isolation profile summary, fail-closed language, and deterministic
+artifact links into the existing `scripts/swarm_operator_status_report.sh`
+producer. It is advisory-only. It must not be described as live bead creation,
+automatic ownership transfer, Agent Mail mutation, `rch` execution, Cargo
+execution, or a second dashboard producer.
+
 The same operator report now also integrates the SWARM-SCALE-IV
 capability-affinity routing handoff:
 
@@ -395,6 +410,7 @@ consumption:
 | `swarm_topology_placement` | `swarm-topology-placement-plan.v1` plus `swarm-topology-placement-receipt.v1` and `swarm-topology-placement-evidence-ledger.v1` from `scripts/swarm_topology_placement_planner.sh` and `scripts/swarm_topology_placement_receipt_ledger.sh` | Show advisory topology class, worker target/shard hints, cache warmth opportunities, expiry/drift/adoption warnings, and source artifact links without pinning workers, rebinding hosts, enforcing placement, repairing target dirs, or mutating the live queue. |
 | `swarm_topology_aware_queue_advisory` | `swarm-topology-aware-queue-advisory.v1` from `scripts/swarm_topology_aware_queue_scorer.sh` | Show preferred-locality confidence, cache-reuse guidance, worker exclusions, degraded/blocked/contaminated queue-locality advice, and source artifact links without mutating the live queue or pinning workers. |
 | `swarm_benchmark_responsiveness` | `swarm-benchmark-workload-catalog.v1` plus `swarm-benchmark-responsiveness-advisory.v1` from `scripts/swarm_benchmark_workload_catalog_normalizer.sh` and `scripts/swarm_benchmark_responsiveness_scorer.sh` | Show benchmark readiness, selected workload and class, throughput-gap and utilization bands, cache recommendation, remote-proof confidence, bottleneck classes, and source artifact links without running live benchmarks, mutating the queue, or mutating workers. |
+| `first_error_conveyor` | `franken-engine.rch-first-error-conveyor-plan.v1` from `scripts/rch_first_error_conveyor.sh` | Show next first error, affected bead, active owner state, duplicate/defer reason codes, proof-isolation profile summary, fail-closed language, and artifact links without creating beads, mutating Agent Mail, running Cargo, or invoking `rch`. |
 | `swarm_capability_affinity_routing` | `capability-affinity-queue-routing-advisory.v1` plus `swarm-capability-affinity-routing-outcome-ledger.v1` from `scripts/swarm_capability_affinity_queue_routing_planner.sh` and `scripts/swarm_capability_affinity_routing_outcome_ledger.sh` | Show advisory worker-cohort readiness, routing mode, mismatch/capability-gap/toolchain-drift counts, and source artifact links without rerouting live tasks, mutating workers, or mutating the live queue. |
 | `swarm_control_surface_catalog` | `swarm-control-surface-catalog.v1` plus `swarm-control-surface-intent-plan.v1` and `swarm-control-surface-drift-report.v1` from `scripts/swarm_control_surface_catalog_normalizer.sh`, `scripts/swarm_control_surface_intent_router.sh`, and `scripts/swarm_control_surface_drift_gate.sh` | Show catalog decision, surface count, drift count, top recommended surface, track, purpose, operator-status section, implementation/smoke scripts, required inputs, emitted artifacts, validation commands, blocked/degraded/fail-closed reason codes, duplicate-new-work warning, and artifact links without creating another dashboard producer or mutating live work. |
 | `staged_contamination` | `staged-ownership-report.v1` | Show staged ownership guard pass/degraded/fail-closed decision and offending paths. |
@@ -617,6 +633,9 @@ enforcement.
   locality and cache-residency evidence, not as live worker pinning, automatic
   host rebinding, queue mutation, placement enforcement, target-dir repair,
   RCH execution, Cargo execution, or worker mutation.
+- The docs must describe the first-error conveyor handoff as integrated
+  advisory compile-blocker evidence, not as live bead creation, Agent Mail
+  mutation, `rch` execution, Cargo execution, or a second dashboard producer.
 - The docs must name the integrated advisory child producers and their
   schema/contract sources.
 - The docs must not describe the composed SWARM-CTRL-VIII no-mock drill as a

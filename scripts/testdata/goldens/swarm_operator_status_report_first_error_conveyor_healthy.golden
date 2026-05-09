@@ -1,0 +1,1224 @@
+{
+  "schema_version": "franken-engine.swarm-operator-status-report.v1",
+  "bead_id": "bd-jw854",
+  "source_revision": "smoke-rev",
+  "status": "healthy",
+  "tui_ready": true,
+  "dashboard_contract": {
+    "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
+    "contract_doc": "docs/SWARM_PREDICTIVE_DASHBOARD_CONTRACT.md",
+    "contract_json": "docs/swarm_predictive_dashboard_contract_v1.json",
+    "renderer": {
+      "provider": "/dp/frankentui",
+      "shipped_in_franken_engine": false,
+      "local_renderer": false
+    }
+  },
+  "summary": {
+    "ready_count": 1,
+    "in_progress_count": 1,
+    "reservation_count": 1,
+    "degraded_count": 0,
+    "planned_command_count": 1,
+    "predictive_cost_command_count": 1,
+    "high_cost_command_count": 0,
+    "proof_cost_budget_count": 0,
+    "stale_evidence_count": 0,
+    "dirty_reserved_count": 0,
+    "blocked_bead_count": 0,
+    "collision_risk": "none",
+    "rch_incident_count": 0,
+    "resource_lease_decision": "admit",
+    "proof_cache_decision": "cache_hit",
+    "qos_batch_decision": "planned",
+    "qos_admitted_count": 1,
+    "qos_deferred_count": 0,
+    "stale_lock_safe_to_reopen_count": 0,
+    "stale_lock_contact_first_count": 0,
+    "forecast_overall_state": "nominal",
+    "forecast_confidence_band": "high",
+    "telemetry_missing_input_count": 0,
+    "admission_budget_profile": "balanced",
+    "admission_deferred_count": 0,
+    "resource_envelope_readiness": "ready",
+    "resource_envelope_decision": "pass",
+    "resource_envelope_severity": "ok",
+    "fair_share_decision": "admit",
+    "fair_share_admitted_count": 3,
+    "fair_share_deferred_count": 0,
+    "fair_share_heavy_admitted_count": 2,
+    "topology_placement_readiness": "ready",
+    "topology_placement_plan_decision": "pass",
+    "topology_placement_receipt_decision": "pass",
+    "topology_placement_topology_class": "numa_hot_cache_preferred",
+    "topology_placement_warm_cache_state": "hot",
+    "topology_placement_warm_cache_opportunity_count": 1,
+    "topology_placement_adoption_status": "adopted",
+    "topology_placement_drift_reason_count": 0,
+    "capability_affinity_readiness": "ready",
+    "capability_affinity_advisory_decision": "pass",
+    "capability_affinity_outcome_ledger_decision": "pass",
+    "capability_affinity_routing_mode": "capability_affinity_confirmed",
+    "capability_affinity_topology_class": "numa_hot_cache_preferred",
+    "capability_affinity_preferred_worker_count": 2,
+    "capability_affinity_mismatch_count": 0,
+    "capability_affinity_capability_gap_count": 0,
+    "capability_affinity_toolchain_drift_count": 0,
+    "lease_exchange_decision": "retain_current_assignments",
+    "lease_exchange_candidate_count": 0,
+    "salvage_promotion_candidate_count": 0,
+    "prefetch_advisory": "prefetch_recommended",
+    "prefetch_target_dir": "/tmp/rch_target_franken_engine_operator_status",
+    "starvation_rescue_plan_decision": "advisory",
+    "starvation_rescue_escalation_band": "ready",
+    "starvation_rescue_top_action": "reopen_stale_claim_then_rebalance",
+    "starvation_rescue_unresolved_risk_count": 0,
+    "checkpoint_restore_plan_decision": "resume",
+    "checkpoint_restore_escalation_band": "ready",
+    "checkpoint_restore_top_action": "resume_from_checkpoint",
+    "checkpoint_restore_unresolved_risk_count": 0,
+    "execution_queue_decision": "pass",
+    "execution_queue_conservative_mode": false,
+    "execution_queue_restore_dependency_state": "clear",
+    "execution_queue_top_start_count": 1,
+    "execution_queue_deferred_count": 0,
+    "execution_queue_bottleneck_count": 1,
+    "queue_fidelity_trust_level": "trustworthy",
+    "queue_fidelity_drift_class": "none",
+    "queue_fidelity_highest_mismatch": "none",
+    "queue_tuning_plan_class": "no_improvement",
+    "queue_tuning_top_recommendation": "none",
+    "queue_tuning_promotion_readiness": "ready",
+    "queue_tuning_promotion_decision": "eligible_canary",
+    "queue_tuning_rollback_verdict": "better_than_current",
+    "queue_tuning_canary_action": "continue_canary",
+    "queue_tuning_manual_blocker_count": 0,
+    "queue_tuning_evidence_link_count": 3,
+    "queue_policy_adoption_readiness": "retained",
+    "queue_policy_adoption_state": "recorded_active_policy",
+    "queue_policy_sustained_gain_verdict": "sustained_gain",
+    "queue_policy_expiry_decision": "retain_adopted_policy",
+    "queue_policy_expiry_required": false,
+    "queue_policy_supersession_required": false,
+    "causal_trace_readiness": "complete",
+    "causal_trace_decision": "pass",
+    "causal_trace_anomaly_count": 0,
+    "causal_trace_missing_edge_count": 0,
+    "staged_contamination_decision": "pass",
+    "staged_contamination_offender_count": 0,
+    "first_error_conveyor_readiness": "actionable",
+    "first_error_conveyor_decision": "block_current_bead",
+    "first_error_conveyor_next_disposition": "block_current_bead",
+    "first_error_conveyor_active_owner_state": "clear",
+    "first_error_conveyor_recommendation_count": 1
+  },
+  "services": {
+    "agent_mail": "ok",
+    "rch": "ok",
+    "proof_evidence_index": "ok"
+  },
+  "ready_beads": [
+    {
+      "id": "bd-p03vs",
+      "title": "Typed proof-evidence index",
+      "priority": 1,
+      "status": "open",
+      "assignee": null
+    }
+  ],
+  "in_progress_beads": [
+    {
+      "id": "bd-0ub12",
+      "title": "Semantic dark matter scoring",
+      "priority": 1,
+      "status": "in_progress",
+      "assignee": "CyanOak"
+    }
+  ],
+  "bv_tracks": [
+    {
+      "track_id": "track-B",
+      "items": [
+        {
+          "id": "bd-p03vs",
+          "title": "Typed proof-evidence index",
+          "priority": 1,
+          "status": "open"
+        }
+      ]
+    }
+  ],
+  "active_reservations": [
+    {
+      "path": "scripts/swarm_operator_status_report.sh",
+      "holder": "SandyThrush",
+      "exclusive": true
+    }
+  ],
+  "resource_decision": {
+    "decision": "admit",
+    "findings": []
+  },
+  "validation_plan": {
+    "decision": "admit",
+    "collision_risk": "none",
+    "risk_flags": [],
+    "commands": [
+      {
+        "command_id": "script-check",
+        "display": "bash -n scripts/swarm_operator_status_report.sh",
+        "command_kind": "shell_syntax",
+        "predicted_cost": {
+          "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+          "state": "static",
+          "cost_class": "low",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0
+        },
+        "risk_flags": [],
+        "cost_evidence": {
+          "status": "not_required",
+          "matched_rows": 0,
+          "fresh_rows": 0,
+          "stale_rows": 0
+        }
+      }
+    ],
+    "omitted_commands": [],
+    "proof_cost_budgets": [],
+    "conflicting_agents": [],
+    "safe_alternatives": [
+      "scripts/swarm_operator_status_report.sh"
+    ]
+  },
+  "proof_evidence_index": {
+    "queries": [
+      {
+        "name": "recent_failed_gates",
+        "row_count": 0
+      },
+      {
+        "name": "proof_by_bead",
+        "row_count": 2
+      }
+    ]
+  },
+  "proof_outcomes": [
+    {
+      "bead_id": "bd-1onpa",
+      "artifact_id": "plan",
+      "status": "pass"
+    }
+  ],
+  "stale_evidence": [],
+  "dirty_files": [],
+  "predictive_dashboard": {
+    "schema_version": "franken-engine.swarm-predictive-dashboard.v1",
+    "renderer_contract": {
+      "provider": "/dp/frankentui",
+      "shipped_in_franken_engine": false,
+      "local_renderer": false
+    },
+    "predictive_cost": {
+      "status": "nominal",
+      "commands": [
+        {
+          "command_id": "script-check",
+          "display": "bash -n scripts/swarm_operator_status_report.sh",
+          "command_kind": "shell_syntax",
+          "cost_class": "low",
+          "cost_state": "static",
+          "sample_count": 0,
+          "elapsed_ms_p50": 0,
+          "elapsed_ms_max": 0,
+          "compiled_target_count_max": 0,
+          "linked_target_count_max": 0,
+          "risk_flags": [],
+          "cost_evidence": {
+            "status": "not_required",
+            "matched_rows": 0,
+            "fresh_rows": 0,
+            "stale_rows": 0
+          }
+        }
+      ],
+      "high_risk_commands": [],
+      "proof_cost_budgets": []
+    },
+    "collision_risk": {
+      "risk": "none",
+      "conflicting_agents": [],
+      "safe_alternatives": [
+        "scripts/swarm_operator_status_report.sh"
+      ],
+      "reservation_recommendations": [],
+      "conflicts": {
+        "reservations": [],
+        "dirty": [],
+        "in_progress": []
+      }
+    },
+    "proof_freshness": {
+      "state": "fresh",
+      "reusable": true,
+      "artifact_id": "proof-current",
+      "artifact_path": null,
+      "reason": "proof artifact is reusable",
+      "recommended_next_action": "Reuse the proof artifact.",
+      "covered_paths": [
+        "scripts/swarm_operator_status_report.sh"
+      ],
+      "changed_paths": []
+    },
+    "swarm_actionability_guard": {
+      "artifact_status": "missing",
+      "readiness": "missing",
+      "severity": "warning",
+      "guard_decision": "missing",
+      "primary_candidate_id": null,
+      "primary_candidate_decision": null,
+      "primary_candidate_states": [],
+      "primary_candidate_assignees": [],
+      "reason_codes": [],
+      "remediation_commands": [],
+      "source_freshness": {
+        "db_newer": false,
+        "all_sources_fresh": true,
+        "missing_optional_sources": []
+      },
+      "candidate_summary": {
+        "candidate_count": 0,
+        "ready_count": 0,
+        "in_progress_count": 0,
+        "blocked_count": 0,
+        "reservation_count": 0,
+        "dirty_overlap_count": 0
+      },
+      "warnings": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "claims_beads": false,
+        "reopens_beads": false,
+        "closes_beads": false,
+        "reassigns_beads": false,
+        "releases_reservations": false,
+        "sends_agent_mail": false,
+        "mutates_git": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false
+      },
+      "artifact_paths": {
+        "actionability_report_json": "",
+        "events_jsonl": null,
+        "commands_txt": null,
+        "report_md": null
+      }
+    },
+    "rch_incidents": {
+      "status": "none",
+      "incidents": []
+    },
+    "resource_leases": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "lease_decision": "admit",
+      "reason": "lease admitted",
+      "agent_id": "ScarletOwl",
+      "bead_id": "bd-h3hrc",
+      "requested_command": "bash -n scripts/swarm_operator_status_report.sh",
+      "target_dir": "/tmp/rch_target_franken_engine_operator_status",
+      "assigned_worker": "worker-alpha",
+      "safe_alternatives": [],
+      "findings": [
+        {
+          "severity": "info",
+          "code": "lease_admitted",
+          "message": "lease admitted"
+        }
+      ],
+      "actionable_commands": []
+    },
+    "proof_cache": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "proof_cache_decision": "cache_hit",
+      "reason": "all requested proof artifacts are safely reusable",
+      "cache_hit_count": 1,
+      "refresh_count": 0,
+      "invalid_count": 0,
+      "cache_hit_artifacts": [
+        {
+          "bead_id": "bd-h3hrc",
+          "artifact_id": "operator-status-golden",
+          "artifact_path": "scripts/testdata/goldens/swarm_operator_status_report_healthy.golden"
+        }
+      ],
+      "required_refreshes": [],
+      "invalid_artifacts": [],
+      "invalidated_paths": [],
+      "refresh_commands": [],
+      "actionable_commands": []
+    },
+    "qos_batches": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "batch_id": "batch-healthy",
+      "batch_decision": "planned",
+      "fairness_reason": "all pending requests fit within fairness and worker capacity",
+      "max_parallel_heavy": 2,
+      "retry_after_seconds": 0,
+      "admitted_count": 1,
+      "deferred_count": 0,
+      "admitted_commands": [
+        {
+          "request_id": "status-shell",
+          "agent_id": "ScarletOwl",
+          "bead_id": "bd-h3hrc",
+          "command": "bash -n scripts/swarm_operator_status_report.sh",
+          "heavy": false,
+          "batch_decision": "admit",
+          "fairness_reason": "admitted as light validation outside heavy capacity"
+        }
+      ],
+      "deferred_commands": [],
+      "actionable_commands": [
+        "bash -n scripts/swarm_operator_status_report.sh"
+      ]
+    },
+    "stale_lock_recommendations": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "recommendation_count": 0,
+      "safe_to_reopen_count": 0,
+      "contact_first_count": 0,
+      "safe_to_reopen": [],
+      "contact_first": [],
+      "recommendations": [],
+      "actionable_commands": []
+    },
+    "telemetry_quality": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "current_and_complete",
+      "confidence_band": "high",
+      "input_count": 3,
+      "provided_input_count": 3,
+      "missing_input_count": 0,
+      "failure_count": 0,
+      "inputs": [
+        {
+          "input": "telemetry_snapshot_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-capacity-snapshot.v1"
+        },
+        {
+          "input": "validation_plan_json",
+          "status": "provided",
+          "schema_version": "franken-engine.swarm-validation-plan.v1"
+        },
+        {
+          "input": "build_storm_batch_plan_json",
+          "status": "provided",
+          "schema_version": "franken-engine.build-storm-batch-plan.v1"
+        }
+      ],
+      "notes": [
+        "deterministic advisory-only forecast fixture"
+      ],
+      "recommended_action": "Treat the predictive forecast as advisory snapshot evidence only.",
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/capacity_forecast.json"
+    },
+    "capacity_forecast": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "admit",
+      "confidence_band": "high",
+      "overall_state": "nominal",
+      "blocked_categories": [],
+      "degraded_categories": [],
+      "category_states": {
+        "compile_pressure": "nominal",
+        "disk_memory_pressure": "nominal",
+        "rch_degradation": "nominal",
+        "target_dir_heat": "nominal",
+        "proof_availability": "nominal",
+        "coordination_pressure": "nominal"
+      },
+      "recommended_actions": {
+        "compile_pressure": "No compile-pressure mitigation is required.",
+        "disk_memory_pressure": "No disk or memory mitigation is required.",
+        "rch_degradation": "rch is healthy enough for advisory use.",
+        "target_dir_heat": "Warm target reuse remains bounded.",
+        "proof_availability": "Proof availability is healthy enough for advisory reuse.",
+        "coordination_pressure": "Coordination pressure is nominal."
+      },
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/capacity_forecast.json"
+    },
+    "admission_budgets": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "admit",
+      "budget_profile": "balanced",
+      "admitted_count": 1,
+      "deferred_count": 0,
+      "protected_request_count": 1,
+      "proof_obligation_count": 1,
+      "recommendations": [
+        {
+          "request_id": "status-shell",
+          "bead_id": "bd-h95kz",
+          "agent_id": "CyanOak",
+          "decision": "admit",
+          "budget_class": "protected",
+          "proof_obligation": true
+        }
+      ],
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/admission_budget_plan.json"
+    },
+    "swarm_resource_envelope": {
+      "artifact_statuses": {
+        "resource_envelope": "provided",
+        "fair_share_batch_plan": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "decision": "pass",
+      "fair_share_decision": "admit",
+      "host_id": "host-64c-256g",
+      "capacity_budget": {
+        "script_lane_limit": 12,
+        "proof_lane_limit": 12,
+        "build_lane_limit": 6,
+        "remote_rch_slot_limit": 12,
+        "memory_bytes_budget": 171798691840,
+        "target_dir_bytes_budget": 311385128960,
+        "defer_reasons": []
+      },
+      "capacity": {
+        "script_lane_limit": 12,
+        "proof_lane_limit": 12,
+        "build_lane_limit": 6,
+        "remote_rch_slot_limit": 12,
+        "memory_bytes_budget": 171798691840,
+        "target_dir_bytes_budget": 311385128960,
+        "rch_slots_available": 12,
+        "target_dir_min_available_bytes": 322122547200
+      },
+      "fair_share": {
+        "requested_count": 3,
+        "admitted_count": 3,
+        "deferred_count": 0,
+        "heavy_admitted_count": 2,
+        "rch_slots_used": 2,
+        "fairness_rationale": [
+          "fixture fair-share rationale"
+        ]
+      },
+      "contaminating_classes": [],
+      "degraded_reason_count": 0,
+      "blocked_reason_count": 0,
+      "fail_closed_reason_count": 0,
+      "artifact_paths": {
+        "resource_envelope_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_resource_envelope.json",
+        "fair_share_batch_plan_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_fair_share_batch_plan.json"
+      }
+    },
+    "swarm_topology_placement": {
+      "artifact_statuses": {
+        "placement_plan": "provided",
+        "placement_receipt": "provided",
+        "evidence_ledger": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "plan_decision": "pass",
+      "receipt_decision": "pass",
+      "ledger_decision": "pass",
+      "placement_readiness": "ready",
+      "recommended_topology_class": "numa_hot_cache_preferred",
+      "recommended_worker_targets": [
+        {
+          "rank": 1,
+          "lane_class": "heavy",
+          "worker_id": "rch-a",
+          "numa_node": 0,
+          "shard_hint": "heavy-numa-0-shard-0",
+          "cache_reuse": true,
+          "target_dir": "/mnt/rch/target-a",
+          "certainty": "confirmed",
+          "reason_codes": [
+            "numa_preferred",
+            "hot_cache_reuse"
+          ]
+        },
+        {
+          "rank": 2,
+          "lane_class": "latency_sensitive",
+          "worker_id": "rch-a",
+          "numa_node": 0,
+          "shard_hint": "latency_sensitive-numa-0-shard-1",
+          "cache_reuse": true,
+          "target_dir": "/mnt/rch/target-a",
+          "certainty": "confirmed",
+          "reason_codes": [
+            "numa_preferred",
+            "hot_cache_reuse"
+          ]
+        }
+      ],
+      "recommended_worker_target_count": 2,
+      "recommended_worker_ids": [
+        "rch-a"
+      ],
+      "heavy_target_count": 1,
+      "latency_sensitive_target_count": 1,
+      "warm_cache_residency_state": "hot",
+      "warm_cache_opportunities": [
+        {
+          "opportunity_id": "reuse_hot_cache",
+          "action": "prefer_hot_cache_worker_before_cold_recompute",
+          "certainty": "confirmed",
+          "worker_ids": [
+            "rch-a"
+          ],
+          "target_dirs": [
+            {
+              "path": "/mnt/rch/target-a",
+              "warm": true,
+              "cache_key": "franken-engine-main"
+            }
+          ],
+          "reason_codes": [
+            "hot_cache_reuse",
+            "reuse_warm_target_dir"
+          ]
+        }
+      ],
+      "warm_cache_opportunity_count": 1,
+      "shard_hints": [
+        "heavy-numa-0-shard-0",
+        "latency_sensitive-numa-0-shard-1"
+      ],
+      "adoption_status": "adopted",
+      "adoption_drift_reason_codes": [
+        "adopted_recommended_target",
+        "cache_reuse_confirmed"
+      ],
+      "adoption_history": [
+        {
+          "receipt_id": "receipt-smoke-topology-placement",
+          "plan_id": "plan-smoke-topology-placement",
+          "adoption_status": "adopted",
+          "expected_host_id": "host-scale-a",
+          "expected_worker_ids": [
+            "rch-a"
+          ],
+          "observed": {
+            "path": "adoption_observation.json",
+            "observed_at": "2026-05-06T20:40:00Z",
+            "observed_epoch_seconds": 1778100000,
+            "host_id": "host-scale-a",
+            "worker_ids": [
+              "rch-a"
+            ],
+            "cache_reuse_observed": true
+          },
+          "drift_reason_codes": [
+            "adopted_recommended_target",
+            "cache_reuse_confirmed"
+          ],
+          "validity_window": {
+            "reference_time": "2026-05-06T20:30:00Z",
+            "reference_epoch_seconds": 1778099400,
+            "ttl_seconds": 1800,
+            "expires_at": "2026-05-06T21:00:00Z",
+            "expires_epoch_seconds": 1778101200,
+            "expired_at_observation": false
+          }
+        }
+      ],
+      "expiry": {
+        "reference_time": "2026-05-06T20:30:00Z",
+        "reference_epoch_seconds": 1778099400,
+        "ttl_seconds": 1800,
+        "expires_at": "2026-05-06T21:00:00Z",
+        "expires_epoch_seconds": 1778101200,
+        "expired_at_observation": false
+      },
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "ledger_summary": {
+        "receipt_count": 1,
+        "adopted_count": 1,
+        "drifted_count": 0,
+        "expired_count": 0,
+        "blocked_count": 0,
+        "fail_closed_count": 0
+      },
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "pins_workers_automatically": false,
+        "enforces_placement_automatically": false
+      },
+      "artifact_paths": {
+        "placement_plan_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_topology_placement_plan.json",
+        "placement_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_topology_placement_receipt.json",
+        "placement_evidence_ledger_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_topology_placement_evidence_ledger.json"
+      }
+    },
+    "swarm_capability_affinity_routing": {
+      "artifact_statuses": {
+        "routing_advisory": "provided",
+        "outcome_ledger": "provided"
+      },
+      "readiness": "ready",
+      "severity": "ok",
+      "advisory_decision": "pass",
+      "outcome_ledger_decision": "pass",
+      "routing_mode": "capability_affinity_confirmed",
+      "recommended_topology_class": "numa_hot_cache_preferred",
+      "preferred_worker_ids": [
+        "rch-a",
+        "rch-b"
+      ],
+      "advised_worker_ids": [
+        "rch-a"
+      ],
+      "preferred_worker_count": 2,
+      "advised_worker_count": 1,
+      "required_capabilities": [
+        "cargo-check",
+        "clippy",
+        "rustfmt"
+      ],
+      "required_capability_count": 3,
+      "required_toolchain_fingerprints": [
+        "nightly-2026-05-06-x86_64-unknown-linux-gnu"
+      ],
+      "required_toolchain_fingerprint_count": 1,
+      "matched_task_ids": [
+        "task-cap-aff-1",
+        "task-cap-aff-2"
+      ],
+      "mismatch_task_ids": [],
+      "capability_gap_task_ids": [],
+      "toolchain_drift_task_ids": [],
+      "contamination_task_ids": [],
+      "matched_task_count": 2,
+      "mismatch_task_count": 0,
+      "capability_gap_task_count": 0,
+      "toolchain_drift_task_count": 0,
+      "contamination_task_count": 0,
+      "capability_coverage_score": 100,
+      "toolchain_parity_score": 100,
+      "confidence_score": 91,
+      "supporting_evidence_summary": {
+        "routing_outcome_samples_present": true,
+        "routing_outcome_sample_count": 2
+      },
+      "reason_codes": [
+        "capability_coverage_confirmed",
+        "preferred_cohort_confirmed",
+        "route_match_confirmed",
+        "toolchain_parity_confirmed"
+      ],
+      "warnings": [],
+      "fail_closed_reason_count": 0,
+      "blocked_reason_count": 0,
+      "degraded_reason_count": 0,
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "reroutes_tasks_automatically": false
+      },
+      "artifact_paths": {
+        "routing_advisory_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_capability_affinity_routing_advisory.json",
+        "outcome_ledger_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/swarm_capability_affinity_routing_outcome_ledger.json"
+      }
+    },
+    "lease_exchange_salvage": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "retain_current_assignments",
+      "manual_review_count": 0,
+      "lease_exchange_candidate_count": 0,
+      "salvage_promotion_candidate_count": 0,
+      "archive_pressure_advisory": "retain",
+      "salvage_workflow_state": "clean_finished",
+      "recommendations": [],
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/lease_exchange_salvage_simulation.json"
+    },
+    "prefetch_roi": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "advisory": "prefetch_recommended",
+      "recommended_action": "Warm the preserved target before the next protected proof.",
+      "reason": "bounded replay cost and positive reuse delta justify a dry-run prefetch recommendation",
+      "budget_profile": "balanced",
+      "target_dir": "/tmp/rch_target_franken_engine_operator_status",
+      "proof_cache_decision": "cache_hit",
+      "archive_pressure_advisory": "retain",
+      "estimated_cpu_slots_total": 4,
+      "expected_reuse_score": 800000,
+      "realized_reuse_score": 910000,
+      "reuse_delta": 110000,
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/warm_target_prefetch_roi_advisory.json"
+    },
+    "starvation_rescue": {
+      "artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "ok",
+      "plan_decision": "advisory",
+      "conformance_decision": "pass",
+      "scenario_class": "healthy",
+      "top_recommendation_action": "reopen_stale_claim_then_rebalance",
+      "recommendation_count": 2,
+      "escalation_band": "ready",
+      "recommended_ordering": [
+        {
+          "rank": 1,
+          "action": "reopen_stale_claim_then_rebalance",
+          "fairness_reason": "Safe stale reopen is available and no ownership drift is active.",
+          "required_next_actions": [
+            "Reopen only evidence-supported stale claims.",
+            "Rebalance deferred work after the reopen lands."
+          ]
+        },
+        {
+          "rank": 2,
+          "action": "monitor_queue_and_keep_fair_share",
+          "fairness_reason": "No brownout or manual-review pressure is active, so queue hygiene remains sufficient.",
+          "required_next_actions": [
+            "Keep the next proof batch narrow and fairness-bounded."
+          ]
+        }
+      ],
+      "unresolved_risks": [],
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/starvation_rescue_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/starvation_rescue_conformance_report.json"
+    },
+    "checkpoint_restore": {
+      "artifact_status": "provided",
+      "plan_artifact_status": "provided",
+      "conformance_artifact_status": "provided",
+      "severity": "ok",
+      "checkpoint_id": "checkpoint-operator-status-smoke",
+      "checkpoint_capture_decision": "captured",
+      "restore_readiness_hint": "candidate",
+      "plan_decision": "resume",
+      "conformance_decision": "pass",
+      "drift_class": "none",
+      "checkpoint_age_seconds": 300,
+      "top_restore_action": "resume_from_checkpoint",
+      "gate_failure_count": 0,
+      "escalation_band": "ready",
+      "unresolved_risks": [],
+      "checked_artifact_path_count": 8,
+      "artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/checkpoint_bundle.json",
+      "plan_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/checkpoint_restore_plan.json",
+      "conformance_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/checkpoint_restore_conformance_report.json"
+    },
+    "execution_queue_advisory": {
+      "artifact_status": "provided",
+      "risk_budget_artifact_status": "provided",
+      "bottleneck_artifact_status": "provided",
+      "run_manifest_artifact_status": "provided",
+      "severity": "ok",
+      "decision": "pass",
+      "conservative_mode": false,
+      "queue_depth": 1,
+      "top_recommended_starts": [
+        {
+          "rank": 1,
+          "task_id": "bd-ready-a",
+          "title": null,
+          "wave": "ready_now",
+          "first_action": "claim bead and reserve focused proof files",
+          "fallback_trigger": "none",
+          "ev_millionths": 725000
+        }
+      ],
+      "deferred_items": [],
+      "bottlenecks": [
+        {
+          "task_id": "bd-ready-a",
+          "severity": "low",
+          "downstream_count": 1,
+          "unassigned": true
+        }
+      ],
+      "bottleneck_count": 1,
+      "critical_bottleneck_count": 0,
+      "risk_budget": {
+        "remaining_millionths": 900000,
+        "consumed_millionths": 100000,
+        "conservative_threshold_millionths": 200000
+      },
+      "artifact_hash_hex": "a84b4803514e57b76ecc7a7044bf41fa67dface6fef016f76e4e281e668f5622",
+      "normalized_input_hash_hex": "920bba2b28a2863a58b5b0ecfa0b2a6f96bdfc00f268a38f647c29d2b10d634e",
+      "proof_lane_rationale": "Execution queue runner artifacts are present and risk budget permits advisory queue use.",
+      "restore_dependency_state": "clear",
+      "restore_dependency_detail": "Checkpoint restore handoff is ready.",
+      "queue_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/execution_queue_artifact.json",
+      "risk_budget_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/execution_queue_risk_budget_receipt.json",
+      "bottleneck_report_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/execution_queue_bottleneck_report.json",
+      "run_manifest_artifact_path": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/execution_queue_run_manifest.json"
+    },
+    "queue_fidelity": {
+      "artifact_status": "provided",
+      "drift_ledger_artifact_status": "provided",
+      "counterfactual_backtest_artifact_status": "provided",
+      "tuning_plan_artifact_status": "provided",
+      "frontier_artifact_status": "provided",
+      "severity": "ok",
+      "trust_level": "trustworthy",
+      "decision": "pass",
+      "overall_fidelity_millionths": 1000000,
+      "confidence_band": "high",
+      "drift_class": "none",
+      "highest_severity_mismatch": null,
+      "mismatch_count": 0,
+      "row_count": 1,
+      "fail_closed_reason_count": 0,
+      "tuning_plan_decision": "pass",
+      "tuning_plan_class": "no_improvement",
+      "top_tuning_recommendation": null,
+      "frontier": [
+        {
+          "candidate_id": "baseline_current",
+          "expected_fidelity_delta_millionths": 0,
+          "confidence_band": "low",
+          "safety_status": "no_change",
+          "manual_review_required": false
+        }
+      ],
+      "operator_notes": [
+        "current weights remain best for this fixture set"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "fidelity_score_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/fidelity_score_receipt.json",
+        "drift_ledger_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/drift_ledger.json",
+        "counterfactual_backtest_report_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/counterfactual_backtest_report.json",
+        "tuning_plan_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/tuning_plan.json",
+        "frontier_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/frontier.json"
+      }
+    },
+    "queue_tuning_promotion": {
+      "artifact_statuses": {
+        "bundle": "provided",
+        "promotion_guard_receipt": "provided",
+        "rollout_plan": "provided",
+        "rollback_comparator_receipt": "provided",
+        "canary_verdict_ledger": "provided"
+      },
+      "severity": "ok",
+      "readiness": "ready",
+      "bundle_id": "queue-tuning-policy-bundle-smoke",
+      "candidate_id": "raise_proof_health_penalty",
+      "candidate_delta_millionths": 240000,
+      "bundle_decision": "ready",
+      "promotion_decision": "eligible_canary",
+      "rollout_decision": "ready_for_manual_approval",
+      "rollback_verdict": "better_than_current",
+      "canary_verdict": "canary_running",
+      "canary_recommended_action": "continue_canary",
+      "manual_approval_required": true,
+      "manual_approval_blocker_count": 0,
+      "evidence_link_count": 3,
+      "rollback_trigger_count": 0,
+      "top_stop_condition": {
+        "metric": "fidelity_delta_millionths",
+        "operator": "lt",
+        "threshold_millionths": 0,
+        "recommended_action": "rollback_required"
+      },
+      "reject_reasons": [],
+      "rollback_triggers": [],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false
+      },
+      "artifact_paths": {
+        "bundle_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/tuning_policy_bundle.json",
+        "promotion_guard_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/promotion_guard_receipt.json",
+        "rollout_plan_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/manual_approval_rollout_plan.json",
+        "rollback_comparator_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/rollback_comparator_receipt.json",
+        "canary_verdict_ledger_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/canary_verdict_ledger.json"
+      }
+    },
+    "queue_policy_adoption": {
+      "artifact_statuses": {
+        "adoption_receipt": "provided",
+        "adoption_snapshot_bundle": "provided",
+        "sustained_gain_receipt": "provided",
+        "expiry_supersession_plan": "provided",
+        "expiry_supersession_ledger": "provided"
+      },
+      "severity": "ok",
+      "readiness": "retained",
+      "adoption_receipt_id": "queue-policy-adoption-receipt-smoke",
+      "adoption_state": "recorded_active_policy",
+      "adopted_policy_bundle_id": "queue-tuning-policy-bundle-smoke",
+      "adopted_candidate_id": "raise_proof_health_penalty",
+      "adopted_expected_delta_millionths": 240000,
+      "observation_window": {
+        "starts_at": "2026-05-06T00:00:00Z",
+        "duration_seconds": 3600,
+        "minimum_sample_count": 3,
+        "monitored_metrics": [
+          "queue_fidelity_millionths",
+          "proof_drift_count",
+          "rollback_trigger_count"
+        ],
+        "stop_on_missing_evidence": true
+      },
+      "supersession_metadata": {
+        "supersedes_adoption_receipt_id": null,
+        "supersedes_policy_bundle_id": "current-queue-policy",
+        "supersession_reason": "smoke",
+        "previous_policy_retention": "retain_for_rollback",
+        "expiry_policy": "score after window"
+      },
+      "sustained_gain_verdict": "sustained_gain",
+      "sustained_gain_receipt_id": "queue-policy-sustained-gain-smoke",
+      "rollback_relevant_drift_count": 0,
+      "expiry_decision": "retain_adopted_policy",
+      "expiry_required": false,
+      "supersession_required": false,
+      "newer_candidate_bundle_id": "queue-tuning-policy-bundle-smoke",
+      "newer_candidate_id": "raise_proof_health_penalty",
+      "execution_state": "advisory_not_executed",
+      "retirement_executed": false,
+      "supersession_executed": false,
+      "decision_reasons": [
+        {
+          "kind": "sustained_gain_retained",
+          "detail": "sustained-gain evidence supports retention"
+        }
+      ],
+      "fail_closed_reasons": [],
+      "ledger_rows": [
+        {
+          "check": "sustained_gain_verdict",
+          "observed_value": "sustained_gain",
+          "effect": "retention_support"
+        },
+        {
+          "check": "newer_candidate_delta",
+          "observed_value": "240000",
+          "adopted_value": "240000",
+          "effect": "retention_support"
+        },
+        {
+          "check": "rollback_relevant_drift_count",
+          "observed_value": "0",
+          "effect": "retention_support"
+        }
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "changes_active_queue": false,
+        "applies_live_retuning": false,
+        "mutates_external_state": false,
+        "retirement_executed": false,
+        "supersession_executed": false
+      },
+      "artifact_paths": {
+        "adoption_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/adoption_receipt.json",
+        "adoption_snapshot_bundle_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/adoption_snapshot_bundle.json",
+        "sustained_gain_receipt_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/sustained_gain_receipt.json",
+        "expiry_supersession_plan_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/expiry_supersession_plan.json",
+        "expiry_supersession_ledger_json": "expiry_supersession_ledger.json"
+      }
+    },
+    "swarm_agent_causal_trace": {
+      "artifact_statuses": {
+        "graph": "provided",
+        "anomaly_report": "provided"
+      },
+      "readiness": "complete",
+      "severity": "ok",
+      "decision": "pass",
+      "trace_id": "trace-complete",
+      "bead_id": "bd-jw854",
+      "source_revision": "smoke-rev",
+      "bead_status": "closed",
+      "required_edge_types": [
+        "bead_claimed",
+        "reservation_covers_path",
+        "validation_proves_closeout",
+        "commit_closes_bead"
+      ],
+      "present_edge_types": [
+        "bead_claimed",
+        "commit_closes_bead",
+        "reservation_covers_path",
+        "validation_proves_closeout"
+      ],
+      "missing_required_edges": [],
+      "edge_counts": {
+        "reservation_covers_path": 1,
+        "validation_proves_closeout": 1,
+        "commit_closes_bead": 1,
+        "bead_claimed": 1
+      },
+      "node_count": 5,
+      "edge_count": 4,
+      "anomaly_count": 0,
+      "fail_closed_count": 0,
+      "degraded_count": 0,
+      "anomaly_classes": [],
+      "contaminating_anomaly_classes": [],
+      "top_anomaly": null,
+      "mutation_policy": {
+        "fixture_fed_only": true,
+        "mutates_br": false,
+        "reassigns_beads": false,
+        "releases_reservations": false,
+        "sends_agent_mail": false,
+        "queries_live_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false,
+        "changes_live_queue_policy": false,
+        "rewrites_historical_outcomes": false,
+        "operator_wording_required": "advisory-only"
+      },
+      "artifact_paths": {
+        "causal_graph_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/causal_trace_graph.json",
+        "anomaly_report_json": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/causal_trace_anomalies.json"
+      }
+    },
+    "staged_contamination": {
+      "artifact_status": "provided",
+      "severity": "ok",
+      "decision": "pass",
+      "staged_path_count": 4,
+      "offender_count": 0,
+      "scoped_beads_issue_ids": [
+        "bd-h3hrc"
+      ],
+      "offending_paths": [],
+      "findings": [],
+      "actionable_commands": []
+    },
+    "fixture_contract": {
+      "golden_cases": [
+        "healthy",
+        "degraded",
+        "stale_proof",
+        "high_cost",
+        "collision_risk",
+        "overloaded",
+        "forecast_low_confidence",
+        "execution_queue_conservative",
+        "execution_queue_restore_blocked",
+        "queue_fidelity_high_drift",
+        "queue_fidelity_insufficient_evidence",
+        "queue_tuning_promotion_blocked",
+        "queue_tuning_promotion_stale_evidence",
+        "queue_tuning_promotion_rollback_required",
+        "queue_policy_adoption_expiry_required",
+        "queue_policy_adoption_supersession_required",
+        "causal_trace_degraded",
+        "causal_trace_contaminated",
+        "resource_envelope_healthy",
+        "resource_envelope_degraded",
+        "resource_envelope_blocked",
+        "resource_envelope_contaminated",
+        "topology_placement_healthy",
+        "topology_placement_drifted",
+        "topology_placement_expired",
+        "topology_placement_blocked",
+        "topology_queue_advisory_healthy",
+        "topology_queue_advisory_degraded",
+        "topology_queue_advisory_blocked",
+        "topology_queue_advisory_contaminated",
+        "benchmark_advisory_healthy",
+        "benchmark_advisory_blocked_measurement",
+        "benchmark_advisory_local_fallback_contaminated",
+        "benchmark_advisory_stale_baseline",
+        "benchmark_advisory_resource_saturation",
+        "capability_affinity_healthy",
+        "capability_affinity_degraded",
+        "capability_affinity_blocked",
+        "actionability_guard_healthy",
+        "actionability_guard_blocked_divergence",
+        "actionability_guard_stale_source",
+        "actionability_guard_dirty_overlap"
+      ],
+      "intended_renderer_repo": "/dp/frankentui",
+      "local_tui_renderer": false
+    },
+    "first_error_conveyor": {
+      "artifact_status": "provided",
+      "readiness": "actionable",
+      "decision": "block_current_bead",
+      "recommendation_count": 1,
+      "next_first_error": {
+        "recommendation_id": "first-error-1",
+        "disposition": "block_current_bead",
+        "title": "[COMPILE-BLOCKER] Fix touched target E0308",
+        "file_path": "crates/franken-engine/src/runtime.rs",
+        "error_family": "rustc_E0308",
+        "error_codes": [
+          "E0308"
+        ],
+        "dedupe_key": "crates/franken-engine/src/runtime.rs|e0308|rustc_e0308||frankenengine-engine"
+      },
+      "affected_bead": null,
+      "active_owner_state": "clear",
+      "duplicate_defer_reason_codes": [],
+      "proof_isolation_profile": {
+        "profile_decision": "pass",
+        "proof_strength": "strong",
+        "target_relevance": "target_relevant"
+      },
+      "fail_closed_language": null,
+      "artifact_paths": {
+        "first_error_conveyor_plan_json": "fixtures/first_error_conveyor_plan.json",
+        "proposed_commands_txt": "fixtures/proposed_commands.txt",
+        "run_manifest_json": "fixtures/run_manifest.json",
+        "events_jsonl": "fixtures/events.jsonl",
+        "commands_txt": "fixtures/commands.txt",
+        "report_md": "fixtures/report.md"
+      },
+      "source_artifact": "[SMOKE_ROOT]/first_error_conveyor_healthy-fixtures/first_error_conveyor_plan.json",
+      "mutation_policy": {
+        "runs_cargo": false,
+        "runs_rch": false,
+        "creates_beads": false,
+        "mutates_br": false,
+        "sends_agent_mail": false,
+        "changes_workers": false
+      }
+    }
+  },
+  "degraded": [],
+  "recommendations": [
+    {
+      "action": "pick_next_ready_bead",
+      "bead_id": "bd-p03vs",
+      "reason": "resource governor admits validation and bead is ready"
+    }
+  ]
+}

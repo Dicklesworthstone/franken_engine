@@ -73,6 +73,7 @@ swarm_capability_affinity_routing_outcome_ledger_json=""
 swarm_control_surface_catalog_json=""
 swarm_control_surface_intent_plan_json=""
 swarm_control_surface_drift_report_json=""
+first_error_conveyor_plan_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -153,6 +154,7 @@ Options:
   --swarm-control-surface-catalog-json FILE
   --swarm-control-surface-intent-plan-json FILE
   --swarm-control-surface-drift-report-json FILE
+  --first-error-conveyor-plan-json FILE
 EOF
 }
 
@@ -446,6 +448,10 @@ while [[ "$#" -gt 0 ]]; do
       swarm_control_surface_drift_report_json="$2"
       shift 2
       ;;
+    --first-error-conveyor-plan-json)
+      first_error_conveyor_plan_json="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -549,6 +555,7 @@ swarm_actionability_report_status="missing"
 swarm_control_surface_catalog_status="missing"
 swarm_control_surface_intent_plan_status="missing"
 swarm_control_surface_drift_report_status="missing"
+first_error_conveyor_plan_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
 if [[ -n "$snapshot_bundle_json" ]]; then snapshot_bundle_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
@@ -599,6 +606,7 @@ if [[ -n "$swarm_capability_affinity_routing_outcome_ledger_json" ]]; then swarm
 if [[ -n "$swarm_control_surface_catalog_json" ]]; then swarm_control_surface_catalog_status="provided"; fi
 if [[ -n "$swarm_control_surface_intent_plan_json" ]]; then swarm_control_surface_intent_plan_status="provided"; fi
 if [[ -n "$swarm_control_surface_drift_report_json" ]]; then swarm_control_surface_drift_report_status="provided"; fi
+if [[ -n "$first_error_conveyor_plan_json" ]]; then first_error_conveyor_plan_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
 snapshot_bundle_data="$(json_or_default "$snapshot_bundle_json" '{"schema_version":"franken-engine.swarm-live-readonly-capture-bundle.v1","decision":"missing","fail_closed_reasons":[],"blocked_reasons":[],"degraded_reasons":[],"sources":[],"non_mutation_attestation":{"fixture_fed_only":true,"advisory_only":true,"mutates_br":false,"sends_agent_mail":false,"queries_live_agent_mail":false,"runs_cargo":false,"runs_rch_exec":false,"mutates_remote_workers":false},"swarm_ops_state_bundle":{"schema_version":"franken-engine.swarm-ops-state-bundle.v1","decision":"missing","source_components":[]},"artifact_paths":{}}' 'snapshot-bundle')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
@@ -649,6 +657,7 @@ swarm_capability_affinity_routing_outcome_ledger_data="$(json_or_default "$swarm
 swarm_control_surface_catalog_data="$(json_or_default "$swarm_control_surface_catalog_json" '{"schema_version":"franken-engine.swarm-control-surface-catalog.v1","decision":"missing","surface_count":0,"fail_closed_count":0,"degraded_count":0,"surfaces":[],"findings":[],"artifact_paths":{},"mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-control-surface-catalog')"
 swarm_control_surface_intent_plan_data="$(json_or_default "$swarm_control_surface_intent_plan_json" '{"schema_version":"franken-engine.swarm-control-surface-intent-plan.v1","decision":"missing","recommendations":[],"advisory_commands":[],"artifacts_to_preserve":[],"blocked_reasons":[],"degraded_reasons":[],"fail_closed_reasons":[],"fail_closed_count":0,"duplicate_new_work_warnings":[],"artifact_paths":{},"mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-control-surface-intent-plan')"
 swarm_control_surface_drift_report_data="$(json_or_default "$swarm_control_surface_drift_report_json" '{"schema_version":"franken-engine.swarm-control-surface-drift-report.v1","decision":"missing","fail_closed_count":0,"findings":[],"remediation_commands":[],"artifact_paths":{},"mutation_policy":{"advisory_only":true,"proof_only":true,"fixture_fed_only":true,"mutates_br":false,"sends_agent_mail":false,"runs_cargo":false,"runs_rch":false,"mutates_remote_workers":false,"changes_live_queue_policy":false}}' 'swarm-control-surface-drift-report')"
+first_error_conveyor_plan_data="$(json_or_default "$first_error_conveyor_plan_json" '{"schema_version":"franken-engine.rch-first-error-conveyor-plan.v1","decision":"missing","summary":{"recommendation_count":0,"block_current_bead_count":0,"new_bead_candidate_count":0,"duplicate_existing_bead_count":0,"defer_active_owner_count":0,"insufficient_evidence_count":0},"recommendations":[],"artifact_paths":{},"non_mutation_attestation":{"runs_cargo":false,"runs_rch":false,"creates_beads":false,"mutates_br":false,"sends_agent_mail":false,"changes_workers":false}}' 'first-error-conveyor-plan')"
 inputs_bundle_path="${run_dir}/inputs.bundle.json"
 {
   printf '{\n'
@@ -714,7 +723,8 @@ inputs_bundle_path="${run_dir}/inputs.bundle.json"
   printf '"swarm_capability_affinity_routing_outcome_ledger":%s,\n' "$swarm_capability_affinity_routing_outcome_ledger_data"
   printf '"swarm_control_surface_catalog":%s,\n' "$swarm_control_surface_catalog_data"
   printf '"swarm_control_surface_intent_plan":%s,\n' "$swarm_control_surface_intent_plan_data"
-  printf '"swarm_control_surface_drift_report":%s\n' "$swarm_control_surface_drift_report_data"
+  printf '"swarm_control_surface_drift_report":%s,\n' "$swarm_control_surface_drift_report_data"
+  printf '"first_error_conveyor_plan":%s\n' "$first_error_conveyor_plan_data"
   printf '}\n'
 } >"$inputs_bundle_path"
 
@@ -776,6 +786,7 @@ jq -n \
   --arg swarm_control_surface_catalog_status "$swarm_control_surface_catalog_status" \
   --arg swarm_control_surface_intent_plan_status "$swarm_control_surface_intent_plan_status" \
   --arg swarm_control_surface_drift_report_status "$swarm_control_surface_drift_report_status" \
+  --arg first_error_conveyor_plan_status "$first_error_conveyor_plan_status" \
   --arg swarm_resource_envelope_json "$swarm_resource_envelope_json" \
   --arg swarm_fair_share_batch_plan_json "$swarm_fair_share_batch_plan_json" \
   --arg swarm_topology_placement_plan_json "$swarm_topology_placement_plan_json" \
@@ -790,6 +801,7 @@ jq -n \
   --arg swarm_control_surface_catalog_json "$swarm_control_surface_catalog_json" \
   --arg swarm_control_surface_intent_plan_json "$swarm_control_surface_intent_plan_json" \
   --arg swarm_control_surface_drift_report_json "$swarm_control_surface_drift_report_json" \
+  --arg first_error_conveyor_plan_json "$first_error_conveyor_plan_json" \
   --arg snapshot_bundle_json "$snapshot_bundle_json" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
@@ -899,6 +911,7 @@ jq -n \
   | $input.swarm_control_surface_catalog as $swarm_control_surface_catalog
   | $input.swarm_control_surface_intent_plan as $swarm_control_surface_intent_plan
   | $input.swarm_control_surface_drift_report as $swarm_control_surface_drift_report
+  | $input.first_error_conveyor_plan as $first_error_conveyor_plan
   | ($ready | map(bead_row) | sort_by(.priority // 999, .id)) as $ready_rows
   | ($in_progress | map(bead_row) | sort_by(.id)) as $in_progress_rows
   | ($dirty_files | map(select(.reserved == true or .overlaps_ready == true))) as $dirty_reserved
@@ -2646,6 +2659,68 @@ jq -n \
         drift_report_md: ($swarm_control_surface_drift_report.artifact_paths.report_md // null)
       }
     }) as $control_surface_catalog_summary
+  | (($first_error_conveyor_plan.recommendations // [])[0] // {}) as $first_error_next
+  | ((($first_error_conveyor_plan.non_mutation_attestation.runs_cargo // false) == true)
+      or (($first_error_conveyor_plan.non_mutation_attestation.runs_rch // false) == true)
+      or (($first_error_conveyor_plan.non_mutation_attestation.creates_beads // false) == true)
+      or (($first_error_conveyor_plan.non_mutation_attestation.mutates_br // false) == true)
+      or (($first_error_conveyor_plan.non_mutation_attestation.sends_agent_mail // false) == true)
+      or (($first_error_conveyor_plan.non_mutation_attestation.changes_workers // false) == true)) as $first_error_unsafe_mutation
+  | ({
+      artifact_status: $first_error_conveyor_plan_status,
+      readiness: (
+        if $first_error_conveyor_plan_status == "missing" then "missing"
+        elif $first_error_unsafe_mutation then "contaminated"
+        elif (($first_error_conveyor_plan.decision // "") == "fail_closed") then "contaminated"
+        elif (($first_error_next.disposition // "") == "insufficient_evidence") then "blocked"
+        elif (($first_error_next.disposition // "") == "defer_active_owner") then "deferred"
+        elif (($first_error_next.disposition // "") == "duplicate_existing_bead") then "duplicate"
+        elif (($first_error_next.disposition // "") | IN("block_current_bead", "new_bead_candidate")) then "actionable"
+        else "idle"
+        end
+      ),
+      decision: ($first_error_conveyor_plan.decision // "missing"),
+      recommendation_count: ($first_error_conveyor_plan.summary.recommendation_count // 0),
+      next_first_error: {
+        recommendation_id: ($first_error_next.recommendation_id // null),
+        disposition: ($first_error_next.disposition // null),
+        title: ($first_error_next.title // null),
+        file_path: ($first_error_next.file_path // null),
+        error_family: ($first_error_next.error_family // null),
+        error_codes: ($first_error_next.error_codes // []),
+        dedupe_key: ($first_error_next.dedupe_key // null)
+      },
+      affected_bead: (
+        $first_error_next.ownership_evidence.matched_beads[0].id
+        // $first_error_next.ownership_evidence.stale_beads[0].id
+        // null
+      ),
+      active_owner_state: (
+        if $first_error_conveyor_plan_status == "missing" then "missing"
+        elif (($first_error_next.disposition // "") == "duplicate_existing_bead") then "duplicate_existing_bead"
+        elif (($first_error_next.disposition // "") == "defer_active_owner") then "active_owner_defer"
+        elif (($first_error_next.reason_codes // []) | index("stale_owner_manual_reopen_candidate")) != null then "stale_owner_manual_reopen"
+        elif (($first_error_next.disposition // "") == "insufficient_evidence") then "fail_closed_or_insufficient_evidence"
+        else "clear"
+        end
+      ),
+      duplicate_defer_reason_codes: (($first_error_next.reason_codes // []) | map(select(. | IN("duplicate_existing_bead", "active_owner_present", "stale_owner_manual_reopen_candidate", "contradictory_ownership_evidence")))),
+      proof_isolation_profile: {
+        profile_decision: ($first_error_next.profile_decision // null),
+        proof_strength: ($first_error_next.proof_strength // null),
+        target_relevance: ($first_error_next.target_relevance // null)
+      },
+      fail_closed_language: (
+        if $first_error_unsafe_mutation then "first-error conveyor artifact contains unsafe mutation claims; refresh before acting"
+        elif (($first_error_conveyor_plan.decision // "") == "fail_closed") then "first-error conveyor failed closed; do not file source-fix work from this evidence"
+        elif (($first_error_next.disposition // "") == "insufficient_evidence") then "first-error conveyor reports insufficient evidence; preserve artifacts and refresh proof"
+        else null
+        end
+      ),
+      artifact_paths: ($first_error_conveyor_plan.artifact_paths // {}),
+      source_artifact: (if $first_error_conveyor_plan_json == "" then null else $first_error_conveyor_plan_json end),
+      mutation_policy: ($first_error_conveyor_plan.non_mutation_attestation // {})
+    }) as $first_error_conveyor_summary
   | ([
       degraded("agent_mail"; $agent_mail_status; "reservation and inbox data may be incomplete"; "Use bead assignee and dirty paths as degraded fallback evidence."),
       degraded("rch"; $rch_status; "remote proof routing may be unavailable"; "Defer heavy validation until rch status is ok or use script-only proof."),
@@ -2662,6 +2737,15 @@ jq -n \
     + ($bad_proofs | map({component: "proof_outcome", status: (.status // "degraded"), impact: (.bead_id + " proof is not passing"), remediation: "Inspect the proof outcome before recommending dependent work."}))
     + ($blocked_items | map({component: "blocked_bead_chain", status: "blocked", impact: (.id + " is blocked in the bv track"), remediation: "Inspect dependencies before recommending this bead."}))
     + ($high_cost_rows | map({component: "predictive_cost", status: (.cost_class // "unknown"), impact: ((.command_id // "unknown_command") + " has elevated predicted validation cost"), remediation: "Narrow the command, defer until resource pressure clears, or preserve the high-cost receipt."}))
+    + (if $first_error_conveyor_plan_status == "missing" then
+        []
+      elif $first_error_conveyor_summary.readiness == "contaminated" then
+        [{component: "first_error_conveyor", status: $first_error_conveyor_summary.decision, impact: "first-error conveyor evidence is fail-closed or unsafe", remediation: ($first_error_conveyor_summary.fail_closed_language // "Refresh the conveyor plan before acting on compile blockers.")}]
+      elif $first_error_conveyor_summary.readiness == "blocked" then
+        [{component: "first_error_conveyor", status: "insufficient_evidence", impact: "next first-error recommendation lacks enough evidence for source-fix work", remediation: "Preserve the conveyor artifacts and refresh the proof-isolation profile before filing work."}]
+      elif $first_error_conveyor_summary.readiness == "deferred" then
+        [{component: "first_error_conveyor", status: "defer_active_owner", impact: "next first-error recommendation is behind an active owner", remediation: "Coordinate with the active owner before filing or claiming overlapping work."}]
+      else [] end)
     + (if $snapshot_bundle_status == "missing" then
         []
       elif $live_snapshot_summary.severity == "critical" then
@@ -2963,6 +3047,13 @@ jq -n \
         control_surface_catalog_top_recommended_operator_status_section: ($control_surface_catalog_summary.top_recommended_operator_status_section // "none"),
         control_surface_catalog_top_recommended_script: ($control_surface_catalog_summary.top_recommended_script // "none"),
         control_surface_catalog_recommended_command_count: $control_surface_catalog_summary.recommended_command_count
+      } else {} end)
+      + (if $first_error_conveyor_plan_status != "missing" then {
+        first_error_conveyor_readiness: $first_error_conveyor_summary.readiness,
+        first_error_conveyor_decision: $first_error_conveyor_summary.decision,
+        first_error_conveyor_next_disposition: ($first_error_conveyor_summary.next_first_error.disposition // "none"),
+        first_error_conveyor_active_owner_state: $first_error_conveyor_summary.active_owner_state,
+        first_error_conveyor_recommendation_count: $first_error_conveyor_summary.recommendation_count
       } else {} end)),
       services: {
         agent_mail: $agent_mail_status,
@@ -3042,11 +3133,20 @@ jq -n \
       + (if $swarm_benchmark_present then {swarm_benchmark_responsiveness: $benchmark_advisory_summary} else {} end)
       + (if $swarm_topology_aware_queue_advisory_status != "missing" then {swarm_topology_aware_queue_advisory: $topology_queue_advisory_summary} else {} end)
       + (if $snapshot_bundle_status != "missing" then {live_readonly_snapshot: $live_snapshot_summary} else {} end)
-      + (if $control_surface_catalog_present then {swarm_control_surface_catalog: $control_surface_catalog_summary} else {} end)),
+      + (if $control_surface_catalog_present then {swarm_control_surface_catalog: $control_surface_catalog_summary} else {} end)
+      + (if $first_error_conveyor_plan_status != "missing" then {first_error_conveyor: $first_error_conveyor_summary} else {} end)),
       degraded: $degraded,
       recommendations: (
         if $staged_contamination_summary.severity == "critical" then
           [recommendation("reject_staged_contamination"; null; "staged ownership guard reports contamination")]
+        elif $first_error_conveyor_plan_status != "missing" and $first_error_conveyor_summary.readiness == "contaminated" then
+          [recommendation("refresh_first_error_conveyor"; $first_error_conveyor_summary.affected_bead; ($first_error_conveyor_summary.fail_closed_language // "first-error conveyor evidence is fail-closed"))]
+        elif $first_error_conveyor_plan_status != "missing" and $first_error_conveyor_summary.readiness == "blocked" then
+          [recommendation("refresh_first_error_evidence"; $first_error_conveyor_summary.affected_bead; "first-error conveyor reports insufficient evidence for source-fix work")]
+        elif $first_error_conveyor_plan_status != "missing" and $first_error_conveyor_summary.readiness == "deferred" then
+          [recommendation("coordinate_first_error_owner"; $first_error_conveyor_summary.affected_bead; "first-error conveyor recommendation is behind active ownership evidence")]
+        elif $first_error_conveyor_plan_status != "missing" and $first_error_conveyor_summary.readiness == "duplicate" then
+          [recommendation("use_existing_first_error_bead"; $first_error_conveyor_summary.affected_bead; "first-error conveyor matched an existing bead for this diagnostic")]
         elif $causal_trace_summary.readiness == "contaminated" then
           [recommendation("respect_causal_trace_contamination"; $causal_trace_summary.bead_id; "causal trace handoff is contaminated by fail-closed anomaly evidence")]
         elif $causal_trace_summary.readiness == "blocked" then
@@ -3229,6 +3329,10 @@ jq -n \
         swarm_control_surface_catalog_json: $control_surface_catalog_summary.artifact_paths.catalog_json,
         swarm_control_surface_intent_plan_json: $control_surface_catalog_summary.artifact_paths.intent_plan_json,
         swarm_control_surface_drift_report_json: $control_surface_catalog_summary.artifact_paths.drift_report_json
+      } else {} end) + (if $first_error_conveyor_plan_status != "missing" then {
+        first_error_conveyor_plan_json: $first_error_conveyor_summary.source_artifact,
+        first_error_conveyor_report_md: ($first_error_conveyor_summary.artifact_paths.report_md // null),
+        first_error_conveyor_commands_txt: ($first_error_conveyor_summary.artifact_paths.proposed_commands_txt // null)
       } else {} end))
     }
 JQ
@@ -3256,6 +3360,12 @@ JQ
   fi
   if jq -e '.predictive_dashboard | has("swarm_actionability_guard")' "$status_path" >/dev/null; then
     printf -- "- Actionability guard: \`%s\` decision=\`%s\` candidate=\`%s\` reasons=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.guard_decision' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_actionability_guard.primary_candidate_id // "none"' "$status_path")" "$(jq '.predictive_dashboard.swarm_actionability_guard.reason_codes | length' "$status_path")"
+  fi
+  if jq -e '.predictive_dashboard | has("first_error_conveyor")' "$status_path" >/dev/null; then
+    printf -- "- First-error conveyor: \`%s\` decision=\`%s\` next=\`%s\` owner=\`%s\` file=\`%s\` proof=\`%s/%s\`\n" "$(jq -r '.predictive_dashboard.first_error_conveyor.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.decision' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.next_first_error.disposition // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.active_owner_state' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.next_first_error.file_path // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.proof_isolation_profile.profile_decision // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.first_error_conveyor.proof_isolation_profile.proof_strength // "none"' "$status_path")"
+    if jq -e '.predictive_dashboard.first_error_conveyor.fail_closed_language != null' "$status_path" >/dev/null; then
+      printf -- "  - First-error fail-closed: %s\n" "$(jq -r '.predictive_dashboard.first_error_conveyor.fail_closed_language' "$status_path")"
+    fi
   fi
   if jq -e '.predictive_dashboard | has("swarm_benchmark_responsiveness")' "$status_path" >/dev/null; then
     printf -- "- Benchmark advisory: \`%s\` workload=\`%s\` class=\`%s\` gap=\`%s\` utilization=\`%s\`\n" "$(jq -r '.predictive_dashboard.swarm_benchmark_responsiveness.readiness' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_benchmark_responsiveness.selected_workload_id // "none"' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_benchmark_responsiveness.benchmark_class // "unknown"' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_benchmark_responsiveness.throughput_gap_band' "$status_path")" "$(jq -r '.predictive_dashboard.swarm_benchmark_responsiveness.utilization_pressure_band' "$status_path")"
@@ -3318,6 +3428,10 @@ JQ
       {label:"Swarm control-surface catalog", path:.artifact_paths.swarm_control_surface_catalog_json},
       {label:"Swarm control-surface intent plan", path:.artifact_paths.swarm_control_surface_intent_plan_json},
       {label:"Swarm control-surface drift report", path:.artifact_paths.swarm_control_surface_drift_report_json}
+    ] else [] end) + (if (.predictive_dashboard | has("first_error_conveyor")) then [
+      {label:"First-error conveyor plan", path:.artifact_paths.first_error_conveyor_plan_json},
+      {label:"First-error conveyor report", path:.artifact_paths.first_error_conveyor_report_md},
+      {label:"First-error conveyor commands", path:.artifact_paths.first_error_conveyor_commands_txt}
     ] else [] end))[]
     | "- " + .label + ": `" + (.path // "missing") + "`"
   ' "$status_path"

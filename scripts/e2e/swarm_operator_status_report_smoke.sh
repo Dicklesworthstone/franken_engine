@@ -2784,6 +2784,125 @@ write_overloaded_fixtures() {
   write_checkpoint_restore_fixtures "$fixture_dir" "manual_review"
 }
 
+write_first_error_conveyor_fixture() {
+  local fixture_dir="$1"
+  local mode="$2"
+  local decision="block_current_bead"
+  local disposition="block_current_bead"
+  local title="[COMPILE-BLOCKER] Fix touched target E0308"
+  local file_path="crates/franken-engine/src/runtime.rs"
+  local affected_bead="null"
+  local reason_codes='["target_relevant_first_error"]'
+  local profile_decision="pass"
+  local proof_strength="strong"
+  local target_relevance="target_relevant"
+  local fail_closed_language="null"
+
+  case "$mode" in
+    healthy)
+      ;;
+    duplicate)
+      decision="dedupe_suppressed"
+      disposition="duplicate_existing_bead"
+      title="[COMPILE-BLOCKER] Existing duplicate runtime E0308"
+      affected_bead='"bd-existing-first-error"'
+      reason_codes='["duplicate_existing_bead"]'
+      profile_decision="degraded"
+      proof_strength="weak"
+      target_relevance="target_ambiguous"
+      ;;
+    deferred)
+      decision="defer_active_owner"
+      disposition="defer_active_owner"
+      title="[COMPILE-BLOCKER] Defer active runtime owner"
+      affected_bead="null"
+      reason_codes='["active_owner_present"]'
+      profile_decision="degraded"
+      proof_strength="weak"
+      target_relevance="target_ambiguous"
+      ;;
+    fail_closed)
+      decision="fail_closed"
+      disposition="insufficient_evidence"
+      title="[COMPILE-BLOCKER] Refuse contaminated first-error evidence"
+      file_path="null"
+      reason_codes='["contradictory_ownership_evidence","insufficient_or_contaminated_evidence"]'
+      profile_decision="fail_closed"
+      proof_strength="none"
+      target_relevance="target_ambiguous"
+      fail_closed_language='"first-error conveyor failed closed; do not file source-fix work from this evidence"'
+      ;;
+    *)
+      record_failure "unknown first-error conveyor fixture mode: ${mode}"
+      exit 64
+      ;;
+  esac
+
+  jq -n \
+    --arg decision "$decision" \
+    --arg disposition "$disposition" \
+    --arg title "$title" \
+    --arg file_path "$file_path" \
+    --arg profile_decision "$profile_decision" \
+    --arg proof_strength "$proof_strength" \
+    --arg target_relevance "$target_relevance" \
+    --argjson affected_bead "$affected_bead" \
+    --argjson reason_codes "$reason_codes" \
+    --argjson fail_closed_language "$fail_closed_language" \
+    '{
+      schema_version:"franken-engine.rch-first-error-conveyor-plan.v1",
+      case_id:"operator-status-" + $decision,
+      decision:$decision,
+      summary:{
+        recommendation_count:1,
+        block_current_bead_count:(if $disposition == "block_current_bead" then 1 else 0 end),
+        new_bead_candidate_count:0,
+        duplicate_existing_bead_count:(if $disposition == "duplicate_existing_bead" then 1 else 0 end),
+        defer_active_owner_count:(if $disposition == "defer_active_owner" then 1 else 0 end),
+        insufficient_evidence_count:(if $disposition == "insufficient_evidence" then 1 else 0 end)
+      },
+      recommendations:[{
+        recommendation_id:"first-error-1",
+        disposition:$disposition,
+        title:$title,
+        file_path:(if $file_path == "null" then null else $file_path end),
+        error_family:"rustc_E0308",
+        error_codes:["E0308"],
+        dedupe_key:"crates/franken-engine/src/runtime.rs|e0308|rustc_e0308||frankenengine-engine",
+        profile_decision:$profile_decision,
+        proof_strength:$proof_strength,
+        target_relevance:$target_relevance,
+        reason_codes:$reason_codes,
+        ownership_evidence:{
+          matched_beads:(if $affected_bead == null then [] else [{id:$affected_bead,status:"open",title:"Existing first-error bead",freshness:"fresh"}] end),
+          stale_beads:[],
+          active_reservations:(if $disposition == "defer_active_owner" then [{id:"res-first-error",agent_name:"OtherAgent",path_pattern:"crates/franken-engine/src/runtime.rs",freshness:"fresh"}] else [] end),
+          recent_announcements:[],
+          ownership_fail_reasons:(if $disposition == "insufficient_evidence" then $reason_codes else [] end)
+        },
+        evidence_paths:{clusters_json:"fixtures/clusters.json",profile_json:"fixtures/profile.json"},
+        proposed_command:"# review-only recommendation"
+      }],
+      artifact_paths:{
+        first_error_conveyor_plan_json:"fixtures/first_error_conveyor_plan.json",
+        proposed_commands_txt:"fixtures/proposed_commands.txt",
+        run_manifest_json:"fixtures/run_manifest.json",
+        events_jsonl:"fixtures/events.jsonl",
+        commands_txt:"fixtures/commands.txt",
+        report_md:"fixtures/report.md"
+      },
+      non_mutation_attestation:{
+        runs_cargo:false,
+        runs_rch:false,
+        creates_beads:false,
+        mutates_br:false,
+        sends_agent_mail:false,
+        changes_workers:false
+      },
+      fail_closed_language:$fail_closed_language
+    }' >"${fixture_dir}/first_error_conveyor_plan.json"
+}
+
 run_case() {
   local case_name="$1"
   local expected_status="$2"
@@ -3006,6 +3125,22 @@ run_case() {
       write_healthy_fixtures "$fixture_dir"
       write_actionability_guard_fixtures "$fixture_dir" "dirty_overlap"
       ;;
+    first_error_conveyor_healthy)
+      write_healthy_fixtures "$fixture_dir"
+      write_first_error_conveyor_fixture "$fixture_dir" "healthy"
+      ;;
+    first_error_conveyor_duplicate)
+      write_healthy_fixtures "$fixture_dir"
+      write_first_error_conveyor_fixture "$fixture_dir" "duplicate"
+      ;;
+    first_error_conveyor_deferred)
+      write_healthy_fixtures "$fixture_dir"
+      write_first_error_conveyor_fixture "$fixture_dir" "deferred"
+      ;;
+    first_error_conveyor_fail_closed)
+      write_healthy_fixtures "$fixture_dir"
+      write_first_error_conveyor_fixture "$fixture_dir" "fail_closed"
+      ;;
     *)
       record_failure "unknown case: ${case_name}"
       exit 64
@@ -3062,6 +3197,7 @@ run_case() {
   [[ -f "${fixture_dir}/swarm_control_surface_catalog.json" ]] && extra_args+=(--swarm-control-surface-catalog-json "${fixture_dir}/swarm_control_surface_catalog.json")
   [[ -f "${fixture_dir}/swarm_control_surface_intent_plan.json" ]] && extra_args+=(--swarm-control-surface-intent-plan-json "${fixture_dir}/swarm_control_surface_intent_plan.json")
   [[ -f "${fixture_dir}/swarm_control_surface_drift_report.json" ]] && extra_args+=(--swarm-control-surface-drift-report-json "${fixture_dir}/swarm_control_surface_drift_report.json")
+  [[ -f "${fixture_dir}/first_error_conveyor_plan.json" ]] && extra_args+=(--first-error-conveyor-plan-json "${fixture_dir}/first_error_conveyor_plan.json")
 
   "$reporter" \
     --bead-id bd-jw854 \
@@ -3248,6 +3384,23 @@ run_case() {
     and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.mutates_git == false)
     and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.runs_cargo == false)
     and (.predictive_dashboard.swarm_actionability_guard.mutation_policy.runs_rch == false)
+    and ((.predictive_dashboard | has("first_error_conveyor") | not) or (
+      (.predictive_dashboard.first_error_conveyor.readiness | type == "string")
+      and (.predictive_dashboard.first_error_conveyor.decision | type == "string")
+      and (.predictive_dashboard.first_error_conveyor.recommendation_count | type == "number")
+      and (.predictive_dashboard.first_error_conveyor.next_first_error.disposition | type == "string")
+      and ((.predictive_dashboard.first_error_conveyor.next_first_error.file_path == null) or (.predictive_dashboard.first_error_conveyor.next_first_error.file_path | type == "string"))
+      and (.predictive_dashboard.first_error_conveyor.active_owner_state | type == "string")
+      and (.predictive_dashboard.first_error_conveyor.duplicate_defer_reason_codes | type == "array")
+      and (.predictive_dashboard.first_error_conveyor.proof_isolation_profile | type == "object")
+      and (.predictive_dashboard.first_error_conveyor.artifact_paths | type == "object")
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.runs_cargo == false)
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.runs_rch == false)
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.creates_beads == false)
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.mutates_br == false)
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.sends_agent_mail == false)
+      and (.predictive_dashboard.first_error_conveyor.mutation_policy.changes_workers == false)
+    ))
     and (.predictive_dashboard.swarm_capability_affinity_routing.readiness | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.advisory_decision | type == "string")
     and (.predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision | type == "string")
@@ -4148,6 +4301,44 @@ run_case() {
         and any(.degraded[]; .component == "swarm_actionability_guard")
       ' "${output_dir}/status.json" >/dev/null
       ;;
+    first_error_conveyor_healthy)
+      jq -e '
+        .predictive_dashboard.first_error_conveyor.readiness == "actionable"
+        and .predictive_dashboard.first_error_conveyor.decision == "block_current_bead"
+        and .predictive_dashboard.first_error_conveyor.next_first_error.disposition == "block_current_bead"
+        and .predictive_dashboard.first_error_conveyor.active_owner_state == "clear"
+        and .predictive_dashboard.first_error_conveyor.proof_isolation_profile.proof_strength == "strong"
+        and .summary.first_error_conveyor_readiness == "actionable"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    first_error_conveyor_duplicate)
+      jq -e '
+        .predictive_dashboard.first_error_conveyor.readiness == "duplicate"
+        and .predictive_dashboard.first_error_conveyor.active_owner_state == "duplicate_existing_bead"
+        and .predictive_dashboard.first_error_conveyor.affected_bead == "bd-existing-first-error"
+        and (.predictive_dashboard.first_error_conveyor.duplicate_defer_reason_codes | index("duplicate_existing_bead"))
+        and .recommendations[0].action == "use_existing_first_error_bead"
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    first_error_conveyor_deferred)
+      jq -e '
+        .predictive_dashboard.first_error_conveyor.readiness == "deferred"
+        and .predictive_dashboard.first_error_conveyor.active_owner_state == "active_owner_defer"
+        and (.predictive_dashboard.first_error_conveyor.duplicate_defer_reason_codes | index("active_owner_present"))
+        and .recommendations[0].action == "coordinate_first_error_owner"
+        and any(.degraded[]; .component == "first_error_conveyor")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
+    first_error_conveyor_fail_closed)
+      jq -e '
+        .predictive_dashboard.first_error_conveyor.readiness == "contaminated"
+        and .predictive_dashboard.first_error_conveyor.decision == "fail_closed"
+        and .predictive_dashboard.first_error_conveyor.active_owner_state == "fail_closed_or_insufficient_evidence"
+        and (.predictive_dashboard.first_error_conveyor.fail_closed_language | test("do not file source-fix work"))
+        and .recommendations[0].action == "refresh_first_error_conveyor"
+        and any(.degraded[]; .component == "first_error_conveyor")
+      ' "${output_dir}/status.json" >/dev/null
+      ;;
   esac
   record_pass "${case_name} dashboard fields validate"
 
@@ -4220,6 +4411,10 @@ assert_dashboard_contract_truth() {
     and (.golden_fixture_cases | index("control_surface_catalog_worker_toolchain_mismatch"))
     and (.golden_fixture_cases | index("control_surface_catalog_warm_target_roi"))
     and (.golden_fixture_cases | index("control_surface_catalog_local_fallback_contaminated"))
+    and (.golden_fixture_cases | index("first_error_conveyor_healthy"))
+    and (.golden_fixture_cases | index("first_error_conveyor_duplicate"))
+    and (.golden_fixture_cases | index("first_error_conveyor_deferred"))
+    and (.golden_fixture_cases | index("first_error_conveyor_fail_closed"))
     and (.required_dashboard_fields | index("predictive_dashboard.telemetry_quality.decision"))
     and (.required_dashboard_fields | index("predictive_dashboard.capacity_forecast.overall_state"))
     and (.required_dashboard_fields | index("predictive_dashboard.admission_budgets.budget_profile"))
@@ -4348,6 +4543,13 @@ assert_dashboard_contract_truth() {
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.duplicate_new_work_warning"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.artifact_paths"))
     and (.required_dashboard_fields | index("predictive_dashboard.swarm_control_surface_catalog.mutation_policy"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.readiness"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.next_first_error"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.active_owner_state"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.duplicate_defer_reason_codes"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.proof_isolation_profile"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.artifact_paths"))
+    and (.required_dashboard_fields | index("predictive_dashboard.first_error_conveyor.mutation_policy"))
   ' "$contract_json" >/dev/null
 
   grep -Fq '/dp/frankentui' "$contract_doc"
@@ -4392,6 +4594,7 @@ assert_dashboard_contract_truth() {
   grep -Fq 'scripts/swarm_benchmark_responsiveness_scorer.sh' "$contract_doc"
   grep -Fq 'docs/swarm_benchmark_workload_catalog_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_actionability_truth_gate.sh' "$contract_doc"
+  grep -Fq 'first-error conveyor' "$contract_doc"
   grep -Fq 'docs/swarm_actionability_truth_gate_contract_v1.json' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_queue_routing_planner.sh' "$contract_doc"
   grep -Fq 'scripts/swarm_capability_affinity_routing_outcome_ledger.sh' "$contract_doc"
@@ -4477,6 +4680,10 @@ run_selftest() {
   run_case "control_surface_catalog_worker_toolchain_mismatch" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "control_surface_catalog_warm_target_roi" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "control_surface_catalog_local_fallback_contaminated" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "first_error_conveyor_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "first_error_conveyor_duplicate" "healthy" "ok" "ok" "ok" "$tmp_root"
+  run_case "first_error_conveyor_deferred" "degraded" "ok" "ok" "ok" "$tmp_root"
+  run_case "first_error_conveyor_fail_closed" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_healthy" "healthy" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_blocked_divergence" "degraded" "ok" "ok" "ok" "$tmp_root"
   run_case "actionability_guard_stale_source" "degraded" "ok" "ok" "ok" "$tmp_root"

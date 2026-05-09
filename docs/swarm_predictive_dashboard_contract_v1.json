@@ -258,6 +258,22 @@
     },
     "handoff_note": "The operator status report integrates actionability guard artifacts as advisory-only claim-preflight evidence. It must not be described as live bead mutation, automatic claim execution, automatic reopen, automatic reassignment, Agent Mail mutation, Git mutation, RCH execution, Cargo execution, or queue mutation."
   },
+  "first_error_conveyor_handoff": {
+    "planner_script": "scripts/rch_first_error_conveyor.sh",
+    "plan_schema_version": "franken-engine.rch-first-error-conveyor-plan.v1",
+    "operator_status_argument": "--first-error-conveyor-plan-json",
+    "operator_status_section": "first_error_conveyor",
+    "status": "producer_integrated_extension",
+    "producer_integration": true,
+    "readiness_policy": {
+      "actionable": "next first-error recommendation is target-relevant and clear of ownership blockers",
+      "duplicate": "recommendation matches an existing bead and should not create duplicate work",
+      "deferred": "recommendation is behind active owner or reservation evidence",
+      "blocked": "recommendation has insufficient evidence for source-fix work",
+      "contaminated": "fail-closed or unsafe mutation evidence invalidates the conveyor plan"
+    },
+    "handoff_note": "The operator status report integrates first-error conveyor plans as advisory-only compile-blocker handoff evidence. It must not be described as live bead creation, automatic ownership transfer, Agent Mail mutation, RCH execution, Cargo execution, or a second dashboard producer."
+  },
   "swarm_capability_affinity_routing_handoff": {
     "planner_script": "scripts/swarm_capability_affinity_queue_routing_planner.sh",
     "outcome_ledger_script": "scripts/swarm_capability_affinity_routing_outcome_ledger.sh",
@@ -435,6 +451,13 @@
     "predictive_dashboard.swarm_actionability_guard.source_freshness",
     "predictive_dashboard.swarm_actionability_guard.artifact_paths",
     "predictive_dashboard.swarm_actionability_guard.mutation_policy",
+    "predictive_dashboard.first_error_conveyor.readiness",
+    "predictive_dashboard.first_error_conveyor.next_first_error",
+    "predictive_dashboard.first_error_conveyor.active_owner_state",
+    "predictive_dashboard.first_error_conveyor.duplicate_defer_reason_codes",
+    "predictive_dashboard.first_error_conveyor.proof_isolation_profile",
+    "predictive_dashboard.first_error_conveyor.artifact_paths",
+    "predictive_dashboard.first_error_conveyor.mutation_policy",
     "predictive_dashboard.swarm_capability_affinity_routing.readiness",
     "predictive_dashboard.swarm_capability_affinity_routing.advisory_decision",
     "predictive_dashboard.swarm_capability_affinity_routing.outcome_ledger_decision",
@@ -526,6 +549,7 @@
     "franken-engine.swarm-control-surface-catalog.v1",
     "franken-engine.swarm-control-surface-intent-plan.v1",
     "franken-engine.swarm-control-surface-drift-report.v1",
+    "franken-engine.rch-first-error-conveyor-plan.v1",
     "franken-engine.stale-lock-recommendations.v1",
     "franken-engine.staged-ownership-report.v1",
     "franken-engine.stress-concurrency.suite-manifest.v1",
@@ -588,7 +612,11 @@
     "control_surface_catalog_build_storm_qos",
     "control_surface_catalog_worker_toolchain_mismatch",
     "control_surface_catalog_warm_target_roi",
-    "control_surface_catalog_local_fallback_contaminated"
+    "control_surface_catalog_local_fallback_contaminated",
+    "first_error_conveyor_healthy",
+    "first_error_conveyor_duplicate",
+    "first_error_conveyor_deferred",
+    "first_error_conveyor_fail_closed"
   ],
   "high_core_scenario_fixture_cases": [
     "healthy_64plus_admission",
@@ -633,6 +661,7 @@
     "The benchmark responsiveness section is advisory benchmark evidence backed by scripts/swarm_benchmark_workload_catalog_normalizer.sh, docs/swarm_benchmark_workload_catalog_contract_v1.json, and scripts/swarm_benchmark_responsiveness_scorer.sh; it must not be described as live benchmark execution, automatic queue mutation, automatic worker mutation, RCH execution, Cargo execution, or automatic claim of measurement truth.",
     "The capability-affinity routing section is advisory worker-cohort and toolchain-safe routing evidence backed by scripts/swarm_capability_affinity_queue_routing_planner.sh and scripts/swarm_capability_affinity_routing_outcome_ledger.sh; it must not be described as live queue mutation, automatic task rerouting, automatic worker mutation, RCH execution, Cargo execution, or worker mutation.",
     "The control-surface catalog section is advisory routing evidence backed by scripts/swarm_control_surface_catalog_normalizer.sh, scripts/swarm_control_surface_intent_router.sh, and scripts/swarm_control_surface_drift_gate.sh; it must not be described as a second dashboard producer, live bead mutation, automatic remediation, automatic worker mutation, RCH execution, Cargo execution, or queue mutation.",
+    "The first-error conveyor section is advisory compile-blocker handoff evidence backed by scripts/rch_first_error_conveyor.sh; it must not be described as live bead creation, automatic ownership transfer, Agent Mail mutation, RCH execution, Cargo execution, or a second dashboard producer.",
     "The SLO tuning advisory is a standalone handoff backed by scripts/swarm_operator_slo_tuning_advisory.sh; it must not be described as a second predictive dashboard producer, a shipped local TUI, or live control-plane mutation.",
     "Each integrated dashboard section must carry a deterministic source artifact path so operators can trace the advisory back to its producing JSON."
   ]

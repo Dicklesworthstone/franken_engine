@@ -1,0 +1,183 @@
+{
+  "schema_version": "franken-engine.rch-first-error-conveyor-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "target_relevant_first_error",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "block_current_bead",
+            "error_family": "rustc_E0308",
+            "file_path": "crates/franken-engine/src/foo.rs",
+            "error_codes": [
+              "E0308"
+            ],
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Fix touched target crates/franken-engine/src/foo.rs E0308",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "Fix target-relevant first error."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "pass",
+        "classification": {
+          "proof_strength": "strong",
+          "target_relevance": "target_relevant"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "block_current_bead",
+        "primary_disposition": "block_current_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 1,
+        "new_bead_candidate_count": 0,
+        "insufficient_evidence_count": 0
+      }
+    },
+    {
+      "case_id": "unrelated_sibling_errors",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "stale_test_api",
+            "file_path": "crates/franken-engine/src/shadow.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Refresh stale test API in crates/franken-engine/src/shadow.rs",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "Refresh stale test API."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "recommend_follow_up",
+        "primary_disposition": "new_bead_candidate",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 1,
+        "insufficient_evidence_count": 0
+      }
+    },
+    {
+      "case_id": "truncated_output",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "fail_closed",
+        "clusters": [
+          {
+            "disposition": "infra_toolchain_blocker",
+            "error_family": "truncated_output",
+            "file_path": null,
+            "error_codes": [],
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Reproduce truncated compile output before filing source bugs",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "Rerun before filing source bugs."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "unknown"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": true,
+          "fail_closed_reasons": []
+        }
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "primary_disposition": "insufficient_evidence",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "insufficient_evidence_count": 1
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "fail_closed",
+        "clusters": [
+          {
+            "disposition": "infra_toolchain_blocker",
+            "error_family": "local_fallback_contamination",
+            "file_path": null,
+            "error_codes": [],
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Refuse contaminated local_fallback proof",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "Do not use local fallback as proof."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "fail_closed",
+        "classification": {
+          "proof_strength": "none",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": true,
+          "transcript_truncated": false,
+          "fail_closed_reasons": [
+            "local_rch_fallback_observed"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "primary_disposition": "insufficient_evidence",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "insufficient_evidence_count": 1
+      }
+    }
+  ]
+}

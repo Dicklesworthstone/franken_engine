@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.rch-first-error-conveyor-contract.v1",
+  "plan_schema_version": "franken-engine.rch-first-error-conveyor-plan.v1",
+  "event_schema_version": "franken-engine.rch-first-error-conveyor.event.v1",
+  "component": "rch_first_error_conveyor",
+  "purpose": "Compose preserved compile-blocker clusters with proof-isolation profiles into an advisory ordered first-error plan.",
+  "advisory_only": true,
+  "non_mutation_policy": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "creates_beads": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_workers": false
+  },
+  "required_inputs": [
+    {
+      "argument": "--clusters-json",
+      "schema_version": "franken-engine.rch-compile-blocker-clusters.v1"
+    },
+    {
+      "argument": "--profile-json",
+      "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1"
+    }
+  ],
+  "optional_inputs": [
+    {
+      "argument": "--source-revision",
+      "description": "Source revision to record in emitted artifacts."
+    },
+    {
+      "argument": "--case-id",
+      "description": "Deterministic fixture case identifier."
+    },
+    {
+      "argument": "--output-dir",
+      "description": "Output directory for deterministic artifacts."
+    }
+  ],
+  "emitted_artifacts": [
+    "first_error_conveyor_plan.json",
+    "proposed_commands.txt",
+    "run_manifest.json",
+    "events.jsonl",
+    "report.md"
+  ],
+  "recommendation_dispositions": [
+    "block_current_bead",
+    "new_bead_candidate",
+    "duplicate_existing_bead",
+    "defer_active_owner",
+    "insufficient_evidence"
+  ],
+  "ordering_rules": [
+    "fail-closed evidence becomes insufficient_evidence",
+    "target-relevant current-bead blockers rank before new follow-up candidates",
+    "new follow-up candidates rank before insufficient evidence",
+    "ties are deterministic by source cluster order and title"
+  ],
+  "fail_closed_conditions": [
+    "missing_or_malformed_cluster_artifact",
+    "missing_or_malformed_profile_artifact",
+    "local_fallback_contamination",
+    "truncated_or_insufficient_compile_output",
+    "profile_fail_closed"
+  ],
+  "fixture_cases": [
+    "target_relevant_first_error",
+    "unrelated_sibling_errors",
+    "truncated_output",
+    "local_fallback_contamination"
+  ],
+  "quality_gates": [
+    "jq empty docs/rch_first_error_conveyor_contract_v1.json",
+    "bash -n scripts/rch_first_error_conveyor.sh scripts/e2e/rch_first_error_conveyor_smoke.sh",
+    "scripts/e2e/rch_first_error_conveyor_smoke.sh selftest",
+    "git diff --check -- docs/rch_first_error_conveyor_contract_v1.json docs/RCH_FIRST_ERROR_CONVEYOR.md scripts/rch_first_error_conveyor.sh scripts/e2e/rch_first_error_conveyor_smoke.sh scripts/testdata/rch_first_error_conveyor/cases.json"
+  ]
+}

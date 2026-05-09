@@ -13,7 +13,7 @@ bead_id="bd-1ypps"
 component="live_guardplane_decision_example"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="artifacts/guardplane_decision_example/${timestamp}"
-target_dir="${CARGO_TARGET_DIR:-target/smoke_guardplane}"
+target_dir="${CARGO_TARGET_DIR:-$root_dir/target/smoke_guardplane}"
 
 echo "🚀 Live Guardplane Decision Example Smoke Test"
 echo "   Bead: $bead_id"
@@ -24,7 +24,9 @@ mkdir -p "$output_dir"
 
 # Build the example
 echo "📦 Building live guardplane decision example..."
-CARGO_TARGET_DIR="$target_dir" cargo build --example live_guardplane_decision_example --release
+RCH_ENV_ALLOWLIST="${RCH_ENV_ALLOWLIST:-CARGO_TARGET_DIR}" \
+    rch exec -- env CARGO_TARGET_DIR="$target_dir" \
+    cargo build --example live_guardplane_decision_example --release
 
 # Run the example and capture output
 echo "🔍 Running guardplane decision analysis..."

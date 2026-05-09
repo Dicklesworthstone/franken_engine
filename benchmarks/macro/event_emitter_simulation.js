@@ -453,3 +453,8 @@ function benchmarkEventEmitterSimulation() {
 if (typeof require !== 'undefined' && require.main === module) {
     benchmarkEventEmitterSimulation();
 }
+
+// Export for use in benchmark suite
+if (typeof module !== 'undefined') {
+    module.exports = benchmarkEventEmitterSimulation;
+}

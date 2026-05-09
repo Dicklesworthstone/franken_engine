@@ -411,3 +411,8 @@ function benchmarkTextProcessing() {
 if (typeof require !== 'undefined' && require.main === module) {
     benchmarkTextProcessing();
 }
+
+// Export for use in benchmark suite
+if (typeof module !== 'undefined') {
+    module.exports = benchmarkTextProcessing;
+}

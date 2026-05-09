@@ -232,3 +232,8 @@ function benchmarkJsonTransformation() {
 if (typeof require !== 'undefined' && require.main === module) {
     benchmarkJsonTransformation();
 }
+
+// Export for use in benchmark suite
+if (typeof module !== 'undefined') {
+    module.exports = benchmarkJsonTransformation;
+}

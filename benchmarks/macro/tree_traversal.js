@@ -341,3 +341,8 @@ function benchmarkTreeTraversal() {
 if (typeof require !== 'undefined' && require.main === module) {
     benchmarkTreeTraversal();
 }
+
+// Export for use in benchmark suite
+if (typeof module !== 'undefined') {
+    module.exports = benchmarkTreeTraversal;
+}

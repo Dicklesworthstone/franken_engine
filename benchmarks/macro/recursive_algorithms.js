@@ -420,3 +420,8 @@ function benchmarkRecursiveAlgorithms() {
 if (typeof require !== 'undefined' && require.main === module) {
     benchmarkRecursiveAlgorithms();
 }
+
+// Export for use in benchmark suite
+if (typeof module !== 'undefined') {
+    module.exports = benchmarkRecursiveAlgorithms;
+}

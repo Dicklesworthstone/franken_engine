@@ -32,33 +32,44 @@ run_step() {
   log_event "pass" "$name"
 }
 
-export RCH_CARGO_WRAPPER_BYPASS="${RCH_CARGO_WRAPPER_BYPASS:-1}"
 export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target_cod_bd_bdrwq4}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${root_dir}/target_cod_bd_bdrwq4}"
 export RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
+
+run_cargo_step() {
+  local name="$1"
+  shift
+  run_step "$name" rch exec -- env \
+    RUSTC_WRAPPER="$RUSTC_WRAPPER" \
+    CARGO_INCREMENTAL="$CARGO_INCREMENTAL" \
+    CARGO_BUILD_JOBS="$CARGO_BUILD_JOBS" \
+    CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
+    RUSTFLAGS="$RUSTFLAGS" \
+    cargo "$@"
+}
 
 log_event "artifact_dir" "$out_dir"
 log_event "cargo_target_dir" "$CARGO_TARGET_DIR"
 
-run_step "unit-evidence-report-contract" \
-  cargo test -p frankenengine-engine --lib monitor_schedule_evidence_report -- --nocapture
+run_cargo_step "unit-evidence-report-contract" \
+  test -p frankenengine-engine --lib monitor_schedule_evidence_report -- --nocapture
 
-run_step "unit-history-evidence-contract" \
-  cargo test -p frankenengine-engine --lib monitor_scheduler_history_evidence_reports -- --nocapture
+run_cargo_step "unit-history-evidence-contract" \
+  test -p frankenengine-engine --lib monitor_scheduler_history_evidence_reports -- --nocapture
 
-run_step "integration-public-report-api" \
-  cargo test -p frankenengine-engine --test monitor_scheduler_integration \
+run_cargo_step "integration-public-report-api" \
+  test -p frankenengine-engine --test monitor_scheduler_integration \
     schedule_evidence_report_public_api_contains_budget_fields -- --nocapture
 
 {
   printf '# Monitor Scheduler VOI Evidence Smoke\n\n'
   printf '%s\n' '- bead: bd-bdrwq.4'
-  printf '%s `%s`\n' '- artifact_dir:' "$out_dir"
-  printf '%s `%s`\n' '- cargo_target_dir:' "$CARGO_TARGET_DIR"
+  printf "%s \`%s\`\n" '- artifact_dir:' "$out_dir"
+  printf "%s \`%s\`\n" '- cargo_target_dir:' "$CARGO_TARGET_DIR"
   printf '%s\n' '- result: pass'
-  printf '%s\n' '- logs: `events.tsv`, `commands.txt`, `stdout.log`, `stderr.log`'
+  printf "%s\n" "- logs: \`events.tsv\`, \`commands.txt\`, \`stdout.log\`, \`stderr.log\`"
 } > "$report_md"
 
 log_event "report" "$report_md"

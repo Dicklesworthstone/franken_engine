@@ -22,17 +22,21 @@ record_result() {
     local expected="$2"
     local status="$3"
     local outcome="$4"
-    local stdout_path="$5"
-    local stderr_path="$6"
+    local expected_diagnostic="$5"
+    local diagnostic_matched="$6"
+    local stdout_path="$7"
+    local stderr_path="$8"
 
-    python3 - "$RESULTS_JSONL" "$case_name" "$expected" "$status" "$outcome" "$stdout_path" "$stderr_path" <<'PY'
+    python3 - "$RESULTS_JSONL" "$case_name" "$expected" "$status" "$outcome" "$expected_diagnostic" "$diagnostic_matched" "$stdout_path" "$stderr_path" <<'PY'
 import json
 import sys
 
-path, case_name, expected, status, outcome, stdout_path, stderr_path = sys.argv[1:]
+path, case_name, expected, status, outcome, expected_diagnostic, diagnostic_matched, stdout_path, stderr_path = sys.argv[1:]
 row = {
     "case": case_name,
     "expected": expected,
+    "expected_diagnostic": expected_diagnostic,
+    "diagnostic_matched": diagnostic_matched == "true",
     "status": int(status),
     "outcome": outcome,
     "stdout": stdout_path,
@@ -100,18 +104,20 @@ append_bare_shadow_cargo_invocation() {
 run_validator_case() {
     local case_name="$1"
     local expected="$2"
-    local proof_doc="$3"
-    local drill="$4"
+    local expected_diagnostic="$3"
+    local proof_doc="$4"
+    local drill="$5"
     local case_dir="$CASES_DIR/$case_name"
     local stdout_path="$case_dir/stdout.txt"
     local stderr_path="$case_dir/stderr.txt"
     local status=0
     local outcome="pass"
+    local diagnostic_matched="false"
 
     mkdir -p "$case_dir"
 
-    printf 'case=%s expected=%s SHADOW_PROOF_DOC=%q SHADOW_LIFECYCLE_DRILL=%q bash %q validate\n' \
-        "$case_name" "$expected" "$proof_doc" "$drill" "$VALIDATOR" >> "$COMMANDS_FILE"
+    printf 'case=%s expected=%s diagnostic=%q SHADOW_PROOF_DOC=%q SHADOW_LIFECYCLE_DRILL=%q bash %q validate\n' \
+        "$case_name" "$expected" "$expected_diagnostic" "$proof_doc" "$drill" "$VALIDATOR" >> "$COMMANDS_FILE"
 
     set +e
     SHADOW_PROOF_DOC="$proof_doc" SHADOW_LIFECYCLE_DRILL="$drill" bash "$VALIDATOR" validate > "$stdout_path" 2> "$stderr_path"
@@ -124,7 +130,13 @@ run_validator_case() {
         outcome="fail"
     fi
 
-    record_result "$case_name" "$expected" "$status" "$outcome" "$stdout_path" "$stderr_path"
+    if grep -Fq -- "$expected_diagnostic" "$stdout_path" || grep -Fq -- "$expected_diagnostic" "$stderr_path"; then
+        diagnostic_matched="true"
+    else
+        outcome="fail"
+    fi
+
+    record_result "$case_name" "$expected" "$status" "$outcome" "$expected_diagnostic" "$diagnostic_matched" "$stdout_path" "$stderr_path"
 
     if [[ "$outcome" == "fail" ]]; then
         return 1
@@ -137,13 +149,13 @@ write_coverage_matrix() {
     cat > "$COVERAGE_MD" <<EOF
 # Shadow Claim Validator Smoke Coverage
 
-| Requirement | Positive case | Negative case | Expected result |
+| Requirement | Positive case | Negative case | Expected diagnostic |
 | --- | --- | --- | --- |
-| Repository proof-state doc and lifecycle drill remain truthful | real_repository_inputs | n/a | Validator succeeds |
-| no_mock_drill must not be documented green | real_repository_inputs | green_no_mock_gate | Fixture fails |
-| no_mock_drill must remain documented blocked | real_repository_inputs | green_no_mock_gate | Fixture fails |
-| Lifecycle drill must keep a synthetic-evidence exit guard | real_repository_inputs | missing_synthetic_exit_guard | Fixture fails |
-| Synthetic lifecycle drill must not invoke bare shadow helper Cargo commands | real_repository_inputs | bare_shadow_helper_cargo | Fixture fails |
+| Repository proof-state doc and lifecycle drill remain truthful | real_repository_inputs | n/a | VALIDATION PASSED |
+| no_mock_drill must not be documented green | real_repository_inputs | green_no_mock_gate | no_mock_drill is still documented as green |
+| no_mock_drill must remain documented blocked | real_repository_inputs | green_no_mock_gate | no_mock_drill is still documented as green |
+| Lifecycle drill must keep a synthetic-evidence exit guard | real_repository_inputs | missing_synthetic_exit_guard | Lifecycle drill no longer has a synthetic-evidence exit guard |
+| Synthetic lifecycle drill must not invoke bare shadow helper Cargo commands | real_repository_inputs | bare_shadow_helper_cargo | Synthetic lifecycle drill still invokes shadow helper binaries via bare cargo |
 
 Artifacts:
 - Commands: $COMMANDS_FILE
@@ -159,7 +171,7 @@ main() {
 
     echo "Writing shadow claim validator smoke artifacts to $ARTIFACT_DIR"
 
-    if ! run_validator_case "real_repository_inputs" "success" "$BASE_PROOF_DOC" "$BASE_DRILL"; then
+    if ! run_validator_case "real_repository_inputs" "success" "VALIDATION PASSED" "$BASE_PROOF_DOC" "$BASE_DRILL"; then
         failures=$((failures + 1))
     fi
 
@@ -169,7 +181,7 @@ main() {
     proof_doc="${green_inputs[0]}"
     drill="${green_inputs[1]}"
     mark_no_mock_gate_green "$proof_doc"
-    if ! run_validator_case "green_no_mock_gate" "failure" "$proof_doc" "$drill"; then
+    if ! run_validator_case "green_no_mock_gate" "failure" "no_mock_drill is still documented as green" "$proof_doc" "$drill"; then
         failures=$((failures + 1))
     fi
 
@@ -179,7 +191,7 @@ main() {
     proof_doc="${missing_guard_inputs[0]}"
     drill="${missing_guard_inputs[1]}"
     remove_synthetic_exit_guard "$drill"
-    if ! run_validator_case "missing_synthetic_exit_guard" "failure" "$proof_doc" "$drill"; then
+    if ! run_validator_case "missing_synthetic_exit_guard" "failure" "Lifecycle drill no longer has a synthetic-evidence exit guard" "$proof_doc" "$drill"; then
         failures=$((failures + 1))
     fi
 
@@ -189,7 +201,7 @@ main() {
     proof_doc="${bare_cargo_inputs[0]}"
     drill="${bare_cargo_inputs[1]}"
     append_bare_shadow_cargo_invocation "$drill"
-    if ! run_validator_case "bare_shadow_helper_cargo" "failure" "$proof_doc" "$drill"; then
+    if ! run_validator_case "bare_shadow_helper_cargo" "failure" "Synthetic lifecycle drill still invokes shadow helper binaries via bare cargo" "$proof_doc" "$drill"; then
         failures=$((failures + 1))
     fi
 

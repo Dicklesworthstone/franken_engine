@@ -97,11 +97,8 @@ check_advisory_language() {
         return 1
     fi
 
-    local content_lower
-    content_lower=$(tr '[:upper:]' '[:lower:]' < "$file_path")
-
     # Should contain advisory language
-    if ! echo "$content_lower" | grep -q "advisory\|recommendation\|preview\|manual"; then
+    if ! grep -Eiq "advisory|recommendation|preview|manual" "$file_path"; then
         log "$RED" "  ❌ Missing advisory language in $description"
         return 1
     fi

@@ -1,0 +1,306 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-contract-cases.v1",
+  "scenarios": [
+    {
+      "scenario_id": "hdf5_required_present",
+      "expected_truth_state": "confirmed",
+      "expected_decision": "pass",
+      "expected_reason_codes": [
+        "required_native_dependency_present",
+        "hdf5_required_present"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-hdf5-present",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "vmi1149989"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "frankenpandas",
+            "hdf5-metno-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "required": true
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "vmi1149989",
+          "probe_command": "pkg-config --modversion hdf5",
+          "probe_status": "present",
+          "observed_version": "1.14.5",
+          "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+          "probe_timestamp": "2026-05-09T07:35:00Z",
+          "freshness_state": "fresh",
+          "contamination_state": "remote_only"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": null,
+          "excerpt": ""
+        }
+      }
+    },
+    {
+      "scenario_id": "hdf5_required_missing",
+      "expected_truth_state": "blocked",
+      "expected_decision": "blocked",
+      "expected_reason_codes": [
+        "hdf5_required_missing",
+        "pkg_config_unavailable"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-hdf5-missing",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "vmi1227854"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "frankenpandas",
+            "hdf5-metno-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "required": true
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "vmi1227854",
+          "probe_command": "pkg-config --modversion hdf5",
+          "probe_status": "missing",
+          "observed_version": null,
+          "abi_fingerprint": null,
+          "probe_timestamp": "2026-05-09T07:35:00Z",
+          "freshness_state": "fresh",
+          "contamination_state": "remote_only"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": "hdf5",
+          "excerpt": "Unable to locate HDF5 root directory and/or headers."
+        }
+      }
+    },
+    {
+      "scenario_id": "optional_native_dependency_absent",
+      "expected_truth_state": "degraded",
+      "expected_decision": "degraded",
+      "expected_reason_codes": [
+        "optional_native_dependency_absent"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-optional-zstd",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine cargo check -p frankenengine-engine --tests",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "vmi1149989"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "zstd-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "zstd",
+              "native_package_name": "libzstd",
+              "probe_kind": "pkg_config_modversion",
+              "required": false
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "vmi1149989",
+          "probe_command": "pkg-config --modversion libzstd",
+          "probe_status": "missing",
+          "observed_version": null,
+          "abi_fingerprint": null,
+          "probe_timestamp": "2026-05-09T07:35:00Z",
+          "freshness_state": "fresh",
+          "contamination_state": "remote_only"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": null,
+          "excerpt": ""
+        }
+      }
+    },
+    {
+      "scenario_id": "stale_worker_probe",
+      "expected_truth_state": "unknown",
+      "expected_decision": "fail_closed",
+      "expected_reason_codes": [
+        "stale_worker_probe"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-stale-probe",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "vmi1149989"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "frankenpandas",
+            "hdf5-metno-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "required": true
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "vmi1149989",
+          "probe_command": "pkg-config --modversion hdf5",
+          "probe_status": "present",
+          "observed_version": "1.14.5",
+          "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+          "probe_timestamp": "2026-04-01T00:00:00Z",
+          "freshness_state": "stale",
+          "contamination_state": "remote_only"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": null,
+          "excerpt": ""
+        }
+      }
+    },
+    {
+      "scenario_id": "contradictory_pkg_config_header_evidence",
+      "expected_truth_state": "unknown",
+      "expected_decision": "fail_closed",
+      "expected_reason_codes": [
+        "contradictory_pkg_config_header_evidence"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-contradictory-hdf5",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "vmi1149989"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "frankenpandas",
+            "hdf5-metno-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "header_presence",
+              "required": true
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "vmi1149989",
+          "probe_command": "pkg-config --modversion hdf5 && test -f /usr/include/hdf5.h",
+          "probe_status": "contradictory",
+          "observed_version": "1.14.5",
+          "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+          "probe_timestamp": "2026-05-09T07:35:00Z",
+          "freshness_state": "fresh",
+          "contamination_state": "remote_only"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": "hdf5",
+          "excerpt": "pkg-config found hdf5, but hdf5.h was absent from include paths."
+        }
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contaminated",
+      "expected_truth_state": "contaminated",
+      "expected_decision": "fail_closed",
+      "expected_reason_codes": [
+        "local_fallback_contaminated"
+      ],
+      "inputs": {
+        "validation_command_context_json": {
+          "validation_id": "val-local-fallback",
+          "command": "cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+          "cargo_package": "frankenengine-engine",
+          "candidate_worker_ids": [
+            "local"
+          ]
+        },
+        "native_requirement_bundle_json": {
+          "schema_version": "franken-engine.native-requirement-bundle.v1",
+          "path_dependency_closure": [
+            "frankenengine-engine",
+            "frankenpandas",
+            "hdf5-metno-sys"
+          ],
+          "requirements": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "required": true
+            }
+          ]
+        },
+        "worker_native_probe_snapshot_json": {
+          "schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+          "worker_id": "local",
+          "probe_command": "pkg-config --modversion hdf5",
+          "probe_status": "present",
+          "observed_version": "1.14.5",
+          "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+          "probe_timestamp": "2026-05-09T07:35:00Z",
+          "freshness_state": "fresh",
+          "contamination_state": "local_fallback"
+        },
+        "rch_failure_log_excerpt_json": {
+          "schema_version": "franken-engine.rch-failure-log-excerpt.v1",
+          "matched_native_dependency": null,
+          "excerpt": "local fallback observed before remote proof completed"
+        }
+      }
+    }
+  ]
+}

@@ -14,7 +14,10 @@ bead_id="bd-dpfvh"
 component="live_ifc_declassification_example"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="artifacts/live_ifc_declassification_example/${timestamp}"
-target_dir="${CARGO_TARGET_DIR:-target/smoke_ifc}"
+target_dir="${CARGO_TARGET_DIR:-${root_dir}/target/smoke_ifc}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
+cargo_incremental="${CARGO_INCREMENTAL:-0}"
+rustc_wrapper="${RUSTC_WRAPPER:-}"
 
 echo "🚀 Live IFC Declassification Example Smoke Test"
 echo "   Bead: $bead_id"
@@ -24,6 +27,22 @@ echo ""
 echo "🔄 Converting static IFC example to live runtime proof..."
 
 mkdir -p "$output_dir"
+
+if ! command -v rch >/dev/null 2>&1; then
+    echo "❌ rch is required for live IFC smoke Cargo execution"
+    exit 2
+fi
+
+run_cargo_step() {
+    local log_path="$1"
+    shift
+    timeout 120 rch exec -- env \
+        "RUSTC_WRAPPER=${rustc_wrapper}" \
+        "CARGO_TARGET_DIR=${target_dir}" \
+        "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+        "CARGO_INCREMENTAL=${cargo_incremental}" \
+        cargo "$@" > "$log_path" 2>&1
+}
 
 # Check that the live example implementation exists
 live_example_path="examples/live_ifc_declassification_example.rs"
@@ -125,13 +144,13 @@ echo "🔧 Performing compilation check..."
 
 # Try to compile the live example
 compile_output="$output_dir/compile_check.log"
-if timeout 120 cargo check --example live_ifc_declassification_example --no-default-features > "$compile_output" 2>&1; then
+if run_cargo_step "$compile_output" check --example live_ifc_declassification_example --no-default-features; then
     echo "✅ Live example compiles successfully"
 
     # If compilation succeeds, try to run integration tests
     echo "🧪 Running integration test check..."
     test_output="$output_dir/test_check.log"
-    if timeout 120 cargo test -p frankenengine-engine --test live_ifc_declassification_runtime_integration --no-default-features > "$test_output" 2>&1; then
+    if run_cargo_step "$test_output" test -p frankenengine-engine --test live_ifc_declassification_runtime_integration --no-default-features; then
         echo "✅ Integration tests pass"
     else
         echo "⚠️ Integration tests have issues (see $test_output)"

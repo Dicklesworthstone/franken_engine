@@ -1,0 +1,191 @@
+{
+  "schema_version": "franken-engine.swarm-proof-equivalence-classifier-fixtures.v1",
+  "base_request": {
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_equivalence",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "cargo",
+      "test",
+      "-p",
+      "frankenengine-engine",
+      "proof_request_capture",
+      "--lib",
+      "--",
+      "--nocapture"
+    ],
+    "command_kind": "cargo_test",
+    "package": "frankenengine-engine",
+    "target_kind": "lib_test_filter",
+    "target_name": "lib",
+    "test_filter": "proof_request_capture",
+    "feature_flags": [],
+    "accepted_env_allowlist": [
+      "CARGO_TARGET_DIR",
+      "CARGO_INCREMENTAL",
+      "CARGO_BUILD_JOBS"
+    ],
+    "source_revision": "fixture-source-revision",
+    "git_commit": "fixture-source-revision",
+    "dependency_closure_roots": [
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "dirty_paths": [
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "target_dir_policy": "disposable_remote_target_dir",
+    "rch_posture": "remote"
+  },
+  "cases": [
+    {
+      "case_id": "identical_command_reuse",
+      "candidate_ref": "base_request",
+      "requested_ref": "base_request",
+      "expected": {
+        "verdict": "reuse_allowed",
+        "reason_codes": [
+          "identical_request"
+        ],
+        "relation": "same_scope",
+        "reuse_eligible": true
+      }
+    },
+    {
+      "case_id": "narrower_candidate_refused",
+      "candidate_ref": "base_request",
+      "requested": {
+        "target_kind": "package_lib_test",
+        "test_filter": null,
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_equivalence",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "-p",
+          "frankenengine-engine",
+          "--lib",
+          "--",
+          "--nocapture"
+        ]
+      },
+      "expected": {
+        "verdict": "reuse_refused",
+        "reason_codes": [
+          "candidate_narrower_than_requested"
+        ],
+        "relation": "candidate_narrower",
+        "reuse_eligible": false
+      }
+    },
+    {
+      "case_id": "env_mismatch_refused",
+      "candidate_ref": "base_request",
+      "requested": {
+        "accepted_env_allowlist": [
+          "CARGO_TARGET_DIR",
+          "CARGO_INCREMENTAL",
+          "CARGO_BUILD_JOBS",
+          "RCH_VISIBILITY"
+        ]
+      },
+      "expected": {
+        "verdict": "reuse_refused",
+        "reason_codes": [
+          "env_allowlist_mismatch"
+        ],
+        "relation": "same_scope",
+        "reuse_eligible": false
+      }
+    },
+    {
+      "case_id": "changed_dependency_root_rerun",
+      "candidate_ref": "base_request",
+      "requested": {
+        "dependency_closure_roots": [
+          "scripts/swarm_proof_request_capture.sh",
+          "scripts/swarm_proof_equivalence_classifier.sh",
+          "docs/SWARM_PROOF_EQUIVALENCE_CLASSIFIER.md"
+        ]
+      },
+      "expected": {
+        "verdict": "rerun_required",
+        "reason_codes": [
+          "changed_dependency_root"
+        ],
+        "relation": "same_scope",
+        "reuse_eligible": false
+      }
+    },
+    {
+      "case_id": "dirty_lane_mismatch_refused",
+      "candidate_ref": "base_request",
+      "requested": {
+        "dirty_paths": [
+          "docs/SWARM_PROOF_EQUIVALENCE_CLASSIFIER.md"
+        ]
+      },
+      "expected": {
+        "verdict": "reuse_refused",
+        "reason_codes": [
+          "dirty_lane_mismatch"
+        ],
+        "relation": "same_scope",
+        "reuse_eligible": false
+      }
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "candidate": {
+        "rch_posture": "local_fallback",
+        "local_fallback_observed": true
+      },
+      "requested_ref": "base_request",
+      "expected": {
+        "verdict": "reuse_refused",
+        "reason_codes": [
+          "contaminated_command_shape"
+        ],
+        "relation": "same_scope",
+        "reuse_eligible": false
+      }
+    },
+    {
+      "case_id": "wider_candidate_human_review",
+      "candidate": {
+        "target_kind": "workspace_all_targets",
+        "test_filter": null,
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_equivalence",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "--all-targets"
+        ]
+      },
+      "requested_ref": "base_request",
+      "expected": {
+        "verdict": "human_review",
+        "reason_codes": [
+          "candidate_wider_than_requested"
+        ],
+        "relation": "candidate_wider",
+        "reuse_eligible": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,199 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-abi-cache-ledger-cases.v1",
+  "scenarios": [
+    {
+      "scenario_id": "hdf5_1_14_5_reuse_match",
+      "expected_decision": "reuse_allowed",
+      "expected_exit_code": 0,
+      "expected_reuse_allowed": true,
+      "expected_reason_codes": [
+        "abi_fingerprint_match"
+      ],
+      "inputs": {
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "abi-hdf5-match",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.5",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [
+                "/usr/include/hdf5/serial/hdf5.h"
+              ],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1149989",
+            "abi_fingerprint": "__SELF__"
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "missing_hdf5_quarantine",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "expected_reuse_allowed": false,
+      "expected_reason_codes": [
+        "missing_native_abi_evidence",
+        "missing_required_header_path"
+      ],
+      "inputs": {
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "abi-hdf5-missing",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1227854",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "missing",
+              "pkg_config_version": null,
+              "include_roots": [],
+              "environment_roots": [],
+              "header_paths": [],
+              "abi_fingerprint": null
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1227854",
+            "abi_fingerprint": "stale"
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "changed_hdf5_version_quarantine",
+      "expected_decision": "reuse_quarantined",
+      "expected_exit_code": 75,
+      "expected_reuse_allowed": false,
+      "expected_reason_codes": [
+        "target_cache_fingerprint_mismatch"
+      ],
+      "inputs": {
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "abi-hdf5-version-changed",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.6",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [
+                "/usr/include/hdf5/serial/hdf5.h"
+              ],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.6"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1149989",
+            "abi_fingerprint": "previous-hdf5-1.14.5"
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "missing_hdf5_header_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "expected_reuse_allowed": false,
+      "expected_reason_codes": [
+        "missing_required_header_path"
+      ],
+      "inputs": {
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "abi-hdf5-header-missing",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.5",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1149989",
+            "abi_fingerprint": "previous"
+          }
+        }
+      }
+    },
+    {
+      "scenario_id": "changed_worker_identity_quarantine",
+      "expected_decision": "reuse_quarantined",
+      "expected_exit_code": 75,
+      "expected_reuse_allowed": false,
+      "expected_reason_codes": [
+        "target_cache_fingerprint_mismatch",
+        "worker_identity_changed"
+      ],
+      "inputs": {
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "abi-worker-changed",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.5",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [
+                "/usr/include/hdf5/serial/hdf5.h"
+              ],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1227854",
+            "abi_fingerprint": "previous-worker"
+          }
+        }
+      }
+    }
+  ]
+}

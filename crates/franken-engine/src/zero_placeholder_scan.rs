@@ -450,34 +450,36 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_parse_compound_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::Blocked,
+            status: ZeroPlaceholderStatus::Resolved,
             severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.parse.compound".to_string(),
-            source_reference: "crates/franken-engine/src/baseline_interpreter.rs::builtin:JsonParse".to_string(),
+            source_reference:
+                "crates/franken-engine/src/stdlib.rs::json_parse; crates/franken-engine/tests/stdlib_integration.rs"
+                    .to_string(),
             observed_behavior:
-                "baseline_interpreter builtin:JsonParse only handles primitives (null/bool/string/number), returns Value::Undefined for arrays/objects. stdlib::json_parse supports compound structures but is not used by baseline."
+                "stdlib::json_parse materializes compound arrays and objects into deterministic heap-backed JsValue::Object handles with recursion-depth and parse-error guards."
                     .to_string(),
             required_behavior:
-                "Parse arrays and objects into deterministic runtime values without placeholder descriptors."
+                "Keep JSON.parse compound materialization backed by live heap objects rather than placeholder descriptors or primitive-only fallbacks."
                     .to_string(),
             diagnostic_code: None,
         },
         ZeroPlaceholderFinding {
             finding_id: "runtime::json_stringify_object_placeholder".to_string(),
             subsystem: ZeroPlaceholderSubsystem::Runtime,
-            status: ZeroPlaceholderStatus::OpenPlaceholder,
+            status: ZeroPlaceholderStatus::Resolved,
             severity: ZeroPlaceholderSeverity::Low,
             owner: "stdlib".to_string(),
             owner_bead_id: JSON_RUNTIME_BEAD_ID.to_string(),
             subject_area: "json.stringify.object".to_string(),
             source_reference: "crates/franken-engine/src/stdlib.rs::json_stringify".to_string(),
             observed_behavior:
-                "JSON.stringify baseline implementation returns stub '{}' for all Object values without heap traversal or property enumeration."
+                "stdlib::json_stringify traverses heap-backed arrays and ordinary objects, applies deterministic omission/nulling rules, rejects circular graphs, and fails closed for unsupported object kinds."
                     .to_string(),
             required_behavior:
-                "Stringify object graphs through deterministic heap traversal with explicit omission/nulling rules and fail-closed errors for unsupported cases."
+                "Keep JSON.stringify object output derived from deterministic heap traversal with explicit omission/nulling rules and fail-closed errors for unsupported cases."
                     .to_string(),
             diagnostic_code: None,
         },

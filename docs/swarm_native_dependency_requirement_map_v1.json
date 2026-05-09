@@ -1,0 +1,194 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-requirement-map.v1",
+  "bead_id": "bd-sqm14.2",
+  "parent_bead_id": "bd-sqm14",
+  "depends_on": [
+    "bd-sqm14.1"
+  ],
+  "contract": "docs/swarm_native_dependency_routing_contract_v1.json",
+  "script": "scripts/swarm_native_dependency_requirement_infer.sh",
+  "smoke_script": "scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_native_dependency_requirement_infer/cases.json",
+  "output_schema_version": "franken-engine.native-requirement-bundle.v1",
+  "source_schema_version": "franken-engine.native-requirement-infer-sources.v1",
+  "required_inputs": [
+    "validation_command_context_json",
+    "cargo_lock_snapshot_json",
+    "workspace_manifest_snapshot_json",
+    "path_dependency_manifests_json",
+    "build_script_diagnostics_json"
+  ],
+  "native_dependency_families": [
+    {
+      "dependency_id": "hdf5",
+      "native_package_name": "hdf5",
+      "pkg_config_names": [
+        "hdf5"
+      ],
+      "environment_roots": [
+        "HDF5_DIR"
+      ],
+      "required_headers": [
+        "hdf5.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence",
+        "library_linkability"
+      ],
+      "rust_crates": [
+        "hdf5-metno-sys"
+      ],
+      "default_required": true
+    },
+    {
+      "dependency_id": "sqlite3",
+      "native_package_name": "sqlite3",
+      "pkg_config_names": [
+        "sqlite3"
+      ],
+      "environment_roots": [
+        "SQLITE3_LIB_DIR",
+        "SQLITE3_INCLUDE_DIR"
+      ],
+      "required_headers": [
+        "sqlite3.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ],
+      "rust_crates": [
+        "libsqlite3-sys"
+      ],
+      "default_required": true
+    },
+    {
+      "dependency_id": "openssl",
+      "native_package_name": "openssl",
+      "pkg_config_names": [
+        "openssl"
+      ],
+      "environment_roots": [
+        "OPENSSL_DIR"
+      ],
+      "required_headers": [
+        "openssl/ssl.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ],
+      "rust_crates": [
+        "openssl-sys"
+      ],
+      "default_required": true
+    },
+    {
+      "dependency_id": "zstd",
+      "native_package_name": "libzstd",
+      "pkg_config_names": [
+        "libzstd"
+      ],
+      "environment_roots": [
+        "ZSTD_SYS_USE_PKG_CONFIG"
+      ],
+      "required_headers": [
+        "zstd.h"
+      ],
+      "required_probe_kinds": [
+        "pkg_config_modversion",
+        "header_presence"
+      ],
+      "rust_crates": [
+        "zstd-sys"
+      ],
+      "default_required": false
+    }
+  ],
+  "diagnostic_patterns": [
+    {
+      "dependency_id": "hdf5",
+      "match": "HDF5",
+      "reason_code": "hdf5_required_missing"
+    },
+    {
+      "dependency_id": "sqlite3",
+      "match": "sqlite3",
+      "reason_code": "missing_required_native_package_metadata"
+    },
+    {
+      "dependency_id": "openssl",
+      "match": "OpenSSL",
+      "reason_code": "missing_required_native_package_metadata"
+    },
+    {
+      "dependency_id": "zstd",
+      "match": "zstd",
+      "reason_code": "optional_native_dependency_absent"
+    }
+  ],
+  "emitted_requirement_fields": [
+    "dependency_id",
+    "native_package_name",
+    "source_crate",
+    "source_version",
+    "source_path",
+    "required",
+    "probe_kinds",
+    "pkg_config_names",
+    "environment_roots",
+    "required_headers",
+    "evidence_confidence"
+  ],
+  "truth_states": [
+    "confirmed",
+    "unknown"
+  ],
+  "decisions": [
+    "pass",
+    "fail_closed"
+  ],
+  "required_reason_codes": [
+    "native_requirements_detected",
+    "no_native_requirements_detected",
+    "hdf5_required_present",
+    "optional_native_dependency_gated_out",
+    "ambiguous_build_script_diagnostic",
+    "stale_cargo_lock_manifest_mismatch",
+    "path_dependency_closure_incomplete"
+  ],
+  "fail_closed_rules": [
+    "build-script native dependency diagnostics without a known dependency mapping fail closed",
+    "Cargo.lock package versions that disagree with manifest package versions fail closed",
+    "enabled path dependency references missing from the provided manifest snapshots fail closed",
+    "root package missing from the manifest snapshots fails closed"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "installs_remote_packages": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "proof_cases": [
+    "hdf5_path_dependency_closure",
+    "rust_only_no_native_dependencies",
+    "unknown_build_script_native_dependency",
+    "optional_native_dependency_gated_out",
+    "stale_cargo_lock_manifest_mismatch"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_native_dependency_requirement_map_v1.json",
+    "jq empty scripts/testdata/swarm_native_dependency_requirement_infer/cases.json",
+    "bash -n scripts/swarm_native_dependency_requirement_infer.sh",
+    "bash -n scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh",
+    "bash scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh check",
+    "bash scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_native_dependency_requirement_infer.sh docs/swarm_native_dependency_requirement_map_v1.json scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh scripts/testdata/swarm_native_dependency_requirement_infer/cases.json"
+  ]
+}

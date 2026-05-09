@@ -10,16 +10,26 @@ ARTIFACTS="artifacts/fleet_evidence/${TIMESTAMP}"
 TEST_OUTPUT_DIR="$ARTIFACTS/test_output"
 CONVERGENCE_SOURCE="$ARTIFACTS/convergence_metrics_sources.jsonl"
 TEE_SOURCE="$ARTIFACTS/tee_verification_sources.jsonl"
+RCH_BIN="${RCH_BIN:-rch}"
+CARGO_TARGET_DIR="${FLEET_QUARANTINE_E2E_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_fleet_quarantine_${TIMESTAMP}}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 mkdir -p "$(dirname "$LOG")"
 mkdir -p "$ARTIFACTS"
 mkdir -p "$TEST_OUTPUT_DIR"
 : > "$CONVERGENCE_SOURCE"
 : > "$TEE_SOURCE"
 
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "Required rch binary not found: $RCH_BIN" >&2
+    exit 127
+fi
+
 echo "=== Fleet Quarantine Propagation E2E Test ==="
 echo "Timestamp: $TIMESTAMP"
 echo "Artifacts: $ARTIFACTS"
 echo "Log: $LOG"
+echo "RCH target dir: $CARGO_TARGET_DIR"
 
 # Initialize test log
 cat > "$LOG" << EOF
@@ -37,24 +47,34 @@ extract_test_markers() {
         | sed 's/^FLEET_TEE_VERIFICATION_JSON=//' >> "$TEE_SOURCE" || true
 }
 
+run_rch_cargo_test() {
+    "$RCH_BIN" exec -- env \
+        "CARGO_INCREMENTAL=$CARGO_INCREMENTAL" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        cargo test "$@"
+}
+
 # Test execution helper
 run_fleet_quarantine_test() {
     local test_name=$1
     local output_file="$TEST_OUTPUT_DIR/${test_name}.log"
     echo "Running fleet quarantine test: $test_name"
 
-    local start_time=$(date +%s%3N)
+    local start_time
+    start_time=$(date +%s%3N)
     local test_exit=0
 
-    # Run cargo test for specific fleet quarantine test
-    if cargo test --test fleet_quarantine_integration "$test_name" -- --nocapture 2>&1 | tee "$output_file"; then
+    # Run cargo test for specific fleet quarantine test through rch.
+    if run_rch_cargo_test --test fleet_quarantine_integration "$test_name" -- --nocapture 2>&1 | tee "$output_file"; then
         test_exit=0
     else
         test_exit=1
     fi
     extract_test_markers "$output_file"
 
-    local end_time=$(date +%s%3N)
+    local end_time
+    end_time=$(date +%s%3N)
     local duration=$((end_time - start_time))
 
     cat >> "$LOG" << EOF
@@ -116,7 +136,7 @@ echo "=== Full Fleet Simulation ==="
 # Test 10: Complete fleet quarantine simulation
 echo "Running complete fleet quarantine simulation..."
 full_output_file="$TEST_OUTPUT_DIR/full_fleet_simulation.log"
-if cargo test --test fleet_quarantine_integration -- --nocapture 2>&1 | tee "$full_output_file"; then
+if run_rch_cargo_test --test fleet_quarantine_integration -- --nocapture 2>&1 | tee "$full_output_file"; then
     test10_exit=0
 else
     test10_exit=1

@@ -30,6 +30,21 @@ Method: followed the `mock-code-finder` skill with documentation-first review, t
 | P2 | `crates/franken-engine/src/signature_preimage.rs:1294` | Ignored `unimplemented!` tests | Constant-time comparison tests are ignored after API drift. This is less severe because it is test-only and ignored, but it leaves crypto regression coverage absent. | Needs cleanup bead if no existing owner |
 | P2 | `crates/franken-engine/src/tee_attestation_policy.rs:3935` | Ignored `unimplemented!` tests | TEE policy tests for expired quotes and high-impact attestation are ignored after API drift. Product code may be fine, but coverage is stale. | Needs cleanup bead if no existing owner |
 
+## Follow-up Status - 2026-05-09
+
+This audit is a historical snapshot. The statuses below reflect current `main`
+inspection and source-only fixes made while `.beads/issues.jsonl` was reserved by
+another agent.
+
+| Finding | Current status |
+|---|---|
+| `crates/franken-engine/src/bin/franken_react_sidecar.rs` placeholder parser | Fixed before this follow-up; current sidecar uses the JSX parser instead of hardcoded `ExampleComponent` discovery. |
+| `scripts/run_crypto_migration_e2e.sh` simulated crypto evidence | Fixed by `5c49e359`: crypto/evidence/capability scenarios now invoke focused `rch exec -- cargo test ...` filters and generate deterministic SHA-256/HMAC vectors. Bead metadata is still pending because `.beads/issues.jsonl` was reserved. |
+| `scripts/run_memory_budget_e2e.sh` simulated memory-budget evidence | Fixed by `d7723939`: runner and replay now use the existing `memory_budget_adversarial` integration target through `rch`, and fail closed when expected Rust test names are not observed. Bead metadata is still pending because `.beads/issues.jsonl` was reserved. |
+| `crates/franken-engine/tests/real_world_program_suite.rs` simulated integration execution | Truth-classified by `3bf5ad82`: the suite now states it is a fixture/readiness inventory and output-contract validator, not FrankenEngine execution conformance. |
+| `crates/franken-engine/src/signature_preimage.rs` ignored `unimplemented!` tests | Already resolved in current source; the old ignored tests were removed and live constant-time hash coverage exists in `hash_tiers_*` integration tests. |
+| `crates/franken-engine/src/tee_attestation_policy.rs` ignored `unimplemented!` tests | Already resolved in current source; stale/high-impact attestation coverage exists in `tee_attestation_policy*` integration and edge-case tests. |
+
 ## False Positives / Lower Priority Buckets
 
 - `zero_placeholder_gate.rs`, `zero_placeholder_scan.rs`, `control_plane_mock_inventory.rs`, and related tests intentionally contain terms like placeholder/mock because they implement detection policy.

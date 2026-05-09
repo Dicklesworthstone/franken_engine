@@ -1060,11 +1060,12 @@ mod tests {
         let result = ShadowReplayVerifier::new(config, 300);
         assert!(result.is_err());
 
-        match result.unwrap_err() {
-            ReplayVerificationError::InvalidConfiguration(msg) => {
+        match result {
+            Err(ReplayVerificationError::InvalidConfiguration(msg)) => {
                 assert!(msg.contains("max_events_per_batch must be greater than 0"));
             }
-            _ => panic!("Expected InvalidConfiguration error"),
+            Err(err) => panic!("Expected InvalidConfiguration error, got {err}"),
+            Ok(_) => panic!("Expected InvalidConfiguration error"),
         }
     }
 
@@ -1080,7 +1081,7 @@ mod tests {
         assert!(verifier.is_expected_migration(&schema_drift));
 
         let behavioral_regression = vec![DriftType::BehavioralRegression {
-            decision_id: EngineObjectId::from_content_hash(ContentHash::from_bytes([0u8; 32])),
+            decision_id: EngineObjectId([0u8; 32]),
             expected_output: ContentHash::from_bytes([1u8; 32]),
             actual_output: ContentHash::from_bytes([2u8; 32]),
             reproducible: true,

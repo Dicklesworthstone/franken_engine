@@ -110,8 +110,8 @@ if ! grep -q '"cli_supports_runtime_profiling": false' "$unsupported_artifact_di
     exit 1
 fi
 
-if ! grep -q '"engine_hooks_implemented": false' "$unsupported_artifact_dir/degraded_non_authoritative.json"; then
-    echo "degraded marker does not record missing engine profiling hooks" >&2
+if ! grep -q '"engine_hooks_implemented": true' "$unsupported_artifact_dir/degraded_non_authoritative.json"; then
+    echo "degraded marker does not record active engine profiling hooks" >&2
     exit 1
 fi
 

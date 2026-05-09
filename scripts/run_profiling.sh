@@ -15,7 +15,7 @@ echo "=== Profiling Infrastructure Test ==="
 echo "Artifacts directory: $ARTIFACTS"
 echo "Log file: $LOG"
 
-echo '{"suite":"profiling_infrastructure","started":"'$(date -Iseconds)'"}' >> "$LOG"
+printf '{"suite":"profiling_infrastructure","started":"%s"}\n' "$(date -Iseconds)" >> "$LOG"
 
 captured_profiles=()
 
@@ -46,9 +46,10 @@ detect_runtime_profiling_support() {
     local run_help
     local cli_supports_runtime_profiling=false
     local engine_hooks_implemented=false
+    # crates/franken-core is workspace-excluded modularization scaffolding; do
+    # not let its stale placeholders decide current runtime support.
     local hook_files=(
         "$REPO_ROOT/crates/franken-engine/src/baseline_interpreter.rs"
-        "$REPO_ROOT/crates/franken-core/src/baseline_interpreter.rs"
     )
     local found_hook_file=0
 
@@ -237,7 +238,11 @@ else
     echo "Optimization report: not emitted; no real profile captures"
 fi
 
-echo '{"suite":"profiling_infrastructure","completed":"'$(date -Iseconds)'","total":'$total_benchmarks',"passed":'$total_passed',"failed":'$total_failed'}' >> "$LOG"
+printf '{"suite":"profiling_infrastructure","completed":"%s","total":%s,"passed":%s,"failed":%s}\n' \
+    "$(date -Iseconds)" \
+    "$total_benchmarks" \
+    "$total_passed" \
+    "$total_failed" >> "$LOG"
 
 if [ $total_failed -eq 0 ]; then
     echo "✅ All profiling infrastructure tests passed!"

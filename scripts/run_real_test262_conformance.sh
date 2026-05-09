@@ -10,6 +10,19 @@ target_dir="${CARGO_TARGET_DIR:-target}"
 if [[ "$target_dir" != /* ]]; then
     target_dir="$PROJECT_ROOT/$target_dir"
 fi
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export CARGO_TARGET_DIR="$target_dir"
+
+if ! command -v rch >/dev/null 2>&1; then
+    echo "rch is required for Test262 conformance Cargo execution" >&2
+    exit 2
+fi
+
+run_rch_cargo() {
+    rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" cargo "$@"
+}
 
 echo "🧪 Real Test262 Conformance Integration (BD-24POU)"
 echo "=================================================================="
@@ -33,7 +46,7 @@ echo "🔄 Step 1: Test262 Case Vector Generation"
 echo "========================================="
 echo "Current status: Using checked-in vectors derived from official tc39/test262 sources"
 echo "To refresh from a pinned checkout, run:"
-echo "  cargo run -p frankenengine-engine --bin franken_test262_generator -- --test262-repo ./test262 --output $CASE_VECTORS"
+echo "  rch exec -- env CARGO_TARGET_DIR=$CARGO_TARGET_DIR cargo run -p frankenengine-engine --bin franken_test262_generator -- --test262-repo ./test262 --output $CASE_VECTORS"
 echo
 
 # Validate case vectors format
@@ -72,7 +85,7 @@ RUNNER="$target_dir/debug/franken_test262_runner"
 if [[ ! -f "$RUNNER" ]]; then
     echo "🔨 Building Test262 runner..."
     cd "$PROJECT_ROOT"
-    if cargo build -p frankenengine-engine --bin franken_test262_runner; then
+    if run_rch_cargo build -p frankenengine-engine --bin franken_test262_runner; then
         echo "  ✅ Test262 runner built successfully"
     else
         echo "  ❌ Test262 runner build failed"
@@ -91,7 +104,7 @@ echo "  Running franken_test262_runner with real case vectors..."
 cd "$PROJECT_ROOT"
 
 # Execute the Test262 runner with the checked-in Test262-derived vectors.
-if timeout 300 cargo run -p frankenengine-engine --bin franken_test262_runner -- \
+if timeout 300 rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" cargo run -p frankenengine-engine --bin franken_test262_runner -- \
     --pins "$PINS" \
     --profile "$PROFILE" \
     --waivers "$WAIVERS" \

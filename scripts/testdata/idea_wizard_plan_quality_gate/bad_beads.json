@@ -1,0 +1,33 @@
+{
+  "closed_authority_ids": [
+    "bd-eozx0",
+    "bd-x82vp"
+  ],
+  "issues": [
+    {
+      "id": "bd-ep8y0",
+      "title": "[IDEA-WIZARD] Live swarm snapshot bridge and proof recovery plan",
+      "description": "Plan with no explicit non-goals."
+    },
+    {
+      "id": "bd-ep8y0.1",
+      "title": "[SWARM-LIVE-SNAPSHOT] Replace bd-eozx0 with duplicate contract planner",
+      "description": "Duplicate contract claim. This creates a parallel planner and omits runnable receipts."
+    },
+    {
+      "id": "bd-ep8y0.8",
+      "title": "[CLAIM-FRESHNESS] README observed claims",
+      "description": "Claim docs with vague wording and no executable receipts."
+    }
+  ],
+  "dependencies": [
+    {
+      "child": "bd-ep8y0.1",
+      "parent": "bd-ep8y0.8"
+    },
+    {
+      "child": "bd-ep8y0.8",
+      "parent": "bd-ep8y0.1"
+    }
+  ]
+}

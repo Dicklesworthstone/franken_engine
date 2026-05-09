@@ -1,0 +1,16 @@
+{
+  "plan": {
+    "tracks": [
+      {
+        "track_id": "track-A",
+        "items": [
+          {
+            "id": "bd-ep8y0.1",
+            "title": "[SWARM-LIVE-SNAPSHOT] Extend bd-eozx0 with read-only capture profile contract",
+            "status": "open"
+          }
+        ]
+      }
+    ]
+  }
+}

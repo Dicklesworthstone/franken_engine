@@ -1,0 +1,51 @@
+{
+  "closed_authority_ids": [
+    "bd-eozx0",
+    "bd-x82vp"
+  ],
+  "issues": [
+    {
+      "id": "bd-ep8y0",
+      "title": "[IDEA-WIZARD] Live swarm snapshot bridge and proof recovery plan",
+      "description": "## Non-goals\nDo not replace br/bv. Do not mutate live schedulers. Reuse upstream authority bd-eozx0 and bd-x82vp."
+    },
+    {
+      "id": "bd-ep8y0.1",
+      "title": "[SWARM-LIVE-SNAPSHOT] Extend bd-eozx0 with read-only capture profile contract",
+      "description": "Contract/profile bead. Reuse bd-eozx0 as canonical live state authority and bd-x82vp for resource lease authority. Validation is shellcheck plus smoke output with events.jsonl, commands.txt, report.md. Advisory read-only; no mutation."
+    },
+    {
+      "id": "bd-ep8y0.3",
+      "title": "[SWARM-LIVE-SNAPSHOT] Add non-mutating live capture adapter",
+      "description": "Implementation bead. Add read-only adapter. Validation uses shellcheck and fixture smoke. Emits events.jsonl, commands.txt, report.md. Advisory-only and does not mutate Agent Mail or br."
+    },
+    {
+      "id": "bd-ep8y0.5",
+      "title": "[SWARM-LIVE-SNAPSHOT] Add e2e smoke and golden degradation reports",
+      "description": "Test/e2e bead with detailed logging, golden reports, commands.txt, events.jsonl, and rch-free shell validation. Advisory-only no mutation."
+    },
+    {
+      "id": "bd-ep8y0.8",
+      "title": "[CLAIM-FRESHNESS] Add evidence age decay alarms for README and operator claims",
+      "description": "Docs/claim bead. Validate claim-language safeguards with observed/target/hypothesis downgrade text. Emits e2e smoke logs, events.jsonl, commands.txt, report.md. Advisory read-only no mutation."
+    }
+  ],
+  "dependencies": [
+    {
+      "child": "bd-ep8y0.1",
+      "parent": "bd-ep8y0"
+    },
+    {
+      "child": "bd-ep8y0.3",
+      "parent": "bd-ep8y0.1"
+    },
+    {
+      "child": "bd-ep8y0.5",
+      "parent": "bd-ep8y0.3"
+    },
+    {
+      "child": "bd-ep8y0.8",
+      "parent": "bd-ep8y0.5"
+    }
+  ]
+}

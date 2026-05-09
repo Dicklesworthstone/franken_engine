@@ -35,6 +35,25 @@ Optional:
   present, Cargo package targeting is ambiguous, or a broad all-targets command
   is claimed as narrow proof.
 
+## Validation Recommendations
+
+Each profile also emits `validation_recommendation`, an advisory object with a
+kind, command text when safe, rationale, desired-test context, and blocking
+diagnostics. Recommendation kinds are:
+
+- `exact_integration_test`: rerun an exact integration test through `rch`.
+- `exact_lib_test_filter`: use a named lib-test filter through `rch` instead of
+  a full lib or all-targets proof.
+- `no_run_compile`: use an `rch` no-run compile when Rust paths need compile
+  proof but no exact test is known.
+- `shell_golden_only`: use shell, JSON, or golden-file proof for non-Rust
+  artifact changes.
+- `blocked_no_safe_proof`: refuse to recommend a source-fix proof until cleaner
+  metadata exists.
+
+Rust validation recommendations always preserve an `rch exec --` command shape;
+the profiler never suggests bare local Cargo.
+
 ## Artifacts
 
 Each run emits:
@@ -61,3 +80,5 @@ The selftest covers:
 - a broad lib-test proof with unrelated-drift risk
 - a shell-only proof
 - local fallback contamination
+- an exact lib-test filter recommendation
+- a no-run compile recommendation

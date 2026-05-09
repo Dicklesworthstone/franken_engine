@@ -247,6 +247,48 @@ jq -n \
     elif ($hints | length) == 0 then "target_ambiguous"
     elif intersects($paths; $hints) then "target_relevant"
     else "target_unrelated" end;
+  def shell_golden_only_paths($paths):
+    ($paths | length) > 0
+    and all($paths[]; (test("\\.golden$") or startswith("scripts/") or startswith("docs/")));
+  def rust_path_present($paths):
+    any($paths[]; test("\\.rs$"));
+  def lib_filter($m):
+    (($m.lib_test_filter // $m.test_filter // "") | tostring);
+  def command_or_null($value):
+    if (($value // "") | tostring) == "" then null else ($value | tostring) end;
+  def rch_command($command):
+    if ($command | startswith("rch exec --")) then $command
+    else ("rch exec -- " + $command)
+    end;
+  def recommendation_kind($decision; $surface; $class; $paths; $m):
+    if $decision == "fail_closed" then "blocked_no_safe_proof"
+    elif shell_golden_only_paths($paths) then "shell_golden_only"
+    elif $surface == "exact_integration_test" then "exact_integration_test"
+    elif $class == "cargo_test" and lib_filter($m) != "" then "exact_lib_test_filter"
+    elif rust_path_present($paths) then "no_run_compile"
+    else "blocked_no_safe_proof"
+    end;
+  def recommendation_command($kind; $command; $package; $target; $m):
+    if command_or_null($m.recommended_validation_command) != null then command_or_null($m.recommended_validation_command)
+    elif $kind == "exact_integration_test" then rch_command($command)
+    elif $kind == "exact_lib_test_filter" then
+      ("rch exec -- env CARGO_INCREMENTAL=0 cargo test -p " + $package + " " + lib_filter($m) + " --lib -- --nocapture")
+    elif $kind == "no_run_compile" then
+      ("rch exec -- env CARGO_INCREMENTAL=0 cargo test -p " + $package + " --no-run")
+    elif $kind == "shell_golden_only" then command_or_null($m.golden_validation_command // $m.shell_validation_command // $command)
+    else null
+    end;
+  def recommendation_rationale($kind; $paths; $m):
+    if $kind == "exact_integration_test" then "exact integration test covers the changed target without compiling unrelated lib-test surfaces"
+    elif $kind == "exact_lib_test_filter" then "exact lib test filter is narrower than full lib or all-targets validation"
+    elif $kind == "no_run_compile" then "no-run compile checks the Rust surface while avoiding unrelated test execution"
+    elif $kind == "shell_golden_only" then "changed paths are shell, docs, or golden artifacts; prefer shell/golden proof over broad Rust compilation"
+    else "no safe narrow validation profile is available from the provided command metadata"
+    end + (
+      if (arr($m.blocking_diagnostics) | length) > 0 then
+        "; blocking diagnostics: " + (arr($m.blocking_diagnostics) | map(.file_path // .message // .code // .) | join(", "))
+      else "" end
+    );
   ($metadata[0]) as $m
   | ($changed[0].changed_paths // []) as $changed_paths
   | (($m.command // $m.validation_command // "") | tostring) as $command
@@ -274,6 +316,9 @@ jq -n \
   | (if ($fail_reasons | length) > 0 then "fail_closed"
      elif $surface == "package_lib_test" or $surface == "workspace_all_targets" or $relevance == "target_ambiguous" or $truncated then "degraded"
      else "pass" end) as $decision
+  | (($changed_paths + $touched_paths) | unique) as $all_changed_paths
+  | recommendation_kind($decision; $surface; $class; $all_changed_paths; $m) as $recommendation_kind
+  | recommendation_command($recommendation_kind; $command; $package; $target; $m) as $recommendation_command
   | {
       schema_version: $schema_version,
       case_id: (if $case_id == "" then null else $case_id end),
@@ -293,8 +338,21 @@ jq -n \
         allowed_fallback: allowed_fallback($surface; $decision)
       },
       target_context: {
-        changed_paths: (($changed_paths + $touched_paths) | unique),
+        changed_paths: $all_changed_paths,
         target_hints: $hints
+      },
+      validation_recommendation: {
+        kind: $recommendation_kind,
+        command_text: $recommendation_command,
+        rationale: recommendation_rationale($recommendation_kind; $all_changed_paths; $m),
+        desired_tests: arr($m.desired_tests),
+        blocking_diagnostics: arr($m.blocking_diagnostics),
+        rust_validation_uses_rch: (
+          if $recommendation_command == null then false
+          elif ($recommendation_kind == "shell_golden_only") then false
+          else ($recommendation_command | startswith("rch exec --"))
+          end
+        )
       },
       evidence_health: {
         local_fallback_observed: $local_fallback,
@@ -383,6 +441,8 @@ jq -r '
   ("- Target relevance: `" + .classification.target_relevance + "`"),
   ("- Proof strength: `" + .classification.proof_strength + "`"),
   ("- Allowed fallback: `" + .classification.allowed_fallback + "`"),
+  ("- Validation recommendation: `" + .validation_recommendation.kind + "`"),
+  ("- Recommended command: `" + ((.validation_recommendation.command_text // "none") | tostring) + "`"),
   ("- Local fallback observed: `" + (.evidence_health.local_fallback_observed | tostring) + "`"),
   "",
   "## Recommendations",

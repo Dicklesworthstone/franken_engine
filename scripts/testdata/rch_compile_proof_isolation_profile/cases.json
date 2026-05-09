@@ -19,7 +19,10 @@
         "compile_surface": "exact_integration_test",
         "target_relevance": "target_relevant",
         "proof_strength": "strong",
-        "allowed_fallback": "rerun_exact_rch"
+        "allowed_fallback": "rerun_exact_rch",
+        "recommendation_kind": "exact_integration_test",
+        "recommended_command": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test zero_placeholder_scan zero_placeholder_inventory_runtime_findings_are_present -- --nocapture",
+        "rust_validation_uses_rch": true
       }
     },
     {
@@ -28,6 +31,7 @@
         "command": "rch exec -- env UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
         "package": "frankenengine-engine",
         "target": "lib",
+        "golden_validation_command": "git diff --check -- tests/golden/build_report_output.golden",
         "touched_paths": [
           "tests/golden/build_report_output.golden"
         ]
@@ -42,7 +46,10 @@
         "compile_surface": "package_lib_test",
         "target_relevance": "target_ambiguous",
         "proof_strength": "weak",
-        "allowed_fallback": "narrow_rch_only"
+        "allowed_fallback": "narrow_rch_only",
+        "recommendation_kind": "shell_golden_only",
+        "recommended_command": "git diff --check -- tests/golden/build_report_output.golden",
+        "rust_validation_uses_rch": false
       }
     },
     {
@@ -63,7 +70,10 @@
         "compile_surface": "shell_only",
         "target_relevance": "target_relevant",
         "proof_strength": "medium",
-        "allowed_fallback": "shell_or_json_only"
+        "allowed_fallback": "shell_or_json_only",
+        "recommendation_kind": "shell_golden_only",
+        "recommended_command": "bash scripts/e2e/rch_compile_blocker_cluster_smoke.sh selftest",
+        "rust_validation_uses_rch": false
       }
     },
     {
@@ -83,7 +93,74 @@
         "compile_surface": "package_lib_test",
         "target_relevance": "target_ambiguous",
         "proof_strength": "none",
-        "allowed_fallback": "none"
+        "allowed_fallback": "none",
+        "recommendation_kind": "blocked_no_safe_proof",
+        "recommended_command": null,
+        "rust_validation_uses_rch": false
+      }
+    },
+    {
+      "case_id": "exact_lib_test_filter",
+      "metadata": {
+        "command": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine object_create_descriptor --lib -- --nocapture",
+        "package": "frankenengine-engine",
+        "target": "lib",
+        "lib_test_filter": "object_create_descriptor",
+        "target_paths": [
+          "crates/franken-engine/src/stdlib.rs"
+        ],
+        "desired_tests": [
+          {
+            "kind": "lib_filter",
+            "filter": "object_create_descriptor"
+          }
+        ]
+      },
+      "changed_paths": [
+        "crates/franken-engine/src/stdlib.rs"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "decision": "degraded",
+        "command_class": "cargo_test",
+        "compile_surface": "package_lib_test",
+        "target_relevance": "target_relevant",
+        "proof_strength": "weak",
+        "allowed_fallback": "narrow_rch_only",
+        "recommendation_kind": "exact_lib_test_filter",
+        "recommended_command": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine object_create_descriptor --lib -- --nocapture",
+        "rust_validation_uses_rch": true
+      }
+    },
+    {
+      "case_id": "no_run_compile",
+      "metadata": {
+        "command": "rch exec -- env CARGO_INCREMENTAL=0 cargo check -p frankenengine-engine --tests",
+        "package": "frankenengine-engine",
+        "target_paths": [
+          "crates/franken-engine/src/runtime.rs"
+        ],
+        "blocking_diagnostics": [
+          {
+            "file_path": "crates/franken-engine/src/unrelated_stale_test.rs",
+            "code": "E0599"
+          }
+        ]
+      },
+      "changed_paths": [
+        "crates/franken-engine/src/runtime.rs"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "command_class": "cargo_check",
+        "compile_surface": "package_check",
+        "target_relevance": "target_relevant",
+        "proof_strength": "medium",
+        "allowed_fallback": "rerun_exact_rch",
+        "recommendation_kind": "no_run_compile",
+        "recommended_command": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --no-run",
+        "rust_validation_uses_rch": true
       }
     }
   ]

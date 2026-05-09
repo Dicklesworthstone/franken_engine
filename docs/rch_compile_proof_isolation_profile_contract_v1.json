@@ -85,6 +85,13 @@
       "rerun_exact_rch",
       "narrow_rch_only",
       "shell_or_json_only"
+    ],
+    "validation_recommendation_kind": [
+      "exact_integration_test",
+      "exact_lib_test_filter",
+      "no_run_compile",
+      "shell_golden_only",
+      "blocked_no_safe_proof"
     ]
   },
   "fail_closed_conditions": [
@@ -98,7 +105,9 @@
     "narrow_integration_test",
     "broad_lib_test_drift",
     "shell_only_proof",
-    "local_fallback_contaminated"
+    "local_fallback_contaminated",
+    "exact_lib_test_filter",
+    "no_run_compile"
   ],
   "quality_gates": [
     "jq empty docs/rch_compile_proof_isolation_profile_contract_v1.json",

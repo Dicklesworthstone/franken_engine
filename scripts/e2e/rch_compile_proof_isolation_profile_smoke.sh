@@ -52,11 +52,13 @@ run_check() {
     and (.fixture_cases | index("broad_lib_test_drift") != null)
     and (.fixture_cases | index("shell_only_proof") != null)
     and (.fixture_cases | index("local_fallback_contaminated") != null)
+    and (.fixture_cases | index("exact_lib_test_filter") != null)
+    and (.fixture_cases | index("no_run_compile") != null)
   ' "$contract_json" >/dev/null || record_failure "contract shape"
 
   jq -e '
     .schema_version == "franken-engine.rch-compile-proof-isolation-profile-fixtures.v1"
-    and (.cases | length) == 4
+    and (.cases | length) == 6
     and all(.cases[]; has("metadata") and has("changed_paths") and has("expected"))
   ' "$cases_json" >/dev/null || record_failure "fixture shape"
 
@@ -121,6 +123,10 @@ run_case() {
       and .classification.target_relevance == $expected.target_relevance
       and .classification.proof_strength == $expected.proof_strength
       and .classification.allowed_fallback == $expected.allowed_fallback
+      and .validation_recommendation.kind == $expected.recommendation_kind
+      and .validation_recommendation.command_text == ($expected.recommended_command // null)
+      and .validation_recommendation.rust_validation_uses_rch == ($expected.rust_validation_uses_rch // false)
+      and ((.validation_recommendation.command_text // "" | startswith("cargo ")) | not)
       and .non_mutation_attestation.runs_cargo == false
       and .non_mutation_attestation.runs_rch == false
       and .non_mutation_attestation.creates_beads == false

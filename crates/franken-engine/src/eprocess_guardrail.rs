@@ -2697,7 +2697,7 @@ mod tests {
     ///
     /// Verifies the documented trait contract:
     /// - Returns None for out-of-domain observations
-    /// - Returns Some(ratio) with finite, non-negative values for valid observations
+    /// - Returns Some(ratio) with fixed-point i64 values for valid observations
     /// - Maintains determinism (same input → same output)
     /// - Provides stable, non-empty family names
     fn assert_likelihood_ratio_fn_contract<T: LikelihoodRatioFn>(lr: &T) {
@@ -2729,25 +2729,8 @@ mod tests {
                 obs, result1, result2
             );
 
-            // If Some(ratio) returned, verify it's finite and result format is valid
-            if let Some(ratio) = result1 {
-                assert!(
-                    ratio.is_finite(),
-                    "ratio({}) returned non-finite value: {}",
-                    obs,
-                    ratio
-                );
-
-                // For likelihood ratios, mathematical constraint is non-negative
-                // However, implementations may define valid negative ratios for specific domains
-                // so we only verify the result is a valid i64
-                assert!(
-                    ratio >= i64::MIN && ratio <= i64::MAX,
-                    "ratio({}) must be valid i64, got: {}",
-                    obs,
-                    ratio
-                );
-            }
+            // Fixed-point i64 ratios cannot encode NaN or infinity; validity
+            // beyond determinism is domain-specific for each implementation.
         }
 
         // Test boundary observations around zero and extremes

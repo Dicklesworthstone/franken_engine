@@ -1758,6 +1758,8 @@ impl fmt::Display for InterpreterError {
     }
 }
 
+impl std::error::Error for InterpreterError {}
+
 // ---------------------------------------------------------------------------
 // InterpreterConfig — lane-specific configuration
 // ---------------------------------------------------------------------------

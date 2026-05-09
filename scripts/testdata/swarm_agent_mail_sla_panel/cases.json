@@ -1,0 +1,260 @@
+{
+  "schema_version": "franken-engine.swarm-agent-mail-sla-panel.fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_response_times",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "FreshAgent",
+            "last_active_ts": "2026-05-09T14:58:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [
+          {
+            "to_agent": "FreshAgent",
+            "thread_id": "bd-healthy",
+            "bead_id": "bd-healthy",
+            "ack_required": true,
+            "acknowledged": true,
+            "created_ts": "2026-05-09T14:55:00Z"
+          }
+        ],
+        "reservations": [
+          {
+            "agent": "FreshAgent",
+            "bead_id": "bd-healthy",
+            "path_pattern": "scripts/example.sh",
+            "expires_ts": "2026-05-09T16:00:00Z"
+          }
+        ]
+      },
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-healthy",
+            "assignee": "FreshAgent",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "pass",
+        "diagnostic_codes": []
+      }
+    },
+    {
+      "case_id": "stale_ack_required_thread",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "SlowAgent",
+            "last_active_ts": "2026-05-09T14:50:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [
+          {
+            "to_agent": "SlowAgent",
+            "thread_id": "bd-stale-ack",
+            "bead_id": "bd-stale-ack",
+            "ack_required": true,
+            "acknowledged": false,
+            "created_ts": "2026-05-09T14:30:00Z"
+          }
+        ],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": []
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "stale_ack_required_thread"
+        ]
+      }
+    },
+    {
+      "case_id": "expired_reservation",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "ExpiredHolder",
+            "last_active_ts": "2026-05-09T14:55:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-expired",
+            "assignee": "ExpiredHolder",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "file_reservations": {
+        "file_reservations": [
+          {
+            "agent_name": "ExpiredHolder",
+            "bead_id": "bd-expired",
+            "path_pattern": "scripts/expired.sh",
+            "expires_ts": "2026-05-09T14:00:00Z"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "expired_reservation"
+        ]
+      }
+    },
+    {
+      "case_id": "inactive_assignee_active_reservation",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "InactiveHolder",
+            "last_active_ts": "2026-05-09T12:00:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "reservations": [
+          {
+            "agent": "InactiveHolder",
+            "bead_id": "bd-inactive",
+            "path_pattern": "scripts/inactive.sh",
+            "expires_ts": "2026-05-09T16:00:00Z"
+          }
+        ]
+      },
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-inactive",
+            "assignee": "InactiveHolder",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "inactive_assignee_active_reservation"
+        ]
+      }
+    },
+    {
+      "case_id": "missing_mail_snapshot",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-missing-mail",
+            "assignee": "UnknownAgent",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "degraded",
+        "diagnostic_codes": [
+          "missing_mail_snapshot"
+        ]
+      }
+    },
+    {
+      "case_id": "contact_policy_blocked_recipient",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "BlockedRecipient",
+            "last_active_ts": "2026-05-09T14:58:00Z",
+            "contact_policy": "contacts_only"
+          }
+        ],
+        "messages": [
+          {
+            "to_agent": "BlockedRecipient",
+            "thread_id": "bd-contact-blocked",
+            "bead_id": "bd-contact-blocked",
+            "ack_required": false,
+            "acknowledged": false,
+            "contact_allowed": false,
+            "created_ts": "2026-05-09T14:58:00Z"
+          }
+        ],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "diagnostic_codes": [
+          "contact_policy_blocked_recipient"
+        ]
+      }
+    },
+    {
+      "case_id": "contradictory_ownership_reservation",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "agents": [
+          {
+            "name": "ReservationHolder",
+            "last_active_ts": "2026-05-09T14:58:00Z",
+            "contact_policy": "auto"
+          },
+          {
+            "name": "BeadAssignee",
+            "last_active_ts": "2026-05-09T14:59:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "reservations": [
+          {
+            "agent": "ReservationHolder",
+            "bead_id": "bd-contradictory",
+            "path_pattern": "scripts/contradictory.sh",
+            "expires_ts": "2026-05-09T16:00:00Z"
+          }
+        ]
+      },
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-contradictory",
+            "assignee": "BeadAssignee",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "diagnostic_codes": [
+          "contradictory_ownership_reservation"
+        ]
+      }
+    }
+  ]
+}

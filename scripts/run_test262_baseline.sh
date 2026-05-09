@@ -2,43 +2,56 @@
 set -euo pipefail
 
 # Test262 Baseline Pass Rate Measurement Script
-# Part of bd-6a61n.1.8 (RC-1.8) implementation
+# Part of bd-6a61n.1.8 (RC-1.8) implementation. This wrapper publishes only
+# measured checked-in vector evidence; it does not emit estimated pass rates.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 ARTIFACTS_DIR="$PROJECT_ROOT/artifacts/test262/$TIMESTAMP"
-target_dir="${CARGO_TARGET_DIR:-target}"
-if [[ "$target_dir" != /* ]]; then
-    target_dir="$PROJECT_ROOT/$target_dir"
-fi
+LOGS_DIR="$ARTIFACTS_DIR/logs"
+RUNNER_OUTPUT_ROOT="$ARTIFACTS_DIR/runner"
+RUN_DATE="${TEST262_BASELINE_RUN_DATE:-$(date -u +%Y-%m-%d)}"
+RCH_BIN="${RCH_BIN:-rch}"
+CARGO_TARGET_DIR="${TEST262_BASELINE_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_test262_baseline_${TIMESTAMP}}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 
 echo "🧪 Test262 Baseline Pass Rate Measurement"
 echo "Timestamp: $TIMESTAMP"
 echo "Artifacts: $ARTIFACTS_DIR"
+echo "RCH target dir: $CARGO_TARGET_DIR"
 
-mkdir -p "$ARTIFACTS_DIR"
-
-# Check if Test262 runner binary exists
-RUNNER="$target_dir/debug/franken_test262_runner"
-if [[ ! -f "$RUNNER" ]]; then
-    echo "Building Test262 runner..."
-    cd "$PROJECT_ROOT"
-    cargo build -p frankenengine-engine --bin franken_test262_runner
-fi
+mkdir -p "$ARTIFACTS_DIR" "$LOGS_DIR" "$RUNNER_OUTPUT_ROOT"
 
 # Configuration paths
 PINS="$PROJECT_ROOT/crates/franken-engine/tests/test262_conformance_pins.toml"
 PROFILE="$PROJECT_ROOT/crates/franken-engine/tests/test262_es2020_profile.toml"
 WAIVERS="$PROJECT_ROOT/crates/franken-engine/tests/test262_conformance_waivers.toml"
 CASE_VECTORS="$PROJECT_ROOT/crates/franken-engine/tests/test262_case_vectors.jsonl"
+CANONICAL_HWM="$ARTIFACTS_DIR/canonical_high_water_mark.json"
+COMMANDS_LOG="$ARTIFACTS_DIR/commands.txt"
+EVENTS_LOG="$ARTIFACTS_DIR/events.jsonl"
+RUN_MANIFEST="$ARTIFACTS_DIR/run_manifest.json"
+BASELINE_REPORT="$ARTIFACTS_DIR/baseline_report.json"
+: > "$COMMANDS_LOG"
+: > "$EVENTS_LOG"
 
-# Check if Test262 suite is available (placeholder - may need actual download)
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "❌ Required rch binary not found: $RCH_BIN" >&2
+    exit 127
+fi
+
+# Check if Test262 suite is available. This baseline intentionally does not
+# claim a full official suite run when only checked-in derived vectors exist.
 TEST262_DIR="$PROJECT_ROOT/test262"
+FULL_SUITE_AVAILABLE=false
 if [[ ! -d "$TEST262_DIR" ]]; then
     echo "⚠️  Test262 suite not found at $TEST262_DIR"
-    echo "For this baseline, we'll use the checked-in Test262-derived case vectors and observed results"
-    echo "Production setup would clone https://github.com/tc39/test262"
+    echo "Using checked-in Test262-derived case vectors only; full-suite claim remains disabled."
+else
+    FULL_SUITE_AVAILABLE=true
 fi
 
 # Log configuration
@@ -48,72 +61,57 @@ echo "  Profile: $PROFILE"
 echo "  Waivers: $WAIVERS"
 echo "  Case Vectors: $CASE_VECTORS"
 
-# Generate baseline run manifest
-cat > "$ARTIFACTS_DIR/run_manifest.json" << EOF
-{
-  "schema_version": "franken-engine.test262-baseline-run.v1",
-  "timestamp": "$TIMESTAMP",
-  "runner_version": "franken_test262_runner",
-  "configuration": {
-    "pins_path": "$PINS",
-    "profile_path": "$PROFILE",
-    "waivers_path": "$WAIVERS",
-    "case_vectors_path": "$CASE_VECTORS"
-  },
-  "purpose": "baseline_pass_rate_measurement",
-  "bead_id": "bd-6a61n.1.8"
+write_event() {
+    local step="$1"
+    local status="$2"
+    local exit_code="$3"
+    local log_path="$4"
+    jq -nc \
+        --arg step "$step" \
+        --arg status "$status" \
+        --argjson exit_code "$exit_code" \
+        --arg log_path "$log_path" \
+        --arg timestamp "$(date -Iseconds)" \
+        '{step:$step,status:$status,exit_code:$exit_code,log_path:$log_path,timestamp:$timestamp}' >> "$EVENTS_LOG"
 }
-EOF
 
-# Check current engine capabilities by running a simple test
-echo "🔧 Testing engine basic functionality..."
-ENGINE_TEST_JS="$ARTIFACTS_DIR/engine_smoke_test.js"
-cat > "$ENGINE_TEST_JS" << 'EOF'
-// Basic engine smoke test for Test262 baseline measurement
-console.log("Engine smoke test starting...");
+run_rch_step() {
+    local step="$1"
+    local log_path="$LOGS_DIR/${step}.log"
+    local exit_code
+    shift
 
-// Chapter 8: Types
-var number = 42;
-var string = "hello";
-var boolean = true;
-var nullValue = null;
-var undefinedValue;
+    {
+        printf 'rch exec -- env CARGO_TARGET_DIR=%q CARGO_BUILD_JOBS=%q CARGO_INCREMENTAL=%q cargo' \
+            "$CARGO_TARGET_DIR" "$CARGO_BUILD_JOBS" "$CARGO_INCREMENTAL"
+        printf ' %q' "$@"
+        printf '\n'
+    } >> "$COMMANDS_LOG"
 
-console.log("Types test:", typeof number, typeof string, typeof boolean, typeof nullValue, typeof undefinedValue);
+    if timeout "$RCH_TIMEOUT_SECONDS" "$RCH_BIN" exec -- env \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_INCREMENTAL=$CARGO_INCREMENTAL" \
+        cargo "$@" > "$log_path" 2>&1; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
 
-// Chapter 12: Expressions
-var arithmetic = (3 + 4) * 2;
-var comparison = arithmetic > 10;
-console.log("Expressions test:", arithmetic, comparison);
+    if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|running locally' "$log_path"; then
+        echo "❌ rch local fallback detected for $step" >&2
+        exit_code=1
+    fi
 
-// Chapter 13: Statements
-var result = 0;
-for (var i = 0; i < 5; i++) {
-    if (i % 2 === 0) {
-        result += i;
-    }
+    if [[ "$exit_code" -eq 0 ]]; then
+        write_event "$step" "pass" "$exit_code" "$log_path"
+        return 0
+    fi
+
+    write_event "$step" "fail" "$exit_code" "$log_path"
+    echo "❌ Step failed: $step (see $log_path)" >&2
+    return "$exit_code"
 }
-console.log("Statements test:", result);
-
-// Chapter 14: Functions
-function testFunction(x, y) {
-    return x + y;
-}
-var arrow = (a, b) => a * b;
-console.log("Functions test:", testFunction(3, 4), arrow(5, 6));
-
-console.log("Engine smoke test completed successfully");
-EOF
-
-# Run engine smoke test to verify basic functionality
-echo "Running engine smoke test..."
-cd "$PROJECT_ROOT"
-if timeout 30 cargo run -p frankenengine-engine --bin franken_javascript_runner -- "$ENGINE_TEST_JS" > "$ARTIFACTS_DIR/engine_smoke_test.log" 2>&1; then
-    echo "✅ Engine smoke test passed"
-else
-    echo "❌ Engine smoke test failed - see $ARTIFACTS_DIR/engine_smoke_test.log"
-    echo "Continuing with Test262 configuration validation..."
-fi
 
 # Validate configuration files
 echo "📝 Validating Test262 configuration..."
@@ -146,93 +144,117 @@ else
     exit 1
 fi
 
-# Generate baseline pass rate estimation based on current capabilities
-echo "📊 Generating baseline pass rate estimation..."
+if [[ -f "$CASE_VECTORS" ]]; then
+    echo "✅ Found checked-in case vectors: $CASE_VECTORS"
+    echo "Case vectors: $(wc -l < "$CASE_VECTORS")"
+    jq -c . "$CASE_VECTORS" >/dev/null
+else
+    echo "❌ Missing case vectors: $CASE_VECTORS"
+    exit 1
+fi
 
-cat > "$ARTIFACTS_DIR/baseline_estimation.json" << EOF
-{
-  "schema_version": "franken-engine.test262-baseline-estimation.v1",
-  "timestamp": "$TIMESTAMP",
-  "methodology": "configuration_analysis",
-  "estimated_coverage": {
-    "chapter_8_types": {
-      "description": "Types: primitives, type conversion, typeof",
-      "estimated_pass_rate": 0.75,
-      "rationale": "Basic type system implemented"
-    },
-    "chapter_12_expressions": {
-      "description": "Expressions: arithmetic, comparison, assignment",
-      "estimated_pass_rate": 0.60,
-      "rationale": "Core arithmetic works, some edge cases may fail"
-    },
-    "chapter_13_statements": {
-      "description": "Statements: if, for, while, switch, try",
-      "estimated_pass_rate": 0.65,
-      "rationale": "Control flow mostly implemented"
-    },
-    "chapter_14_functions": {
-      "description": "Functions: declaration, expression, arrow, params",
-      "estimated_pass_rate": 0.55,
-      "rationale": "Functions work but advanced features missing"
-    }
-  },
-  "overall_estimated_pass_rate": 0.64,
-  "confidence": "medium",
-  "next_steps": [
-    "Run actual Test262 suite against engine",
-    "Compare actual vs estimated rates",
-    "Set high-water mark from actual results",
-    "Configure CI regression gate"
-  ]
-}
-EOF
+cd "$PROJECT_ROOT"
 
-echo "✅ Generated baseline estimation: $ARTIFACTS_DIR/baseline_estimation.json"
+echo "🔨 Checking Test262 runner..."
+run_rch_step check_runner check -p frankenengine-engine --bin franken_test262_runner
 
-# Generate high-water mark template
-echo "📈 Preparing high-water mark configuration..."
+echo "🚀 Running checked-in Test262-derived vector baseline..."
+run_rch_step run_checked_in_vectors run -p frankenengine-engine --bin franken_test262_runner -- \
+    --pins "$PINS" \
+    --profile "$PROFILE" \
+    --waivers "$WAIVERS" \
+    --case-vectors "$CASE_VECTORS" \
+    --output-root "$RUNNER_OUTPUT_ROOT" \
+    --high-water-mark "$CANONICAL_HWM" \
+    --run-date "$RUN_DATE"
 
-cat > "$ARTIFACTS_DIR/high_water_mark_template.toml" << EOF
-schema_version = "franken-engine.test262-high-water-mark.v1"
-measurement_date = "$TIMESTAMP"
-es_profile = "ES2020"
+RUNNER_LOG="$LOGS_DIR/run_checked_in_vectors.log"
+RUNNER_MANIFEST="$(grep -Eo 'test262 run_manifest=.*' "$RUNNER_LOG" | tail -n 1 | sed 's/.*test262 run_manifest=//' || true)"
+RUNNER_EVIDENCE="$(grep -Eo 'test262 evidence=.*' "$RUNNER_LOG" | tail -n 1 | sed 's/.*test262 evidence=//' || true)"
+RUNNER_HWM="$(grep -Eo 'test262 high_water_mark=.*' "$RUNNER_LOG" | tail -n 1 | sed 's/.*test262 high_water_mark=//' || true)"
+RUNNER_CANONICAL_HWM="$(grep -Eo 'test262 canonical_high_water_mark=.*' "$RUNNER_LOG" | tail -n 1 | sed 's/.*test262 canonical_high_water_mark=//' || true)"
 
-# These values should be updated with actual Test262 run results
-[pass_counts]
-total_tests = 0
-passed_tests = 0
-failed_tests = 0
-skipped_tests = 0
-waived_tests = 0
+[[ -n "$RUNNER_MANIFEST" && -f "$RUNNER_MANIFEST" ]] || { echo "❌ Runner manifest not found in $RUNNER_LOG" >&2; exit 1; }
+[[ -n "$RUNNER_EVIDENCE" && -f "$RUNNER_EVIDENCE" ]] || { echo "❌ Runner evidence not found in $RUNNER_LOG" >&2; exit 1; }
+[[ -n "$RUNNER_HWM" && -f "$RUNNER_HWM" ]] || { echo "❌ Runner high-water mark not found in $RUNNER_LOG" >&2; exit 1; }
+[[ -n "$RUNNER_CANONICAL_HWM" && -f "$RUNNER_CANONICAL_HWM" ]] || { echo "❌ Runner canonical high-water mark not found in $RUNNER_LOG" >&2; exit 1; }
 
-[chapter_breakdown]
-chapter_8_types_pass_rate = 0.00
-chapter_12_expressions_pass_rate = 0.00
-chapter_13_statements_pass_rate = 0.00
-chapter_14_functions_pass_rate = 0.00
+jq -n \
+    --arg timestamp "$TIMESTAMP" \
+    --arg run_date "$RUN_DATE" \
+    --arg pins "$PINS" \
+    --arg profile "$PROFILE" \
+    --arg waivers "$WAIVERS" \
+    --arg case_vectors "$CASE_VECTORS" \
+    --arg runner_manifest "$RUNNER_MANIFEST" \
+    --arg runner_evidence "$RUNNER_EVIDENCE" \
+    --arg runner_high_water_mark "$RUNNER_HWM" \
+    --arg runner_canonical_high_water_mark "$RUNNER_CANONICAL_HWM" \
+    --argjson full_suite_available "$FULL_SUITE_AVAILABLE" \
+    '{
+      schema_version: "franken-engine.test262-baseline-report.v2",
+      timestamp: $timestamp,
+      run_date: $run_date,
+      proof_state: "checked_in_vectors_provisional",
+      claim_scope: "checked_in_test262_derived_vectors",
+      full_suite_claim_allowed: false,
+      full_suite_available: $full_suite_available,
+      configuration: {
+        pins_path: $pins,
+        profile_path: $profile,
+        waivers_path: $waivers,
+        case_vectors_path: $case_vectors
+      },
+      runner_artifacts: {
+        run_manifest: $runner_manifest,
+        evidence: $runner_evidence,
+        high_water_mark: $runner_high_water_mark,
+        canonical_high_water_mark: $runner_canonical_high_water_mark
+      },
+      limitations: [
+        "checked-in vector profile, not a full official Test262 suite run",
+        "full official Test262 pass-rate claims require an official checkout run",
+        "this script does not emit estimated pass rates or template high-water marks"
+      ]
+    }' > "$BASELINE_REPORT"
 
-[regression_policy]
-allow_pass_rate_decrease = false
-min_pass_rate_threshold = 0.50
-regression_acknowledgment_required = true
-EOF
-
-echo "✅ Generated high-water mark template: $ARTIFACTS_DIR/high_water_mark_template.toml"
+jq -n \
+    --arg timestamp "$TIMESTAMP" \
+    --arg component "test262_baseline_measurement" \
+    --arg outcome "pass" \
+    --arg commands "$COMMANDS_LOG" \
+    --arg events "$EVENTS_LOG" \
+    --arg baseline_report "$BASELINE_REPORT" \
+    --arg runner_manifest "$RUNNER_MANIFEST" \
+    --arg cargo_target_dir "$CARGO_TARGET_DIR" \
+    '{
+      schema_version: "franken-engine.test262-baseline-run.v2",
+      timestamp: $timestamp,
+      component: $component,
+      outcome: $outcome,
+      cargo_target_dir: $cargo_target_dir,
+      purpose: "checked_in_vector_baseline_measurement",
+      artifact_paths: {
+        commands: $commands,
+        events: $events,
+        baseline_report: $baseline_report,
+        runner_manifest: $runner_manifest
+      }
+    }' > "$RUN_MANIFEST"
 
 # Summary
 echo "🎯 Test262 baseline measurement setup completed"
 echo ""
 echo "📁 Artifacts generated in: $ARTIFACTS_DIR"
 echo "  - run_manifest.json: Run configuration and metadata"
-echo "  - engine_smoke_test.js: Basic engine functionality test"
-echo "  - engine_smoke_test.log: Engine test output"
-echo "  - baseline_estimation.json: Estimated pass rates by chapter"
-echo "  - high_water_mark_template.toml: Template for actual measurements"
+echo "  - baseline_report.json: measured checked-in vector baseline with limitations"
+echo "  - events.jsonl: rch-backed command events"
+echo "  - commands.txt: command transcript"
+echo "  - logs/: rch command logs"
 echo ""
 echo "🚀 Next steps:"
-echo "  1. Ensure Test262 suite is available (clone tc39/test262 if needed)"
-echo "  2. Run: $RUNNER with actual Test262 test files"
-echo "  3. Update high-water mark with actual results"
-echo "  4. Configure CI regression gate"
+echo "  1. Ensure a pinned official tc39/test262 checkout is available for full-suite claims"
+echo "  2. Refresh checked-in vectors with franken_test262_generator when the pin changes"
+echo "  3. Use scripts/run_test262_es2020_gate.sh for release gating"
 echo ""
 echo "✅ Baseline measurement infrastructure ready"

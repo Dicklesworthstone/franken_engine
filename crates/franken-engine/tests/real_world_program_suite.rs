@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::Path;
 
-/// Tests for real-world JavaScript programs that exercise comprehensive language features
+/// Fixture inventory for real-world JavaScript programs that exercise comprehensive
+/// language features.
 ///
-/// This test suite validates FrankenEngine's ability to execute complex JavaScript programs
-/// that use modern ES2015+ features in realistic scenarios.
+/// This suite validates fixture presence, expected feature coverage, and output
+/// contracts for complex ES2015+ programs. It does not claim FrankenEngine
+/// execution conformance; executable compatibility belongs in dedicated runtime
+/// and conformance harnesses.
 ///
 /// Coverage includes:
 /// - Data structures and algorithms (LinkedList, TreeTraversal)
@@ -37,7 +40,7 @@ struct ProgramDescriptor {
     should_not_contain: &'static [&'static str],
 }
 
-/// Result of program execution
+/// Result of fixture validation.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ExecutionResult {
@@ -49,7 +52,7 @@ struct ExecutionResult {
     error_message: Option<String>,
 }
 
-/// Test suite runner for real-world JavaScript programs
+/// Fixture inventory runner for real-world JavaScript programs.
 struct RealWorldProgramSuite {
     programs: Vec<ProgramDescriptor>,
 }
@@ -221,9 +224,9 @@ impl RealWorldProgramSuite {
         }
     }
 
-    /// Execute a single program and return results
+    /// Validate a single program fixture and return results.
     fn execute_program(&self, program: &ProgramDescriptor) -> ExecutionResult {
-        println!("Executing program: {}", program.name);
+        println!("Validating program fixture: {}", program.name);
 
         // Read program file
         let file_path = Path::new(program.file_path);
@@ -249,9 +252,8 @@ impl RealWorldProgramSuite {
             }
         }
 
-        // Simulate program execution (in real implementation, would use FrankenEngine)
         let start_time = std::time::Instant::now();
-        let execution_result = self.simulate_execution(&program_content, program);
+        let execution_result = self.render_expected_output_contract(&program_content, program);
         let duration = start_time.elapsed();
 
         let success = execution_result.is_ok()
@@ -318,7 +320,7 @@ impl RealWorldProgramSuite {
     /// JavaScript programs. It intentionally does not claim execution
     /// conformance; the fixtures exercise syntax families that are tracked as
     /// compatibility targets and may not all be executable by the native lane.
-    fn simulate_execution(
+    fn render_expected_output_contract(
         &self,
         content: &str,
         program: &ProgramDescriptor,
@@ -327,7 +329,7 @@ impl RealWorldProgramSuite {
             return Err(format!("Program '{}' is empty", program.name));
         }
 
-        let simulated_output = match program.name {
+        let contract_output = match program.name {
             name if name.contains("LinkedList") => {
                 r#"LinkedList Test Results:
 {
@@ -409,10 +411,10 @@ impl RealWorldProgramSuite {
   }
 }"#
             }
-            _ => "Program executed successfully",
+            _ => "Program fixture output contract rendered",
         };
 
-        Ok(simulated_output.to_string())
+        Ok(contract_output.to_string())
     }
 
     /// Verify that program output meets expectations
@@ -459,9 +461,9 @@ impl RealWorldProgramSuite {
 
     /// Run all programs in the test suite
     pub fn run_all_programs(&self) -> Vec<ExecutionResult> {
-        println!("Running Real-World JavaScript Program Test Suite...");
+        println!("Running Real-World JavaScript Program Fixture Inventory...");
         println!(
-            "Testing {} programs with comprehensive language feature coverage\n",
+            "Validating {} program fixtures with comprehensive language feature coverage\n",
             self.programs.len()
         );
 
@@ -495,14 +497,14 @@ impl RealWorldProgramSuite {
         let total_features: usize = results.iter().map(|r| r.features_verified.len()).sum();
 
         let mut report = format!(
-            "Real-World JavaScript Program Test Suite Report\n\
+            "Real-World JavaScript Program Fixture Inventory Report\n\
             ================================================\n\
             Total Programs: {}\n\
-            Successful: {}\n\
+            Successful Fixture Validations: {}\n\
             Failed: {}\n\
             Success Rate: {:.1}%\n\
-            Total Execution Time: {} ms\n\
-            Total Features Verified: {}\n\n\
+            Total Validation Time: {} ms\n\
+            Total Features Cataloged: {}\n\n\
             Program Details:\n",
             total_programs,
             successful,
@@ -527,7 +529,7 @@ impl RealWorldProgramSuite {
         }
 
         report.push_str(&format!(
-            "\nLanguage Features Validated:\n\
+            "\nLanguage Features Cataloged:\n\
             - ES2015 Classes and Inheritance\n\
             - Generators and Iterator Protocol\n\
             - Maps, Sets, WeakMaps\n\
@@ -540,7 +542,7 @@ impl RealWorldProgramSuite {
             - Component-based Architecture\n\
             - Form Validation and Business Logic\n\
             - Recursive and Iterative Algorithms\n\n\
-            Test Suite Status: {}\n",
+            Fixture Inventory Status: {}\n",
             if successful == total_programs {
                 "ALL TESTS PASSED"
             } else {
@@ -556,7 +558,7 @@ impl RealWorldProgramSuite {
 mod tests {
     use super::*;
 
-    /// Test the real-world JavaScript program suite execution
+    /// Test the real-world JavaScript program fixture inventory.
     #[test]
     fn test_real_world_program_suite() {
         let suite = RealWorldProgramSuite::new();
@@ -585,11 +587,11 @@ mod tests {
             );
         }
 
-        // Verify all programs executed successfully (simulated)
+        // Verify all program fixtures validate against their output contracts.
         let successful_count = results.iter().filter(|r| r.success).count();
         assert!(
             successful_count >= 6,
-            "Expected at least 6 successful executions, got {}",
+            "Expected at least 6 successful fixture validations, got {}",
             successful_count
         );
 
@@ -613,9 +615,9 @@ mod tests {
 
         // Generate and verify report
         let report = suite.generate_report(&results);
-        assert!(report.contains("Real-World JavaScript Program Test Suite Report"));
+        assert!(report.contains("Real-World JavaScript Program Fixture Inventory Report"));
         assert!(report.contains("Total Programs: 8"));
-        assert!(report.contains("Language Features Validated:"));
+        assert!(report.contains("Language Features Cataloged:"));
 
         println!("\n{}", report);
     }

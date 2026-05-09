@@ -24,6 +24,15 @@
     "proof_cache_locality_plan_json",
     "rch_rehabilitation_ledger_json"
   ],
+  "optional_inputs": [
+    {
+      "name": "snapshot_bundle_json",
+      "argument": "--snapshot-bundle-json",
+      "schema_version": "franken-engine.swarm-live-readonly-capture-bundle.v1",
+      "producer": "scripts/swarm_live_readonly_snapshot_bundle.sh",
+      "purpose": "Annotate every panel with live read-only source freshness, local fallback risk, and bd-eozx0/bd-x82vp provenance without replacing required dashboard inputs."
+    }
+  ],
   "required_outputs": [
     "dashboard_bundle.json",
     "dashboard_events.ndjson",
@@ -55,6 +64,8 @@
     "panels[].aria_label",
     "panels[].supports_tiny_layout",
     "panels[].visible_reasons",
+    "panels[].live_readonly_snapshot",
+    "source_freshness.live_readonly_snapshot",
     "mutation_policy.adapter_only"
   ],
   "display_states": [
@@ -85,6 +96,12 @@
       "class": "proof_cache_locality_degraded",
       "panel_id": "proof_cache_locality",
       "required_display_state": "degraded"
+    },
+    {
+      "class": "live_snapshot_degraded",
+      "panel_id": "*",
+      "required_display_state": "annotated",
+      "note": "Provided live read-only snapshot bundles annotate every panel and may degrade or fail-close the dashboard decision when source evidence is stale, degraded, or locally contaminated."
     }
   ],
   "fixture_cases": [
@@ -129,6 +146,7 @@
     "jq empty docs/swarm_frankentui_dashboard_bundle_contract_v1.json scripts/testdata/swarm_frankentui_dashboard_bundle/cases.json",
     "bash scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh check",
     "bash scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh selftest",
+    "bash scripts/e2e/swarm_live_readonly_snapshot_bundle_smoke.sh selftest",
     "git diff --check -- docs/SWARM_FRANKENTUI_DASHBOARD_BUNDLE.md docs/swarm_frankentui_dashboard_bundle_contract_v1.json scripts/swarm_frankentui_dashboard_bundle.sh scripts/e2e/swarm_frankentui_dashboard_bundle_smoke.sh scripts/testdata/swarm_frankentui_dashboard_bundle/cases.json"
   ]
 }

@@ -14,6 +14,7 @@ stale_recovery_receipts_json=""
 worker_truth_report_json=""
 proof_cache_locality_plan_json=""
 rch_rehabilitation_ledger_json=""
+snapshot_bundle_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -34,6 +35,7 @@ Required inputs:
 Other options:
   --source-revision REV
   --output-dir DIR
+  --snapshot-bundle-json FILE  Optional live read-only snapshot bundle from scripts/swarm_live_readonly_snapshot_bundle.sh
 
 Artifacts:
   dashboard_bundle.json
@@ -74,6 +76,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --rch-rehabilitation-ledger-json)
       rch_rehabilitation_ledger_json="${2:-}"
+      shift 2
+      ;;
+    --snapshot-bundle-json)
+      snapshot_bundle_json="${2:-}"
       shift 2
       ;;
     --source-revision)
@@ -128,6 +134,7 @@ stale_normalized="${run_dir}/stale_recovery_receipts.normalized.json"
 worker_normalized="${run_dir}/worker_truth_report.normalized.json"
 locality_normalized="${run_dir}/proof_cache_locality_plan.normalized.json"
 rehab_normalized="${run_dir}/rch_rehabilitation_ledger.normalized.json"
+snapshot_normalized="${run_dir}/snapshot_bundle.normalized.json"
 
 : >"$events_path"
 : >"$dashboard_events_path"
@@ -171,6 +178,36 @@ normalize_required_json "$stale_recovery_receipts_json" "$stale_normalized" "sta
 normalize_required_json "$worker_truth_report_json" "$worker_normalized" "worker truth report"
 normalize_required_json "$proof_cache_locality_plan_json" "$locality_normalized" "proof-cache locality plan"
 normalize_required_json "$rch_rehabilitation_ledger_json" "$rehab_normalized" "RCH rehabilitation ledger"
+snapshot_bundle_status="missing"
+if [[ -n "$snapshot_bundle_json" ]]; then
+  normalize_required_json "$snapshot_bundle_json" "$snapshot_normalized" "live read-only snapshot bundle"
+  snapshot_bundle_status="provided"
+else
+  jq -cS -n '{
+    schema_version:"franken-engine.swarm-live-readonly-capture-bundle.v1",
+    decision:"missing",
+    fail_closed_reasons:[],
+    blocked_reasons:[],
+    degraded_reasons:["missing_live_readonly_snapshot"],
+    sources:[],
+    non_mutation_attestation:{
+      fixture_fed_only:true,
+      advisory_only:true,
+      mutates_br:false,
+      sends_agent_mail:false,
+      queries_live_agent_mail:false,
+      runs_cargo:false,
+      runs_rch_exec:false,
+      mutates_remote_workers:false
+    },
+    swarm_ops_state_bundle:{
+      schema_version:"franken-engine.swarm-ops-state-bundle.v1",
+      decision:"missing",
+      source_components:[]
+    },
+    artifact_paths:{}
+  }' >"$snapshot_normalized"
+fi
 
 jq -n \
   --slurpfile resource "$resource_normalized" \
@@ -179,6 +216,7 @@ jq -n \
   --slurpfile worker "$worker_normalized" \
   --slurpfile locality "$locality_normalized" \
   --slurpfile rehab "$rehab_normalized" \
+  --slurpfile snapshot "$snapshot_normalized" \
   --arg schema_version "franken-engine.swarm-frankentui-dashboard-bundle.v1" \
   --arg dashboard_event_schema_version "franken-engine.swarm-frankentui-dashboard-event.v1" \
   --arg source_revision "$source_revision" \
@@ -188,6 +226,8 @@ jq -n \
   --arg worker_truth_report_json "$worker_truth_report_json" \
   --arg proof_cache_locality_plan_json "$proof_cache_locality_plan_json" \
   --arg rch_rehabilitation_ledger_json "$rch_rehabilitation_ledger_json" \
+  --arg snapshot_bundle_json "$snapshot_bundle_json" \
+  --arg snapshot_bundle_status "$snapshot_bundle_status" \
   --arg bundle_path "$bundle_path" \
   --arg dashboard_events_path "$dashboard_events_path" \
   --arg events_path "$events_path" \
@@ -237,6 +277,7 @@ jq -n \
   | ($worker[0]) as $worker_doc
   | ($locality[0]) as $locality_doc
   | ($rehab[0]) as $rehab_doc
+  | ($snapshot[0]) as $snapshot_doc
   | (arr($admission_doc.recommendations)
       | map(select((low(.decision) | IN("admit", "admitted", "admit_narrow", "admitted_narrow", "pass"))))) as $admitted_rows
   | (arr($admission_doc.recommendations)
@@ -246,6 +287,26 @@ jq -n \
   | (arr($locality_doc.recommendations)) as $locality_recommendations
   | (arr($rehab_doc.workers) + arr($rehab_doc.worker_receipts) + arr($rehab_doc.rehabilitation_receipts) + arr($rehab_doc.receipts)) as $rehab_receipts
   | ($worker_rows | map(select((.drained // false) == true or (low(.daemon_status // .status // .worker_state) | contains("drain"))))) as $drained_workers
+  | (
+      {
+        artifact_status:$snapshot_bundle_status,
+        decision:($snapshot_doc.decision // "missing"),
+        freshness_state:(
+          if $snapshot_bundle_status == "missing" then "missing"
+          elif any($snapshot_doc.sources[]?; (.freshness_state // "") == "stale") then "stale"
+          elif any($snapshot_doc.sources[]?; (.freshness_state // "") == "missing") then "missing"
+          else "fresh" end
+        ),
+        source_count:(arr($snapshot_doc.sources) | length),
+        source_components:(arr($snapshot_doc.sources) | map({component, trust_state, freshness_state, local_fallback_observed:(.local_fallback_observed // false), error_code})),
+        fail_closed_reasons:($snapshot_doc.fail_closed_reasons // []),
+        blocked_reasons:($snapshot_doc.blocked_reasons // []),
+        degraded_reasons:($snapshot_doc.degraded_reasons // []),
+        local_fallback_observed:any($snapshot_doc.sources[]?; (.local_fallback_observed // false) == true),
+        artifact_paths:($snapshot_doc.artifact_paths // {}),
+        mutation_policy:($snapshot_doc.non_mutation_attestation // {})
+      }
+    ) as $snapshot_summary
   | ([
       if source_bad($resource_doc; "franken-engine.swarm-resource-envelope.v1") then reason("bad_schema"; "resource_envelope_json"; "resource envelope schema is unexpected") else empty end,
       if source_bad($admission_doc; "franken-engine.swarm-admission-budget-plan.v1") then reason("bad_schema"; "admission_budget_plan_json"; "admission budget schema is unexpected") else empty end,
@@ -253,12 +314,15 @@ jq -n \
       if source_bad($worker_doc; "franken-engine.rch-worker-truth-parity-report.v1") then reason("bad_schema"; "worker_truth_report_json"; "worker truth schema is unexpected") else empty end,
       if source_bad($locality_doc; "franken-engine.swarm-proof-cache-locality-plan.v1") then reason("bad_schema"; "proof_cache_locality_plan_json"; "proof-cache locality schema is unexpected") else empty end,
       if source_bad($rehab_doc; "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1") then reason("bad_schema"; "rch_rehabilitation_ledger_json"; "RCH rehabilitation schema is unexpected") else empty end,
+      if $snapshot_bundle_status == "provided" and source_bad($snapshot_doc; "franken-engine.swarm-live-readonly-capture-bundle.v1") then reason("bad_schema"; "snapshot_bundle_json"; "live read-only snapshot schema is unexpected") else empty end,
       if (($resource_doc.mutation_policy.runs_cargo // false) == true) or (($resource_doc.mutation_policy.runs_rch // false) == true) or (($resource_doc.mutation_policy.mutates_remote_workers // false) == true) then reason("unsafe_mutation_policy"; "resource_envelope_json"; "resource envelope claims live mutation authority") else empty end,
       if (($locality_doc.mutation_policy.runs_cargo // false) == true) or (($locality_doc.mutation_policy.runs_rch // false) == true) or (($locality_doc.mutation_policy.mutates_remote_workers // false) == true) then reason("unsafe_mutation_policy"; "proof_cache_locality_plan_json"; "proof-cache locality plan claims live mutation authority") else empty end,
+      if $snapshot_bundle_status == "provided" and ((($snapshot_summary.mutation_policy.mutates_br // false) == true) or (($snapshot_summary.mutation_policy.sends_agent_mail // false) == true) or (($snapshot_summary.mutation_policy.queries_live_agent_mail // false) == true) or (($snapshot_summary.mutation_policy.runs_cargo // false) == true) or (($snapshot_summary.mutation_policy.runs_rch_exec // false) == true) or (($snapshot_summary.mutation_policy.mutates_remote_workers // false) == true)) then reason("unsafe_mutation_policy"; "snapshot_bundle_json"; "live read-only snapshot claims mutation authority") else empty end,
       if (($stale_doc.decision // "") == "fail_closed") then reason("stale_recovery_fail_closed"; "stale_recovery_receipts_json"; "stale ownership recovery evidence failed closed") else empty end,
       if (($worker_doc.decision // "") == "fail_closed") then reason("worker_truth_fail_closed"; "worker_truth_report_json"; "RCH worker truth evidence failed closed") else empty end,
       if (($locality_doc.decision // "") == "fail_closed") then reason("proof_cache_locality_fail_closed"; "proof_cache_locality_plan_json"; "proof-cache locality evidence failed closed") else empty end,
-      if (($rehab_doc.decision // "") == "fail_closed") then reason("rch_rehabilitation_fail_closed"; "rch_rehabilitation_ledger_json"; "RCH rehabilitation evidence failed closed") else empty end
+      if (($rehab_doc.decision // "") == "fail_closed") then reason("rch_rehabilitation_fail_closed"; "rch_rehabilitation_ledger_json"; "RCH rehabilitation evidence failed closed") else empty end,
+      if $snapshot_bundle_status == "provided" and (($snapshot_doc.decision // "") == "fail_closed") then reason("live_snapshot_fail_closed"; "snapshot_bundle_json"; "live read-only snapshot evidence failed closed") else empty end
     ] | unique_by([.code, .source_id, .detail])) as $fail_closed_reasons
   | ([
       if (low($resource_doc.decision) == "blocked") or (low($resource_doc.readiness) == "blocked") then reason("capacity_blocked"; "resource_envelope_json"; "resource envelope reports saturated capacity") else empty end,
@@ -275,6 +339,8 @@ jq -n \
       if (($drained_workers | length) > 0) then reason("rch_worker_drained"; "worker_truth_report_json"; "at least one RCH worker is drained") else empty end,
       if (low($rehab_doc.decision) == "degraded") then reason("rch_rehabilitation_degraded"; "rch_rehabilitation_ledger_json"; "RCH rehabilitation ledger is degraded") else empty end,
       if (low($locality_doc.decision) == "degraded") then reason("proof_cache_locality_degraded"; "proof_cache_locality_plan_json"; "proof-cache locality plan is degraded") else empty end
+      ,
+      if $snapshot_bundle_status == "provided" and (low($snapshot_doc.decision) == "degraded") then reason("live_snapshot_degraded"; "snapshot_bundle_json"; "live read-only snapshot contains degraded source evidence") else empty end
     ] | unique_by([.code, .source_id, .detail])) as $degraded_reasons
   | (
       if ($fail_closed_reasons | length) > 0 then "fail_closed"
@@ -478,7 +544,10 @@ jq -n \
           drained_worker_count:($drained_workers | length)
         })
       },
-      panels:($panels | to_entries | map(.value + {focus_order:(.key + 1)})),
+      panels:($panels | to_entries | map(.value + {focus_order:(.key + 1), live_readonly_snapshot:$snapshot_summary})),
+      source_freshness:{
+        live_readonly_snapshot:$snapshot_summary
+      },
       fail_closed_reasons:$fail_closed_reasons,
       blocked_reasons:$blocked_reasons,
       degraded_reasons:$degraded_reasons,
@@ -503,7 +572,8 @@ jq -n \
         stale_recovery_receipts_json:$stale_recovery_receipts_json,
         worker_truth_report_json:$worker_truth_report_json,
         proof_cache_locality_plan_json:$proof_cache_locality_plan_json,
-        rch_rehabilitation_ledger_json:$rch_rehabilitation_ledger_json
+        rch_rehabilitation_ledger_json:$rch_rehabilitation_ledger_json,
+        snapshot_bundle_json:(if $snapshot_bundle_status == "provided" then $snapshot_bundle_json else null end)
       },
       artifact_paths:{
         dashboard_bundle_json:$bundle_path,

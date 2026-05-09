@@ -7,6 +7,14 @@
     "status_schema_version": "franken-engine.swarm-operator-status-report.v1",
     "dashboard_schema_version": "franken-engine.swarm-predictive-dashboard.v1"
   },
+  "live_readonly_snapshot_handoff": {
+    "script": "scripts/swarm_live_readonly_snapshot_bundle.sh",
+    "operator_status_argument": "--snapshot-bundle-json",
+    "bundle_schema_version": "franken-engine.swarm-live-readonly-capture-bundle.v1",
+    "canonical_live_state_contract": "docs/swarm_ops_state_contract_v1.json",
+    "canonical_resource_lease_runbook": "docs/SWARM_RESOURCE_LEASE_PLANNER.md",
+    "handoff_note": "Optional advisory source-freshness evidence for operator status and FrankenTUI dashboard handoffs. It must not be described as a live capture daemon, scheduler, Agent Mail client, resource planner, worker controller, or queue mutation surface."
+  },
   "renderer": {
     "repo_path": "/dp/frankentui",
     "shipped_in_franken_engine": false,
@@ -296,6 +304,11 @@
     "predictive_dashboard.proof_freshness.reusable",
     "predictive_dashboard.rch_incidents.status",
     "predictive_dashboard.rch_incidents.incidents",
+    "predictive_dashboard.live_readonly_snapshot.decision",
+    "predictive_dashboard.live_readonly_snapshot.freshness_state",
+    "predictive_dashboard.live_readonly_snapshot.source_components",
+    "predictive_dashboard.live_readonly_snapshot.local_fallback_observed",
+    "predictive_dashboard.live_readonly_snapshot.mutation_policy",
     "predictive_dashboard.resource_leases.lease_decision",
     "predictive_dashboard.resource_leases.severity",
     "predictive_dashboard.proof_cache.proof_cache_decision",
@@ -470,6 +483,7 @@
     "franken-engine.swarm-validation-collision-receipt.v1",
     "franken-engine.proof-freshness-decay-report.v1",
     "franken-engine.rch-incident-packet.v1",
+    "franken-engine.swarm-live-readonly-capture-bundle.v1",
     "franken-engine.swarm-resource-lease-plan.v1",
     "franken-engine.proof-reuse-cache-plan.v1",
     "franken-engine.build-storm-batch-plan.v1",
@@ -601,6 +615,7 @@
     "Any future rich TUI dashboard must be implemented through /dp/frankentui or an explicit ADR exception.",
     "The producer must remain snapshot-fed and must not claim beads, query services, or run cargo commands.",
     "scripts/swarm_operator_status_report.sh remains the single predictive dashboard producer in franken_engine; do not add a second dashboard implementation here.",
+    "The optional live_readonly_snapshot section is advisory source-freshness evidence backed by scripts/swarm_live_readonly_snapshot_bundle.sh; it must not be described as a scheduler, live capture daemon, resource planner, Agent Mail client, RCH executor, Cargo executor, worker mutation surface, or replacement for bd-eozx0/bd-x82vp authority.",
     "The high-core scenario matrix is a reviewed fixture and golden surface backed by scripts/swarm_high_core_slo_scenario_matrix.sh; it must not be described as live scheduler tuning, live worker execution, or automatic worker mutation.",
     "The SWARM-CTRL-IX threshold receipt is advisory snapshot evidence backed by scripts/swarm_slo_calibrator.sh; it must not be described as live scheduler tuning, live worker mutation, or automatic resource-governor reconfiguration.",
     "The telemetry quality and capacity forecast sections are advisory snapshots backed by scripts/swarm_capacity_forecaster.sh; they must not be described as live scheduling or automatic worker mutation.",

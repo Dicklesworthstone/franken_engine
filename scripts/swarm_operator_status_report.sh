@@ -23,6 +23,7 @@ dirty_files_json=""
 collision_receipt_json=""
 proof_freshness_json=""
 rch_incident_packet_json=""
+snapshot_bundle_json=""
 resource_lease_plan_json=""
 proof_cache_plan_json=""
 qos_batch_plan_json=""
@@ -102,6 +103,7 @@ Options:
   --collision-receipt-json FILE
   --proof-freshness-json FILE
   --rch-incident-packet-json FILE
+  --snapshot-bundle-json FILE
   --resource-lease-plan-json FILE
   --proof-cache-plan-json FILE
   --qos-batch-plan-json FILE
@@ -242,6 +244,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --rch-incident-packet-json)
       rch_incident_packet_json="$2"
+      shift 2
+      ;;
+    --snapshot-bundle-json)
+      snapshot_bundle_json="$2"
       shift 2
       ;;
     --resource-lease-plan-json)
@@ -494,6 +500,7 @@ dirty_files_data="$(json_or_default "$dirty_files_json" '[]' 'dirty-files')"
 collision_receipt_data="$(json_or_default "$collision_receipt_json" '{"collision_risk":"none","conflicting_agents":[],"safe_alternatives":[],"reservation_recommendations":[],"conflicts":{"reservations":[],"dirty":[],"in_progress":[]}}' 'collision-receipt')"
 proof_freshness_data="$(json_or_default "$proof_freshness_json" '{"freshness_state":"not_provided","reusable":null,"reason":"No proof freshness report was provided.","recommended_next_action":"Provide a proof freshness report before reusing prior proof artifacts."}' 'proof-freshness')"
 rch_incident_packet_data="$(json_or_default "$rch_incident_packet_json" '{"status":"not_provided","failure_kind":"none","retry_safety":"not_required","recommended_next_action":"No rch incident packet was provided."}' 'rch-incident-packet')"
+snapshot_bundle_status="missing"
 resource_lease_plan_status="missing"
 proof_cache_plan_status="missing"
 qos_batch_plan_status="missing"
@@ -543,6 +550,7 @@ swarm_control_surface_catalog_status="missing"
 swarm_control_surface_intent_plan_status="missing"
 swarm_control_surface_drift_report_status="missing"
 if [[ -n "$resource_lease_plan_json" ]]; then resource_lease_plan_status="provided"; fi
+if [[ -n "$snapshot_bundle_json" ]]; then snapshot_bundle_status="provided"; fi
 if [[ -n "$proof_cache_plan_json" ]]; then proof_cache_plan_status="provided"; fi
 if [[ -n "$qos_batch_plan_json" ]]; then qos_batch_plan_status="provided"; fi
 if [[ -n "$stale_lock_recommendations_json" ]]; then stale_lock_recommendations_status="provided"; fi
@@ -592,6 +600,7 @@ if [[ -n "$swarm_control_surface_catalog_json" ]]; then swarm_control_surface_ca
 if [[ -n "$swarm_control_surface_intent_plan_json" ]]; then swarm_control_surface_intent_plan_status="provided"; fi
 if [[ -n "$swarm_control_surface_drift_report_json" ]]; then swarm_control_surface_drift_report_status="provided"; fi
 resource_lease_plan_data="$(json_or_default "$resource_lease_plan_json" '{"schema_version":"franken-engine.swarm-resource-lease-plan.v1","lease_decision":"missing","reason":"No resource lease plan was provided.","findings":[],"safe_alternatives":[]}' 'resource-lease-plan')"
+snapshot_bundle_data="$(json_or_default "$snapshot_bundle_json" '{"schema_version":"franken-engine.swarm-live-readonly-capture-bundle.v1","decision":"missing","fail_closed_reasons":[],"blocked_reasons":[],"degraded_reasons":[],"sources":[],"non_mutation_attestation":{"fixture_fed_only":true,"advisory_only":true,"mutates_br":false,"sends_agent_mail":false,"queries_live_agent_mail":false,"runs_cargo":false,"runs_rch_exec":false,"mutates_remote_workers":false},"swarm_ops_state_bundle":{"schema_version":"franken-engine.swarm-ops-state-bundle.v1","decision":"missing","source_components":[]},"artifact_paths":{}}' 'snapshot-bundle')"
 proof_cache_plan_data="$(json_or_default "$proof_cache_plan_json" '{"schema_version":"franken-engine.proof-reuse-cache-plan.v1","proof_cache_decision":"missing","reason":"No proof cache plan was provided.","cache_hit_artifacts":[],"required_refreshes":[],"invalid_artifacts":[],"invalidated_paths":[],"refresh_commands":[]}' 'proof-cache-plan')"
 qos_batch_plan_data="$(json_or_default "$qos_batch_plan_json" '{"schema_version":"franken-engine.build-storm-batch-plan.v1","batch_decision":"missing","fairness_reason":"No build-storm QoS batch plan was provided.","admitted_commands":[],"deferred_commands":[],"retry_after_seconds":0}' 'qos-batch-plan')"
 stale_lock_recommendations_data="$(json_or_default "$stale_lock_recommendations_json" '{"schema_version":"franken-engine.stale-lock-recommendations.v1","stale_lock_recommendations":[],"safe_to_reopen":[],"contact_first":[]}' 'stale-lock-recommendations')"
@@ -656,6 +665,7 @@ inputs_bundle_path="${run_dir}/inputs.bundle.json"
   printf '"collision_receipt":%s,\n' "$collision_receipt_data"
   printf '"proof_freshness":%s,\n' "$proof_freshness_data"
   printf '"rch_incident_packet":%s,\n' "$rch_incident_packet_data"
+  printf '"snapshot_bundle":%s,\n' "$snapshot_bundle_data"
   printf '"resource_lease_plan":%s,\n' "$resource_lease_plan_data"
   printf '"proof_cache_plan":%s,\n' "$proof_cache_plan_data"
   printf '"qos_batch_plan":%s,\n' "$qos_batch_plan_data"
@@ -716,6 +726,7 @@ jq -n \
   --arg agent_mail_status "$agent_mail_status" \
   --arg rch_status "$rch_status" \
   --arg proof_index_status "$proof_index_status" \
+  --arg snapshot_bundle_status "$snapshot_bundle_status" \
   --arg resource_lease_plan_status "$resource_lease_plan_status" \
   --arg proof_cache_plan_status "$proof_cache_plan_status" \
   --arg qos_batch_plan_status "$qos_batch_plan_status" \
@@ -779,6 +790,7 @@ jq -n \
   --arg swarm_control_surface_catalog_json "$swarm_control_surface_catalog_json" \
   --arg swarm_control_surface_intent_plan_json "$swarm_control_surface_intent_plan_json" \
   --arg swarm_control_surface_drift_report_json "$swarm_control_surface_drift_report_json" \
+  --arg snapshot_bundle_json "$snapshot_bundle_json" \
   --arg status_path "$status_path" \
   --arg commands_path "$commands_path" \
   --arg report_path "$report_path" \
@@ -837,6 +849,7 @@ jq -n \
   | $input.collision_receipt as $collision_receipt
   | $input.proof_freshness as $proof_freshness
   | $input.rch_incident_packet as $rch_incident_packet
+  | $input.snapshot_bundle as $snapshot_bundle
   | $input.resource_lease_plan as $resource_lease_plan
   | $input.proof_cache_plan as $proof_cache_plan
   | $input.qos_batch_plan as $qos_batch_plan
@@ -949,6 +962,48 @@ jq -n \
         recommended_next_action: ($rch_incident_packet.recommended_next_action // null)
       }]
     end) as $rch_incident_summaries
+  | ({
+      artifact_status: $snapshot_bundle_status,
+      severity: (
+        if $snapshot_bundle_status == "missing" then "not_provided"
+        elif (($snapshot_bundle.schema_version // "") != "franken-engine.swarm-live-readonly-capture-bundle.v1") then "critical"
+        elif (($snapshot_bundle.non_mutation_attestation.mutates_br // false) == true
+              or ($snapshot_bundle.non_mutation_attestation.sends_agent_mail // false) == true
+              or ($snapshot_bundle.non_mutation_attestation.queries_live_agent_mail // false) == true
+              or ($snapshot_bundle.non_mutation_attestation.runs_cargo // false) == true
+              or ($snapshot_bundle.non_mutation_attestation.runs_rch_exec // false) == true
+              or ($snapshot_bundle.non_mutation_attestation.mutates_remote_workers // false) == true) then "critical"
+        elif (($snapshot_bundle.decision // "") == "fail_closed") then "critical"
+        elif (($snapshot_bundle.decision // "") == "blocked") then "warning"
+        elif (($snapshot_bundle.decision // "") == "degraded") then "warning"
+        else "ok"
+        end
+      ),
+      decision: ($snapshot_bundle.decision // "missing"),
+      source_revision: ($snapshot_bundle.source_revision // null),
+      freshness_state: (
+        if $snapshot_bundle_status == "missing" then "missing"
+        elif any($snapshot_bundle.sources[]?; (.freshness_state // "") == "stale") then "stale"
+        elif any($snapshot_bundle.sources[]?; (.freshness_state // "") == "missing") then "missing"
+        else "fresh"
+        end
+      ),
+      source_count: (($snapshot_bundle.sources // []) | length),
+      source_components: (($snapshot_bundle.sources // []) | map({
+        component,
+        trust_state,
+        freshness_state,
+        local_fallback_observed:(.local_fallback_observed // false),
+        error_code
+      })),
+      fail_closed_reasons: ($snapshot_bundle.fail_closed_reasons // []),
+      blocked_reasons: ($snapshot_bundle.blocked_reasons // []),
+      degraded_reasons: ($snapshot_bundle.degraded_reasons // []),
+      local_fallback_observed: any($snapshot_bundle.sources[]?; (.local_fallback_observed // false) == true),
+      artifact_paths: ($snapshot_bundle.artifact_paths // {}),
+      source_authority: ($snapshot_bundle.upstream_authority // {}),
+      mutation_policy: ($snapshot_bundle.non_mutation_attestation // {})
+    }) as $live_snapshot_summary
   | ({
       artifact_status: $resource_lease_plan_status,
       severity: (
@@ -2607,6 +2662,13 @@ jq -n \
     + ($bad_proofs | map({component: "proof_outcome", status: (.status // "degraded"), impact: (.bead_id + " proof is not passing"), remediation: "Inspect the proof outcome before recommending dependent work."}))
     + ($blocked_items | map({component: "blocked_bead_chain", status: "blocked", impact: (.id + " is blocked in the bv track"), remediation: "Inspect dependencies before recommending this bead."}))
     + ($high_cost_rows | map({component: "predictive_cost", status: (.cost_class // "unknown"), impact: ((.command_id // "unknown_command") + " has elevated predicted validation cost"), remediation: "Narrow the command, defer until resource pressure clears, or preserve the high-cost receipt."}))
+    + (if $snapshot_bundle_status == "missing" then
+        []
+      elif $live_snapshot_summary.severity == "critical" then
+        [{component: "live_readonly_snapshot", status: $live_snapshot_summary.decision, impact: "live read-only snapshot evidence is fail-closed, malformed, or unsafe", remediation: "Refresh the snapshot bundle with scripts/swarm_live_readonly_snapshot_bundle.sh before publishing live handoff evidence."}]
+      elif $live_snapshot_summary.severity == "warning" then
+        [{component: "live_readonly_snapshot", status: $live_snapshot_summary.decision, impact: "live read-only snapshot evidence is degraded, stale, or blocked", remediation: "Treat the snapshot as advisory degraded evidence and refresh stale or missing sources before scheduling work."}]
+      else [] end)
     + (if $resource_lease_plan_status == "missing" then
         [{component: "resource_leases", status: "missing", impact: "resource lease admission artifact is missing", remediation: "Provide --resource-lease-plan-json before publishing the operator status feed."}]
       elif $resource_leases_summary.severity != "ok" then
@@ -2979,6 +3041,7 @@ jq -n \
       }
       + (if $swarm_benchmark_present then {swarm_benchmark_responsiveness: $benchmark_advisory_summary} else {} end)
       + (if $swarm_topology_aware_queue_advisory_status != "missing" then {swarm_topology_aware_queue_advisory: $topology_queue_advisory_summary} else {} end)
+      + (if $snapshot_bundle_status != "missing" then {live_readonly_snapshot: $live_snapshot_summary} else {} end)
       + (if $control_surface_catalog_present then {swarm_control_surface_catalog: $control_surface_catalog_summary} else {} end)),
       degraded: $degraded,
       recommendations: (
@@ -3000,6 +3063,10 @@ jq -n \
           [recommendation("respect_benchmark_measurement_block"; $benchmark_advisory_summary.selected_workload_id; "benchmark throughput evidence remains blocked and cannot support workload readiness claims")]
         elif $swarm_benchmark_present and $benchmark_advisory_summary.readiness == "degraded" then
           [recommendation("review_benchmark_advisory"; $benchmark_advisory_summary.selected_workload_id; "benchmark responsiveness advisory is degraded by stale, saturated, or incomplete evidence")]
+        elif $snapshot_bundle_status != "missing" and $live_snapshot_summary.severity == "critical" then
+          [recommendation("refresh_live_readonly_snapshot"; null; "live read-only snapshot evidence is fail-closed, malformed, or carries unsafe mutation claims")]
+        elif $snapshot_bundle_status != "missing" and $live_snapshot_summary.severity == "warning" then
+          [recommendation("review_live_readonly_snapshot"; null; "live read-only snapshot evidence is degraded, stale, or blocked")]
         elif $resource_envelope_summary.readiness == "contaminated" then
           [recommendation("respect_resource_envelope_contamination"; null; "resource envelope or fair-share plan is contaminated by fail-closed capacity evidence")]
         elif $resource_envelope_summary.readiness == "blocked" then
@@ -3153,6 +3220,11 @@ jq -n \
         swarm_benchmark_workload_catalog_json: $benchmark_advisory_summary.artifact_paths.workload_catalog_json,
         swarm_benchmark_catalog_findings_json: $benchmark_advisory_summary.artifact_paths.catalog_findings_json,
         swarm_benchmark_responsiveness_advisory_json: $benchmark_advisory_summary.artifact_paths.responsiveness_advisory_json
+      } else {} end) + (if $snapshot_bundle_status != "missing" then {
+        snapshot_bundle_json: $snapshot_bundle_json,
+        snapshot_bundle_report_md: ($live_snapshot_summary.artifact_paths.report_md // null),
+        snapshot_bundle_redaction_report_json: ($live_snapshot_summary.artifact_paths.redaction_report_json // null),
+        snapshot_swarm_ops_state_bundle_json: ($live_snapshot_summary.artifact_paths.swarm_ops_state_bundle_json // null)
       } else {} end) + (if $control_surface_catalog_present then {
         swarm_control_surface_catalog_json: $control_surface_catalog_summary.artifact_paths.catalog_json,
         swarm_control_surface_intent_plan_json: $control_surface_catalog_summary.artifact_paths.intent_plan_json,
@@ -3168,6 +3240,9 @@ JQ
   printf -- "- In progress: \`%s\`\n" "$(jq '.summary.in_progress_count' "$status_path")"
   printf -- "- Degraded fields: \`%s\`\n\n" "$(jq '.summary.degraded_count' "$status_path")"
   printf -- "- Dashboard contract: \`%s\` via \`%s\`\n" "$(jq -r '.dashboard_contract.schema_version' "$status_path")" "$(jq -r '.dashboard_contract.renderer.provider' "$status_path")"
+  if jq -e '.predictive_dashboard | has("live_readonly_snapshot")' "$status_path" >/dev/null; then
+    printf -- "- Live read-only snapshot: \`%s\` freshness=\`%s\` sources=\`%s\`\n" "$(jq -r '.predictive_dashboard.live_readonly_snapshot.decision' "$status_path")" "$(jq -r '.predictive_dashboard.live_readonly_snapshot.freshness_state' "$status_path")" "$(jq '.predictive_dashboard.live_readonly_snapshot.source_count' "$status_path")"
+  fi
   printf -- "- Forecast confidence: \`%s\` / \`%s\`\n" "$(jq -r '.summary.forecast_confidence_band' "$status_path")" "$(jq -r '.summary.forecast_overall_state' "$status_path")"
   printf -- "- Admission budget: \`%s\` with \`%s\` deferred\n" "$(jq -r '.summary.admission_budget_profile' "$status_path")" "$(jq '.summary.admission_deferred_count' "$status_path")"
   printf -- "- Resource envelope: \`%s\` / \`%s\` with \`%s\` admitted and \`%s\` deferred\n" "$(jq -r '.summary.resource_envelope_readiness' "$status_path")" "$(jq -r '.summary.fair_share_decision' "$status_path")" "$(jq '.summary.fair_share_admitted_count' "$status_path")" "$(jq '.summary.fair_share_deferred_count' "$status_path")"

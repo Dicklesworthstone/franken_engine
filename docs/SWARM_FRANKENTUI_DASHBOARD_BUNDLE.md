@@ -14,7 +14,11 @@ view. It is not a TUI runtime and it is not an autonomous operator.
 `scripts/swarm_frankentui_dashboard_bundle.sh` consumes explicit JSON evidence
 from the resource envelope, admission planner, stale recovery policy, RCH worker
 truth ledger, proof-cache locality optimizer, and RCH rehabilitation ledger. It
-emits:
+may also consume `--snapshot-bundle-json` from
+`scripts/swarm_live_readonly_snapshot_bundle.sh`. That optional bundle annotates
+all panels with source freshness, fail-closed local fallback evidence, and
+bd-eozx0/bd-x82vp provenance; it does not replace the required dashboard input
+artifacts. It emits:
 
 - `dashboard_bundle.json`
 - `dashboard_events.ndjson`
@@ -39,6 +43,11 @@ The bundle must always include these panel IDs:
 Missing telemetry, stale ownership evidence, drained workers, blocked capacity,
 and fail-closed upstream artifacts are visible display states. The adapter must
 not omit a panel just because its source evidence is missing or stale.
+When a live read-only snapshot bundle is supplied, every panel carries a
+`live_readonly_snapshot` object so `/dp/frankentui` can render source freshness
+and local fallback risk without inventing a second scheduler or resource
+planner. If no snapshot bundle is supplied, the top-level `source_freshness`
+section marks it `missing` without changing the legacy fixture decisions.
 
 ## Display States
 

@@ -3,6 +3,8 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 bundle_script="${root_dir}/scripts/swarm_live_readonly_snapshot_bundle.sh"
+operator_reporter="${root_dir}/scripts/swarm_operator_status_report.sh"
+dashboard_bundle="${root_dir}/scripts/swarm_frankentui_dashboard_bundle.sh"
 profile_path="${root_dir}/docs/swarm_live_readonly_capture_profile_v1.json"
 fixtures_path="${SWARM_LIVE_READONLY_SNAPSHOT_FIXTURES:-${root_dir}/scripts/testdata/swarm_live_readonly_snapshot/cases.json}"
 mode="${1:-check}"
@@ -156,6 +158,8 @@ run_case() {
 
 run_check() {
   bash -n "$bundle_script"
+  bash -n "$operator_reporter"
+  bash -n "$dashboard_bundle"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$profile_path" "$fixtures_path" >/dev/null
   if fixtures_shape_ok; then
@@ -168,6 +172,156 @@ run_check() {
   grep -Fq 'rch exec' "$bundle_script"
   grep -Fq 'local_rch_fallback_marker' "$bundle_script"
   grep -Fq 'redaction_report.json' "$bundle_script"
+  grep -Fq -- '--snapshot-bundle-json' "$operator_reporter"
+  grep -Fq -- '--snapshot-bundle-json' "$dashboard_bundle"
+}
+
+write_operator_handoff_inputs() {
+  local fixture_dir="$1"
+
+  jq -n '[]' >"${fixture_dir}/ready.json"
+  jq -n '[]' >"${fixture_dir}/in_progress.json"
+  jq -n '{plan:{tracks:[]}}' >"${fixture_dir}/bv_plan.json"
+  jq -n '[]' >"${fixture_dir}/reservations.json"
+  jq -n '{decision:"admit",findings:[]}' >"${fixture_dir}/resource_decision.json"
+  jq -n '{decision:"pass",commands:[],omitted_commands:[]}' >"${fixture_dir}/validation_plan.json"
+  jq -n '{queries:[]}' >"${fixture_dir}/proof_index.json"
+  jq -n '[]' >"${fixture_dir}/proof_outcomes.json"
+  jq -n '[]' >"${fixture_dir}/stale_evidence.json"
+  jq -n '[]' >"${fixture_dir}/dirty_files.json"
+  jq -n '{collision_risk:"none",conflicting_agents:[],safe_alternatives:[],reservation_recommendations:[],conflicts:{reservations:[],dirty:[],in_progress:[]}}' >"${fixture_dir}/collision_receipt.json"
+  jq -n '{freshness_state:"fresh",reusable:true,reason:"snapshot handoff smoke"}' >"${fixture_dir}/proof_freshness.json"
+  jq -n '{status:"not_provided",failure_kind:"none",retry_safety:"not_required",recommended_next_action:"No rch incident packet was provided."}' >"${fixture_dir}/rch_incident_packet.json"
+}
+
+run_operator_handoff() {
+  local snapshot_path="$1"
+  local fixture_dir="$2"
+  local expected_decision="$3"
+  local output_dir="${fixture_dir}/operator-status"
+
+  mkdir -p "$fixture_dir"
+  write_operator_handoff_inputs "$fixture_dir"
+
+  "$operator_reporter" \
+    --bead-id bd-ep8y0.4 \
+    --source-revision fixture-revision \
+    --output-dir "$output_dir" \
+    --agent-mail-status ok \
+    --rch-status ok \
+    --proof-index-status ok \
+    --ready-json "${fixture_dir}/ready.json" \
+    --in-progress-json "${fixture_dir}/in_progress.json" \
+    --bv-plan-json "${fixture_dir}/bv_plan.json" \
+    --reservations-json "${fixture_dir}/reservations.json" \
+    --resource-decision-json "${fixture_dir}/resource_decision.json" \
+    --validation-plan-json "${fixture_dir}/validation_plan.json" \
+    --proof-index-json "${fixture_dir}/proof_index.json" \
+    --proof-outcomes-json "${fixture_dir}/proof_outcomes.json" \
+    --stale-evidence-json "${fixture_dir}/stale_evidence.json" \
+    --dirty-files-json "${fixture_dir}/dirty_files.json" \
+    --collision-receipt-json "${fixture_dir}/collision_receipt.json" \
+    --proof-freshness-json "${fixture_dir}/proof_freshness.json" \
+    --rch-incident-packet-json "${fixture_dir}/rch_incident_packet.json" \
+    --snapshot-bundle-json "$snapshot_path" >/dev/null
+
+  jq -e --arg expected_decision "$expected_decision" '
+    .predictive_dashboard.live_readonly_snapshot.decision == $expected_decision
+    and .predictive_dashboard.live_readonly_snapshot.artifact_status == "provided"
+    and (.predictive_dashboard.live_readonly_snapshot.source_components | type == "array")
+    and .artifact_paths.snapshot_bundle_json != null
+  ' "${output_dir}/status.json" >/dev/null
+}
+
+write_dashboard_handoff_inputs() {
+  local fixture_dir="$1"
+
+  jq -n '{
+    schema_version:"franken-engine.swarm-resource-envelope.v1",
+    decision:"pass",
+    readiness:"ready",
+    host_profile:"64c_256g",
+    telemetry_status:"provided",
+    memory_pressure:{available_bytes:206158430208},
+    disk_pressure:{target_dir_available_bytes:536870912000},
+    rch_slots:{available:12,total:16},
+    capacity_budget:{remote_rch_slot_limit:12},
+    mutation_policy:{advisory_only:true,runs_cargo:false,runs_rch:false,mutates_remote_workers:false}
+  }' >"${fixture_dir}/resource_envelope.json"
+  jq -n '{
+    schema_version:"franken-engine.swarm-admission-budget-plan.v1",
+    decision:"pass",
+    budget_profile:"large_host_protected",
+    recommendations:[{request_id:"bd-light-a",bead_id:"bd-light-a",lane_class:"light",decision:"admit",requested_command:"bash scripts/e2e/light_smoke.sh check"}]
+  }' >"${fixture_dir}/admission_budget_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.swarm-ops-stale-recovery-receipts.v1",
+    decision:"pass",
+    snapshot_status:{agent_profiles:"provided",mail_activity:"provided",file_reservations:"provided",git_activity:"provided"},
+    summary:{total:0,healthy:0,needs_contact:0,safe_to_reopen:0,manual_review:0,blocked_by_active_agent:0},
+    recovery_receipts:[]
+  }' >"${fixture_dir}/stale_recovery_receipts.json"
+  jq -n '{
+    schema_version:"franken-engine.rch-worker-truth-parity-report.v1",
+    decision:"pass",
+    worker_rows:[{worker_id:"rch-a",daemon_status:"idle",probe_schedulable:true,queue_schedulable:true,drained:false}],
+    findings:[]
+  }' >"${fixture_dir}/worker_truth_report.json"
+  jq -n '{
+    schema_version:"franken-engine.swarm-proof-cache-locality-plan.v1",
+    decision:"pass",
+    target_dir:"/mnt/rch/target-a",
+    worker_id:"rch-a",
+    proof_cache_summary:{cache_hit_count:1,refresh_count:0},
+    recommendations:[],
+    mutation_policy:{advisory_only:true,runs_cargo:false,runs_rch:false,mutates_remote_workers:false}
+  }' >"${fixture_dir}/proof_cache_locality_plan.json"
+  jq -n '{
+    schema_version:"franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+    decision:"pass",
+    summary:{total_workers:1,healthy_count:1,drain_recommended_count:0,drained_count:0,rehab_candidate_count:0},
+    workers:[{worker_id:"rch-a",classification:"healthy",current_state:"idle",reason_codes:[]}]
+  }' >"${fixture_dir}/rch_rehabilitation_ledger.json"
+}
+
+run_dashboard_handoff() {
+  local snapshot_path="$1"
+  local fixture_dir="$2"
+  local expected_decision="$3"
+  local expected_code="$4"
+  local output_dir="${fixture_dir}/dashboard"
+  local args code
+
+  mkdir -p "$fixture_dir"
+  write_dashboard_handoff_inputs "$fixture_dir"
+  args=(
+    --resource-envelope-json "${fixture_dir}/resource_envelope.json"
+    --admission-budget-plan-json "${fixture_dir}/admission_budget_plan.json"
+    --stale-recovery-receipts-json "${fixture_dir}/stale_recovery_receipts.json"
+    --worker-truth-report-json "${fixture_dir}/worker_truth_report.json"
+    --proof-cache-locality-plan-json "${fixture_dir}/proof_cache_locality_plan.json"
+    --rch-rehabilitation-ledger-json "${fixture_dir}/rch_rehabilitation_ledger.json"
+    --source-revision fixture-revision
+    --output-dir "$output_dir"
+  )
+  if [[ -n "$snapshot_path" ]]; then
+    args+=(--snapshot-bundle-json "$snapshot_path")
+  fi
+
+  set +e
+  bash "$dashboard_bundle" "${args[@]}" >/dev/null
+  code=$?
+  set -e
+  if [[ "$code" -ne "$expected_code" ]]; then
+    record_failure "dashboard handoff expected exit ${expected_code}, got ${code}"
+    return
+  fi
+
+  jq -e --arg expected_decision "$expected_decision" --arg snapshot_status "$(if [[ -n "$snapshot_path" ]]; then printf provided; else printf missing; fi)" '
+    .source_freshness.live_readonly_snapshot.decision == $expected_decision
+    and .source_freshness.live_readonly_snapshot.artifact_status == $snapshot_status
+    and all(.panels[]; .live_readonly_snapshot.decision == $expected_decision)
+  ' "${output_dir}/dashboard_bundle.json" >/dev/null
 }
 
 run_all_cases() {
@@ -196,6 +350,21 @@ run_selftest() {
   else
     record_failure "selftest did not redact Agent Mail secret-shaped fields"
   fi
+
+  run_dashboard_handoff "" "${tmp_root}/handoff/missing" "missing" 0
+  record_pass "selftest dashboard handoff missing snapshot"
+  run_operator_handoff "${tmp_root}/healthy/out/snapshot.json" "${tmp_root}/handoff/operator-healthy" "pass"
+  run_dashboard_handoff "${tmp_root}/healthy/out/snapshot.json" "${tmp_root}/handoff/dashboard-healthy" "pass" 0
+  record_pass "selftest handoff healthy snapshot"
+  run_operator_handoff "${tmp_root}/missing_optional_sources/out/snapshot.json" "${tmp_root}/handoff/operator-missing-optional" "degraded"
+  run_dashboard_handoff "${tmp_root}/missing_optional_sources/out/snapshot.json" "${tmp_root}/handoff/dashboard-missing-optional" "degraded" 0
+  record_pass "selftest handoff degraded snapshot"
+  run_operator_handoff "${tmp_root}/stale_required_live_state/out/snapshot.json" "${tmp_root}/handoff/operator-stale" "fail_closed"
+  run_dashboard_handoff "${tmp_root}/stale_required_live_state/out/snapshot.json" "${tmp_root}/handoff/dashboard-stale" "fail_closed" 42
+  record_pass "selftest handoff stale snapshot"
+  run_operator_handoff "$fallback_snapshot" "${tmp_root}/handoff/operator-local-fallback" "fail_closed"
+  run_dashboard_handoff "$fallback_snapshot" "${tmp_root}/handoff/dashboard-local-fallback" "fail_closed" 42
+  record_pass "selftest handoff local fallback snapshot"
 }
 
 case "$mode" in

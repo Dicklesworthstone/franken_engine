@@ -20,6 +20,19 @@ Agent Mail, run `rch`, execute Cargo, or mutate tracker state.
 It remains the only predictive dashboard producer in `franken_engine`.
 scripts/swarm_operator_status_report.sh remains the only predictive dashboard producer in `franken_engine`.
 
+The producer can also consume the live read-only snapshot bundle:
+
+- Script: `scripts/swarm_live_readonly_snapshot_bundle.sh`
+- Bundle schema: `franken-engine.swarm-live-readonly-capture-bundle.v1`
+- Operator-status argument: `--snapshot-bundle-json`
+- Upstream authorities: `docs/swarm_ops_state_contract_v1.json` and
+  `docs/SWARM_RESOURCE_LEASE_PLANNER.md`
+
+That bundle is advisory source-freshness evidence. It lets the operator status
+feed surface stale live snapshots, local `rch` fallback markers, missing
+optional sources, and non-mutation attestations without becoming a live capture
+daemon, scheduler, resource planner, Agent Mail client, or worker controller.
+
 The predictive dashboard contract also has a pre-dashboard telemetry snapshot
 extension:
 
@@ -359,6 +372,7 @@ consumption:
 | `collision_risk` | `swarm-validation-collision-receipt.v1` or equivalent validation-plan fields | Show reservation, dirty-file, and in-progress bead overlap risk. |
 | `proof_freshness` | `proof-freshness-decay-report.v1` | Show whether prior proof evidence can be reused for the current source state. |
 | `rch_incidents` | `rch-incident-packet.v1` | Show remote execution failure kind, retry safety, and next action. |
+| `live_readonly_snapshot` | `swarm-live-readonly-capture-bundle.v1` from `scripts/swarm_live_readonly_snapshot_bundle.sh` | Optional handoff that shows live source freshness, fail-closed local fallback evidence, degraded optional-source evidence, and bd-eozx0/bd-x82vp provenance without replacing the canonical state or lease-planner contracts. |
 | `resource_leases` | `swarm-resource-lease-plan.v1` | Show resource-admission decision, lease severity, worker assignment, and remediation commands. |
 | `proof_cache` | `proof-reuse-cache-plan.v1` | Show cache-hit, partial-refresh, refresh-required, and fail-closed proof reuse decisions. |
 | `qos_batches` | `build-storm-batch-plan.v1` | Show admitted and deferred validation work, fairness reason, retry delay, and bounded command rows. |

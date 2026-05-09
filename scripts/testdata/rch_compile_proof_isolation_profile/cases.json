@@ -1,0 +1,90 @@
+{
+  "schema_version": "franken-engine.rch-compile-proof-isolation-profile-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "narrow_integration_test",
+      "metadata": {
+        "command": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test zero_placeholder_scan zero_placeholder_inventory_runtime_findings_are_present -- --nocapture",
+        "package": "frankenengine-engine",
+        "test_target": "zero_placeholder_scan",
+        "intended_target_path": "crates/franken-engine/tests/zero_placeholder_scan.rs"
+      },
+      "changed_paths": [
+        "crates/franken-engine/tests/zero_placeholder_scan.rs"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "command_class": "cargo_test",
+        "compile_surface": "exact_integration_test",
+        "target_relevance": "target_relevant",
+        "proof_strength": "strong",
+        "allowed_fallback": "rerun_exact_rch"
+      }
+    },
+    {
+      "case_id": "broad_lib_test_drift",
+      "metadata": {
+        "command": "rch exec -- env UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
+        "package": "frankenengine-engine",
+        "target": "lib",
+        "touched_paths": [
+          "tests/golden/build_report_output.golden"
+        ]
+      },
+      "changed_paths": [
+        "tests/golden/build_report_output.golden"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "decision": "degraded",
+        "command_class": "cargo_test",
+        "compile_surface": "package_lib_test",
+        "target_relevance": "target_ambiguous",
+        "proof_strength": "weak",
+        "allowed_fallback": "narrow_rch_only"
+      }
+    },
+    {
+      "case_id": "shell_only_proof",
+      "metadata": {
+        "command": "bash scripts/e2e/rch_compile_blocker_cluster_smoke.sh selftest",
+        "touched_paths": [
+          "scripts/rch_compile_blocker_cluster.sh"
+        ]
+      },
+      "changed_paths": [
+        "scripts/rch_compile_blocker_cluster.sh"
+      ],
+      "expected": {
+        "exit_code": 0,
+        "decision": "pass",
+        "command_class": "shell_gate",
+        "compile_surface": "shell_only",
+        "target_relevance": "target_relevant",
+        "proof_strength": "medium",
+        "allowed_fallback": "shell_or_json_only"
+      }
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine --lib",
+        "package": "frankenengine-engine",
+        "local_fallback_observed": true
+      },
+      "changed_paths": [
+        "crates/franken-engine/src/lib.rs"
+      ],
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "command_class": "cargo_test",
+        "compile_surface": "package_lib_test",
+        "target_relevance": "target_ambiguous",
+        "proof_strength": "none",
+        "allowed_fallback": "none"
+      }
+    }
+  ]
+}

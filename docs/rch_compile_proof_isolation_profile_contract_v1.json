@@ -1,0 +1,109 @@
+{
+  "schema_version": "franken-engine.rch-compile-proof-isolation-profile-contract.v1",
+  "profile_schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+  "event_schema_version": "franken-engine.rch-compile-proof-isolation-profile.event.v1",
+  "component": "rch_compile_proof_isolation_profile",
+  "purpose": "Classify preserved validation command metadata into a proof-isolation profile before agents rely on an rch-backed Cargo or shell proof.",
+  "advisory_only": true,
+  "non_mutation_policy": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "creates_beads": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_workers": false
+  },
+  "required_inputs": [
+    {
+      "argument": "--metadata-json",
+      "description": "Command metadata captured from a preserved rch or shell validation attempt."
+    }
+  ],
+  "optional_inputs": [
+    {
+      "argument": "--changed-paths-json",
+      "description": "Array of changed paths or an object with changed_paths/touched_paths used to judge target relevance."
+    },
+    {
+      "argument": "--source-revision",
+      "description": "Source revision to record in emitted artifacts."
+    },
+    {
+      "argument": "--case-id",
+      "description": "Deterministic fixture case identifier."
+    },
+    {
+      "argument": "--output-dir",
+      "description": "Output directory for deterministic artifacts."
+    }
+  ],
+  "emitted_artifacts": [
+    "compile_proof_isolation_profile.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "profile_fields": {
+    "decision": [
+      "pass",
+      "degraded",
+      "fail_closed"
+    ],
+    "command_class": [
+      "cargo_test",
+      "cargo_check",
+      "cargo_clippy",
+      "shell_gate",
+      "json_gate",
+      "unknown"
+    ],
+    "compile_surface": [
+      "exact_integration_test",
+      "package_lib_test",
+      "workspace_all_targets",
+      "package_check",
+      "package_clippy",
+      "shell_only",
+      "json_only",
+      "unknown"
+    ],
+    "target_relevance": [
+      "target_relevant",
+      "target_ambiguous",
+      "target_unrelated",
+      "unknown"
+    ],
+    "proof_strength": [
+      "strong",
+      "medium",
+      "weak",
+      "none"
+    ],
+    "allowed_fallback": [
+      "none",
+      "rerun_exact_rch",
+      "narrow_rch_only",
+      "shell_or_json_only"
+    ]
+  },
+  "fail_closed_conditions": [
+    "missing_command_metadata",
+    "local_rch_fallback_observed",
+    "unknown_validation_command",
+    "cargo_command_without_package",
+    "ambiguous_all_targets_claimed_as_narrow"
+  ],
+  "fixture_cases": [
+    "narrow_integration_test",
+    "broad_lib_test_drift",
+    "shell_only_proof",
+    "local_fallback_contaminated"
+  ],
+  "quality_gates": [
+    "jq empty docs/rch_compile_proof_isolation_profile_contract_v1.json",
+    "bash -n scripts/rch_compile_proof_isolation_profile.sh scripts/e2e/rch_compile_proof_isolation_profile_smoke.sh",
+    "scripts/e2e/rch_compile_proof_isolation_profile_smoke.sh selftest",
+    "git diff --check -- docs/rch_compile_proof_isolation_profile_contract_v1.json docs/RCH_COMPILE_PROOF_ISOLATION_PROFILE.md scripts/rch_compile_proof_isolation_profile.sh scripts/e2e/rch_compile_proof_isolation_profile_smoke.sh scripts/testdata/rch_compile_proof_isolation_profile/cases.json"
+  ]
+}

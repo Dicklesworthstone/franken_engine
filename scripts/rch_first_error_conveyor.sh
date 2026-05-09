@@ -9,6 +9,9 @@ original_args=("$@")
 
 clusters_json=""
 profile_json=""
+beads_json=""
+reservations_json=""
+announcements_json=""
 source_revision="${RCH_FIRST_ERROR_CONVEYOR_SOURCE_REVISION:-}"
 case_id_override=""
 
@@ -26,6 +29,9 @@ Required:
   --profile-json FILE
 
 Options:
+  --beads-json FILE           Read-only bead ownership snapshot
+  --reservations-json FILE    Read-only Agent Mail reservation snapshot
+  --announcements-json FILE   Read-only recent announcement snapshot
   --source-revision REV
   --case-id ID
   --output-dir DIR
@@ -47,6 +53,18 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --profile-json)
       profile_json="${2:-}"
+      shift 2
+      ;;
+    --beads-json)
+      beads_json="${2:-}"
+      shift 2
+      ;;
+    --reservations-json)
+      reservations_json="${2:-}"
+      shift 2
+      ;;
+    --announcements-json)
+      announcements_json="${2:-}"
       shift 2
       ;;
     --source-revision)
@@ -92,6 +110,19 @@ for input_path in "$clusters_json" "$profile_json"; do
     exit 64
   fi
 done
+for input_path in "$beads_json" "$reservations_json" "$announcements_json"; do
+  if [[ -z "$input_path" ]]; then
+    continue
+  fi
+  if [[ ! -f "$input_path" ]]; then
+    printf 'ownership snapshot JSON not found: %s\n' "$input_path" >&2
+    exit 64
+  fi
+  if ! jq empty "$input_path" >/dev/null 2>&1; then
+    printf 'invalid ownership snapshot JSON: %s\n' "$input_path" >&2
+    exit 64
+  fi
+done
 if [[ -z "$source_revision" ]]; then
   source_revision="$(git -C "$root_dir" rev-parse HEAD 2>/dev/null || printf unknown)"
 fi
@@ -107,6 +138,9 @@ invocation_path="${run_dir}/commands.txt"
 report_path="${run_dir}/report.md"
 clusters_normalized_path="${run_dir}/clusters.normalized.json"
 profile_normalized_path="${run_dir}/profile.normalized.json"
+beads_normalized_path="${run_dir}/beads.normalized.json"
+reservations_normalized_path="${run_dir}/reservations.normalized.json"
+announcements_normalized_path="${run_dir}/announcements.normalized.json"
 
 for artifact_path in \
   "$plan_path" \
@@ -118,7 +152,10 @@ for artifact_path in \
   "$invocation_path" \
   "$report_path" \
   "$clusters_normalized_path" \
-  "$profile_normalized_path"; do
+  "$profile_normalized_path" \
+  "$beads_normalized_path" \
+  "$reservations_normalized_path" \
+  "$announcements_normalized_path"; do
   if [[ -e "$artifact_path" ]]; then
     printf 'refusing to overwrite existing artifact: %s\n' "$artifact_path" >&2
     exit 73
@@ -157,6 +194,21 @@ write_event() {
 
 jq -cS . "$clusters_json" >"$clusters_normalized_path"
 jq -cS . "$profile_json" >"$profile_normalized_path"
+if [[ -n "$beads_json" ]]; then
+  jq -cS . "$beads_json" >"$beads_normalized_path"
+else
+  printf '{"schema_version":"franken-engine.rch-first-error-conveyor-beads-snapshot.v1","beads":[],"health":{"contradictory_evidence":false,"fail_closed_reasons":[]}}\n' >"$beads_normalized_path"
+fi
+if [[ -n "$reservations_json" ]]; then
+  jq -cS . "$reservations_json" >"$reservations_normalized_path"
+else
+  printf '{"schema_version":"franken-engine.rch-first-error-conveyor-reservations-snapshot.v1","reservations":[],"health":{"contradictory_evidence":false,"fail_closed_reasons":[]}}\n' >"$reservations_normalized_path"
+fi
+if [[ -n "$announcements_json" ]]; then
+  jq -cS . "$announcements_json" >"$announcements_normalized_path"
+else
+  printf '{"schema_version":"franken-engine.rch-first-error-conveyor-announcements-snapshot.v1","announcements":[],"health":{"contradictory_evidence":false,"fail_closed_reasons":[]}}\n' >"$announcements_normalized_path"
+fi
 
 case_id="$(jq -r '.case_id // ""' "$clusters_normalized_path")"
 if [[ -n "$case_id_override" ]]; then
@@ -166,11 +218,17 @@ fi
 jq -n \
   --slurpfile clusters "$clusters_normalized_path" \
   --slurpfile profile "$profile_normalized_path" \
+  --slurpfile beads "$beads_normalized_path" \
+  --slurpfile reservations "$reservations_normalized_path" \
+  --slurpfile announcements "$announcements_normalized_path" \
   --arg schema_version "franken-engine.rch-first-error-conveyor-plan.v1" \
   --arg source_revision "$source_revision" \
   --arg case_id "$case_id" \
   --arg clusters_json "$clusters_json" \
   --arg profile_json "$profile_json" \
+  --arg beads_json "$beads_json" \
+  --arg reservations_json "$reservations_json" \
+  --arg announcements_json "$announcements_json" \
   --arg plan_path "$plan_path" \
   --arg commands_path "$commands_path" \
   --arg manifest_path "$manifest_path" \
@@ -178,6 +236,44 @@ jq -n \
   --arg invocation_path "$invocation_path" \
   --arg report_path "$report_path" '
   def arr($value): if ($value | type) == "array" then $value else [] end;
+  def scalar($value): if $value == null then "" else ($value | tostring) end;
+  def lower($value): scalar($value) | ascii_downcase;
+  def first_code($value):
+    if (arr($value.error_codes) | length) > 0 then arr($value.error_codes)[0]
+    else ($value.error_code // "")
+    end;
+  def dedupe_key($value):
+    if scalar($value.dedupe_key) != "" then lower($value.dedupe_key)
+    else [
+      lower($value.file_path),
+      lower(first_code($value)),
+      lower($value.error_family),
+      lower($value.symbol // $value.test_name),
+      lower($value.command_target // $value.package_target // $value.test_target)
+    ] | join("|")
+    end;
+  def freshness($value):
+    if scalar($value.freshness) != "" then scalar($value.freshness)
+    elif ($value.stale // false) == true then "stale"
+    elif ($value.fresh // false) == true then "fresh"
+    else "fresh"
+    end;
+  def current_status($status): (["open", "blocked", "in_progress"] | index($status)) != null;
+  def path_matches($pattern; $path):
+    scalar($pattern) as $pattern_s
+    | scalar($path) as $path_s
+    | ($pattern_s != "" and $path_s != "" and (
+        $pattern_s == $path_s
+        or (($pattern_s | endswith("*")) and ($path_s | startswith($pattern_s[0:-1])))
+      ));
+  def health_fail_closed($doc):
+    (($doc.health.contradictory_evidence // false) == true)
+    or (($doc.health.fail_closed // false) == true);
+  def health_reasons($doc):
+    (arr($doc.health.fail_closed_reasons)
+      + [if ($doc.health.contradictory_evidence // false) == true then "contradictory_ownership_evidence" else empty end]
+      + [if ($doc.health.fail_closed // false) == true then "ownership_snapshot_fail_closed" else empty end]
+    );
   def disposition($cluster; $profile_decision; $cluster_decision):
     if $profile_decision == "fail_closed" or $cluster_decision == "fail_closed" then "insufficient_evidence"
     elif ($cluster.disposition // "") == "block_current_bead" then "block_current_bead"
@@ -199,7 +295,7 @@ jq -n \
       if ($profile_doc.evidence_health.local_fallback_observed // false) == true then "local_fallback_contamination" else empty end,
       if ($profile_doc.evidence_health.transcript_truncated // false) == true then "truncated_output" else empty end
     ] + arr($profile_doc.evidence_health.fail_closed_reasons) | unique);
-  def manual_command($cluster; $disp):
+  def manual_command($cluster; $disp; $evidence):
     if $disp == "new_bead_candidate" then
       "# review before running: br create " + ((($cluster.proposed_bead.title // "Compile blocker follow-up") | @sh))
       + " -t " + ((($cluster.proposed_bead.issue_type // "bug") | @sh))
@@ -207,14 +303,64 @@ jq -n \
       + " --description " + ((($cluster.proposed_bead.body_md // "Review preserved first-error evidence before filing.") | @sh))
     elif $disp == "block_current_bead" then
       "# block current bead until first error is fixed: " + (($cluster.proposed_bead.title // "current bead blocker") | @sh)
+    elif $disp == "duplicate_existing_bead" then
+      "# duplicate existing bead; inspect before filing: "
+      + ((if ($evidence.matched_beads | length) > 0 then ($evidence.matched_beads | map(.id) | join(",")) else "unknown" end) | @sh)
+    elif $disp == "defer_active_owner" then
+      "# defer active owner or reservation; inspect before filing: "
+      + (([
+          ($evidence.active_reservations | map(.id | tostring)[]?),
+          ($evidence.recent_announcements | map(.id | tostring)[]?)
+        ] | join(",")) | @sh)
     else
       "# no source-fix bead recommended: insufficient evidence"
     end;
   ($clusters[0]) as $cluster_doc
   | ($profile[0]) as $profile_doc
+  | ($beads[0]) as $beads_doc
+  | ($reservations[0]) as $reservations_doc
+  | ($announcements[0]) as $announcements_doc
+  | (health_fail_closed($beads_doc) or health_fail_closed($reservations_doc) or health_fail_closed($announcements_doc)) as $ownership_fail_closed
+  | (health_reasons($beads_doc) + health_reasons($reservations_doc) + health_reasons($announcements_doc) | unique) as $ownership_fail_reasons
+  | (arr($beads_doc.beads) | map(. + {dedupe_key: dedupe_key(.), freshness: freshness(.), owner_kind: "bead"})) as $bead_records
+  | (arr($reservations_doc.reservations) | map(. + {dedupe_key: dedupe_key(.), freshness: freshness(.), owner_kind: "reservation"})) as $reservation_records
+  | (arr($announcements_doc.announcements) | map(. + {dedupe_key: dedupe_key(.), freshness: freshness(.), owner_kind: "announcement"})) as $announcement_records
   | (($cluster_doc.clusters // []) | to_entries | map(
       .value as $cluster
-      | disposition($cluster; ($profile_doc.decision // "unknown"); ($cluster_doc.decision // "unknown")) as $disp
+      | dedupe_key($cluster) as $cluster_key
+      | scalar($cluster.file_path) as $cluster_path
+      | disposition($cluster; ($profile_doc.decision // "unknown"); ($cluster_doc.decision // "unknown")) as $base_disp
+      | ($bead_records | map(select(current_status(.status // "") and .dedupe_key == $cluster_key))) as $matching_current_beads
+      | ($matching_current_beads | map(select(.freshness != "stale"))) as $fresh_matching_beads
+      | ($matching_current_beads | map(select(.freshness == "stale"))) as $stale_matching_beads
+      | ($reservation_records | map(select(
+          ((.active // true) != false)
+          and .freshness != "stale"
+          and (
+            (scalar(.dedupe_key) != "" and .dedupe_key == $cluster_key)
+            or path_matches(.path_pattern; $cluster_path)
+          )
+        ))) as $fresh_reservations
+      | ($announcement_records | map(select(
+          .freshness != "stale"
+          and (
+            (scalar(.dedupe_key) != "" and .dedupe_key == $cluster_key)
+            or (arr(.file_paths) | index($cluster_path) != null)
+          )
+        ))) as $fresh_announcements
+      | (if $ownership_fail_closed then "insufficient_evidence"
+         elif ($fresh_matching_beads | length) > 0 then "duplicate_existing_bead"
+         elif (($fresh_reservations | length) + ($fresh_announcements | length)) > 0 then "defer_active_owner"
+         else $base_disp
+         end) as $disp
+      | {
+          dedupe_key: $cluster_key,
+          matched_beads: ($fresh_matching_beads | map({id, status, title, freshness, dedupe_key})),
+          stale_beads: ($stale_matching_beads | map({id, status, title, freshness, dedupe_key})),
+          active_reservations: ($fresh_reservations | map({id, holder, agent_name, path_pattern, freshness, dedupe_key})),
+          recent_announcements: ($fresh_announcements | map({id, message_id, from, sender, subject, freshness, dedupe_key})),
+          ownership_fail_reasons: (if $ownership_fail_closed then $ownership_fail_reasons else [] end)
+        } as $ownership_evidence
       | {
           source_index: .key,
           recommendation_id: ("first-error-" + ((.key + 1) | tostring)),
@@ -227,15 +373,27 @@ jq -n \
           profile_decision: ($profile_doc.decision // "unknown"),
           proof_strength: ($profile_doc.classification.proof_strength // "unknown"),
           target_relevance: ($profile_doc.classification.target_relevance // "unknown"),
-          reason_codes: reasons($cluster; $profile_doc; $disp),
+          dedupe_key: $cluster_key,
+          reason_codes: (
+            reasons($cluster; $profile_doc; $disp)
+            + (if $ownership_fail_closed then $ownership_fail_reasons else [] end)
+            + (if ($fresh_matching_beads | length) > 0 then ["duplicate_existing_bead"] else [] end)
+            + (if (($fresh_reservations | length) + ($fresh_announcements | length)) > 0 then ["active_owner_present"] else [] end)
+            + (if ($stale_matching_beads | length) > 0 then ["stale_owner_manual_reopen_candidate"] else [] end)
+            | unique
+          ),
+          ownership_evidence: $ownership_evidence,
           evidence_paths: {
             clusters_json: $clusters_json,
-            profile_json: $profile_json
+            profile_json: $profile_json,
+            beads_json: (if $beads_json == "" then null else $beads_json end),
+            reservations_json: (if $reservations_json == "" then null else $reservations_json end),
+            announcements_json: (if $announcements_json == "" then null else $announcements_json end)
           },
-          proposed_command: manual_command($cluster; $disp)
+          proposed_command: manual_command($cluster; $disp; $ownership_evidence)
         }
     ) | sort_by(.rank, .source_index, .title)) as $recommendations
-  | ([($cluster_doc.decision // ""), ($profile_doc.decision // "")] | map(select(. == "fail_closed")) | length > 0) as $has_fail_closed_input
+  | ([($cluster_doc.decision // ""), ($profile_doc.decision // "")] | map(select(. == "fail_closed")) | length > 0 or $ownership_fail_closed) as $has_fail_closed_input
   | {
       schema_version: $schema_version,
       case_id: (if $case_id == "" then null else $case_id end),
@@ -244,22 +402,31 @@ jq -n \
         if $has_fail_closed_input then "fail_closed"
         elif ($recommendations | length) == 0 then "no_action"
         elif any($recommendations[]; .disposition == "block_current_bead") then "block_current_bead"
-        else "recommend_follow_up" end
+        elif any($recommendations[]; .disposition == "new_bead_candidate") then "recommend_follow_up"
+        elif any($recommendations[]; .disposition == "defer_active_owner") then "defer_active_owner"
+        elif any($recommendations[]; .disposition == "duplicate_existing_bead") then "dedupe_suppressed"
+        else "no_action" end
       ),
       summary: {
         recommendation_count: ($recommendations | length),
         block_current_bead_count: ($recommendations | map(select(.disposition == "block_current_bead")) | length),
         new_bead_candidate_count: ($recommendations | map(select(.disposition == "new_bead_candidate")) | length),
+        duplicate_existing_bead_count: ($recommendations | map(select(.disposition == "duplicate_existing_bead")) | length),
+        defer_active_owner_count: ($recommendations | map(select(.disposition == "defer_active_owner")) | length),
         insufficient_evidence_count: ($recommendations | map(select(.disposition == "insufficient_evidence")) | length)
       },
       recommendations: $recommendations,
       source_decisions: {
         cluster_decision: ($cluster_doc.decision // "unknown"),
-        profile_decision: ($profile_doc.decision // "unknown")
+        profile_decision: ($profile_doc.decision // "unknown"),
+        ownership_fail_closed: $ownership_fail_closed
       },
       input_artifacts: {
         clusters_json: $clusters_json,
-        profile_json: $profile_json
+        profile_json: $profile_json,
+        beads_json: (if $beads_json == "" then null else $beads_json end),
+        reservations_json: (if $reservations_json == "" then null else $reservations_json end),
+        announcements_json: (if $announcements_json == "" then null else $announcements_json end)
       },
       artifact_paths: {
         first_error_conveyor_plan_json: $plan_path,
@@ -328,6 +495,8 @@ jq -r '
   ("- Recommendations: `" + (.summary.recommendation_count | tostring) + "`"),
   ("- Block current bead: `" + (.summary.block_current_bead_count | tostring) + "`"),
   ("- New bead candidates: `" + (.summary.new_bead_candidate_count | tostring) + "`"),
+  ("- Duplicate existing beads: `" + (.summary.duplicate_existing_bead_count | tostring) + "`"),
+  ("- Deferred active owners: `" + (.summary.defer_active_owner_count | tostring) + "`"),
   ("- Insufficient evidence: `" + (.summary.insufficient_evidence_count | tostring) + "`"),
   "",
   "## Recommendations",
@@ -335,7 +504,7 @@ jq -r '
   (if (.recommendations | length) == 0 then "none" else (.recommendations[] | "- `" + .recommendation_id + "` `" + .disposition + "` " + .title) end)
 ' "$plan_path" >"$report_path"
 
-write_event "input.loaded" "ok" "normalized cluster and profile artifacts" "$clusters_json"
+write_event "input.loaded" "ok" "normalized cluster, profile, and ownership artifacts" "$clusters_json"
 write_event "plan.emitted" "$(jq -r '.decision' "$plan_path")" "emitted first-error conveyor plan" "$plan_path"
 
 printf 'first_error_conveyor_plan=%s\n' "$plan_path"

@@ -17,9 +17,16 @@ Required:
 
 Optional:
 
+- `--beads-json`
+- `--reservations-json`
+- `--announcements-json`
 - `--source-revision`
 - `--case-id`
 - `--output-dir`
+
+The ownership inputs are read-only snapshots. The conveyor uses them to suppress
+duplicate compile-blocker proposals, defer work behind active owners, or fail
+closed when ownership evidence contradicts itself.
 
 ## Outputs
 
@@ -38,10 +45,17 @@ decide whether to run any suggested `br create` command manually.
   bead until fixed.
 - `new_bead_candidate`: unrelated current-head error may deserve a follow-up
   bead after review.
-- `duplicate_existing_bead`: reserved for the ownership-aware follow-up lane.
-- `defer_active_owner`: reserved for the ownership-aware follow-up lane.
+- `duplicate_existing_bead`: existing open, blocked, or in-progress bead already
+  covers the diagnostic key.
+- `defer_active_owner`: active reservation or recent ownership announcement
+  covers the affected path/key.
 - `insufficient_evidence`: contaminated, truncated, or fail-closed inputs cannot
   safely produce source-fix work.
+
+Duplicate and deferral decisions are based on a stable dedupe key derived from
+diagnostic code, file path, optional symbol or test name, and command target.
+Stale in-progress ownership stays visible in the report as a manual reopen
+candidate; it is not silently treated as a clear lane.
 
 ## Smoke Proof
 

@@ -178,6 +178,363 @@
         "new_bead_candidate_count": 0,
         "insufficient_evidence_count": 1
       }
+    },
+    {
+      "case_id": "duplicate_open_bead",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "rustc_E0308",
+            "file_path": "crates/franken-engine/src/foo.rs",
+            "error_codes": [
+              "E0308"
+            ],
+            "command_target": "frankenengine-engine",
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Duplicate open foo E0308",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "This should be suppressed by the open bead snapshot."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-open-dup",
+            "status": "open",
+            "title": "[COMPILE-BLOCKER] Existing foo E0308",
+            "file_path": "crates/franken-engine/src/foo.rs",
+            "error_codes": [
+              "E0308"
+            ],
+            "error_family": "rustc_E0308",
+            "command_target": "frankenengine-engine",
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "dedupe_suppressed",
+        "primary_disposition": "duplicate_existing_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 1,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "duplicate_existing_bead",
+        "matched_bead_id": "bd-open-dup"
+      }
+    },
+    {
+      "case_id": "blocked_bead_same_file",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "object_create_descriptor",
+            "file_path": "crates/franken-engine/src/stdlib.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "command_target": "frankenengine-engine",
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Duplicate blocked stdlib E0599",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "This should be suppressed by the blocked bead snapshot."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-blocked-dup",
+            "status": "blocked",
+            "title": "[MOCK-FINDER] Existing blocked stdlib descriptor work",
+            "file_path": "crates/franken-engine/src/stdlib.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "error_family": "object_create_descriptor",
+            "command_target": "frankenengine-engine",
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "dedupe_suppressed",
+        "primary_disposition": "duplicate_existing_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 1,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "duplicate_existing_bead",
+        "matched_bead_id": "bd-blocked-dup"
+      }
+    },
+    {
+      "case_id": "active_fresh_owner",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "stale_test_api",
+            "file_path": "crates/franken-engine/src/shadow_replay_verifier.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "command_target": "frankenengine-engine",
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Defer active owner shadow replay verifier",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "This should defer behind the active reservation."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "reservations_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-reservations-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "reservations": [
+          {
+            "id": "res-shadow-active",
+            "agent_name": "OtherAgent",
+            "path_pattern": "crates/franken-engine/src/shadow_replay_verifier.rs",
+            "active": true,
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "announcements_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-announcements-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "announcements": [
+          {
+            "id": "mail-shadow-active",
+            "from": "OtherAgent",
+            "subject": "[COMPILE-BLOCKER] Working shadow replay verifier",
+            "file_paths": [
+              "crates/franken-engine/src/shadow_replay_verifier.rs"
+            ],
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "defer_active_owner",
+        "primary_disposition": "defer_active_owner",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 1,
+        "insufficient_evidence_count": 0,
+        "reason_code": "active_owner_present",
+        "matched_reservation_id": "res-shadow-active",
+        "matched_announcement_id": "mail-shadow-active"
+      }
+    },
+    {
+      "case_id": "stale_owner_manual_reopen",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "rustc_E0277",
+            "file_path": "crates/franken-engine/src/replay.rs",
+            "error_codes": [
+              "E0277"
+            ],
+            "command_target": "frankenengine-engine",
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Reopen stale replay E0277 owner",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "This should remain a manual follow-up candidate with stale owner evidence."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-stale-owner",
+            "status": "in_progress",
+            "title": "[COMPILE-BLOCKER] Stale replay E0277 owner",
+            "file_path": "crates/franken-engine/src/replay.rs",
+            "error_codes": [
+              "E0277"
+            ],
+            "error_family": "rustc_E0277",
+            "command_target": "frankenengine-engine",
+            "freshness": "stale"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "recommend_follow_up",
+        "primary_disposition": "new_bead_candidate",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 1,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "stale_owner_manual_reopen_candidate",
+        "matched_bead_id": "bd-stale-owner"
+      }
+    },
+    {
+      "case_id": "contradictory_ownership",
+      "clusters": {
+        "schema_version": "franken-engine.rch-compile-blocker-clusters.v1",
+        "decision": "clustered",
+        "clusters": [
+          {
+            "disposition": "file_follow_up",
+            "error_family": "rustc_E0308",
+            "file_path": "crates/franken-engine/src/foo.rs",
+            "error_codes": [
+              "E0308"
+            ],
+            "command_target": "frankenengine-engine",
+            "proposed_bead": {
+              "title": "[COMPILE-BLOCKER] Refuse contradictory ownership",
+              "priority": 2,
+              "issue_type": "bug",
+              "body_md": "This should fail closed before filing source work."
+            }
+          }
+        ]
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": true,
+          "fail_closed_reasons": [
+            "bead_and_reservation_disagree"
+          ]
+        },
+        "beads": []
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "primary_disposition": "insufficient_evidence",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 1,
+        "reason_code": "contradictory_ownership_evidence"
+      }
     }
   ]
 }

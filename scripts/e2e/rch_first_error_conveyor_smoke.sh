@@ -31,6 +31,15 @@ write_case_inputs() {
   mkdir -p "$case_dir"
   jq '.clusters' <<<"$case_json" >"${case_dir}/clusters.json"
   jq '.profile' <<<"$case_json" >"${case_dir}/profile.json"
+  if jq -e 'has("beads_snapshot")' <<<"$case_json" >/dev/null; then
+    jq '.beads_snapshot' <<<"$case_json" >"${case_dir}/beads.json"
+  fi
+  if jq -e 'has("reservations_snapshot")' <<<"$case_json" >/dev/null; then
+    jq '.reservations_snapshot' <<<"$case_json" >"${case_dir}/reservations.json"
+  fi
+  if jq -e 'has("announcements_snapshot")' <<<"$case_json" >/dev/null; then
+    jq '.announcements_snapshot' <<<"$case_json" >"${case_dir}/announcements.json"
+  fi
 }
 
 run_check() {
@@ -52,11 +61,16 @@ run_check() {
     and (.fixture_cases | index("unrelated_sibling_errors") != null)
     and (.fixture_cases | index("truncated_output") != null)
     and (.fixture_cases | index("local_fallback_contamination") != null)
+    and (.fixture_cases | index("duplicate_open_bead") != null)
+    and (.fixture_cases | index("blocked_bead_same_file") != null)
+    and (.fixture_cases | index("active_fresh_owner") != null)
+    and (.fixture_cases | index("stale_owner_manual_reopen") != null)
+    and (.fixture_cases | index("contradictory_ownership") != null)
   ' "$contract_json" >/dev/null || record_failure "contract shape"
 
   jq -e '
     .schema_version == "franken-engine.rch-first-error-conveyor-fixtures.v1"
-    and (.cases | length) == 4
+    and (.cases | length) == 9
     and all(.cases[]; has("clusters") and has("profile") and has("expected"))
   ' "$cases_json" >/dev/null || record_failure "fixture shape"
 
@@ -97,6 +111,15 @@ run_case() {
     --case-id "$case_id"
     --output-dir "$output_dir"
   )
+  if [[ -f "${case_dir}/beads.json" ]]; then
+    cmd+=(--beads-json "${case_dir}/beads.json")
+  fi
+  if [[ -f "${case_dir}/reservations.json" ]]; then
+    cmd+=(--reservations-json "${case_dir}/reservations.json")
+  fi
+  if [[ -f "${case_dir}/announcements.json" ]]; then
+    cmd+=(--announcements-json "${case_dir}/announcements.json")
+  fi
 
   expected_exit="$(jq -r '.expected.exit_code' <<<"$case_json")"
   set +e
@@ -120,8 +143,21 @@ run_case() {
       and .summary.recommendation_count == $expected.recommendation_count
       and .summary.block_current_bead_count == $expected.block_current_bead_count
       and .summary.new_bead_candidate_count == $expected.new_bead_candidate_count
+      and .summary.duplicate_existing_bead_count == ($expected.duplicate_existing_bead_count // 0)
+      and .summary.defer_active_owner_count == ($expected.defer_active_owner_count // 0)
       and .summary.insufficient_evidence_count == $expected.insufficient_evidence_count
       and any(.recommendations[]; .disposition == $expected.primary_disposition)
+      and (if ($expected.reason_code // null) == null then true else any(.recommendations[]; .reason_codes | index($expected.reason_code) != null) end)
+      and (if ($expected.matched_bead_id // null) == null then true else any(.recommendations[];
+        ((.ownership_evidence.matched_beads | map(.id) | index($expected.matched_bead_id)) != null)
+        or ((.ownership_evidence.stale_beads | map(.id) | index($expected.matched_bead_id)) != null)
+      ) end)
+      and (if ($expected.matched_reservation_id // null) == null then true else any(.recommendations[];
+        (.ownership_evidence.active_reservations | map(.id) | index($expected.matched_reservation_id)) != null
+      ) end)
+      and (if ($expected.matched_announcement_id // null) == null then true else any(.recommendations[];
+        (.ownership_evidence.recent_announcements | map(.id) | index($expected.matched_announcement_id)) != null
+      ) end)
       and .non_mutation_attestation.runs_cargo == false
       and .non_mutation_attestation.runs_rch == false
       and .non_mutation_attestation.creates_beads == false

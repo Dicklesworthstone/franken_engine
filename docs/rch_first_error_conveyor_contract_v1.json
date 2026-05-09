@@ -25,6 +25,21 @@
   ],
   "optional_inputs": [
     {
+      "argument": "--beads-json",
+      "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+      "description": "Read-only snapshot of open, blocked, and in-progress beads for duplicate suppression."
+    },
+    {
+      "argument": "--reservations-json",
+      "schema_version": "franken-engine.rch-first-error-conveyor-reservations-snapshot.v1",
+      "description": "Read-only snapshot of active file reservations for owner deferral."
+    },
+    {
+      "argument": "--announcements-json",
+      "schema_version": "franken-engine.rch-first-error-conveyor-announcements-snapshot.v1",
+      "description": "Read-only snapshot of recent Agent Mail-style ownership announcements."
+    },
+    {
       "argument": "--source-revision",
       "description": "Source revision to record in emitted artifacts."
     },
@@ -54,6 +69,8 @@
   "ordering_rules": [
     "fail-closed evidence becomes insufficient_evidence",
     "target-relevant current-bead blockers rank before new follow-up candidates",
+    "new follow-up candidates rank before duplicate and active-owner deferrals",
+    "duplicate existing beads rank before active-owner deferrals",
     "new follow-up candidates rank before insufficient evidence",
     "ties are deterministic by source cluster order and title"
   ],
@@ -62,13 +79,19 @@
     "missing_or_malformed_profile_artifact",
     "local_fallback_contamination",
     "truncated_or_insufficient_compile_output",
-    "profile_fail_closed"
+    "profile_fail_closed",
+    "contradictory_ownership_evidence"
   ],
   "fixture_cases": [
     "target_relevant_first_error",
     "unrelated_sibling_errors",
     "truncated_output",
-    "local_fallback_contamination"
+    "local_fallback_contamination",
+    "duplicate_open_bead",
+    "blocked_bead_same_file",
+    "active_fresh_owner",
+    "stale_owner_manual_reopen",
+    "contradictory_ownership"
   ],
   "quality_gates": [
     "jq empty docs/rch_first_error_conveyor_contract_v1.json",

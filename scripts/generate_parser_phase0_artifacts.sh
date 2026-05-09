@@ -18,8 +18,20 @@ provenance_json="$artifact_dir/provenance.json"
 hash_validation_error_json="$artifact_dir/deterministic_hash_validation_error.json"
 fixture_catalog="crates/franken-engine/tests/fixtures/parser_phase0_semantic_fixtures.json"
 
+if ! command -v rch >/dev/null 2>&1; then
+  echo "rch is required for parser phase0 baseline Cargo execution" >&2
+  exit 2
+fi
+
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/target/parser_phase0_artifacts}"
+
+phase0_report_command=(rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" cargo run -p frankenengine-engine --bin franken_parser_phase0_report --quiet)
+
 # Generate baseline report or fallback to degraded state
-if cargo run -p frankenengine-engine --bin franken_parser_phase0_report --quiet > "$baseline_json" 2>/dev/null; then
+if "${phase0_report_command[@]}" > "$baseline_json" 2>/dev/null; then
     echo "Generated baseline report successfully"
 else
     echo "Baseline report binary unavailable, generating fallback baseline"
@@ -96,7 +108,8 @@ jq -n \
     }
   }' > "$performance_receipt"
 
-# Remove flamegraph.svg since we're using degraded receipt mode
+# Remove flamegraph.svg since we're using degraded receipt mode.
+# shellcheck disable=SC2034
 flamegraph_svg=""
 
 completeness_millionths="$(jq -r '.grammar_completeness.completeness_millionths // 0' "$baseline_json")"

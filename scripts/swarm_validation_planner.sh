@@ -10,6 +10,7 @@ source_revision="${SWARM_VALIDATION_PLANNER_SOURCE_REVISION:-}"
 proof_cost_history_json="${SWARM_VALIDATION_PLANNER_PROOF_COST_HISTORY_JSON:-}"
 reservation_snapshot_json="${SWARM_VALIDATION_PLANNER_RESERVATION_SNAPSHOT_JSON:-}"
 in_progress_json="${SWARM_VALIDATION_PLANNER_IN_PROGRESS_JSON:-}"
+native_route_advisory_json="${SWARM_VALIDATION_PLANNER_NATIVE_ROUTE_ADVISORY_JSON:-}"
 package_override=""
 test_target_override=""
 allow_broad="false"
@@ -28,6 +29,8 @@ Options:
   --reservation-snapshot-json PATH
                             Optional Agent Mail reservation snapshot JSON fixture.
   --in-progress-json PATH   Optional br in-progress bead snapshot JSON fixture.
+  --native-route-advisory-json PATH
+                            Optional franken-engine.native-dependency-routing-advisory.v1 artifact.
   --package PACKAGE         Optional package override for Rust path fallback.
   --test-target TARGET      Optional exact integration test target.
   --allow-broad             Permit broad all-targets planning. Default is fail-closed/no broad commands.
@@ -91,6 +94,14 @@ while [[ "$#" -gt 0 ]]; do
         exit 64
       }
       in_progress_json="$2"
+      shift 2
+      ;;
+    --native-route-advisory-json)
+      [[ "$#" -ge 2 ]] || {
+        usage
+        exit 64
+      }
+      native_route_advisory_json="$2"
       shift 2
       ;;
     --package)
@@ -186,6 +197,7 @@ reservation_rows_json="${run_dir}/reservation_snapshot_rows.json"
 in_progress_rows_json="${run_dir}/in_progress_snapshot_rows.json"
 dirty_rows_json="${run_dir}/dirty_worktree_rows.json"
 dirty_rows_jsonl="${run_dir}/dirty_worktree_rows.jsonl"
+native_route_advisory_normalized="${run_dir}/native_route_advisory.normalized.json"
 : >"$commands_jsonl"
 : >"$budgets_jsonl"
 : >"$mappings_jsonl"
@@ -199,6 +211,7 @@ printf '[]\n' >"$planned_write_paths_json"
 printf '[]\n' >"$reservation_rows_json"
 printf '[]\n' >"$in_progress_rows_json"
 printf '[]\n' >"$dirty_rows_json"
+printf '{}\n' >"$native_route_advisory_normalized"
 
 safe_token() {
   tr -c '[:alnum:]_' '_' <<<"$1" | sed 's/_$//'
@@ -232,6 +245,7 @@ write_path_array_json() {
 
 reservation_snapshot_status="missing"
 in_progress_snapshot_status="missing"
+native_route_advisory_status="not_supplied"
 
 json_string_line() {
   jq -nc --arg value "$1" '$value'
@@ -413,6 +427,46 @@ normalize_cost_history() {
           evidence_source: $evidence_source
         }
     ]' "$proof_cost_history_json" >"$cost_rows_json"
+}
+
+normalize_native_route_advisory() {
+  if [[ -z "$native_route_advisory_json" ]]; then
+    native_route_advisory_status="not_supplied"
+    printf '{}\n' >"$native_route_advisory_normalized"
+    return 0
+  fi
+
+  if [[ ! -f "$native_route_advisory_json" ]]; then
+    native_route_advisory_status="missing"
+    emit_warning "missing_native_route_advisory" "Native dependency route advisory file does not exist: ${native_route_advisory_json}"
+    add_reason "missing_native_route_advisory"
+    printf '{}\n' >"$native_route_advisory_normalized"
+    return 0
+  fi
+
+  if ! jq empty "$native_route_advisory_json" >/dev/null 2>&1; then
+    native_route_advisory_status="invalid"
+    emit_warning "invalid_native_route_advisory" "Native dependency route advisory is not valid JSON: ${native_route_advisory_json}"
+    add_reason "invalid_native_route_advisory"
+    printf '{}\n' >"$native_route_advisory_normalized"
+    return 0
+  fi
+
+  if ! jq -e \
+    '.schema_version == "franken-engine.native-dependency-routing-advisory.v1"
+      and (.decision | type == "string")
+      and (.truth_state | type == "string")' \
+    "$native_route_advisory_json" >/dev/null; then
+    native_route_advisory_status="invalid"
+    emit_warning "invalid_native_route_advisory" "Native dependency route advisory must use franken-engine.native-dependency-routing-advisory.v1 with decision and truth_state"
+    add_reason "invalid_native_route_advisory"
+    printf '{}\n' >"$native_route_advisory_normalized"
+    return 0
+  fi
+
+  native_route_advisory_status="present"
+  add_reason "native_route_advisory_supplied"
+  jq -cS . "$native_route_advisory_json" >"$native_route_advisory_normalized"
 }
 
 build_collision_receipt() {
@@ -690,6 +744,88 @@ cost_prediction_for_command() {
       end'
 }
 
+native_route_projection_for_command() {
+  local display="$1"
+  local command_kind="$2"
+
+  jq -nc \
+    --arg input_status "$native_route_advisory_status" \
+    --arg input_path "$native_route_advisory_json" \
+    --arg display "$display" \
+    --arg command_kind "$command_kind" \
+    --slurpfile advisory "$native_route_advisory_normalized" '
+      def heavy: ($command_kind | startswith("rch_"));
+      def base_route($status; $decision; $truth_state; $reason_codes; $command_match):
+        {
+          source: (if $input_path == "" then null else $input_path end),
+          status: $status,
+          decision: $decision,
+          truth_state: $truth_state,
+          command_match: $command_match,
+          required_dependency_ids: [],
+          compatible_worker_ids: [],
+          incompatible_worker_ids: [],
+          fail_closed_worker_ids: [],
+          retry_advice: {},
+          reason_codes: $reason_codes,
+          mutation_policy: {}
+        };
+      if (heavy | not) or $input_status == "not_supplied" then
+        {include: false, risk_flags: []}
+      elif $input_status != "present" then
+        {
+          include: true,
+          risk_flags: ["native_dependency_route_input_" + $input_status],
+          routing: base_route("fail_closed"; "fail_closed"; "unknown"; ["native_route_advisory_" + $input_status]; true)
+        }
+      else
+        ($advisory[0] // {}) as $route
+        | ($route.command // "") as $route_command
+        | (($route_command == "") or ($route_command == $display)) as $command_match
+        | ($route.compatible_worker_ids // []) as $compatible
+        | (($route.incompatible_workers // []) | map(.worker_id // "unknown-worker")) as $incompatible
+        | (($route.fail_closed_workers // []) | map(.worker_id // "unknown-worker")) as $fail_closed_workers
+        | ($route.decision // "fail_closed") as $decision
+        | ($route.truth_state // "unknown") as $truth_state
+        | ($route.reason_codes // []) as $reason_codes
+        | (
+            if ($command_match | not) then "fail_closed"
+            elif $decision == "pass" and $truth_state == "confirmed" and (($incompatible | length) > 0 or ($fail_closed_workers | length) > 0) then "compatible_with_rejections"
+            elif $decision == "pass" and $truth_state == "confirmed" then "compatible"
+            elif $decision == "blocked" then "blocked"
+            else "fail_closed"
+            end
+          ) as $status
+        | {
+            include: true,
+            risk_flags: (
+              if ($command_match | not) then ["native_dependency_route_command_mismatch"]
+              elif $status == "blocked" then ["native_dependency_route_blocked"]
+              elif $status == "fail_closed" then ["native_dependency_route_fail_closed"]
+              elif $status == "compatible_with_rejections" then ["native_dependency_incompatible_workers_rejected"]
+              else []
+              end
+            ),
+            routing: {
+              source: $input_path,
+              status: $status,
+              decision: $decision,
+              truth_state: $truth_state,
+              command_match: $command_match,
+              routing_advisory_id: ($route.routing_advisory_id // null),
+              validation_id: ($route.validation_id // null),
+              required_dependency_ids: ($route.required_dependency_ids // []),
+              compatible_worker_ids: $compatible,
+              incompatible_worker_ids: $incompatible,
+              fail_closed_worker_ids: $fail_closed_workers,
+              retry_advice: ($route.retry_advice // {}),
+              reason_codes: $reason_codes,
+              mutation_policy: ($route.mutation_policy // {})
+            }
+          }
+      end'
+}
+
 emit_command() {
   local command_id="$1"
   local display="$2"
@@ -701,9 +837,10 @@ emit_command() {
   local max_compiled="${8:-0}"
   local max_linked="${9:-0}"
   local max_elapsed_ms="${10:-0}"
-  local prediction
+  local prediction native_projection
 
   prediction="$(cost_prediction_for_command "$command_id" "$command_kind" "$package" "$target" "$recommended_target_dir" "$max_compiled" "$max_linked" "$max_elapsed_ms")"
+  native_projection="$(native_route_projection_for_command "$display" "$command_kind")"
   jq -nc \
     --arg command_id "$command_id" \
     --arg display "$display" \
@@ -712,7 +849,8 @@ emit_command() {
     --arg target "$target" \
     --arg rationale "$rationale" \
     --argjson prediction "$prediction" \
-    '{
+    --argjson native_projection "$native_projection" \
+    '({
       command_id: $command_id,
       display: $display,
       command_kind: $command_kind,
@@ -721,9 +859,9 @@ emit_command() {
       rationale: $rationale,
       predicted_cost: $prediction.predicted_cost,
       recommended_target_dir: $prediction.recommended_target_dir,
-      risk_flags: $prediction.risk_flags,
+      risk_flags: (($prediction.risk_flags + ($native_projection.risk_flags // [])) | sort | unique),
       cost_evidence: $prediction.cost_evidence
-    }' >>"$commands_jsonl"
+    } + (if $native_projection.include then {native_dependency_routing: $native_projection.routing} else {} end))' >>"$commands_jsonl"
 }
 
 emit_budget() {
@@ -840,6 +978,7 @@ write_path_array_json "$planned_write_paths_json" "${planned_write_paths[@]}"
 normalize_reservation_snapshot
 normalize_in_progress_snapshot
 normalize_cost_history
+normalize_native_route_advisory
 
 for raw_path in "${changed_paths[@]}"; do
   path="$(repo_relative_path "$raw_path")"
@@ -950,10 +1089,25 @@ cost_failure_count="$(jq -s '[.[] | select(.kind == "missing_cost_history" or .k
 fallback_count="$(jq -s '[.[] | select(.kind == "package_lib_fallback")] | length' "$mappings_jsonl")"
 risk_flags_json="$(jq '[.[].risk_flags[]?] | sort | unique' "$commands_jsonl")"
 cost_fail_closed_count="$(jq '[.[].risk_flags[]? | select(. == "mismatched_cost_evidence" or . == "contradictory_cost_evidence")] | length' "$commands_jsonl")"
+native_route_blocked_count="$(jq '[.[].native_dependency_routing? | select(.status == "blocked")] | length' "$commands_jsonl")"
+native_route_fail_closed_count="$(jq '[.[].native_dependency_routing? | select(.status == "fail_closed")] | length' "$commands_jsonl")"
+native_route_narrow_count="$(jq '[.[].native_dependency_routing? | select(.status == "compatible_with_rejections")] | length' "$commands_jsonl")"
+if [[ "$native_route_blocked_count" -ne 0 ]]; then
+  emit_warning "native_route_blocked" "native dependency route advisory reports no compatible worker for at least one heavy proof command"
+  add_reason "native_route_blocked"
+fi
+if [[ "$native_route_fail_closed_count" -ne 0 ]]; then
+  emit_warning "native_route_fail_closed" "native dependency route advisory is missing, invalid, stale, contradictory, contaminated, or mismatched for at least one heavy proof command"
+  add_reason "native_route_fail_closed"
+fi
+if [[ "$native_route_narrow_count" -ne 0 ]]; then
+  emit_warning "native_route_compatible_with_rejections" "native dependency route advisory selected a compatible worker while rejecting incompatible or fail-closed candidates"
+  add_reason "native_route_compatible_with_rejections"
+fi
 decision="admit"
-if [[ "$unknown_count" -ne 0 || "$cost_failure_count" -ne 0 || "$cost_fail_closed_count" -ne 0 || "$command_count" -eq 0 || "$reservation_overlap_count" -ne 0 ]]; then
+if [[ "$unknown_count" -ne 0 || "$cost_failure_count" -ne 0 || "$cost_fail_closed_count" -ne 0 || "$native_route_blocked_count" -ne 0 || "$native_route_fail_closed_count" -ne 0 || "$command_count" -eq 0 || "$reservation_overlap_count" -ne 0 ]]; then
   decision="fail_closed"
-elif [[ "$fallback_count" -ne 0 || "$dirty_overlap_count" -ne 0 || "$in_progress_overlap_count" -ne 0 || "$collision_risk" == "agent_mail_snapshot_missing" ]]; then
+elif [[ "$fallback_count" -ne 0 || "$dirty_overlap_count" -ne 0 || "$in_progress_overlap_count" -ne 0 || "$collision_risk" == "agent_mail_snapshot_missing" || "$native_route_narrow_count" -ne 0 ]]; then
   decision="admit_narrow"
 fi
 

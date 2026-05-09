@@ -1,0 +1,145 @@
+{
+  "schema_version": "franken-engine.swarm-validation-plan.v1",
+  "bead_id": "bd-1onpa",
+  "source_revision": "smoke-rev",
+  "decision": "fail_closed",
+  "allow_broad": false,
+  "reason_codes": [
+    "exact_test_target",
+    "native_route_advisory_supplied",
+    "native_route_fail_closed"
+  ],
+  "risk_flags": [
+    "native_dependency_route_fail_closed"
+  ],
+  "changed_paths": [
+    "crates/franken-engine/tests/react_compilation_pipeline_integration.rs"
+  ],
+  "planned_write_paths": [
+    "crates/franken-engine/tests/react_compilation_pipeline_integration.rs"
+  ],
+  "collision_risk": "none",
+  "conflicting_agents": [],
+  "safe_alternatives": [
+    "crates/franken-engine/tests/react_compilation_pipeline_integration.rs"
+  ],
+  "reservation_recommendations": [],
+  "collision_receipt": {
+    "path": "[SMOKE_ROOT]/native-route-fail-closed/collision_receipt.json",
+    "schema_version": "franken-engine.swarm-validation-collision-receipt.v1",
+    "agent_mail_snapshot": {
+      "status": "present",
+      "path": "[SMOKE_ROOT]/no-conflict-reservations.json"
+    },
+    "in_progress_snapshot": {
+      "status": "present",
+      "path": "[SMOKE_ROOT]/clean-in-progress.json"
+    }
+  },
+  "path_mappings": [
+    {
+      "path": "crates/franken-engine/tests/react_compilation_pipeline_integration.rs",
+      "kind": "exact_test_target",
+      "package": "frankenengine-engine",
+      "target": "react_compilation_pipeline_integration",
+      "rationale": "changed integration test maps to its exact test target"
+    }
+  ],
+  "commands": [
+    {
+      "command_id": "cargo-test-react_compilation_pipeline_integration",
+      "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_react_compilation_pipeline_integration cargo test -p frankenengine-engine --test react_compilation_pipeline_integration",
+      "command_kind": "rch_cargo_test",
+      "package": "frankenengine-engine",
+      "target": "react_compilation_pipeline_integration",
+      "rationale": "exact test target inferred from changed integration test path",
+      "predicted_cost": {
+        "schema_version": "franken-engine.swarm-validation-predicted-cost.v1",
+        "state": "matched",
+        "cost_class": "low",
+        "sample_count": 1,
+        "elapsed_ms_p50": 1500,
+        "elapsed_ms_max": 1500,
+        "compiled_target_count_max": 1,
+        "linked_target_count_max": 1
+      },
+      "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_react_compilation_pipeline_integration",
+      "risk_flags": [
+        "native_dependency_route_fail_closed"
+      ],
+      "cost_evidence": {
+        "status": "matched",
+        "source": "[SMOKE_ROOT]/react-low-cost-history.json",
+        "matched_rows": 1,
+        "fresh_rows": 1,
+        "stale_rows": 0,
+        "source_revisions": [
+          "smoke-rev"
+        ],
+        "content_hashes": [
+          "sha-react-low-cost"
+        ]
+      },
+      "native_dependency_routing": {
+        "source": "[SMOKE_ROOT]/native-route-fail-closed.json",
+        "status": "fail_closed",
+        "decision": "fail_closed",
+        "truth_state": "unknown",
+        "command_match": true,
+        "routing_advisory_id": "native-route-smoke",
+        "validation_id": "native-route-smoke",
+        "required_dependency_ids": [
+          "hdf5"
+        ],
+        "compatible_worker_ids": [],
+        "incompatible_worker_ids": [],
+        "fail_closed_worker_ids": [
+          "vmi1149989"
+        ],
+        "retry_advice": {
+          "explanation": "smoke native dependency routing advisory",
+          "mode": "fail_closed_requires_fresh_probe_evidence",
+          "preferred_worker_id": null
+        },
+        "reason_codes": [
+          "no_compatible_workers",
+          "stale_worker_probe"
+        ],
+        "mutation_policy": {
+          "advisory_only": true,
+          "installs_remote_packages": false,
+          "mutates_remote_workers": false,
+          "runs_cargo": false,
+          "runs_rch": false
+        }
+      }
+    }
+  ],
+  "omitted_commands": [
+    {
+      "kind": "broad_all_targets",
+      "path": "*",
+      "reason": "Broad all-targets checks are intentionally omitted unless a later artifact justifies them"
+    }
+  ],
+  "warnings": [
+    {
+      "kind": "native_route_fail_closed",
+      "detail": "native dependency route advisory is missing, invalid, stale, contradictory, contaminated, or mismatched for at least one heavy proof command"
+    }
+  ],
+  "proof_cost_budgets": [
+    {
+      "schema_version": "franken-engine.focused-proof-cost-budget.v1",
+      "suite": "react_compilation_pipeline_integration",
+      "package": "frankenengine-engine",
+      "max_total_compiled_targets": 2,
+      "max_total_linked_targets": 1,
+      "max_unexpected_targets": 0,
+      "max_targets_by_kind": {
+        "test": 1,
+        "lib": 1
+      }
+    }
+  ]
+}

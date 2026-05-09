@@ -173,6 +173,54 @@ write_contradictory_cost_history() {
     }' >"$output_path"
 }
 
+write_native_route_advisory() {
+  local output_path="$1"
+  local command="$2"
+  local decision="$3"
+  local truth_state="$4"
+  local compatible_workers_json="$5"
+  local incompatible_workers_json="$6"
+  local fail_closed_workers_json="$7"
+  local reason_codes_json="$8"
+
+  jq -n \
+    --arg schema_version "franken-engine.native-dependency-routing-advisory.v1" \
+    --arg source_revision "smoke-rev" \
+    --arg command "$command" \
+    --arg decision "$decision" \
+    --arg truth_state "$truth_state" \
+    --argjson compatible_workers "$compatible_workers_json" \
+    --argjson incompatible_workers "$incompatible_workers_json" \
+    --argjson fail_closed_workers "$fail_closed_workers_json" \
+    --argjson reason_codes "$reason_codes_json" \
+    '{
+      schema_version: $schema_version,
+      source_revision: $source_revision,
+      routing_advisory_id: "native-route-smoke",
+      validation_id: "native-route-smoke",
+      command: $command,
+      required_dependency_ids: ["hdf5"],
+      compatible_worker_ids: $compatible_workers,
+      incompatible_workers: $incompatible_workers,
+      fail_closed_workers: $fail_closed_workers,
+      retry_advice: {
+        mode: (if $decision == "pass" then "retry_on_compatible_worker" elif $decision == "blocked" then "block_until_native_dependency_available" else "fail_closed_requires_fresh_probe_evidence" end),
+        preferred_worker_id: ($compatible_workers[0] // null),
+        explanation: "smoke native dependency routing advisory"
+      },
+      reason_codes: $reason_codes,
+      truth_state: $truth_state,
+      decision: $decision,
+      mutation_policy: {
+        advisory_only: true,
+        runs_cargo: false,
+        runs_rch: false,
+        mutates_remote_workers: false,
+        installs_remote_packages: false
+      }
+    }' >"$output_path"
+}
+
 write_reservation_snapshot() {
   local output_path="$1"
   local path_pattern="$2"
@@ -268,6 +316,17 @@ assert_safe_alternative() {
   record_pass "safe alternative includes ${expected_path}"
 }
 
+assert_native_route_status() {
+  local plan_path="$1"
+  local expected_status="$2"
+
+  jq -e \
+    --arg expected_status "$expected_status" \
+    '.commands[0].native_dependency_routing.status == $expected_status' \
+    "$plan_path" >/dev/null
+  record_pass "native route status ${expected_status}"
+}
+
 run_planner_expect_pass() {
   local output_dir="$1"
   shift
@@ -306,6 +365,31 @@ run_planner_expect_cost_fail() {
     '.decision == "fail_closed" and (.risk_flags | index($expected_flag) != null)' \
     "${output_dir}/plan.json" >/dev/null
   assert_no_stale_or_mismatch_low_cost_claim "${output_dir}/plan.json"
+  record_pass "planner failed closed for ${expected_flag}"
+}
+
+run_planner_expect_native_fail() {
+  local output_dir="$1"
+  local expected_flag="$2"
+  shift 2
+  local output exit_code
+
+  set +e
+  output="$(SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE="${SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE:-}" \
+    "$planner" --bead-id bd-1onpa --source-revision smoke-rev --output-dir "$output_dir" "$@" 2>&1)"
+  exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    record_failure "planner unexpectedly passed"
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+
+  jq -e \
+    --arg expected_flag "$expected_flag" \
+    '.decision == "fail_closed" and (.risk_flags | index($expected_flag) != null)' \
+    "${output_dir}/plan.json" >/dev/null
   record_pass "planner failed closed for ${expected_flag}"
 }
 
@@ -372,9 +456,10 @@ assert_default_output_dir_outside_worktree() {
 
 run_selftest() {
   local tmp_parent tmp_root
-  local low_history high_history stale_history mismatched_history contradictory_history
+  local low_history high_history stale_history mismatched_history contradictory_history react_low_history
   local no_conflict_reservations exact_conflict_reservations glob_conflict_reservations
   local clean_in_progress dirty_overlap_in_progress safe_alternative_in_progress
+  local react_command native_route_compatible native_route_blocked native_route_fail_closed
 
   tmp_parent="${SWARM_VALIDATION_PLANNER_SMOKE_ARTIFACT_ROOT:-${TMPDIR:-/tmp}}"
   mkdir -p "$tmp_parent"
@@ -384,13 +469,19 @@ run_selftest() {
   stale_history="${tmp_root}/stale-cost-history.json"
   mismatched_history="${tmp_root}/mismatched-cost-history.json"
   contradictory_history="${tmp_root}/contradictory-cost-history.json"
+  react_low_history="${tmp_root}/react-low-cost-history.json"
   no_conflict_reservations="${tmp_root}/no-conflict-reservations.json"
   exact_conflict_reservations="${tmp_root}/exact-conflict-reservations.json"
   glob_conflict_reservations="${tmp_root}/glob-conflict-reservations.json"
   clean_in_progress="${tmp_root}/clean-in-progress.json"
   dirty_overlap_in_progress="${tmp_root}/dirty-overlap-in-progress.json"
   safe_alternative_in_progress="${tmp_root}/safe-alternative-in-progress.json"
+  native_route_compatible="${tmp_root}/native-route-compatible.json"
+  native_route_blocked="${tmp_root}/native-route-blocked.json"
+  native_route_fail_closed="${tmp_root}/native-route-fail-closed.json"
+  react_command="rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_1onpa_frankenengine_engine_react_compilation_pipeline_integration cargo test -p frankenengine-engine --test react_compilation_pipeline_integration"
   write_proof_cost_history "$low_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 1200 1 1 "pass" false "sha-low-cost"
+  write_proof_cost_history "$react_low_history" "smoke-rev" "cargo-test-react_compilation_pipeline_integration" "frankenengine-engine" "react_compilation_pipeline_integration" 1500 1 1 "pass" false "sha-react-low-cost"
   write_proof_cost_history "$high_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 900000 12 2 "pass" false "sha-high-cost"
   write_proof_cost_history "$stale_history" "old-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-engine" "proof_manifest_golden_artifacts" 800 1 1 "pass" false "sha-stale-cost"
   write_proof_cost_history "$mismatched_history" "smoke-rev" "cargo-test-proof_manifest_golden_artifacts" "frankenengine-extension-host" "proof_manifest_golden_artifacts" 800 1 1 "pass" false "sha-mismatched-cost"
@@ -401,6 +492,21 @@ run_selftest() {
   write_in_progress_snapshot "$clean_in_progress" "bd-clean" "GreenField" "docs/non_overlapping.md"
   write_in_progress_snapshot "$dirty_overlap_in_progress" "bd-overlap" "PurpleRiver" "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md"
   write_in_progress_snapshot "$safe_alternative_in_progress" "bd-safe" "PurpleRiver" "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md"
+  write_native_route_advisory "$native_route_compatible" "$react_command" "pass" "confirmed" \
+    '["vmi1149989"]' \
+    '[{"worker_id":"vmi1227854","reason_codes":["hdf5_missing","missing_required_native_evidence"]}]' \
+    '[]' \
+    '["compatible_worker_available","hdf5_missing","incompatible_worker_missing_native_dependency"]'
+  write_native_route_advisory "$native_route_blocked" "$react_command" "blocked" "blocked" \
+    '[]' \
+    '[{"worker_id":"vmi1227854","reason_codes":["hdf5_missing","missing_required_native_evidence"]}]' \
+    '[]' \
+    '["hdf5_missing","incompatible_worker_missing_native_dependency","no_compatible_workers"]'
+  write_native_route_advisory "$native_route_fail_closed" "$react_command" "fail_closed" "unknown" \
+    '[]' \
+    '[]' \
+    '[{"worker_id":"vmi1149989","reason_codes":["stale_worker_probe"]}]' \
+    '["no_compatible_workers","stale_worker_probe"]'
 
   SWARM_VALIDATION_PLANNER_GIT_STATUS_OVERRIDE=''
   run_planner_expect_pass \
@@ -497,6 +603,51 @@ run_selftest() {
     "$tmp_root" \
     "${tmp_root}/high-cost" \
     "${golden_dir}/swarm_validation_planner_high_cost.golden"
+
+  run_planner_expect_pass \
+    "${tmp_root}/native-route-compatible" \
+    --reservation-snapshot-json "$no_conflict_reservations" \
+    --in-progress-json "$clean_in_progress" \
+    --proof-cost-history-json "$react_low_history" \
+    --native-route-advisory-json "$native_route_compatible" \
+    --changed-path crates/franken-engine/tests/react_compilation_pipeline_integration.rs
+  assert_decision_and_collision "${tmp_root}/native-route-compatible/plan.json" "admit_narrow" "none"
+  assert_native_route_status "${tmp_root}/native-route-compatible/plan.json" "compatible_with_rejections"
+  assert_case_golden \
+    "native-route-compatible" \
+    "$tmp_root" \
+    "${tmp_root}/native-route-compatible" \
+    "${golden_dir}/swarm_validation_planner_native_dependency_compatible.golden"
+
+  run_planner_expect_native_fail \
+    "${tmp_root}/native-route-blocked" \
+    "native_dependency_route_blocked" \
+    --reservation-snapshot-json "$no_conflict_reservations" \
+    --in-progress-json "$clean_in_progress" \
+    --proof-cost-history-json "$react_low_history" \
+    --native-route-advisory-json "$native_route_blocked" \
+    --changed-path crates/franken-engine/tests/react_compilation_pipeline_integration.rs
+  assert_native_route_status "${tmp_root}/native-route-blocked/plan.json" "blocked"
+  assert_case_golden \
+    "native-route-blocked" \
+    "$tmp_root" \
+    "${tmp_root}/native-route-blocked" \
+    "${golden_dir}/swarm_validation_planner_native_dependency_blocked.golden"
+
+  run_planner_expect_native_fail \
+    "${tmp_root}/native-route-fail-closed" \
+    "native_dependency_route_fail_closed" \
+    --reservation-snapshot-json "$no_conflict_reservations" \
+    --in-progress-json "$clean_in_progress" \
+    --proof-cost-history-json "$react_low_history" \
+    --native-route-advisory-json "$native_route_fail_closed" \
+    --changed-path crates/franken-engine/tests/react_compilation_pipeline_integration.rs
+  assert_native_route_status "${tmp_root}/native-route-fail-closed/plan.json" "fail_closed"
+  assert_case_golden \
+    "native-route-fail-closed" \
+    "$tmp_root" \
+    "${tmp_root}/native-route-fail-closed" \
+    "${golden_dir}/swarm_validation_planner_native_dependency_fail_closed.golden"
 
   run_planner_expect_pass \
     "${tmp_root}/stale-cost" \

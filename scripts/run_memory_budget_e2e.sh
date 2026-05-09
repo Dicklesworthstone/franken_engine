@@ -2,314 +2,225 @@
 set -euo pipefail
 
 # Memory Budget Enforcement E2E Test Script
-# Validates memory budget enforcement with adversarial inputs and structured logging
+# Validates memory budget enforcement with adversarial inputs and structured logging.
 # Bead: bd-1yst7.7
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-ARTIFACTS_DIR="artifacts/memory_budget_e2e/${TIMESTAMP}"
-EVENTS_LOG="${ARTIFACTS_DIR}/events.jsonl"
-MANIFEST="${ARTIFACTS_DIR}/run_manifest.json"
-COMMANDS_LOG="${ARTIFACTS_DIR}/commands.txt"
-REPORT="${ARTIFACTS_DIR}/memory_budget_report.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$PROJECT_ROOT/artifacts/memory_budget_e2e/$TIMESTAMP}"
+EVENTS_LOG="$ARTIFACTS_DIR/events.jsonl"
+MANIFEST="$ARTIFACTS_DIR/run_manifest.json"
+COMMANDS_LOG="$ARTIFACTS_DIR/commands.txt"
+REPORT="$ARTIFACTS_DIR/memory_budget_report.json"
+OUTPUT_LOG="$ARTIFACTS_DIR/memory_budget_adversarial_output.txt"
+
+RCH_BIN="${RCH_BIN:-rch}"
+RCH_VISIBILITY="${RCH_VISIBILITY:-verbose}"
+RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="${RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS:-600}"
+RCH_PRIORITY="${RCH_PRIORITY:-low}"
+RCH_CARGO_ENV=(CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1)
+
+TEST_TARGET="memory_budget_adversarial"
+TEST_CASES=(
+    "1|heap_object_limits|test_object_allocation_exhaustion|MemoryBudgetExceeded"
+    "2|heap_byte_limits|test_memory_byte_exhaustion|MemoryBudgetExceeded"
+    "3|scope_chain_depth|test_scope_depth_exhaustion|ScopeDepthExceeded"
+    "4|closure_allocation|test_closure_memory_amplification|success_or_MemoryBudgetExceeded"
+    "5|generator_allocation|test_generator_memory_exhaustion|success_or_MemoryBudgetExceeded"
+    "6|iterator_allocation|test_iterator_allocation_loop|success_or_MemoryBudgetExceeded"
+    "7|combined_pressure|test_combined_memory_exhaustion|success_or_MemoryBudgetExceeded"
+    "8|boundary_conditions|test_memory_budget_boundary_conditions|boundary_success_then_MemoryBudgetExceeded"
+    "9|regression|test_memory_recovery_after_budget_error|recovery_after_MemoryBudgetExceeded"
+)
 
 mkdir -p "$ARTIFACTS_DIR"
+: > "$EVENTS_LOG"
+: > "$COMMANDS_LOG"
+
+RUN_COMMAND=(
+    "$RCH_BIN" exec -- env
+    "${RCH_CARGO_ENV[@]}"
+    cargo test -p frankenengine-engine --test "$TEST_TARGET" -- --nocapture
+)
 
 echo "=== Memory Budget E2E Test Suite ==="
 echo "Timestamp: $TIMESTAMP"
 echo "Artifacts: $ARTIFACTS_DIR"
 echo "Events log: $EVENTS_LOG"
-
-# Initialize manifest
-cat > "$MANIFEST" << EOF
-{
-  "suite": "memory_budget_e2e",
-  "timestamp": "$(date -Iseconds)",
-  "artifacts_dir": "$ARTIFACTS_DIR",
-  "total_test_cases": 17,
-  "test_categories": {
-    "heap_object_limits": 5,
-    "scope_chain_depth": 4,
-    "gc_integration": 3,
-    "budget_interaction": 3,
-    "regression": 2
-  },
-  "description": "Memory budget enforcement validation with adversarial inputs"
-}
-EOF
-
-echo "Suite initialized with manifest: $MANIFEST"
-echo "Starting 17 test cases across 5 categories..."
 echo
 
-# Track test results
-total_tests=17
-passed_tests=0
-failed_tests=0
-
-# Test execution helper
-run_memory_test() {
-    local test_id=$1
-    local test_name=$2
-    local js_source=$3
-    local expected_result=$4  # "pass" or "fail"
-    local expected_error_type=${5:-"null"}
-
-    echo "Test $test_id: $test_name"
-
-    # Record command
-    echo "Test $test_id: cargo test --test memory_budget_adversarial $test_name" >> "$COMMANDS_LOG"
-
-    local start_time=$(date +%s%3N)
-    local test_status="unknown"
-    local error_type="null"
-
-    # Create temporary test file with the JS source
-    local temp_test_file="/tmp/memory_test_${test_id}.rs"
-    cat > "$temp_test_file" << EOF
-#[test]
-fn ${test_name}() {
-    let mut config = frankenengine_engine::baseline_interpreter::InterpreterConfig::quickjs_defaults();
-    config.max_heap_objects = 10; // Low limit for testing
-    config.max_total_memory_bytes = 1024 * 4; // 4KB limit
-    config.max_scope_depth = 5; // Low depth limit
-
-    let lane = frankenengine_engine::baseline_interpreter::QuickJsLane::new(config);
-    let result = lane.execute_source("$js_source", "$test_name");
-
-    match result {
-        Ok(_) => {
-            if "$expected_result" == "pass" {
-                // Test passed as expected
-            } else {
-                panic!("Expected test to fail but it passed");
-            }
-        },
-        Err(e) => {
-            if "$expected_result" == "fail" {
-                // Test failed as expected - check error type if specified
-                println!("Error (expected): {:?}", e);
-            } else {
-                panic!("Expected test to pass but it failed: {:?}", e);
-            }
-        }
-    }
-}
-EOF
-
-    # Execute the actual test instead of simulating results
-    local test_exit_code=0
-    if timeout 30 cargo test --test memory_budget_e2e_generated -- "${test_name}" --nocapture 2>&1; then
-        test_exit_code=0
-    else
-        test_exit_code=$?
-    fi
-
-    # Evaluate real test result against expectation
-    if [[ "$expected_result" == "pass" && $test_exit_code -eq 0 ]]; then
-        test_status="pass"
-        ((passed_tests++))
-    elif [[ "$expected_result" == "fail" && $test_exit_code -ne 0 ]]; then
-        test_status="fail"
-        error_type="$expected_error_type"
-        ((passed_tests++))  # Expected failure counts as success
-    else
-        test_status="unexpected"
-        if [[ "$expected_result" == "pass" ]]; then
-            error_type="unexpected_failure"
-        else
-            error_type="unexpected_success"
-        fi
-        ((failed_tests++))
-    fi
-
-    local end_time=$(date +%s%3N)
-    local duration=$((end_time - start_time))
-
-    # Log test result to JSONL
-    cat >> "$EVENTS_LOG" << EOF
-{"test_id":$test_id,"test_name":"$test_name","js_source":"$js_source","status":"$test_status","peak_heap_objects":0,"peak_memory_bytes":0,"instructions_consumed":0,"error_type":"$error_type","gc_collections":0,"duration_ms":$duration,"timestamp":"$(date -Iseconds)"}
-EOF
-
-    echo "  Status: $test_status ($duration ms)"
-    echo
-}
-
-# ==========================================================================
-# Heap Object Limits (5 cases)
-# ==========================================================================
-
-echo "=== Category 1: Heap Object Limits ==="
-
-# Test 1: Allocate max_heap_objects - 1 (should succeed)
-run_memory_test 1 "heap_objects_under_limit" \
-    "for(let i=0; i<9; i++) { let obj = {value: i}; }" \
-    "pass"
-
-# Test 2: Allocate max_heap_objects (boundary - should succeed)
-run_memory_test 2 "heap_objects_at_limit" \
-    "for(let i=0; i<10; i++) { let obj = {value: i}; }" \
-    "pass"
-
-# Test 3: Allocate max_heap_objects + 1 (should fail)
-run_memory_test 3 "heap_objects_over_limit" \
-    "for(let i=0; i<11; i++) { let obj = {value: i}; }" \
-    "fail" "MemoryBudgetExceeded"
-
-# Test 4: Large properties (should hit memory byte limit)
-run_memory_test 4 "large_properties_memory_limit" \
-    "let obj = {}; for(let i=0; i<100; i++) { obj['key'+i] = 'very_long_string_that_consumes_memory_quickly_'.repeat(50); }" \
-    "fail" "MemoryBudgetExceeded"
-
-# Test 5: Generator yield loop (objects per yield)
-run_memory_test 5 "generator_object_allocation" \
-    "function* gen() { for(let i=0; i<20; i++) { yield {id: i, data: 'test'}; } } let g = gen(); for(let i=0; i<20; i++) { let val = g.next(); if(val.done) break; }" \
-    "fail" "MemoryBudgetExceeded"
-
-# ==========================================================================
-# Scope Chain Depth (4 cases)
-# ==========================================================================
-
-echo "=== Category 2: Scope Chain Depth ==="
-
-# Test 6: Nested functions under limit (should succeed)
-run_memory_test 6 "scope_depth_under_limit" \
-    "function f1() { function f2() { function f3() { function f4() { return 42; } return f4(); } return f3(); } return f2(); } f1();" \
-    "pass"
-
-# Test 7: Nested functions over limit (should fail)
-run_memory_test 7 "scope_depth_over_limit" \
-    "function f1() { function f2() { function f3() { function f4() { function f5() { function f6() { return 42; } return f6(); } return f5(); } return f4(); } return f3(); } return f2(); } f1();" \
-    "fail" "ScopeDepthExceeded"
-
-# Test 8: Closure capture at deep scope
-run_memory_test 8 "deep_scope_closure_capture" \
-    "function outer() { let x = 1; function mid() { let y = 2; function inner() { return function() { return x + y; }; } return inner(); } return mid(); } outer()();" \
-    "pass"
-
-# Test 9: Recursive closure creation (O(n^2) amplification)
-run_memory_test 9 "recursive_closure_creation" \
-    "function createClosures(depth) { if(depth <= 0) return []; let captured = depth; return [function() { return captured; }].concat(createClosures(depth-1)); } createClosures(10);" \
-    "fail" "MemoryBudgetExceeded"
-
-# ==========================================================================
-# GC Integration (3 cases)
-# ==========================================================================
-
-echo "=== Category 3: GC Integration ==="
-
-# Test 10: GC reclamation (allocate, drop, reallocate)
-run_memory_test 10 "gc_reclamation_cycle" \
-    "for(let round=0; round<3; round++) { let objs = []; for(let i=0; i<5; i++) { objs.push({round: round, id: i}); } objs = null; }" \
-    "pass"
-
-# Test 11: GC pressure threshold
-run_memory_test 11 "gc_pressure_threshold" \
-    "let objs = []; for(let i=0; i<8; i++) { objs.push({size: 'medium_string_'.repeat(10), id: i}); } objs.push({final: true});" \
-    "pass"
-
-# Test 12: Per-extension isolation (simulated)
-run_memory_test 12 "extension_isolation_simulation" \
-    "let extensionA = []; for(let i=0; i<5; i++) { extensionA.push({ext: 'A', id: i}); } let extensionB = []; for(let i=0; i<5; i++) { extensionB.push({ext: 'B', id: i}); }" \
-    "pass"
-
-# ==========================================================================
-# Budget Interaction (3 cases)
-# ==========================================================================
-
-echo "=== Category 4: Budget Interaction ==="
-
-# Test 13: Memory budget exhausted before instruction budget
-run_memory_test 13 "memory_before_instruction_budget" \
-    "for(let i=0; i<50; i++) { let obj = {iteration: i, data: 'small'}; }" \
-    "fail" "MemoryBudgetExceeded"
-
-# Test 14: Instruction budget exhausted before memory budget
-run_memory_test 14 "instruction_before_memory_budget" \
-    "let count = 0; for(let i=0; i<1000000; i++) { count += i; }" \
-    "fail" "InstructionBudgetExceeded"
-
-# Test 15: Combined limits (scope + objects + strings)
-run_memory_test 15 "combined_limits_stress" \
-    "function outer() { let strings = []; for(let i=0; i<5; i++) { strings.push('data'.repeat(20)); } function inner() { let objs = []; for(let j=0; j<5; j++) { objs.push({str: strings[j % strings.length]}); } return objs; } return inner(); } outer();" \
-    "fail" "MemoryBudgetExceeded"
-
-# ==========================================================================
-# Regression (2 cases)
-# ==========================================================================
-
-echo "=== Category 5: Regression ==="
-
-# Test 16: alloc_object returns Result (not panic)
-run_memory_test 16 "alloc_object_returns_result" \
-    "for(let i=0; i<15; i++) { try { let obj = {id: i}; } catch(e) { console.log('Caught:', e); } }" \
-    "fail" "MemoryBudgetExceeded"
-
-# Test 17: alloc_iterator returns Result
-run_memory_test 17 "alloc_iterator_returns_result" \
-    "let arrays = []; for(let i=0; i<10; i++) { let arr = [1,2,3,4,5]; arrays.push(arr); for(let val of arr) { console.log(val); } }" \
-    "fail" "MemoryBudgetExceeded"
-
-# ==========================================================================
-# Generate Final Report
-# ==========================================================================
-
-echo "=== Generating Final Report ==="
-
-success_rate=$(echo "scale=2; $passed_tests * 100 / $total_tests" | bc -l)
-
-cat > "$REPORT" << EOF
 {
-  "suite": "memory_budget_e2e",
-  "timestamp": "$(date -Iseconds)",
-  "execution_summary": {
-    "total_tests": $total_tests,
-    "passed_tests": $passed_tests,
-    "failed_tests": $failed_tests,
-    "success_rate_percent": $success_rate
-  },
-  "test_categories": {
-    "heap_object_limits": {
-      "category_tests": 5,
-      "description": "Object allocation limits and boundary conditions"
-    },
-    "scope_chain_depth": {
-      "category_tests": 4,
-      "description": "Function nesting and closure scope chain limits"
-    },
-    "gc_integration": {
-      "category_tests": 3,
-      "description": "Garbage collection integration with memory budgets"
-    },
-    "budget_interaction": {
-      "category_tests": 3,
-      "description": "Interaction between memory, instruction, and scope budgets"
-    },
-    "regression": {
-      "category_tests": 2,
-      "description": "Regression tests for Result-based allocation APIs"
-    }
-  },
-  "artifacts": {
-    "events_log": "$EVENTS_LOG",
-    "run_manifest": "$MANIFEST",
-    "commands_log": "$COMMANDS_LOG",
-    "summary_report": "$REPORT"
-  },
-  "compliance": {
-    "structured_logging": true,
-    "deterministic_execution": true,
-    "artifact_publication": true,
-    "adversarial_inputs": true
-  }
+    echo "# Memory Budget E2E Commands"
+    echo "# Started: $TIMESTAMP"
+    echo "RCH_VISIBILITY=$RCH_VISIBILITY RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=$RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS RCH_PRIORITY=$RCH_PRIORITY ${RUN_COMMAND[*]}"
+} >> "$COMMANDS_LOG"
+
+python3 - "$MANIFEST" "$ARTIFACTS_DIR" "$OUTPUT_LOG" "$COMMANDS_LOG" "$TEST_TARGET" "${RUN_COMMAND[@]}" __CASES__ "${TEST_CASES[@]}" << 'PY'
+import datetime
+import json
+import sys
+
+separator = sys.argv.index("__CASES__")
+manifest_path, artifacts_dir, output_log, commands_log, test_target = sys.argv[1:6]
+run_command = sys.argv[6:separator]
+cases = []
+for spec in sys.argv[separator + 1:]:
+    test_id, category, test_name, expected = spec.split("|", 3)
+    cases.append(
+        {
+            "test_id": int(test_id),
+            "category": category,
+            "test_name": test_name,
+            "expected_outcome": expected,
+        }
+    )
+
+manifest = {
+    "suite": "memory_budget_e2e",
+    "schema_version": "franken-engine.memory-budget-e2e.v2",
+    "timestamp": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "artifacts_dir": artifacts_dir,
+    "events_log": "events.jsonl",
+    "commands_log": "commands.txt",
+    "output_log": "memory_budget_adversarial_output.txt",
+    "test_target": test_target,
+    "total_test_cases": len(cases),
+    "run_command": run_command,
+    "test_cases": cases,
+    "description": "rch-backed memory budget adversarial integration test evidence",
 }
-EOF
+with open(manifest_path, "w", encoding="utf-8") as fh:
+    json.dump(manifest, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
 
-# ==========================================================================
-# Final Summary
-# ==========================================================================
+echo "Running rch-backed Rust target: $TEST_TARGET"
+start_time="$(date +%s%3N)"
+set +e
+RCH_VISIBILITY="$RCH_VISIBILITY" \
+    RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="$RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS" \
+    RCH_PRIORITY="$RCH_PRIORITY" \
+    "${RUN_COMMAND[@]}" > "$OUTPUT_LOG" 2>&1
+command_exit=$?
+set -e
+end_time="$(date +%s%3N)"
+duration_ms=$((end_time - start_time))
 
+python3 - "$EVENTS_LOG" "$REPORT" "$OUTPUT_LOG" "$command_exit" "$duration_ms" "${TEST_CASES[@]}" << 'PY'
+import datetime
+import json
+import re
+import sys
+
+events_path, report_path, output_path = sys.argv[1:4]
+command_exit = int(sys.argv[4])
+duration_ms = int(sys.argv[5])
+case_specs = sys.argv[6:]
+
+with open(output_path, "r", encoding="utf-8", errors="replace") as fh:
+    output = fh.read()
+
+timestamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+cases = []
+passed = 0
+
+with open(events_path, "a", encoding="utf-8") as events:
+    for spec in case_specs:
+        test_id, category, test_name, expected = spec.split("|", 3)
+        observed = re.search(rf"test\s+{re.escape(test_name)}\s+\.\.\.\s+ok\b", output) is not None
+        status = "pass" if command_exit == 0 and observed else "fail"
+        if status == "pass":
+            passed += 1
+        event = {
+            "test_id": int(test_id),
+            "test_name": test_name,
+            "category": category,
+            "status": status,
+            "expected_outcome": expected,
+            "observed_in_rust_output": observed,
+            "command_exit_code": command_exit,
+            "duration_ms": duration_ms,
+            "evidence_source": "cargo_test_memory_budget_adversarial_via_rch",
+            "output_log": output_path,
+            "timestamp": timestamp,
+        }
+        json.dump(event, events, sort_keys=True)
+        events.write("\n")
+        cases.append(event)
+
+    summary = {
+        "suite_complete": True,
+        "total_tests": len(cases),
+        "passed_tests": passed,
+        "failed_tests": len(cases) - passed,
+        "success_rate_percent": round((passed * 100.0) / len(cases), 2) if cases else 0.0,
+        "command_exit_code": command_exit,
+        "duration_ms": duration_ms,
+        "timestamp": timestamp,
+    }
+    json.dump(summary, events, sort_keys=True)
+    events.write("\n")
+
+report = {
+    "suite": "memory_budget_e2e",
+    "schema_version": "franken-engine.memory-budget-e2e.report.v2",
+    "execution_summary": {
+        "total_tests": len(cases),
+        "passed_tests": passed,
+        "failed_tests": len(cases) - passed,
+        "success_rate_percent": round((passed * 100.0) / len(cases), 2) if cases else 0.0,
+        "command_exit_code": command_exit,
+        "duration_ms": duration_ms,
+    },
+    "cases": cases,
+    "artifacts": {
+        "events_log": events_path,
+        "summary_report": report_path,
+        "rust_output": output_path,
+    },
+    "compliance": {
+        "structured_logging": True,
+        "deterministic_execution": True,
+        "artifact_publication": True,
+        "adversarial_inputs": True,
+        "rch_backed_rust_execution": True,
+        "simulated_replay": False,
+    },
+}
+with open(report_path, "w", encoding="utf-8") as fh:
+    json.dump(report, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+
+passed_tests="$(python3 - "$REPORT" << 'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    report = json.load(fh)
+print(report["execution_summary"]["passed_tests"])
+PY
+)"
+failed_tests="$(python3 - "$REPORT" << 'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    report = json.load(fh)
+print(report["execution_summary"]["failed_tests"])
+PY
+)"
+success_rate="$(python3 - "$REPORT" << 'PY'
+import json
+import sys
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    report = json.load(fh)
+print(report["execution_summary"]["success_rate_percent"])
+PY
+)"
+
+echo
 echo "=== Memory Budget E2E Test Results ==="
-echo "Total test cases: $total_tests"
+echo "Total test cases: ${#TEST_CASES[@]}"
 echo "Passed: $passed_tests"
 echo "Failed: $failed_tests"
 echo "Success rate: ${success_rate}%"
@@ -318,20 +229,13 @@ echo "Artifacts published to: $ARTIFACTS_DIR"
 echo "- Events log: $EVENTS_LOG"
 echo "- Run manifest: $MANIFEST"
 echo "- Commands log: $COMMANDS_LOG"
+echo "- Rust output: $OUTPUT_LOG"
 echo "- Summary report: $REPORT"
-echo
 
-# Emit final summary to events log
-cat >> "$EVENTS_LOG" << EOF
-{"suite_complete":true,"total_tests":$total_tests,"passed_tests":$passed_tests,"failed_tests":$failed_tests,"success_rate_percent":$success_rate,"timestamp":"$(date -Iseconds)"}
-EOF
-
-if [ $failed_tests -eq 0 ]; then
-    echo "✅ All memory budget tests completed successfully!"
-    echo "🔒 Memory budget enforcement validated across all categories"
+if [[ "$failed_tests" == "0" ]]; then
+    echo "All memory budget tests completed successfully."
     exit 0
-else
-    echo "⚠️  Some test cases failed (expected for adversarial testing)"
-    echo "📊 Review artifacts for detailed analysis"
-    exit 1
 fi
+
+echo "Memory budget E2E failed; inspect $OUTPUT_LOG and $EVENTS_LOG."
+exit 1

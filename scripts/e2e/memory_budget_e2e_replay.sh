@@ -2,28 +2,40 @@
 set -euo pipefail
 
 # Memory Budget E2E Replay Script
-# Replays memory budget enforcement tests from artifacts for deterministic validation
+# Replays memory budget enforcement tests by rerunning the rch-backed Rust target.
 # Bead: bd-1yst7.7
 
-if [ $# -ne 1 ]; then
+if [[ $# -ne 1 ]]; then
     echo "Usage: $0 <artifacts_dir>"
-    echo "Example: $0 artifacts/memory_budget_e2e/20260416_141900"
+    echo "Example: $0 artifacts/memory_budget_e2e/20260416T141900Z"
     exit 1
 fi
 
 ARTIFACTS_DIR="$1"
-EVENTS_LOG="${ARTIFACTS_DIR}/events.jsonl"
-MANIFEST="${ARTIFACTS_DIR}/run_manifest.json"
-COMMANDS_LOG="${ARTIFACTS_DIR}/commands.txt"
-REPLAY_LOG="${ARTIFACTS_DIR}/replay_$(date +%Y%m%d_%H%M%S).jsonl"
+EVENTS_LOG="$ARTIFACTS_DIR/events.jsonl"
+MANIFEST="$ARTIFACTS_DIR/run_manifest.json"
+REPLAY_LOG="$ARTIFACTS_DIR/replay_$(date -u +%Y%m%dT%H%M%SZ).jsonl"
+REPLAY_OUTPUT="$ARTIFACTS_DIR/replay_memory_budget_adversarial_output.txt"
 
-if [ ! -d "$ARTIFACTS_DIR" ]; then
-    echo "Error: Artifacts directory not found: $ARTIFACTS_DIR"
+RCH_BIN="${RCH_BIN:-rch}"
+RCH_VISIBILITY="${RCH_VISIBILITY:-verbose}"
+RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="${RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS:-600}"
+RCH_PRIORITY="${RCH_PRIORITY:-low}"
+RCH_CARGO_ENV=(CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1)
+TEST_TARGET="memory_budget_adversarial"
+
+if [[ ! -d "$ARTIFACTS_DIR" ]]; then
+    echo "Error: artifacts directory not found: $ARTIFACTS_DIR"
     exit 1
 fi
 
-if [ ! -f "$EVENTS_LOG" ]; then
-    echo "Error: Events log not found: $EVENTS_LOG"
+if [[ ! -f "$EVENTS_LOG" ]]; then
+    echo "Error: events log not found: $EVENTS_LOG"
+    exit 1
+fi
+
+if [[ ! -f "$MANIFEST" ]]; then
+    echo "Error: run manifest not found: $MANIFEST"
     exit 1
 fi
 
@@ -33,115 +45,102 @@ echo "Original events: $EVENTS_LOG"
 echo "Replay log: $REPLAY_LOG"
 echo
 
-# Validate manifest
-if [ -f "$MANIFEST" ]; then
-    echo "Validating manifest..."
-    if jq empty "$MANIFEST" 2>/dev/null; then
-        echo "✓ Manifest is valid JSON"
-        total_tests=$(jq -r '.total_test_cases' "$MANIFEST")
-        echo "✓ Expected test cases: $total_tests"
-    else
-        echo "⚠ Manifest JSON is invalid"
-    fi
-else
-    echo "⚠ Manifest not found"
-fi
+jq -e '.schema_version == "franken-engine.memory-budget-e2e.v2"' "$MANIFEST" >/dev/null
+jq -e --arg target "$TEST_TARGET" '.test_target == $target' "$MANIFEST" >/dev/null
 
-# Validate events log
-echo "Validating events log..."
-event_count=0
-test_events=0
-suite_complete=false
+RUN_COMMAND=(
+    "$RCH_BIN" exec -- env
+    "${RCH_CARGO_ENV[@]}"
+    cargo test -p frankenengine-engine --test "$TEST_TARGET" -- --nocapture
+)
 
-while IFS= read -r line; do
-    ((event_count++))
-    if echo "$line" | jq -e '.test_id' > /dev/null 2>&1; then
-        ((test_events++))
-    fi
-    if echo "$line" | jq -e '.suite_complete' > /dev/null 2>&1; then
-        suite_complete=true
-    fi
-done < "$EVENTS_LOG"
+python3 - "$REPLAY_LOG" "$ARTIFACTS_DIR" << 'PY'
+import datetime
+import json
+import sys
 
-echo "✓ Total events: $event_count"
-echo "✓ Test events: $test_events"
-echo "✓ Suite completed: $suite_complete"
+path, artifacts_dir = sys.argv[1:3]
+record = {
+    "replay_started": True,
+    "original_artifacts": artifacts_dir,
+    "timestamp": datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+}
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(record, fh, sort_keys=True)
+    fh.write("\n")
+PY
 
-# Start replay
-echo
-echo "=== Starting Replay ==="
+echo "Running rch-backed replay target: $TEST_TARGET"
+set +e
+RCH_VISIBILITY="$RCH_VISIBILITY" \
+    RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="$RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS" \
+    RCH_PRIORITY="$RCH_PRIORITY" \
+    "${RUN_COMMAND[@]}" > "$REPLAY_OUTPUT" 2>&1
+command_exit=$?
+set -e
 
-cat > "$REPLAY_LOG" << EOF
-{"replay_started":true,"original_artifacts":"$ARTIFACTS_DIR","timestamp":"$(date -Iseconds)"}
-EOF
+python3 - "$EVENTS_LOG" "$REPLAY_LOG" "$REPLAY_OUTPUT" "$command_exit" << 'PY'
+import datetime
+import json
+import re
+import sys
 
-# Replay each test event
-replay_passed=0
-replay_failed=0
+events_path, replay_log, replay_output_path = sys.argv[1:4]
+command_exit = int(sys.argv[4])
 
-while IFS= read -r line; do
-    if echo "$line" | jq -e '.test_id' > /dev/null 2>&1; then
-        test_id=$(echo "$line" | jq -r '.test_id')
-        test_name=$(echo "$line" | jq -r '.test_name')
-        original_status=$(echo "$line" | jq -r '.status')
-        original_duration=$(echo "$line" | jq -r '.duration_ms')
-        js_source=$(echo "$line" | jq -r '.js_source')
+with open(replay_output_path, "r", encoding="utf-8", errors="replace") as fh:
+    output = fh.read()
 
-        echo "Replaying Test $test_id: $test_name"
-        echo "  Original: $original_status (${original_duration}ms)"
-        echo "  JS: ${js_source:0:60}..."
+expected = []
+with open(events_path, "r", encoding="utf-8") as fh:
+    for line in fh:
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("test_name") and event.get("status") == "pass":
+            expected.append(event["test_name"])
 
-        # Simulate replay (deterministic validation)
-        replay_start=$(date +%s%3N)
+timestamp = datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+validated = 0
+invalid = 0
+with open(replay_log, "a", encoding="utf-8") as out:
+    for test_name in expected:
+        observed = re.search(rf"test\s+{re.escape(test_name)}\s+\.\.\.\s+ok\b", output) is not None
+        status = "validated" if command_exit == 0 and observed else "invalid"
+        if status == "validated":
+            validated += 1
+        else:
+            invalid += 1
+        record = {
+            "test_name": test_name,
+            "replay_status": status,
+            "observed_in_rust_output": observed,
+            "command_exit_code": command_exit,
+            "deterministic_validation": command_exit == 0 and observed,
+            "timestamp": timestamp,
+        }
+        json.dump(record, out, sort_keys=True)
+        out.write("\n")
 
-        # For replay, we validate the test structure and expected outcome
-        if [[ "$original_status" == "pass" || "$original_status" == "fail" ]]; then
-            replay_status="validated"
-            ((replay_passed++))
-        else
-            replay_status="invalid"
-            ((replay_failed++))
-        fi
+    summary = {
+        "replay_complete": True,
+        "replayed_tests": len(expected),
+        "validated": validated,
+        "invalid": invalid,
+        "success_rate_percent": round((validated * 100.0) / len(expected), 2) if expected else 0.0,
+        "command_exit_code": command_exit,
+        "replay_output": replay_output_path,
+        "timestamp": timestamp,
+    }
+    json.dump(summary, out, sort_keys=True)
+    out.write("\n")
 
-        replay_end=$(date +%s%3N)
-        replay_duration=$((replay_end - replay_start))
-
-        echo "  Replay: $replay_status (${replay_duration}ms)"
-
-        # Log replay result
-        cat >> "$REPLAY_LOG" << EOF
-{"replay_test_id":$test_id,"test_name":"$test_name","original_status":"$original_status","replay_status":"$replay_status","original_duration_ms":$original_duration,"replay_duration_ms":$replay_duration,"deterministic":true,"timestamp":"$(date -Iseconds)"}
-EOF
-    fi
-done < "$EVENTS_LOG"
-
-# Generate replay summary
-echo
-echo "=== Replay Summary ==="
-echo "Tests replayed: $((replay_passed + replay_failed))"
-echo "Validated: $replay_passed"
-echo "Invalid: $replay_failed"
-
-replay_success_rate=0
-if [ $((replay_passed + replay_failed)) -gt 0 ]; then
-    replay_success_rate=$(echo "scale=2; $replay_passed * 100 / ($replay_passed + $replay_failed)" | bc -l)
-fi
-
-echo "Replay success rate: ${replay_success_rate}%"
-
-# Final replay log entry
-cat >> "$REPLAY_LOG" << EOF
-{"replay_complete":true,"replayed_tests":$((replay_passed + replay_failed)),"validated":$replay_passed,"invalid":$replay_failed,"success_rate_percent":$replay_success_rate,"deterministic_validation":true,"timestamp":"$(date -Iseconds)"}
-EOF
+if invalid or command_exit != 0 or not expected:
+    sys.exit(1)
+PY
 
 echo
 echo "Replay artifacts:"
 echo "- Replay log: $REPLAY_LOG"
-
-if [ $replay_failed -eq 0 ]; then
-    echo "✅ All tests validated in replay!"
-    exit 0
-else
-    echo "❌ Some tests failed validation in replay"
-    exit 1
-fi
+echo "- Replay Rust output: $REPLAY_OUTPUT"
+echo "All memory budget tests validated in replay."

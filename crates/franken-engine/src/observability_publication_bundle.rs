@@ -2035,9 +2035,7 @@ mod tests {
                     suppression_reasons: vec![format!("suppressed {}", mode.as_str())],
                     content_hash: ContentHash::default(),
                 };
-                decision.content_hash = decision
-                    .compute_hash()
-                    .expect("promotion decision hash computation should not fail");
+                decision.content_hash = decision.compute_hash();
 
                 ObservabilitySupremacyCellSnapshot {
                     workload_id: workload.workload_id().to_string(),

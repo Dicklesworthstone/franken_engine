@@ -1,0 +1,473 @@
+{
+  "schema_version": "franken-engine.swarm-feedback-family-conformance.fixtures.v1",
+  "base_artifacts": {
+    "contract_profile": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.swarm-feedback-contract-profile.report.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_br": false
+      }
+    },
+    "proof_portfolio": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.swarm-proof-portfolio.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "runs_cargo": false,
+        "runs_rch": false
+      }
+    },
+    "target_dir_heatmap": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.swarm-rch-target-dir-heatmap.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "runs_rch": false
+      }
+    },
+    "agent_mail_sla": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.agent-mail-sla-report.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "sends_agent_mail": false,
+        "releases_reservations": false,
+        "mutates_br": false
+      }
+    },
+    "stalled_ownership_reopen": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "runs_br_reopen": false,
+        "mutates_br": false
+      }
+    },
+    "since_green_diff": {
+      "present": true,
+      "decision": "pass",
+      "schema_version": "franken-engine.swarm-since-green-slo-diff.v1",
+      "evidence_freshness": "fresh",
+      "non_mutation_attestation": {
+        "advisory_only": true,
+        "reruns_proofs": false,
+        "mutates_claims": false,
+        "runs_rch": false
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_family_output",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "fresh"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_cargo": false,
+              "runs_rch": false,
+              "mutates_br": false
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_cargo": false,
+              "runs_rch": false
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_rch": false
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "sends_agent_mail": false,
+              "releases_reservations": false,
+              "mutates_br": false
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_br_reopen": false,
+              "mutates_br": false
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "reruns_proofs": false,
+              "mutates_claims": false,
+              "runs_rch": false
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass"
+      }
+    },
+    {
+      "case_id": "missing_profile_contract",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "fresh"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": false,
+            "decision": "missing",
+            "evidence_freshness": "missing",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_rch": false
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_rch": false
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "reason_code": "missing_profile_contract"
+      }
+    },
+    {
+      "case_id": "stale_upstream_evidence",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "stale"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "reason_code": "stale_upstream_evidence"
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "fresh"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "fail_closed",
+            "local_fallback_detected": true,
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "reason_code": "local_fallback_contamination"
+      }
+    },
+    {
+      "case_id": "mutation_wording",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "fresh"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "mutation_wording_detected": true,
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true,
+              "runs_br_reopen": false
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "reason_code": "mutation_wording"
+      }
+    },
+    {
+      "case_id": "claim_proof_downgrade_required",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-family-conformance.input.v1",
+        "upstream_evidence": {
+          "live_state_freshness": "fresh"
+        },
+        "artifacts": {
+          "contract_profile": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "proof_portfolio": {
+            "present": true,
+            "decision": "pass",
+            "proof_state": "targeted_without_live_proof",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "target_dir_heatmap": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "agent_mail_sla": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "stalled_ownership_reopen": {
+            "present": true,
+            "decision": "pass",
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          },
+          "since_green_diff": {
+            "present": true,
+            "decision": "degraded",
+            "claim_downgrade_required": true,
+            "evidence_freshness": "fresh",
+            "non_mutation_attestation": {
+              "advisory_only": true
+            }
+          }
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "reason_code": "claim_proof_state_downgrade_required"
+      }
+    }
+  ]
+}

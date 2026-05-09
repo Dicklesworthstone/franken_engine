@@ -1,0 +1,191 @@
+{
+  "schema_version": "franken-engine.swarm-since-green-slo-diff.fixtures.v1",
+  "default_input": {
+    "schema_version": "franken-engine.swarm-since-green-slo-diff.input.v1",
+    "green_bundle": {
+      "present": true,
+      "bundle_id": "green-20260509T120000Z",
+      "path": "artifacts/green/run_manifest.json",
+      "decision": "pass",
+      "owning_bead": "bd-gvhsx.5",
+      "owning_surface": "swarm-since-green",
+      "artifacts": [
+        {
+          "artifact_id": "artifact-doctor",
+          "path": "artifacts/green/artifact_doctor_report.json",
+          "hash": "sha256-green-doctor",
+          "schema_version": "franken-engine.swarm-artifact-doctor-report.v1",
+          "decision": "pass",
+          "owning_bead": "bd-ep8y0.9",
+          "owning_surface": "artifact-doctor"
+        },
+        {
+          "artifact_id": "claim-freshness",
+          "path": "artifacts/green/claim_freshness_report.json",
+          "hash": "sha256-green-claims",
+          "schema_version": "franken-engine.claim-freshness-report.v1",
+          "decision": "pass",
+          "owning_bead": "bd-ep8y0.8",
+          "owning_surface": "claim-freshness"
+        }
+      ]
+    },
+    "current_bundle": {
+      "present": true,
+      "bundle_id": "current-20260509T123000Z",
+      "path": "artifacts/current/run_manifest.json",
+      "decision": "pass",
+      "freshness": "fresh",
+      "claim_state": "ok",
+      "local_fallback_detected": false,
+      "owning_bead": "bd-gvhsx.5",
+      "owning_surface": "swarm-since-green",
+      "artifacts": [
+        {
+          "artifact_id": "artifact-doctor",
+          "path": "artifacts/current/artifact_doctor_report.json",
+          "hash": "sha256-green-doctor",
+          "schema_version": "franken-engine.swarm-artifact-doctor-report.v1",
+          "decision": "pass",
+          "owning_bead": "bd-ep8y0.9",
+          "owning_surface": "artifact-doctor"
+        },
+        {
+          "artifact_id": "claim-freshness",
+          "path": "artifacts/current/claim_freshness_report.json",
+          "hash": "sha256-green-claims",
+          "schema_version": "franken-engine.claim-freshness-report.v1",
+          "decision": "pass",
+          "owning_bead": "bd-ep8y0.8",
+          "owning_surface": "claim-freshness"
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": "clean_no_diff",
+      "input_patch": {},
+      "expected": {
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "stale_current_bundle",
+      "input_patch": {
+        "current_bundle": {
+          "freshness": "stale"
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "stale_current_bundle"
+        ]
+      }
+    },
+    {
+      "case_id": "missing_green_baseline",
+      "input_patch": {
+        "green_bundle": {
+          "present": false
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "missing_green_baseline"
+        ],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "local_fallback_current",
+      "input_patch": {
+        "current_bundle": {
+          "local_fallback_detected": true
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "local_fallback_in_current"
+        ],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "schema_drift",
+      "input_patch": {
+        "current_bundle": {
+          "artifacts": [
+            {
+              "artifact_id": "artifact-doctor",
+              "path": "artifacts/current/artifact_doctor_report.json",
+              "hash": "sha256-green-doctor",
+              "schema_version": "franken-engine.swarm-artifact-doctor-report.v2",
+              "decision": "pass",
+              "owning_bead": "bd-ep8y0.9",
+              "owning_surface": "artifact-doctor"
+            },
+            {
+              "artifact_id": "claim-freshness",
+              "path": "artifacts/current/claim_freshness_report.json",
+              "hash": "sha256-green-claims",
+              "schema_version": "franken-engine.claim-freshness-report.v1",
+              "decision": "pass",
+              "owning_bead": "bd-ep8y0.8",
+              "owning_surface": "claim-freshness"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "schema_drift"
+        ]
+      }
+    },
+    {
+      "case_id": "claim_downgrade_required",
+      "input_patch": {
+        "current_bundle": {
+          "claim_state": "downgrade_required",
+          "artifacts": [
+            {
+              "artifact_id": "artifact-doctor",
+              "path": "artifacts/current/artifact_doctor_report.json",
+              "hash": "sha256-green-doctor",
+              "schema_version": "franken-engine.swarm-artifact-doctor-report.v1",
+              "decision": "pass",
+              "owning_bead": "bd-ep8y0.9",
+              "owning_surface": "artifact-doctor"
+            },
+            {
+              "artifact_id": "claim-freshness",
+              "path": "artifacts/current/claim_freshness_report.json",
+              "hash": "sha256-current-claims-downgrade",
+              "schema_version": "franken-engine.claim-freshness-report.v1",
+              "decision": "degraded",
+              "owning_bead": "bd-ep8y0.8",
+              "owning_surface": "claim-freshness"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "claim_downgrade_required",
+          "current_decision_regressed"
+        ]
+      }
+    }
+  ]
+}

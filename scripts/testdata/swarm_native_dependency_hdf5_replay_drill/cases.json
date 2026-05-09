@@ -1,0 +1,617 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-hdf5-replay-drill-cases.v1",
+  "scenarios": [
+    {
+      "scenario_id": "hdf5_fixture_selects_compatible_worker",
+      "expected_exit_code": 0,
+      "expected": {
+        "status": "PASS",
+        "route_decision": "pass",
+        "compatible_worker_ids": [
+          "vmi1149989"
+        ],
+        "required_dependency_ids": [
+          "hdf5"
+        ],
+        "hdf5_detected": true
+      },
+      "expected_step_exit_codes": {
+        "requirement_infer": 0,
+        "worker_probe_normalizer": {
+          "vmi1227854": 75,
+          "vmi1149989": 0
+        },
+        "route_planner": 0,
+        "abi_cache_ledger": 0,
+        "operator_status": 0
+      },
+      "expected_strings": [
+        "operator_status: `PASS`",
+        "preferred_worker_id: `vmi1149989`",
+        "Rejected workers: `vmi1227854:hdf5`",
+        "not a source failure claim"
+      ],
+      "inputs": {
+        "requirement_inference": {
+          "validation_command_context_json": {
+            "schema_version": "franken-engine.validation-command-context.v1",
+            "validation_id": "hdf5-drill-compatible",
+            "command": "timeout 1200 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_hdf5_drill CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test react_compilation_pipeline_integration -- --nocapture",
+            "cargo_package": "frankenengine-engine",
+            "root_packages": [
+              "frankenengine-engine"
+            ],
+            "active_features": [],
+            "enabled_optional_dependencies": []
+          },
+          "cargo_lock_snapshot_json": {
+            "schema_version": "franken-engine.cargo-lock-snapshot.v1",
+            "freshness_state": "fresh",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0"
+              },
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0"
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0"
+              }
+            ]
+          },
+          "workspace_manifest_snapshot_json": {
+            "schema_version": "franken-engine.workspace-manifest-snapshot.v1",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0",
+                "manifest_path": "crates/franken-engine/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "frankenpandas",
+                    "package": "frankenpandas",
+                    "path": "../frankenpandas"
+                  }
+                ]
+              }
+            ]
+          },
+          "path_dependency_manifests_json": {
+            "schema_version": "franken-engine.path-dependency-manifests.v1",
+            "packages": [
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0",
+                "manifest_path": "../frankenpandas/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "hdf5-metno-sys",
+                    "package": "hdf5-metno-sys"
+                  }
+                ]
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0",
+                "manifest_path": "../frankenpandas/vendor/hdf5-metno-sys/Cargo.toml",
+                "dependencies": [],
+                "build_rs": "build.rs"
+              }
+            ]
+          },
+          "build_script_diagnostics_json": {
+            "schema_version": "franken-engine.build-script-diagnostics.v1",
+            "diagnostics": [
+              {
+                "source": "hdf5-metno-sys build.rs",
+                "native_dependency_signal": true,
+                "matched_dependency_id": "hdf5",
+                "message": "Unable to locate HDF5 root directory and/or headers"
+              }
+            ]
+          }
+        },
+        "worker_probe_inputs": [
+          {
+            "worker_id": "vmi1227854",
+            "raw_worker_probe_json": {
+              "schema_version": "franken-engine.raw-worker-native-probe.v1",
+              "worker_id": "vmi1227854",
+              "host_class": "remote-linux-x86_64",
+              "captured_at": "2026-05-09T07:35:00Z",
+              "probes": [
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "pkg_config_modversion",
+                  "probe_command": "pkg-config --modversion hdf5",
+                  "exit_code": 1,
+                  "stderr": "Package hdf5 was not found in the pkg-config search path.",
+                  "probe_timestamp": "2026-05-09T07:35:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                },
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "header_presence",
+                  "probe_command": "test -f /usr/include/hdf5/serial/hdf5.h",
+                  "exit_code": 1,
+                  "header_present": false,
+                  "probe_timestamp": "2026-05-09T07:35:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                }
+              ]
+            }
+          },
+          {
+            "worker_id": "vmi1149989",
+            "raw_worker_probe_json": {
+              "schema_version": "franken-engine.raw-worker-native-probe.v1",
+              "worker_id": "vmi1149989",
+              "host_class": "remote-linux-x86_64",
+              "captured_at": "2026-05-09T07:35:00Z",
+              "probes": [
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "pkg_config_modversion",
+                  "probe_command": "pkg-config --modversion hdf5",
+                  "exit_code": 0,
+                  "stdout": "1.14.5",
+                  "observed_version": "1.14.5",
+                  "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+                  "probe_timestamp": "2026-05-09T07:35:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                },
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "header_presence",
+                  "probe_command": "test -f /usr/include/hdf5/serial/hdf5.h",
+                  "exit_code": 0,
+                  "header_present": true,
+                  "probe_timestamp": "2026-05-09T07:35:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                }
+              ]
+            }
+          }
+        ],
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "hdf5-drill-compatible",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.5",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [
+                "/usr/include/hdf5/serial/hdf5.h"
+              ],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1149989",
+            "abi_fingerprint": "__SELF__"
+          }
+        },
+        "rch_log_fixtures": [
+          {
+            "worker_id": "vmi1227854",
+            "fixture_kind": "missing_hdf5_failure",
+            "log_lines": [
+              "[RCH] remote vmi1227854 failed while compiling hdf5-metno-sys",
+              "Unable to locate HDF5 root directory and/or headers",
+              "pkg-config --modversion hdf5 exited with status 1"
+            ]
+          },
+          {
+            "worker_id": "vmi1149989",
+            "fixture_kind": "present_hdf5_probe",
+            "log_lines": [
+              "[RCH] dry-run worker probe vmi1149989",
+              "pkg-config --modversion hdf5 => 1.14.5",
+              "/usr/include/hdf5/serial/hdf5.h present"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario_id": "hdf5_fixture_all_workers_missing_blocked",
+      "expected_exit_code": 75,
+      "expected": {
+        "status": "BLOCKED",
+        "route_decision": "blocked",
+        "compatible_worker_ids": [],
+        "required_dependency_ids": [
+          "hdf5"
+        ],
+        "hdf5_detected": true
+      },
+      "expected_step_exit_codes": {
+        "requirement_infer": 0,
+        "worker_probe_normalizer": {
+          "vmi1227854": 75,
+          "vmi1167313": 75
+        },
+        "route_planner": 75,
+        "abi_cache_ledger": 42,
+        "operator_status": 75
+      },
+      "expected_strings": [
+        "operator_status: `BLOCKED`",
+        "compatible_worker_ids: `[]`",
+        "Rejected workers: `vmi1227854:hdf5,vmi1167313:hdf5`",
+        "Validation environment blocker"
+      ],
+      "inputs": {
+        "requirement_inference": {
+          "validation_command_context_json": {
+            "schema_version": "franken-engine.validation-command-context.v1",
+            "validation_id": "hdf5-drill-all-missing",
+            "command": "timeout 1200 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_hdf5_drill CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test react_compilation_pipeline_integration -- --nocapture",
+            "cargo_package": "frankenengine-engine",
+            "root_packages": [
+              "frankenengine-engine"
+            ],
+            "active_features": [],
+            "enabled_optional_dependencies": []
+          },
+          "cargo_lock_snapshot_json": {
+            "schema_version": "franken-engine.cargo-lock-snapshot.v1",
+            "freshness_state": "fresh",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0"
+              },
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0"
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0"
+              }
+            ]
+          },
+          "workspace_manifest_snapshot_json": {
+            "schema_version": "franken-engine.workspace-manifest-snapshot.v1",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0",
+                "manifest_path": "crates/franken-engine/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "frankenpandas",
+                    "package": "frankenpandas",
+                    "path": "../frankenpandas"
+                  }
+                ]
+              }
+            ]
+          },
+          "path_dependency_manifests_json": {
+            "schema_version": "franken-engine.path-dependency-manifests.v1",
+            "packages": [
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0",
+                "manifest_path": "../frankenpandas/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "hdf5-metno-sys",
+                    "package": "hdf5-metno-sys"
+                  }
+                ]
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0",
+                "manifest_path": "../frankenpandas/vendor/hdf5-metno-sys/Cargo.toml",
+                "dependencies": [],
+                "build_rs": "build.rs"
+              }
+            ]
+          },
+          "build_script_diagnostics_json": {
+            "schema_version": "franken-engine.build-script-diagnostics.v1",
+            "diagnostics": [
+              {
+                "source": "hdf5-metno-sys build.rs",
+                "native_dependency_signal": true,
+                "matched_dependency_id": "hdf5",
+                "message": "Unable to locate HDF5 root directory and/or headers"
+              }
+            ]
+          }
+        },
+        "worker_probe_inputs": [
+          {
+            "worker_id": "vmi1227854",
+            "raw_worker_probe_json": {
+              "schema_version": "franken-engine.raw-worker-native-probe.v1",
+              "worker_id": "vmi1227854",
+              "host_class": "remote-linux-x86_64",
+              "captured_at": "2026-05-09T07:35:00Z",
+              "probes": [
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "pkg_config_modversion",
+                  "probe_command": "pkg-config --modversion hdf5",
+                  "exit_code": 1,
+                  "stderr": "Package hdf5 was not found in the pkg-config search path.",
+                  "probe_timestamp": "2026-05-09T07:35:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                }
+              ]
+            }
+          },
+          {
+            "worker_id": "vmi1167313",
+            "raw_worker_probe_json": {
+              "schema_version": "franken-engine.raw-worker-native-probe.v1",
+              "worker_id": "vmi1167313",
+              "host_class": "remote-linux-x86_64",
+              "captured_at": "2026-05-09T07:36:00Z",
+              "probes": [
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "pkg_config_modversion",
+                  "probe_command": "pkg-config --modversion hdf5",
+                  "exit_code": 1,
+                  "stderr": "Package hdf5 was not found in the pkg-config search path.",
+                  "probe_timestamp": "2026-05-09T07:36:00Z",
+                  "freshness_state": "fresh",
+                  "contamination_state": "remote_only"
+                }
+              ]
+            }
+          }
+        ],
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "hdf5-drill-all-missing",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1227854",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "missing",
+              "pkg_config_version": null,
+              "include_roots": [],
+              "environment_roots": [],
+              "header_paths": [],
+              "abi_fingerprint": null
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1227854",
+            "abi_fingerprint": "previous-compatible-proof"
+          }
+        },
+        "rch_log_fixtures": [
+          {
+            "worker_id": "vmi1227854",
+            "fixture_kind": "missing_hdf5_failure",
+            "log_lines": [
+              "[RCH] remote vmi1227854 failed before test execution",
+              "hdf5-metno-sys: Unable to locate HDF5 root directory and/or headers"
+            ]
+          },
+          {
+            "worker_id": "vmi1167313",
+            "fixture_kind": "missing_hdf5_failure",
+            "log_lines": [
+              "[RCH] remote vmi1167313 failed before test execution",
+              "pkg-config could not find hdf5"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario_id": "hdf5_fixture_stale_probe_fail_closed",
+      "expected_exit_code": 42,
+      "expected": {
+        "status": "FAIL-CLOSED",
+        "route_decision": "fail_closed",
+        "compatible_worker_ids": [],
+        "required_dependency_ids": [
+          "hdf5"
+        ],
+        "hdf5_detected": true
+      },
+      "expected_step_exit_codes": {
+        "requirement_infer": 0,
+        "worker_probe_normalizer": {
+          "vmi1149989": 42
+        },
+        "route_planner": 42,
+        "abi_cache_ledger": 75,
+        "operator_status": 42
+      },
+      "expected_strings": [
+        "operator_status: `FAIL-CLOSED`",
+        "route_reason_codes: `[\"missing_required_native_evidence\",\"no_compatible_workers\",\"stale_worker_probe\"]`",
+        "Fail-closed workers: `vmi1149989:missing_required_native_evidence+stale_worker_probe`",
+        "not a source failure claim"
+      ],
+      "inputs": {
+        "requirement_inference": {
+          "validation_command_context_json": {
+            "schema_version": "franken-engine.validation-command-context.v1",
+            "validation_id": "hdf5-drill-stale-probe",
+            "command": "timeout 1200 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_hdf5_drill CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --test react_compilation_pipeline_integration -- --nocapture",
+            "cargo_package": "frankenengine-engine",
+            "root_packages": [
+              "frankenengine-engine"
+            ],
+            "active_features": [],
+            "enabled_optional_dependencies": []
+          },
+          "cargo_lock_snapshot_json": {
+            "schema_version": "franken-engine.cargo-lock-snapshot.v1",
+            "freshness_state": "fresh",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0"
+              },
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0"
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0"
+              }
+            ]
+          },
+          "workspace_manifest_snapshot_json": {
+            "schema_version": "franken-engine.workspace-manifest-snapshot.v1",
+            "packages": [
+              {
+                "name": "frankenengine-engine",
+                "version": "0.1.0",
+                "manifest_path": "crates/franken-engine/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "frankenpandas",
+                    "package": "frankenpandas",
+                    "path": "../frankenpandas"
+                  }
+                ]
+              }
+            ]
+          },
+          "path_dependency_manifests_json": {
+            "schema_version": "franken-engine.path-dependency-manifests.v1",
+            "packages": [
+              {
+                "name": "frankenpandas",
+                "version": "0.1.0",
+                "manifest_path": "../frankenpandas/Cargo.toml",
+                "dependencies": [
+                  {
+                    "name": "hdf5-metno-sys",
+                    "package": "hdf5-metno-sys"
+                  }
+                ]
+              },
+              {
+                "name": "hdf5-metno-sys",
+                "version": "0.10.0",
+                "manifest_path": "../frankenpandas/vendor/hdf5-metno-sys/Cargo.toml",
+                "dependencies": [],
+                "build_rs": "build.rs"
+              }
+            ]
+          },
+          "build_script_diagnostics_json": {
+            "schema_version": "franken-engine.build-script-diagnostics.v1",
+            "diagnostics": [
+              {
+                "source": "hdf5-metno-sys build.rs",
+                "native_dependency_signal": true,
+                "matched_dependency_id": "hdf5",
+                "message": "Unable to locate HDF5 root directory and/or headers"
+              }
+            ]
+          }
+        },
+        "worker_probe_inputs": [
+          {
+            "worker_id": "vmi1149989",
+            "raw_worker_probe_json": {
+              "schema_version": "franken-engine.raw-worker-native-probe.v1",
+              "worker_id": "vmi1149989",
+              "host_class": "remote-linux-x86_64",
+              "captured_at": "2026-05-01T00:00:00Z",
+              "probes": [
+                {
+                  "dependency_id": "hdf5",
+                  "native_package_name": "hdf5",
+                  "probe_kind": "pkg_config_modversion",
+                  "probe_command": "pkg-config --modversion hdf5",
+                  "exit_code": 0,
+                  "stdout": "1.14.5",
+                  "observed_version": "1.14.5",
+                  "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+                  "probe_timestamp": "2026-05-01T00:00:00Z",
+                  "freshness_state": "stale",
+                  "contamination_state": "remote_only"
+                }
+              ]
+            }
+          }
+        ],
+        "abi_cache_input_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-input.v1",
+          "validation_id": "hdf5-drill-stale-probe",
+          "rust_toolchain": "rustc 1.91.0-nightly",
+          "rch_worker_id": "vmi1149989",
+          "target_dir_id": "franken_engine-target-v1",
+          "requirement_bundle_version": "franken-engine.native-requirement-bundle.v1",
+          "native_dependencies": [
+            {
+              "dependency_id": "hdf5",
+              "status": "present",
+              "pkg_config_version": "1.14.5",
+              "include_roots": [
+                "/usr/include/hdf5/serial"
+              ],
+              "environment_roots": [
+                "HDF5_DIR=/usr"
+              ],
+              "header_paths": [
+                "/usr/include/hdf5/serial/hdf5.h"
+              ],
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5"
+            }
+          ],
+          "cached_proof": {
+            "rch_worker_id": "vmi1149989",
+            "abi_fingerprint": "stale-fingerprint"
+          }
+        },
+        "rch_log_fixtures": [
+          {
+            "worker_id": "vmi1149989",
+            "fixture_kind": "stale_hdf5_probe",
+            "log_lines": [
+              "[RCH] cached worker probe vmi1149989",
+              "pkg-config --modversion hdf5 => 1.14.5",
+              "probe freshness_state=stale"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

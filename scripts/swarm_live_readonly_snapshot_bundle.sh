@@ -352,6 +352,20 @@ process_source() {
     fi
   fi
 
+  if jq empty "$raw_path" >/dev/null 2>&1 && jq -e '(.capture_error // false) == true' "$raw_path" >/dev/null; then
+    if [[ "$required" == "true" ]]; then
+      trust_state="fail_closed"
+      reason_code="capture_error_required_source"
+      error_code="FE-SWARM-LIVE-CAPTURE-ERROR-REQUIRED"
+      outcome="fail_closed"
+    elif [[ "$trust_state" == "trusted" ]]; then
+      trust_state="degraded"
+      reason_code="capture_error_${component}"
+      error_code="FE-SWARM-LIVE-CAPTURE-ERROR"
+      outcome="degraded"
+    fi
+  fi
+
   if jq empty "$raw_path" >/dev/null 2>&1; then
     if jq -e 'any(..; ((type == "object" and (.local_fallback_observed? == true)) or (type == "string" and test("\\[RCH\\][[:space:]]+local|local fallback"; "i"))))' "$raw_path" >/dev/null; then
       local_fallback="true"

@@ -1,0 +1,242 @@
+{
+  "schema_version": "franken-engine.swarm-live-readonly-capture-adapter-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy_round_trip",
+      "inputs": {
+        "swarm_ops_state": {
+          "schema_version": "franken-engine.swarm-ops-state-bundle.v1",
+          "captured_at": "2026-05-09T11:59:30Z",
+          "decision": "pass",
+          "source_components": []
+        },
+        "br_ready": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "ready_items": [
+            {
+              "id": "bd-ep8y0.3",
+              "title": "Add non-mutating live capture adapter",
+              "status": "open",
+              "priority": 2
+            }
+          ]
+        },
+        "br_in_progress": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "issues": []
+        },
+        "br_sync_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false
+        },
+        "bv_plan": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "plan": {
+            "summary": {
+              "highest_impact": "bd-ep8y0.3"
+            }
+          }
+        },
+        "agent_mail_snapshot": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "agents": [
+            {
+              "agent_name": "MossySpire",
+              "last_active_ts": "2026-05-09T11:59:00Z"
+            }
+          ],
+          "reservations": []
+        },
+        "rch_status": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "workers": [],
+          "jobs": [],
+          "local_fallback_observed": false
+        },
+        "rch_queue": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "jobs": []
+        },
+        "git_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_paths": []
+        },
+        "git_diff_check": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "diff_check_status": "pass",
+          "checked_paths": [
+            "scripts/swarm_live_readonly_capture_adapter.sh"
+          ]
+        },
+        "resource_pressure": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "cpu_slots_available": 8,
+          "memory_pressure": "low",
+          "disk_pressure": "low"
+        },
+        "proof_transcript": {
+          "captured_at": "2026-05-09T11:30:00Z",
+          "command": "bash scripts/e2e/swarm_live_readonly_capture_adapter_smoke.sh selftest",
+          "exit_code": 0,
+          "started_at": "2026-05-09T11:29:00Z",
+          "completed_at": "2026-05-09T11:30:00Z",
+          "output_hash": "sha256:adapter-healthy"
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "missing_agent_mail_degraded",
+      "inputs": {
+        "swarm_ops_state": {
+          "schema_version": "franken-engine.swarm-ops-state-bundle.v1",
+          "captured_at": "2026-05-09T11:59:30Z",
+          "decision": "pass",
+          "source_components": []
+        },
+        "br_ready": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "ready_items": []
+        },
+        "br_in_progress": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "issues": []
+        },
+        "br_sync_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false
+        },
+        "bv_plan": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "plan": {}
+        },
+        "rch_status": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "workers": [],
+          "jobs": [],
+          "local_fallback_observed": false
+        },
+        "rch_queue": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "jobs": []
+        },
+        "git_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_paths": []
+        },
+        "git_diff_check": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "diff_check_status": "pass",
+          "checked_paths": []
+        },
+        "resource_pressure": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "cpu_slots_available": 8,
+          "memory_pressure": "low",
+          "disk_pressure": "low"
+        },
+        "proof_transcript": {
+          "captured_at": "2026-05-09T11:30:00Z",
+          "command": "bash scripts/e2e/swarm_live_readonly_capture_adapter_smoke.sh check",
+          "exit_code": 0,
+          "started_at": "2026-05-09T11:29:00Z",
+          "completed_at": "2026-05-09T11:30:00Z",
+          "output_hash": "sha256:adapter-missing-mail"
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "fail_closed_reasons": [],
+        "blocked_reasons": [],
+        "degraded_reasons": [
+          "missing_agent_mail_snapshot"
+        ]
+      }
+    },
+    {
+      "case_id": "local_fallback_round_trip",
+      "inputs": {
+        "swarm_ops_state": {
+          "schema_version": "franken-engine.swarm-ops-state-bundle.v1",
+          "captured_at": "2026-05-09T11:59:30Z",
+          "decision": "pass",
+          "source_components": []
+        },
+        "br_ready": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "ready_items": []
+        },
+        "br_in_progress": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "issues": []
+        },
+        "br_sync_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_count": 0,
+          "db_newer": false,
+          "jsonl_newer": false
+        },
+        "bv_plan": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "plan": {}
+        },
+        "agent_mail_snapshot": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "agents": [],
+          "reservations": []
+        },
+        "rch_status": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "workers": [],
+          "jobs": [],
+          "local_fallback_observed": true,
+          "stderr": "[RCH] local (daemon unavailable)"
+        },
+        "rch_queue": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "jobs": []
+        },
+        "git_status": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "dirty_paths": []
+        },
+        "git_diff_check": {
+          "captured_at": "2026-05-09T11:59:35Z",
+          "diff_check_status": "pass",
+          "checked_paths": []
+        },
+        "resource_pressure": {
+          "captured_at": "2026-05-09T11:59:45Z",
+          "cpu_slots_available": 8,
+          "memory_pressure": "low",
+          "disk_pressure": "low"
+        },
+        "proof_transcript": {
+          "captured_at": "2026-05-09T11:30:00Z",
+          "command": "bash scripts/e2e/swarm_live_readonly_capture_adapter_smoke.sh check",
+          "exit_code": 0,
+          "started_at": "2026-05-09T11:29:00Z",
+          "completed_at": "2026-05-09T11:30:00Z",
+          "output_hash": "sha256:adapter-local-fallback"
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "local_rch_fallback_marker"
+        ],
+        "blocked_reasons": [],
+        "degraded_reasons": []
+      }
+    }
+  ]
+}

@@ -2834,53 +2834,25 @@ mod tests {
 
     #[test]
     fn golden_generate_savings_report_deterministic_output() {
-        // Create a deterministic AllocationElisionGate with fixed state
-        let mut gate = AllocationElisionGate::new(lane("test-lane-42"), epoch(10));
+        // Create a deterministic evaluator with fixed state.
+        let mut gate = ElisionGateEvaluator::with_defaults();
 
-        // Add some deterministic site evaluations to create realistic state
-        let site_1 = site("allocation-site-1");
-        let site_2 = site("allocation-site-2");
-        let site_3 = site("allocation-site-3");
+        // Add deterministic site evaluations to create realistic state.
+        let mut eval_input_1 = make_good_input("allocation-site-1");
+        eval_input_1.lane_id = lane("test-lane-42");
+        eval_input_1.epoch = epoch(10);
+        eval_input_1.now_ns = 1_234_567_890_000;
 
-        // Evaluate sites to populate state (approved, denied, etc.)
-        let eval_input_1 = ElisionEvalInput {
-            site_id: site_1.clone(),
-            lane_id: lane("test-lane-42"),
-            alloc_type: AllocationType::Heap,
-            size_hint: 1024,
-            safety_margin_millionths: 950_000,
-            gc_assessment: good_gc_assessment(),
-            latency_evidence: good_latency_evidence(),
-            epoch: epoch(10),
-            timestamp_ns: 1234567890000,
-            request_id: "req-1".to_string(),
-        };
+        let mut eval_input_2 = make_good_input("allocation-site-2");
+        eval_input_2.lane_id = lane("test-lane-42");
+        eval_input_2.gc_assessment = bad_gc_assessment();
+        eval_input_2.epoch = epoch(10);
+        eval_input_2.now_ns = 1_234_567_890_001;
 
-        let eval_input_2 = ElisionEvalInput {
-            site_id: site_2.clone(),
-            lane_id: lane("test-lane-42"),
-            alloc_type: AllocationType::Stack,
-            size_hint: 256,
-            safety_margin_millionths: 800_000,
-            gc_assessment: bad_gc_assessment(),
-            latency_evidence: good_latency_evidence(),
-            epoch: epoch(10),
-            timestamp_ns: 1234567890001,
-            request_id: "req-2".to_string(),
-        };
-
-        let eval_input_3 = ElisionEvalInput {
-            site_id: site_3.clone(),
-            lane_id: lane("test-lane-42"),
-            alloc_type: AllocationType::Heap,
-            size_hint: 512,
-            safety_margin_millionths: 900_000,
-            gc_assessment: good_gc_assessment(),
-            latency_evidence: good_latency_evidence(),
-            epoch: epoch(10),
-            timestamp_ns: 1234567890002,
-            request_id: "req-3".to_string(),
-        };
+        let mut eval_input_3 = make_good_input("allocation-site-3");
+        eval_input_3.lane_id = lane("test-lane-42");
+        eval_input_3.epoch = epoch(10);
+        eval_input_3.now_ns = 1_234_567_890_002;
 
         // Evaluate sites to build up state
         gate.evaluate(&eval_input_1);

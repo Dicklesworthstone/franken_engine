@@ -1398,14 +1398,7 @@ mod tests {
     fn test_build_cell_hash_deterministic() {
         let cell1 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
         let cell2 = make_green_cell("c5", "latency", PromotionRule::FailClosed);
-        assert_eq!(
-            cell1
-                .compute_hash()
-                .expect("calibration cell hash should not fail"),
-            cell2
-                .compute_hash()
-                .expect("calibration cell hash should not fail")
-        );
+        assert_eq!(cell1.compute_hash(), cell2.compute_hash());
     }
 
     // -- evaluate_promotion tests -------------------------------------------
@@ -1827,12 +1820,7 @@ mod tests {
         let s2 = make_sentinel("ch1", SentinelKind::ErrorBound, 500_000, 100_000);
         let c1 = build_cell("same", "domain_a", vec![s1], PromotionRule::FailClosed);
         let c2 = build_cell("same", "domain_b", vec![s2], PromotionRule::FailClosed);
-        assert_ne!(
-            c1.compute_hash()
-                .expect("calibration cell hash should not fail"),
-            c2.compute_hash()
-                .expect("calibration cell hash should not fail")
-        );
+        assert_ne!(c1.compute_hash(), c2.compute_hash());
     }
 
     // -- Helper function tests ----------------------------------------------
@@ -1960,10 +1948,14 @@ mod tests {
 
         // Create a mix of green, yellow, and red cells for comprehensive coverage
         let cells = vec![
-            make_green_cell("cell-green-1", "latency", PromotionRule::RequireAll),
-            make_yellow_cell("cell-yellow-1", "throughput", PromotionRule::PermitMajority),
+            make_green_cell("cell-green-1", "latency", PromotionRule::FailClosed),
+            make_yellow_cell(
+                "cell-yellow-1",
+                "throughput",
+                PromotionRule::RequireCalibration,
+            ),
             make_red_cell("cell-red-1", "memory", PromotionRule::FailClosed),
-            make_green_cell("cell-green-2", "cpu", PromotionRule::RequireAll),
+            make_green_cell("cell-green-2", "cpu", PromotionRule::FailClosed),
         ];
 
         // Call the target function to generate the report
@@ -2022,10 +2014,14 @@ mod tests {
         let report2 = build_report(
             SecurityEpoch::from_raw(42),
             vec![
-                make_green_cell("cell-green-1", "latency", PromotionRule::RequireAll),
-                make_yellow_cell("cell-yellow-1", "throughput", PromotionRule::PermitMajority),
+                make_green_cell("cell-green-1", "latency", PromotionRule::FailClosed),
+                make_yellow_cell(
+                    "cell-yellow-1",
+                    "throughput",
+                    PromotionRule::RequireCalibration,
+                ),
                 make_red_cell("cell-red-1", "memory", PromotionRule::FailClosed),
-                make_green_cell("cell-green-2", "cpu", PromotionRule::RequireAll),
+                make_green_cell("cell-green-2", "cpu", PromotionRule::FailClosed),
             ],
         );
 

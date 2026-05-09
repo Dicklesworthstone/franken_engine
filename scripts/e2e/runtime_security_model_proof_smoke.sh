@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${root_dir}"
+# shellcheck disable=SC1091
 source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 artifact_root="${RUNTIME_SECURITY_MODEL_ARTIFACT_ROOT:-${root_dir}/artifacts/runtime_security_model_proof_smoke}"
@@ -14,10 +15,17 @@ source_report_path="${run_dir}/source_report.json"
 
 export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/data/tmp/franken_engine_runtime_security_model_${USER:-agent}}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
 
 mkdir -p "${run_dir}"
 : >"${events_path}"
 : >"${commands_path}"
+
+if ! command -v rch >/dev/null 2>&1; then
+  echo "runtime_security_model: rch is required for Cargo proof steps" >&2
+  exit 2
+fi
 
 failure_count=0
 
@@ -72,14 +80,22 @@ run_step() {
   local end_ms
   local duration_ms
   local exit_code
+  local -a command=(
+    rch exec -- env
+    "RUSTC_WRAPPER=${RUSTC_WRAPPER}"
+    "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}"
+    "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+    "$@"
+  )
 
-  printf '%q ' "$@" >>"${commands_path}"
+  printf '%q ' "${command[@]}" >>"${commands_path}"
   printf '\n' >>"${commands_path}"
 
   echo "runtime_security_model: running ${step_id}"
   start_ms="$(date +%s%3N)"
   set +e
-  "$@" >"${log_path}" 2>&1
+  "${command[@]}" >"${log_path}" 2>&1
   exit_code=$?
   set -e
   end_ms="$(date +%s%3N)"
@@ -111,15 +127,9 @@ run_step() {
   fi
 }
 
-run_step \
-  "ifc-lattice-model" \
-  "cargo-test-ifc-lattice-model" \
-  cargo test -p frankenengine-engine --lib ifc_lattice_model -- --nocapture
+run_step "ifc-lattice-model" "cargo-test-ifc-lattice-model" cargo test -p frankenengine-engine --lib ifc_lattice_model -- --nocapture
 
-run_step \
-  "capability-algebra-model" \
-  "cargo-test-capability-algebra-model" \
-  cargo test -p frankenengine-engine --lib capability_profile_security_algebra -- --nocapture
+run_step "capability-algebra-model" "cargo-test-capability-algebra-model" cargo test -p frankenengine-engine --lib capability_profile_security_algebra -- --nocapture
 
 status="pass"
 if [[ "${failure_count}" -ne 0 ]]; then

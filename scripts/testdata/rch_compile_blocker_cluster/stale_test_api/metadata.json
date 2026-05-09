@@ -1,0 +1,15 @@
+{
+  "case_id": "stale_test_api",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-stale CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --tests",
+  "worker_id": "vmi-stale",
+  "build_id": "cluster-stale-001",
+  "target_dir": "/tmp/rch-cluster-stale",
+  "package": "frankenengine-engine",
+  "target": "tests",
+  "validation_scope": "workspace tests",
+  "exit_code": 101,
+  "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+  "touched_paths": [
+    "crates/franken-engine/src/baseline_interpreter.rs"
+  ]
+}

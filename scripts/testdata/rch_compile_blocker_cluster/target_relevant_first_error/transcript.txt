@@ -1,0 +1,10 @@
+[2026-05-09T13:20:00Z] Selected worker: vmi-target
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+error[E0308]: mismatched types
+   --> crates/franken-engine/src/baseline_interpreter.rs:7312:21
+    |
+7312 |         return JsValue::Object(id);
+     |                ^^^^^^^^^^^^^^^^^^^ expected `Result<JsValue, EvalError>`, found `JsValue`
+Remote command finished: exit=101

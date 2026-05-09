@@ -1,0 +1,10 @@
+[2026-05-09T13:40:00Z] Selected worker: vmi-truncated
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-truncated CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets
+error[E0277]: the trait bound `ProofCapsule: Clone` is not satisfied
+   --> crates/franken-engine/src/proof_capsule.rs:44:10
+    |
+44  | #[derive(Clone)]
+    |          ^^^^^ the trait `Clone` is not implemented for `ProofCapsule`
+... 5517 tokens truncated ...
+Remote command finished: exit=101

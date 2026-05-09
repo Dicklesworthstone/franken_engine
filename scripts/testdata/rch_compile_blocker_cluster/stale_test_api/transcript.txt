@@ -1,0 +1,10 @@
+[2026-05-09T13:30:00Z] Selected worker: vmi-stale
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-stale CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --tests
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+   --> crates/franken-engine/tests/calibration_sentinel.rs:88:18
+    |
+88  |     let value = calibrate_worker("vmi-stale", 4);
+    |                 ^^^^^^^^^^^^^^^^---------------- argument #3 is missing
+Remote command finished: exit=101

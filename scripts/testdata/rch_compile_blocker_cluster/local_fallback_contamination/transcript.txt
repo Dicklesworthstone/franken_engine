@@ -1,0 +1,7 @@
+[2026-05-09T13:35:00Z] Failed to query daemon: connection refused; running locally
+Remote toolchain failure, falling back to local execution
+Executing command locally:
+cargo check -p frankenengine-engine --tests
+error[E0425]: cannot find value `locally_compiled_marker` in this scope
+   --> crates/franken-engine/src/baseline_interpreter.rs:12:9
+Remote command was never started.

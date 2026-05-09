@@ -1,0 +1,10 @@
+[2026-05-09T13:25:00Z] Selected worker: vmi-sibling
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-sibling CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+error[E0432]: unresolved import `crate::shadow::ReplayFixture`
+   --> crates/franken-engine/tests/shadow_replay_verifier.rs:19:5
+    |
+19  | use crate::shadow::ReplayFixture;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ReplayFixture` in `shadow`
+Remote command finished: exit=101

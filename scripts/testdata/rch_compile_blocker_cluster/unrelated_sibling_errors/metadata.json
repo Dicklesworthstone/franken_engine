@@ -1,0 +1,15 @@
+{
+  "case_id": "unrelated_sibling_errors",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch-cluster-sibling CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture",
+  "worker_id": "vmi-sibling",
+  "build_id": "cluster-sibling-001",
+  "target_dir": "/tmp/rch-cluster-sibling",
+  "package": "frankenengine-engine",
+  "target": "lib-test",
+  "validation_scope": "bd-x88q1 active builtin regression",
+  "exit_code": 101,
+  "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+  "touched_paths": [
+    "crates/franken-engine/src/baseline_interpreter.rs"
+  ]
+}

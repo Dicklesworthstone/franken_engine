@@ -1,0 +1,95 @@
+{
+  "schema_version": "franken-engine.rch-compile-blocker-cluster-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "target_relevant_first_error",
+      "expected": {
+        "case_id": "target_relevant_first_error",
+        "decision": "clustered",
+        "cluster_count": 1,
+        "block_current_bead": 1,
+        "file_follow_up": 0,
+        "infra_toolchain_blocker": 0,
+        "tests_reached_intended_target": true,
+        "local_fallback_observed": false,
+        "truncated_output_observed": false,
+        "primary_disposition": "block_current_bead",
+        "primary_error_family": "rustc_E0308",
+        "proposal_contains": "crates/franken-engine/src/baseline_interpreter.rs",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "unrelated_sibling_errors",
+      "expected": {
+        "case_id": "unrelated_sibling_errors",
+        "decision": "clustered",
+        "cluster_count": 1,
+        "block_current_bead": 0,
+        "file_follow_up": 1,
+        "infra_toolchain_blocker": 0,
+        "tests_reached_intended_target": false,
+        "local_fallback_observed": false,
+        "truncated_output_observed": false,
+        "primary_disposition": "file_follow_up",
+        "primary_error_family": "rustc_E0432",
+        "proposal_contains": "crates/franken-engine/tests/shadow_replay_verifier.rs",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "stale_test_api",
+      "expected": {
+        "case_id": "stale_test_api",
+        "decision": "clustered",
+        "cluster_count": 1,
+        "block_current_bead": 0,
+        "file_follow_up": 1,
+        "infra_toolchain_blocker": 0,
+        "tests_reached_intended_target": false,
+        "local_fallback_observed": false,
+        "truncated_output_observed": false,
+        "primary_disposition": "file_follow_up",
+        "primary_error_family": "stale_test_api",
+        "proposal_contains": "Refresh stale test API",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected": {
+        "case_id": "local_fallback_contamination",
+        "decision": "fail_closed",
+        "cluster_count": 1,
+        "block_current_bead": 0,
+        "file_follow_up": 0,
+        "infra_toolchain_blocker": 1,
+        "tests_reached_intended_target": false,
+        "local_fallback_observed": true,
+        "truncated_output_observed": false,
+        "primary_disposition": "infra_toolchain_blocker",
+        "primary_error_family": "local_fallback_contamination",
+        "proposal_contains": "Do not close from truncated or local_fallback output.",
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "truncated_output",
+      "expected": {
+        "case_id": "truncated_output",
+        "decision": "fail_closed",
+        "cluster_count": 1,
+        "block_current_bead": 0,
+        "file_follow_up": 0,
+        "infra_toolchain_blocker": 1,
+        "tests_reached_intended_target": false,
+        "local_fallback_observed": false,
+        "truncated_output_observed": true,
+        "primary_disposition": "infra_toolchain_blocker",
+        "primary_error_family": "truncated_output",
+        "proposal_contains": "Reproduce truncated compile output",
+        "exit_code": 42
+      }
+    }
+  ]
+}

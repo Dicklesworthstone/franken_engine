@@ -1,0 +1,15 @@
+{
+  "case_id": "local_fallback_contamination",
+  "command": "cargo check -p frankenengine-engine --tests",
+  "worker_id": null,
+  "build_id": "cluster-local-fallback-001",
+  "target_dir": "/tmp/rch-cluster-local-fallback",
+  "package": "frankenengine-engine",
+  "target": "tests",
+  "validation_scope": "local contaminated fallback",
+  "exit_code": 101,
+  "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+  "touched_paths": [
+    "crates/franken-engine/src/baseline_interpreter.rs"
+  ]
+}

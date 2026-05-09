@@ -1,0 +1,40 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-planner-contract.v1",
+  "bead_id": "bd-ua5n2.5",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.2",
+    "bd-ua5n2.3",
+    "bd-ua5n2.4"
+  ],
+  "script": "scripts/swarm_proof_batch_planner.sh",
+  "operator_docs": "docs/SWARM_PROOF_BATCH_PLANNER.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_batch_planner/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_batch_planner_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "actions": [
+    "coalesce",
+    "reuse",
+    "rerun_now",
+    "rerun_later",
+    "keep_isolated",
+    "human_review"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "creates_deletes_target_dirs": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_batch_planner_contract_v1.json scripts/testdata/swarm_proof_batch_planner/cases.json",
+    "bash -n scripts/swarm_proof_batch_planner.sh",
+    "bash -n scripts/e2e/swarm_proof_batch_planner_smoke.sh",
+    "bash scripts/e2e/swarm_proof_batch_planner_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_batch_planner_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_proof_batch_planner.sh docs/SWARM_PROOF_BATCH_PLANNER.md docs/swarm_proof_batch_planner_contract_v1.json scripts/testdata/swarm_proof_batch_planner/cases.json scripts/e2e/swarm_proof_batch_planner_smoke.sh"
+  ]
+}

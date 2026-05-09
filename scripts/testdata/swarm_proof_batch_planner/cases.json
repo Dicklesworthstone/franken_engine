@@ -1,0 +1,137 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-planner-fixtures.v1",
+  "base_request": {
+    "request_id": "req-alpha",
+    "agent": "MossySpire",
+    "proof_fingerprint": "fp-alpha",
+    "preferred_worker": "worker-a",
+    "evidence_path": "fixtures/proof_request.json",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "isolation_required": false
+  },
+  "base_input": {
+    "artifact_index_evidence_path": "fixtures/artifact_index.json",
+    "worker_evidence_path": "fixtures/workers.json",
+    "workers": [
+      {
+        "worker_id": "worker-a",
+        "target_isolation": "compatible",
+        "warm_cache_fingerprints": [
+          "fp-warm"
+        ]
+      }
+    ],
+    "artifact_index": [],
+    "fairness_debt": [],
+    "operator_policy": {
+      "conflict": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "duplicate_proof_coalescing",
+      "requests": [
+        {
+          "request_id": "req-dup-a",
+          "proof_fingerprint": "fp-dup",
+          "agent": "MossySpire"
+        },
+        {
+          "request_id": "req-dup-b",
+          "proof_fingerprint": "fp-dup",
+          "agent": "FrostyPine"
+        }
+      ],
+      "expected_actions": [
+        "coalesce",
+        "coalesce"
+      ]
+    },
+    {
+      "case_id": "fresh_artifact_reuse",
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-alpha",
+          "reuse_eligible": true,
+          "freshness": "fresh"
+        }
+      ],
+      "expected_actions": [
+        "reuse"
+      ]
+    },
+    {
+      "case_id": "compatible_warm_cache_ordering",
+      "requests": [
+        {
+          "request_id": "req-warm",
+          "proof_fingerprint": "fp-warm",
+          "preferred_worker": "worker-a",
+          "agent": "MossySpire"
+        }
+      ],
+      "expected_actions": [
+        "rerun_now"
+      ],
+      "expected_reasons": [
+        "compatible_warm_cache_ordering"
+      ]
+    },
+    {
+      "case_id": "fairness_recovery_after_deferral",
+      "fairness_debt": [
+        {
+          "agent": "MossySpire",
+          "deferred_count": 4
+        }
+      ],
+      "expected_actions": [
+        "rerun_now"
+      ],
+      "expected_reasons": [
+        "fairness_debt_recovery"
+      ]
+    },
+    {
+      "case_id": "incompatible_target_isolation",
+      "requests": [
+        {
+          "request_id": "req-isolated",
+          "proof_fingerprint": "fp-isolated",
+          "preferred_worker": "worker-a",
+          "isolation_required": true,
+          "agent": "MossySpire"
+        }
+      ],
+      "expected_actions": [
+        "keep_isolated"
+      ]
+    },
+    {
+      "case_id": "stale_artifact_refusal",
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-alpha",
+          "reuse_eligible": false,
+          "freshness": "expired",
+          "invalidation_reasons": [
+            "expired_ttl"
+          ]
+        }
+      ],
+      "expected_actions": [
+        "rerun_later"
+      ]
+    },
+    {
+      "case_id": "conflicting_operator_intent_policy",
+      "operator_policy": {
+        "conflict": true,
+        "reason": "operator forbids coalescing on this lane"
+      },
+      "expected_actions": [
+        "human_review"
+      ]
+    }
+  ]
+}

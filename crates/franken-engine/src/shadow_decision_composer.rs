@@ -1312,6 +1312,32 @@ fn dedupe_sorted(values: &mut Vec<String>) {
 mod tests {
     use super::*;
 
+    fn test_journal_event(
+        source_key: &str,
+        collected_epoch_seconds: i64,
+        fresh: bool,
+    ) -> JournalSourceEvent {
+        JournalSourceEvent {
+            source_key: Some(source_key.to_string()),
+            source_id: Some(format!("{source_key}-event")),
+            source_kind: Some(format!("{source_key}_snapshot_json")),
+            schema_version: Some("test.source.v1".to_string()),
+            content_hash: Some(format!("sha256:{source_key}")),
+            collected_epoch_seconds: Some(collected_epoch_seconds),
+            freshness_window_seconds: Some(300),
+            fresh: Some(fresh),
+            payload: Some(serde_json::json!({})),
+            ..Default::default()
+        }
+    }
+
+    fn complete_required_events(collected_epoch_seconds: i64) -> Vec<JournalSourceEvent> {
+        REQUIRED_SHADOW_DECISION_SOURCE_KEYS
+            .iter()
+            .map(|source_key| test_journal_event(source_key, collected_epoch_seconds, true))
+            .collect()
+    }
+
     #[test]
     fn artifact_path_guard_accepts_canonical_paths_under_output_dir() {
         let output_dir = Path::new("/tmp/franken-shadow-output");
@@ -1379,79 +1405,87 @@ mod tests {
     }
 
     #[test]
-    fn compose_shadow_decision_with_stale_sources_marks_stale() {
-        let mut source_snapshots = BTreeMap::new();
-        for (i, key) in REQUIRED_SHADOW_DECISION_SOURCE_KEYS.iter().enumerate() {
-            let status = if i == 0 {
-                SourceSnapshotStatus::Stale
-            } else {
-                SourceSnapshotStatus::Fresh
-            };
-            source_snapshots.insert(
-                key.to_string(),
-                SourceSnapshot {
-                    timestamp: "2026-05-08T12:00:00Z".to_string(),
-                    content: Value::Object(serde_json::Map::new()),
-                    status,
-                },
-            );
-        }
-
+    fn compose_shadow_decision_with_stale_sources_marks_blocked() {
+        let now = 1715173200;
+        let mut journal_events = complete_required_events(now);
+        journal_events[0].collected_epoch_seconds = Some(now - 600);
+        journal_events[0].fresh = Some(false);
+        let stale_source_key = journal_events[0].source_key.clone().unwrap();
         let input = ShadowDecisionComposerInput {
-            timestamp: "2026-05-08T12:00:00Z".to_string(),
-            journal_events: vec![],
-            source_snapshots,
-            existing_autopilot: None,
+            shadow_run_id: "test-run-123".to_string(),
+            source_revision: "abc123".to_string(),
+            generated_epoch_seconds: now,
+            default_freshness_window_seconds: 300,
+            max_recommendations: 16,
+            journal_events,
+            existing_autopilot_outputs: vec![],
+            artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
         };
 
         let result = compose_shadow_decision(&input);
         assert!(result.is_ok());
         let artifacts = result.unwrap();
-        assert_eq!(artifacts.status.truth_state, ShadowTruthState::Stale);
+        assert_eq!(
+            artifacts.shadow_status.truth_state,
+            ShadowTruthState::Blocked
+        );
+        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
+        assert!(
+            artifacts
+                .shadow_status
+                .stale_sources
+                .contains(&stale_source_key)
+        );
+        assert!(
+            !artifacts
+                .shadow_status
+                .source_snapshot_status
+                .get(&stale_source_key)
+                .expect("stale source status should be present")
+                .fresh
+        );
     }
 
     #[test]
     fn normalize_journal_event_handles_valid_json() {
         let event = JournalSourceEvent {
-            timestamp: "2026-05-08T12:00:00Z".to_string(),
-            event_type: "test_event".to_string(),
-            raw_data: r#"{"key": "value", "number": 42}"#.to_string(),
+            source_key: Some("br_queue".to_string()),
+            source_id: Some("br-event-1".to_string()),
+            normalized_payload_json: Some(r#"{"key": "value", "number": 42}"#.to_string()),
+            ..Default::default()
         };
 
-        let result = normalize_journal_event(&event);
+        let result = normalize_journal_event(&event, 300);
         assert!(result.is_ok());
         let normalized = result.unwrap();
-        assert_eq!(normalized.event_type, "test_event");
-        assert_eq!(normalized.normalized_data["key"], "value");
-        assert_eq!(normalized.normalized_data["number"], 42);
+        assert_eq!(normalized.source_key, "br_queue");
+        assert_eq!(normalized.source_id, "br-event-1");
+        assert_eq!(normalized.payload["key"], "value");
+        assert_eq!(normalized.payload["number"], 42);
     }
 
     #[test]
     fn normalize_journal_event_handles_invalid_json() {
         let event = JournalSourceEvent {
-            timestamp: "2026-05-08T12:00:00Z".to_string(),
-            event_type: "test_event".to_string(),
-            raw_data: "invalid json {".to_string(),
+            normalized_payload_json: Some("invalid json {".to_string()),
+            ..Default::default()
         };
 
-        let result = normalize_journal_event(&event);
+        let result = normalize_journal_event(&event, 300);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("JSON parse error"));
+        assert!(matches!(err, ShadowDecisionError::Json(_)));
+        assert!(err.to_string().contains("shadow decision JSON error"));
     }
 
     #[test]
     fn normalize_journal_event_empty_data_creates_empty_object() {
-        let event = JournalSourceEvent {
-            timestamp: "2026-05-08T12:00:00Z".to_string(),
-            event_type: "empty_event".to_string(),
-            raw_data: String::new(),
-        };
+        let event = JournalSourceEvent::default();
 
-        let result = normalize_journal_event(&event);
+        let result = normalize_journal_event(&event, 300);
         assert!(result.is_ok());
         let normalized = result.unwrap();
-        assert!(normalized.normalized_data.as_object().unwrap().is_empty());
+        assert!(normalized.payload.as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -1468,51 +1502,49 @@ mod tests {
     #[test]
     fn recommendation_artifact_paths_creates_valid_structure() {
         let paths = RecommendationArtifactPaths {
+            shadow_status_json: "/test/shadow_status.json".to_string(),
             recommendations_json: "/test/recommendations.json".to_string(),
-            recommendation_metadata_dir: "/test/meta".to_string(),
         };
 
+        assert_eq!(paths.shadow_status_json, "/test/shadow_status.json");
         assert_eq!(paths.recommendations_json, "/test/recommendations.json");
-        assert_eq!(paths.recommendation_metadata_dir, "/test/meta");
     }
 
     #[test]
     fn shadow_decision_error_display_formatting() {
         let err1 = ShadowDecisionError::InvalidInput("test error".to_string());
-        assert_eq!(err1.to_string(), "invalid input: test error");
+        assert_eq!(
+            err1.to_string(),
+            "invalid shadow decision input: test error"
+        );
 
-        let err2 = ShadowDecisionError::JsonParseError("parse error".to_string());
-        assert_eq!(err2.to_string(), "JSON parse error: parse error");
+        let err2 = ShadowDecisionError::Json("parse error".to_string());
+        assert_eq!(err2.to_string(), "shadow decision JSON error: parse error");
 
-        let err3 = ShadowDecisionError::IoError("io error".to_string());
-        assert_eq!(err3.to_string(), "I/O error: io error");
-
-        let err4 = ShadowDecisionError::MissingRequiredSource("source".to_string());
-        assert_eq!(err4.to_string(), "missing required source: source");
+        let err3 = ShadowDecisionError::Io("io error".to_string());
+        assert_eq!(err3.to_string(), "shadow decision I/O error: io error");
     }
 
     #[test]
     fn shadow_truth_state_serialization() {
-        let fresh = ShadowTruthState::Fresh;
-        let stale = ShadowTruthState::Stale;
+        let confirmed = ShadowTruthState::Confirmed;
         let degraded = ShadowTruthState::Degraded;
+        let blocked = ShadowTruthState::Blocked;
+        let contaminated = ShadowTruthState::Contaminated;
 
-        let fresh_json = serde_json::to_string(&fresh).unwrap();
-        let stale_json = serde_json::to_string(&stale).unwrap();
+        let confirmed_json = serde_json::to_string(&confirmed).unwrap();
         let degraded_json = serde_json::to_string(&degraded).unwrap();
+        let blocked_json = serde_json::to_string(&blocked).unwrap();
+        let contaminated_json = serde_json::to_string(&contaminated).unwrap();
 
-        assert_eq!(fresh_json, r#""Fresh""#);
-        assert_eq!(stale_json, r#""Stale""#);
-        assert_eq!(degraded_json, r#""Degraded""#);
+        assert_eq!(confirmed_json, r#""confirmed""#);
+        assert_eq!(degraded_json, r#""degraded""#);
+        assert_eq!(blocked_json, r#""blocked""#);
+        assert_eq!(contaminated_json, r#""contaminated""#);
 
-        // Test deserialization
         assert_eq!(
-            serde_json::from_str::<ShadowTruthState>(&fresh_json).unwrap(),
-            fresh
-        );
-        assert_eq!(
-            serde_json::from_str::<ShadowTruthState>(&stale_json).unwrap(),
-            stale
+            serde_json::from_str::<ShadowTruthState>(&confirmed_json).unwrap(),
+            confirmed
         );
         assert_eq!(
             serde_json::from_str::<ShadowTruthState>(&degraded_json).unwrap(),
@@ -1522,72 +1554,77 @@ mod tests {
 
     #[test]
     fn shadow_decision_serialization() {
-        let proceed = ShadowDecision::Proceed;
-        let hold = ShadowDecision::Hold;
+        let pass = ShadowDecision::Pass;
+        let degraded = ShadowDecision::Degraded;
+        let fail_closed = ShadowDecision::FailClosed;
 
-        let proceed_json = serde_json::to_string(&proceed).unwrap();
-        let hold_json = serde_json::to_string(&hold).unwrap();
+        let pass_json = serde_json::to_string(&pass).unwrap();
+        let degraded_json = serde_json::to_string(&degraded).unwrap();
+        let fail_closed_json = serde_json::to_string(&fail_closed).unwrap();
 
-        assert_eq!(proceed_json, r#""Proceed""#);
-        assert_eq!(hold_json, r#""Hold""#);
+        assert_eq!(pass_json, r#""pass""#);
+        assert_eq!(degraded_json, r#""degraded""#);
+        assert_eq!(fail_closed_json, r#""fail_closed""#);
 
-        // Test deserialization
         assert_eq!(
-            serde_json::from_str::<ShadowDecision>(&proceed_json).unwrap(),
-            proceed
+            serde_json::from_str::<ShadowDecision>(&pass_json).unwrap(),
+            pass
         );
         assert_eq!(
-            serde_json::from_str::<ShadowDecision>(&hold_json).unwrap(),
-            hold
+            serde_json::from_str::<ShadowDecision>(&fail_closed_json).unwrap(),
+            fail_closed
         );
     }
 
     #[test]
     fn mutation_policy_defaults() {
-        let policy = MutationPolicy::default();
-        assert!(!policy.allow_destructive_operations);
-        assert!(!policy.allow_force_push);
-        assert!(!policy.allow_branch_deletion);
-        assert!(!policy.allow_config_changes);
-        assert!(!policy.allow_dependency_updates);
-        assert!(!policy.allow_schema_migrations);
-        assert!(!policy.allow_critical_path_changes);
-        assert!(policy.require_review_for_api_changes);
-        assert!(policy.require_review_for_breaking_changes);
-        assert!(policy.require_tests_for_new_code);
-        assert_eq!(policy.max_simultaneous_mutations, 3);
-        assert_eq!(policy.mutation_blast_radius_limit, 50);
+        let policy = MutationPolicy::advisory_only();
+        assert!(policy.advisory_only);
+        assert!(policy.proof_only);
+        assert!(!policy.mutates_br);
+        assert!(!policy.reassigns_beads);
+        assert!(!policy.releases_reservations);
+        assert!(!policy.sends_agent_mail);
+        assert!(!policy.runs_cargo);
+        assert!(!policy.runs_rch);
+        assert!(!policy.mutates_git);
+        assert!(!policy.mutates_remote_workers);
+        assert!(!policy.changes_live_queue_policy);
+        assert!(!policy.writes_outside_output_dir);
     }
 
     #[test]
     fn sibling_reuse_creation() {
-        let reuse = SiblingReuse {
-            agent_name: "TestAgent".to_string(),
-            recommendation_id: "rec_123".to_string(),
-            similarity_score: 0.85,
-            justification: "Similar work pattern".to_string(),
-        };
+        let reuse = SiblingReuse::required();
 
-        assert_eq!(reuse.agent_name, "TestAgent");
-        assert_eq!(reuse.similarity_score, 0.85);
+        assert_eq!(reuse.persistence, "/dp/frankensqlite");
+        assert_eq!(reuse.tui, "/dp/frankentui");
+        assert_eq!(reuse.service_api, "/dp/fastapi_rust");
     }
 
     #[test]
     fn advisory_recommendation_structure() {
         let rec = AdvisoryRecommendation {
             recommendation_id: "rec_456".to_string(),
-            command_line: "git commit -m 'test'".to_string(),
-            rationale: "Test commit".to_string(),
-            risk_assessment: "low".to_string(),
-            estimated_duration_minutes: 5,
-            requires_manual_review: false,
-            sibling_reuse: None,
+            rank: 5,
+            action_class: "inspect".to_string(),
+            command_text: "br ready --json".to_string(),
+            executes_mutation: false,
+            remediation_only: true,
+            source_event_ids: vec!["br-event-1".to_string()],
+            source_hashes: vec!["sha256:br_queue".to_string()],
+            source_collected_epoch_seconds: vec![1715173200],
+            degradation_state: "none".to_string(),
+            reason_codes: vec!["FE-SWARM-AUTOPILOT-SHADOW-IDLE-QUEUE".to_string()],
+            evidence_paths: vec!["/test/shadow_status.json".to_string()],
         };
 
         assert_eq!(rec.recommendation_id, "rec_456");
-        assert_eq!(rec.estimated_duration_minutes, 5);
-        assert!(!rec.requires_manual_review);
-        assert!(rec.sibling_reuse.is_none());
+        assert_eq!(rec.rank, 5);
+        assert_eq!(rec.command_text, "br ready --json");
+        assert!(!rec.executes_mutation);
+        assert!(rec.remediation_only);
+        assert_eq!(rec.source_event_ids, vec!["br-event-1"]);
     }
 
     #[test]
@@ -1638,17 +1675,31 @@ mod tests {
 
     #[test]
     fn source_snapshot_status_serialization() {
-        let fresh = SourceSnapshotStatus::Fresh;
-        let stale = SourceSnapshotStatus::Stale;
-        let degraded = SourceSnapshotStatus::Degraded;
+        let status = SourceSnapshotStatus {
+            source_key: "br_queue".to_string(),
+            source_id: "br-event-1".to_string(),
+            source_kind: "br_queue_snapshot_json".to_string(),
+            schema_version: "test.source.v1".to_string(),
+            content_hash: "sha256:br_queue".to_string(),
+            collected_epoch_seconds: 1715173200,
+            freshness_window_seconds: 300,
+            fresh: true,
+            degraded: false,
+            raw_payload_ref: "journal-events-jsonl".to_string(),
+            local_fallback_contamination: false,
+            error_codes: vec![],
+        };
 
-        let fresh_json = serde_json::to_string(&fresh).unwrap();
-        let stale_json = serde_json::to_string(&stale).unwrap();
-        let degraded_json = serde_json::to_string(&degraded).unwrap();
-
-        assert_eq!(fresh_json, r#""Fresh""#);
-        assert_eq!(stale_json, r#""Stale""#);
-        assert_eq!(degraded_json, r#""Degraded""#);
+        let serialized = serde_json::to_value(&status).unwrap();
+        assert_eq!(
+            serialized.get("source_key").and_then(Value::as_str),
+            Some("br_queue")
+        );
+        assert_eq!(serialized.get("fresh").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            serialized.get("degraded").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     // Additional test coverage for production code paths
@@ -1754,23 +1805,18 @@ mod tests {
     }
 
     #[test]
-    fn compose_shadow_decision_with_stale_source_produces_degraded_state() {
+    fn compose_shadow_decision_with_stale_source_produces_blocked_state() {
         let old_timestamp = 1715173200 - 600; // 10 minutes ago
-        let event = JournalSourceEvent {
-            source_key: Some("br_queue".to_string()),
-            collected_epoch_seconds: Some(old_timestamp),
-            freshness_window_seconds: Some(300), // 5 minute window
-            fresh: Some(false),
-            payload: Some(serde_json::json!({})),
-            ..Default::default()
-        };
+        let mut journal_events = complete_required_events(1715173200);
+        journal_events[0].collected_epoch_seconds = Some(old_timestamp);
+        journal_events[0].fresh = Some(false);
         let input = ShadowDecisionComposerInput {
             shadow_run_id: "test-run-123".to_string(),
             source_revision: "abc123".to_string(),
             generated_epoch_seconds: 1715173200,
             default_freshness_window_seconds: 300,
             max_recommendations: 16,
-            journal_events: vec![event],
+            journal_events,
             existing_autopilot_outputs: vec![],
             artifact_paths: ArtifactPaths::for_output_dir("/tmp/test"),
         };
@@ -1780,9 +1826,9 @@ mod tests {
         let artifacts = result.unwrap();
         assert_eq!(
             artifacts.shadow_status.truth_state,
-            ShadowTruthState::Degraded
+            ShadowTruthState::Blocked
         );
-        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::Degraded);
+        assert_eq!(artifacts.shadow_status.decision, ShadowDecision::FailClosed);
     }
 
     #[test]

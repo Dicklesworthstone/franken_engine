@@ -1,0 +1,343 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen.fixtures.v1",
+  "cases": [
+    {
+      "case_id": "active_owner",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-active",
+              "title": "Active owner bead",
+              "assignee": "ActiveAgent",
+              "updated_at": "2026-05-09T14:50:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "pass",
+          "agents": [
+            {
+              "name": "ActiveAgent",
+              "last_active_ts": "2026-05-09T14:55:00Z"
+            }
+          ],
+          "diagnostics": []
+        },
+        "git_activity": [],
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "recommendation": "keep_assigned",
+        "reason_code": "active_owner"
+      }
+    },
+    {
+      "case_id": "stale_owner_safe_to_reopen",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-stale-safe",
+              "title": "Stale safe bead",
+              "assignee": "StaleAgent",
+              "updated_at": "2026-05-09T12:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "pass",
+          "agents": [
+            {
+              "name": "StaleAgent",
+              "last_active_ts": "2026-05-09T12:05:00Z"
+            }
+          ],
+          "diagnostics": []
+        },
+        "git_activity": [],
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "recommendation": "recommend_reopen",
+        "reason_code": "stale_owner_safe_to_reopen"
+      }
+    },
+    {
+      "case_id": "stale_owner_dirty_overlap",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-dirty",
+              "title": "Stale dirty bead",
+              "assignee": "DirtyAgent",
+              "updated_at": "2026-05-09T11:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "pass",
+          "agents": [
+            {
+              "name": "DirtyAgent",
+              "last_active_ts": "2026-05-09T11:05:00Z"
+            }
+          ],
+          "diagnostics": []
+        },
+        "dirty_overlap": [
+          {
+            "bead_id": "bd-dirty",
+            "path": "scripts/dirty.sh",
+            "owner": "DirtyAgent"
+          }
+        ],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "recommendation": "manual_review",
+        "reason_code": "dirty_overlap"
+      }
+    },
+    {
+      "case_id": "expired_reservation",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-expired-reservation",
+              "title": "Expired reservation bead",
+              "assignee": "ExpiredAgent",
+              "updated_at": "2026-05-09T11:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "blocked",
+          "agents": [
+            {
+              "name": "ExpiredAgent",
+              "last_active_ts": "2026-05-09T11:00:00Z"
+            }
+          ],
+          "diagnostics": [
+            {
+              "code": "expired_reservation",
+              "bead_id": "bd-expired-reservation",
+              "agent_name": "ExpiredAgent"
+            }
+          ]
+        },
+        "file_reservations": [
+          {
+            "agent_name": "ExpiredAgent",
+            "bead_id": "bd-expired-reservation",
+            "path_pattern": "scripts/expired.sh",
+            "expires_ts": "2026-05-09T14:00:00Z"
+          }
+        ],
+        "dirty_overlap": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "recommendation": "manual_review",
+        "reason_code": "expired_reservation"
+      }
+    },
+    {
+      "case_id": "mail_unavailable",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-mail-missing",
+              "title": "Mail missing bead",
+              "assignee": "UnknownAgent",
+              "updated_at": "2026-05-09T11:00:00Z"
+            }
+          ]
+        },
+        "git_activity": [],
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "recommendation": "manual_review",
+        "reason_code": "mail_unavailable"
+      }
+    },
+    {
+      "case_id": "recently_active_old_bead",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-old-but-active",
+              "title": "Old bead with active owner",
+              "assignee": "RecentlyActiveAgent",
+              "updated_at": "2026-05-09T10:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "pass",
+          "agents": [
+            {
+              "name": "RecentlyActiveAgent",
+              "last_active_ts": "2026-05-09T14:59:00Z"
+            }
+          ],
+          "diagnostics": []
+        },
+        "git_activity": [],
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "recommendation": "keep_assigned",
+        "reason_code": "active_owner"
+      }
+    },
+    {
+      "case_id": "missing_br_snapshot",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "br_in_progress": {
+          "present": false,
+          "issues": []
+        },
+        "agent_mail_sla_report": {
+          "decision": "pass",
+          "agents": [],
+          "diagnostics": []
+        },
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reason": "missing_br_snapshot"
+      }
+    },
+    {
+      "case_id": "contradictory_ownership",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-contradictory",
+              "title": "Contradictory bead",
+              "assignee": "AgentA",
+              "updated_at": "2026-05-09T11:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "blocked",
+          "agents": [
+            {
+              "name": "AgentA",
+              "last_active_ts": "2026-05-09T11:00:00Z"
+            }
+          ],
+          "diagnostics": [
+            {
+              "code": "contradictory_ownership_reservation",
+              "bead_id": "bd-contradictory",
+              "agent_name": "AgentB",
+              "br_assignee": "AgentA"
+            }
+          ]
+        },
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reason": "contradictory_ownership_evidence"
+      }
+    }
+  ]
+}

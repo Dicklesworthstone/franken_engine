@@ -1,0 +1,258 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-worker-probe-cases.v1",
+  "scenarios": [
+    {
+      "scenario_id": "present_hdf5",
+      "expected_decision": "pass",
+      "expected_truth_state": "confirmed",
+      "expected_exit_code": 0,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "present"
+        }
+      ],
+      "expected_reason_codes": [
+        "hdf5_present",
+        "native_dependency_present"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "vmi1149989",
+          "host_class": "remote-linux-x86_64",
+          "captured_at": "2026-05-09T07:35:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "pkg-config --modversion hdf5",
+              "exit_code": 0,
+              "stdout": "1.14.5",
+              "observed_version": "1.14.5",
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            },
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "header_presence",
+              "probe_command": "test -f /usr/include/hdf5/serial/hdf5.h",
+              "exit_code": 0,
+              "header_present": true,
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "missing_hdf5",
+      "expected_decision": "blocked",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 75,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "missing"
+        }
+      ],
+      "expected_reason_codes": [
+        "hdf5_missing",
+        "native_dependency_missing"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "vmi1227854",
+          "host_class": "remote-linux-x86_64",
+          "captured_at": "2026-05-09T07:35:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "pkg-config --modversion hdf5",
+              "exit_code": 1,
+              "stderr": "Package hdf5 was not found in the pkg-config search path",
+              "observed_version": null,
+              "abi_fingerprint": null,
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "stale_probe",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "unknown",
+      "expected_exit_code": 42,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "stale"
+        }
+      ],
+      "expected_reason_codes": [
+        "stale_worker_probe"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "vmi1149989",
+          "host_class": "remote-linux-x86_64",
+          "captured_at": "2026-04-01T00:00:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "pkg-config --modversion hdf5",
+              "exit_code": 0,
+              "stdout": "1.14.5",
+              "observed_version": "1.14.5",
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+              "probe_timestamp": "2026-04-01T00:00:00Z",
+              "freshness_state": "stale",
+              "contamination_state": "remote_only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "contradictory_pkg_config_header",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "unknown",
+      "expected_exit_code": 42,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "contradictory"
+        }
+      ],
+      "expected_reason_codes": [
+        "contradictory_pkg_config_header_evidence"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "vmi1149989",
+          "host_class": "remote-linux-x86_64",
+          "captured_at": "2026-05-09T07:35:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "pkg-config --modversion hdf5",
+              "exit_code": 0,
+              "stdout": "1.14.5",
+              "observed_version": "1.14.5",
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            },
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "header_presence",
+              "probe_command": "test -f /usr/include/hdf5.h",
+              "exit_code": 1,
+              "header_present": false,
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "probe_unavailable",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "unknown",
+      "expected_exit_code": 42,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "unsupported"
+        }
+      ],
+      "expected_reason_codes": [
+        "probe_unavailable"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "vmi1167313",
+          "host_class": "remote-linux-x86_64",
+          "captured_at": "2026-05-09T07:35:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "ssh vmi1167313 pkg-config --modversion hdf5",
+              "exit_code": 255,
+              "stderr": "ssh probe unavailable",
+              "probe_unavailable": true,
+              "observed_version": null,
+              "abi_fingerprint": null,
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "remote_only"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contaminated",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "contaminated",
+      "expected_exit_code": 42,
+      "expected_classifications": [
+        {
+          "dependency_id": "hdf5",
+          "classification": "contaminated"
+        }
+      ],
+      "expected_reason_codes": [
+        "local_fallback_contaminated"
+      ],
+      "inputs": {
+        "raw_worker_probe_json": {
+          "schema_version": "franken-engine.raw-worker-native-probe.v1",
+          "worker_id": "local",
+          "host_class": "local-fallback",
+          "captured_at": "2026-05-09T07:35:00Z",
+          "probes": [
+            {
+              "dependency_id": "hdf5",
+              "native_package_name": "hdf5",
+              "probe_kind": "pkg_config_modversion",
+              "probe_command": "pkg-config --modversion hdf5",
+              "exit_code": 0,
+              "stdout": "1.14.5",
+              "observed_version": "1.14.5",
+              "abi_fingerprint": "pkg-config:hdf5:1.14.5",
+              "probe_timestamp": "2026-05-09T07:35:00Z",
+              "freshness_state": "fresh",
+              "contamination_state": "local_fallback"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

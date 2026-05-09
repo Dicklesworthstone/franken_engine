@@ -1,0 +1,116 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-worker-probe-contract.v1",
+  "bead_id": "bd-sqm14.3",
+  "parent_bead_id": "bd-sqm14",
+  "depends_on": [
+    "bd-sqm14.1"
+  ],
+  "contract": "docs/swarm_native_dependency_routing_contract_v1.json",
+  "requirement_map": "docs/swarm_native_dependency_requirement_map_v1.json",
+  "script": "scripts/swarm_native_dependency_worker_probe_normalizer.sh",
+  "smoke_script": "scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh",
+  "fixture_bundle": "scripts/testdata/swarm_native_dependency_worker_probe/cases.json",
+  "output_schema_version": "franken-engine.worker-native-probe-snapshot.v1",
+  "source_schema_version": "franken-engine.worker-native-probe-sources.v1",
+  "required_inputs": [
+    "raw_worker_probe_json"
+  ],
+  "optional_inputs": [
+    "native_requirement_bundle_json"
+  ],
+  "preserved_fields": [
+    "worker_id",
+    "host_class",
+    "dependency_id",
+    "native_package_name",
+    "probe_kind",
+    "probe_command",
+    "probe_status",
+    "observed_version",
+    "abi_fingerprint",
+    "probe_timestamp",
+    "freshness_state",
+    "contamination_state",
+    "classification",
+    "reason_codes"
+  ],
+  "probe_kinds": [
+    "pkg_config_modversion",
+    "header_presence",
+    "library_linkability",
+    "env_root",
+    "build_script_diagnostic"
+  ],
+  "classifications": [
+    "present",
+    "missing",
+    "stale",
+    "contradictory",
+    "unsupported",
+    "unknown",
+    "contaminated"
+  ],
+  "truth_states": [
+    "confirmed",
+    "blocked",
+    "unknown",
+    "contaminated"
+  ],
+  "decisions": [
+    "pass",
+    "blocked",
+    "fail_closed"
+  ],
+  "exit_codes": {
+    "pass": 0,
+    "blocked": 75,
+    "fail_closed": 42
+  },
+  "required_reason_codes": [
+    "native_dependency_present",
+    "native_dependency_missing",
+    "hdf5_present",
+    "hdf5_missing",
+    "stale_worker_probe",
+    "contradictory_pkg_config_header_evidence",
+    "probe_unavailable",
+    "local_fallback_contaminated",
+    "unknown_probe_state"
+  ],
+  "classification_rules": [
+    "fresh pkg-config success plus coherent header and link probes classifies present",
+    "required pkg-config failure classifies missing and returns blocked",
+    "stale probe evidence fails closed",
+    "pkg-config success with missing required header classifies contradictory and fails closed",
+    "SSH or probe transport unavailability classifies unsupported and fails closed",
+    "local fallback contamination classifies contaminated and fails closed"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "installs_remote_packages": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "proof_cases": [
+    "present_hdf5",
+    "missing_hdf5",
+    "stale_probe",
+    "contradictory_pkg_config_header",
+    "probe_unavailable",
+    "local_fallback_contaminated"
+  ],
+  "validation_commands": [
+    "jq empty docs/swarm_native_dependency_worker_probe_contract_v1.json",
+    "jq empty scripts/testdata/swarm_native_dependency_worker_probe/cases.json",
+    "bash -n scripts/swarm_native_dependency_worker_probe_normalizer.sh",
+    "bash -n scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh",
+    "bash scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh check",
+    "bash scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_native_dependency_worker_probe_normalizer.sh docs/swarm_native_dependency_worker_probe_contract_v1.json scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh scripts/testdata/swarm_native_dependency_worker_probe/cases.json"
+  ]
+}

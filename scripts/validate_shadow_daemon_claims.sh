@@ -168,8 +168,8 @@ check_script_command_examples() {
 }
 
 check_shadow_no_mock_gate_truth() {
-    local proof_doc="docs/SHADOW_DAEMON_PROOF_STATE.md"
-    local lifecycle_drill="scripts/e2e/shadow_daemon_lifecycle_drill.sh"
+    local proof_doc="${SHADOW_PROOF_DOC:-docs/SHADOW_DAEMON_PROOF_STATE.md}"
+    local lifecycle_drill="${SHADOW_LIFECYCLE_DRILL:-scripts/e2e/shadow_daemon_lifecycle_drill.sh}"
 
     if [[ ! -f "$proof_doc" || ! -f "$lifecycle_drill" ]]; then
         log "$RED" "  ❌ Missing shadow proof-state inputs"
@@ -289,6 +289,10 @@ case "${1:-validate}" in
         echo ""
         echo "This script validates that shadow daemon documentation claims"
         echo "comply with adoption gate restrictions and maintain advisory-only semantics."
+        echo ""
+        echo "Environment overrides for fixture checks:"
+        echo "  SHADOW_PROOF_DOC        Proof-state document path"
+        echo "  SHADOW_LIFECYCLE_DRILL  Lifecycle drill script path"
         ;;
     *)
         log "$RED" "Unknown command: $1"

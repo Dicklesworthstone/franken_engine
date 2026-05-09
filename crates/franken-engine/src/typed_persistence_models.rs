@@ -4439,16 +4439,12 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// TODO: Integration scaffolding
+// Typed persistence truth state
 // ---------------------------------------------------------------------------
 
-// ✓ DONE: Implement SQLModel session management and FrankenSQLite initialization
-// ✓ DONE: Add explicit typed backfill dry-run planning for legacy generic StoreRecord data
-// ✓ DONE: Add store-specific lossless legacy-to-typed backfill mappers
-// ✓ DONE: Add typed StoreRecord boundaries and StorageAdapter extension methods
-// ✓ DONE: Add fail-closed field validation rules for each typed model
-// ✓ DONE: Implement query builders for common access patterns
-// TODO: Add external integration/e2e scripts with actual sqlmodel_rust session lifecycle logging
-// TODO: Wire production SQLModel sessions behind typed adapter methods
-// TODO: Add sqlmodel_rust session initialization in storage adapter constructor
-// TODO: Update all callers to use typed store operations instead of generic record operations
+// The SQLMODEL-TYPED-P0 implementation track is closed. The authoritative
+// contract and executable gates live in docs/TYPED_PERSISTENCE_ENFORCEMENT_CONTRACT.md.
+// This module keeps the typed model, session, backfill, and adapter-extension
+// surface; store-specific callers and storage-adapter guards now enforce the
+// typed-heavy boundaries. Future production session hardening should update the
+// contract and open a fresh bead instead of restoring stale generic-authority notes here.

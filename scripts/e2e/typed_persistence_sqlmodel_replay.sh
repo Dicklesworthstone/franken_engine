@@ -68,8 +68,17 @@ json_event() {
 run_step() {
   local step_id="$1"
   shift
-  local command_text="$*"
   local log_path="${step_logs_dir}/${step_id}.log"
+  local -a command=(
+    rch exec -- env
+    "RUSTC_WRAPPER=${RUSTC_WRAPPER:-}"
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}"
+    "CARGO_INCREMENTAL=${CARGO_INCREMENTAL:-0}"
+    "CARGO_TARGET_DIR=${target_dir}"
+    "RUSTFLAGS=${RUSTFLAGS:--C linker=cc}"
+    "$@"
+  )
+  local command_text="${command[*]}"
   local started_ms ended_ms duration_ms
 
   commands_run+=("$command_text")
@@ -77,14 +86,7 @@ run_step() {
   json_event "${step_id}.started" "running" "" "$step_id" "$command_text" "$log_path" 0
 
   started_ms="$(date -u +%s%3N)"
-  if env \
-    RCH_CARGO_WRAPPER_BYPASS="${RCH_CARGO_WRAPPER_BYPASS:-1}" \
-    RUSTC_WRAPPER="${RUSTC_WRAPPER:-}" \
-    CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" \
-    CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}" \
-    CARGO_TARGET_DIR="$target_dir" \
-    RUSTFLAGS="${RUSTFLAGS:--C linker=cc}" \
-    "$@" >"$log_path" 2>&1; then
+  if "${command[@]}" >"$log_path" 2>&1; then
     ended_ms="$(date -u +%s%3N)"
     duration_ms="$((ended_ms - started_ms))"
     json_event "${step_id}.completed" "pass" "" "$step_id" "$command_text" "$log_path" "$duration_ms"
@@ -149,6 +151,8 @@ write_manifest() {
     dirty_worktree=true
   fi
 
+  # manifest_path is passed as data, not read by jq.
+  # shellcheck disable=SC2094
   jq -n \
     --arg schema_version "franken-engine.typed-persistence-sqlmodel.manifest.v1" \
     --arg bead_id "$bead_id" \

@@ -1,0 +1,161 @@
+{
+  "schema_version": "franken-engine.swarm-rch-target-dir-heatmap.fixtures.v1",
+  "default_input": {
+    "schema_version": "franken-engine.swarm-rch-target-dir-heatmap.input.v1",
+    "contract_profile": {
+      "decision": "pass",
+      "path": "artifacts/swarm_feedback_contract_profile.json"
+    },
+    "rch_snapshot": {
+      "present": true,
+      "freshness": "fresh",
+      "local_fallback_detected": false,
+      "workers": [
+        {
+          "worker_id": "rch-worker-a",
+          "daemon_status": "idle",
+          "slots_available": 2,
+          "disk_pressure": "low",
+          "target_dirs": [
+            {
+              "target_dir": "/tmp/franken-engine-proof-target",
+              "target_dir_class": "warm_reusable",
+              "cache_reuse_score": 91,
+              "evidence_freshness": "fresh",
+              "safe_alternative": "use a fresh target dir if cache hash evidence changes"
+            }
+          ]
+        }
+      ]
+    },
+    "resource_pressure": {
+      "disk_pressure": "low",
+      "memory_pressure": "low"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "warm_reusable_target",
+      "input_patch": {},
+      "expected": {
+        "decision": "pass",
+        "expected_recommendation": "reuse_warm_target",
+        "fail_closed_reasons": [],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "cold_target",
+      "input_patch": {
+        "rch_snapshot": {
+          "workers": [
+            {
+              "worker_id": "rch-worker-b",
+              "daemon_status": "idle",
+              "slots_available": 1,
+              "disk_pressure": "low",
+              "target_dirs": [
+                {
+                  "target_dir": "/tmp/franken-engine-cold-target",
+                  "target_dir_class": "cold",
+                  "cache_reuse_score": 5,
+                  "evidence_freshness": "fresh",
+                  "safe_alternative": "prefer narrow shell proof until a warm target exists"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_recommendation": "allocate_fresh_target",
+        "fail_closed_reasons": [],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "disk_pressure",
+      "input_patch": {
+        "resource_pressure": {
+          "disk_pressure": "high",
+          "memory_pressure": "medium"
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_recommendation": "defer_due_to_pressure",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "disk_or_memory_pressure"
+        ]
+      }
+    },
+    {
+      "case_id": "worker_saturated",
+      "input_patch": {
+        "rch_snapshot": {
+          "workers": [
+            {
+              "worker_id": "rch-worker-a",
+              "daemon_status": "busy",
+              "slots_available": 0,
+              "disk_pressure": "low",
+              "target_dirs": [
+                {
+                  "target_dir": "/tmp/franken-engine-proof-target",
+                  "target_dir_class": "warm_reusable",
+                  "cache_reuse_score": 91,
+                  "evidence_freshness": "fresh",
+                  "safe_alternative": "wait for a remote slot or pick a lower-risk shell proof"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_recommendation": "defer_no_slot",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "worker_saturated"
+        ]
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "input_patch": {
+        "rch_snapshot": {
+          "local_fallback_detected": true
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_recommendation": "manual_review",
+        "fail_closed_reasons": [
+          "local_rch_fallback_contamination"
+        ],
+        "degraded_reasons": []
+      }
+    },
+    {
+      "case_id": "missing_rch_snapshot",
+      "input_patch": {
+        "rch_snapshot": {
+          "present": false,
+          "freshness": "missing",
+          "workers": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "expected_recommendation": "",
+        "fail_closed_reasons": [],
+        "degraded_reasons": [
+          "missing_rch_snapshot"
+        ]
+      }
+    }
+  ]
+}

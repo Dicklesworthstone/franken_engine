@@ -1,0 +1,106 @@
+{
+  "schema_version": "franken-engine.swarm-proof-command-preflight-contract.v1",
+  "bead_id": "bd-ua5n2.9",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.1"
+  ],
+  "script": "scripts/swarm_proof_command_preflight.sh",
+  "operator_docs": "docs/SWARM_PROOF_COMMAND_PREFLIGHT.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_command_preflight/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_command_preflight_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-command-preflight.v1",
+  "purpose": "Cheaply lint proof command text before it enters the proof broker. The preflight emits deterministic guidance and never executes the command being inspected.",
+  "valid_decisions": [
+    "proof_safe",
+    "proof_unsafe",
+    "needs_human_review",
+    "non_heavy_read_only"
+  ],
+  "valid_reason_codes": [
+    "direct_rch_cargo_proof",
+    "shell_wrapper_fallback_risk",
+    "bare_cargo_not_allowed",
+    "non_heavy_read_only",
+    "missing_target_dir_policy",
+    "unsupported_env_leakage",
+    "missing_rch_visibility",
+    "unsupported_heavy_command_shape",
+    "unknown_command_shape",
+    "missing_command"
+  ],
+  "valid_command_kinds": [
+    "cargo_test",
+    "cargo_check",
+    "cargo_clippy",
+    "cargo_build",
+    "cargo_run",
+    "cargo_bench",
+    "git_diff_check",
+    "jq",
+    "bash_syntax",
+    "shellcheck",
+    "unknown"
+  ],
+  "heavy_command_policy": {
+    "cargo_requires_rch_exec": true,
+    "accepted_heavy_prefix": "rch exec -- env",
+    "target_dir_required": true,
+    "local_fallback_default": "refuse",
+    "shell_wrappers_allowed": false,
+    "bare_cargo_allowed": false,
+    "visibility_required_when_evidence_requires_it": true
+  },
+  "accepted_env_allowlist": [
+    "CARGO_TARGET_DIR",
+    "CARGO_INCREMENTAL",
+    "CARGO_BUILD_JOBS",
+    "CARGO_PROFILE_DEV_DEBUG",
+    "RCH_VISIBILITY",
+    "RCH_PRIORITY",
+    "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS",
+    "RUSTFLAGS",
+    "RUSTUP_TOOLCHAIN"
+  ],
+  "remediation_requirements": [
+    "Every non-proof-safe decision emits remediation text.",
+    "Every heavy cargo rejection emits a pasteable direct rch exec -- env command when a cargo suffix can be extracted.",
+    "Target-dir remediation uses /tmp/rch_target_franken_engine_<safe_bead_id>.",
+    "Unsupported env remediation lists rejected env names."
+  ],
+  "required_outputs": [
+    "preflight_report.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "fixture_cases": [
+    "accepted_direct_rch_cargo",
+    "rejected_shell_wrapper_fallback_risk",
+    "rejected_bare_cargo",
+    "accepted_read_only_non_heavy",
+    "rejected_missing_target_dir",
+    "rejected_env_mismatch",
+    "rejected_missing_visibility",
+    "unknown_command_needs_human_review"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json",
+    "bash -n scripts/swarm_proof_command_preflight.sh",
+    "bash -n scripts/e2e/swarm_proof_command_preflight_smoke.sh",
+    "bash scripts/e2e/swarm_proof_command_preflight_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_command_preflight_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_proof_command_preflight.sh docs/SWARM_PROOF_COMMAND_PREFLIGHT.md docs/swarm_proof_command_preflight_contract_v1.json scripts/testdata/swarm_proof_command_preflight/cases.json scripts/e2e/swarm_proof_command_preflight_smoke.sh"
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "schema_version": "franken-engine.swarm-proof-command-preflight-fixtures.v1",
+  "contract_schema_version": "franken-engine.swarm-proof-command-preflight-contract.v1",
+  "cases": [
+    {
+      "case_id": "accepted_direct_rch_cargo",
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": true
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "proof_safe",
+        "reason_code": "direct_rch_cargo_proof",
+        "command_kind": "cargo_test",
+        "transport": "rch_direct_env",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine proof_broker_contract --lib -- --nocapture",
+        "remediation": "Command is preflight-safe; preserve the direct rch exec -- env shape, CARGO_TARGET_DIR, and env allowlist when scheduling proof."
+      }
+    },
+    {
+      "case_id": "rejected_shell_wrapper_fallback_risk",
+      "command": "bash -lc \"rch exec -- cargo test -p frankenengine-engine --lib\"",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": true
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "shell_wrapper_fallback_risk",
+        "command_kind": "cargo_test",
+        "transport": "shell_wrapper",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine --lib",
+        "remediation": "Remove the shell wrapper and run the command as direct argv: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo test -p frankenengine-engine --lib"
+      }
+    },
+    {
+      "case_id": "rejected_bare_cargo",
+      "command": "cargo check --all-targets",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "bare_cargo_not_allowed",
+        "command_kind": "cargo_check",
+        "transport": "local_bare",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+        "remediation": "Do not use bare Cargo for proof. Run through RCH with an isolated target dir: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets"
+      }
+    },
+    {
+      "case_id": "accepted_read_only_non_heavy",
+      "command": "git diff --check -- docs/SWARM_PROOF_BROKER.md",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "non_heavy_read_only",
+        "reason_code": "non_heavy_read_only",
+        "command_kind": "git_diff_check",
+        "transport": "read_only",
+        "pasteable_command": "git diff --check -- docs/SWARM_PROOF_BROKER.md",
+        "remediation": "Command is non-heavy/read-only; it may be used as lightweight evidence without RCH or Cargo execution."
+      }
+    },
+    {
+      "case_id": "rejected_missing_target_dir",
+      "command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_target_dir_policy",
+        "command_kind": "cargo_test",
+        "transport": "rch_direct_env",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+        "remediation": "Add an isolated target dir before scheduling proof: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
+      }
+    },
+    {
+      "case_id": "rejected_env_mismatch",
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad SECRET_TOKEN=abc cargo check -p frankenengine-engine --tests",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "unsupported_env_leakage",
+        "command_kind": "cargo_check",
+        "transport": "rch_direct_env",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+        "remediation": "Remove unsupported env assignments (SECRET_TOKEN) and use the allowlisted shape: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests"
+      }
+    },
+    {
+      "case_id": "rejected_missing_visibility",
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": true
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "missing_rch_visibility",
+        "command_kind": "cargo_clippy",
+        "transport": "rch_direct_env",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+        "remediation": "Add RCH_VISIBILITY=verbose for evidence capture before scheduling proof: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 RCH_VISIBILITY=verbose cargo clippy -p frankenengine-engine --all-targets -- -D warnings"
+      }
+    },
+    {
+      "case_id": "unknown_command_needs_human_review",
+      "command": "make test",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "needs_human_review",
+        "reason_code": "unknown_command_shape",
+        "command_kind": "unknown",
+        "transport": "unknown",
+        "pasteable_command": null,
+        "remediation": "Command shape is not recognized by the proof broker preflight; request human review and do not reuse it as green proof."
+      }
+    }
+  ]
+}

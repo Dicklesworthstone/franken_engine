@@ -1,0 +1,186 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-operator-status-cases.v1",
+  "scenarios": [
+    {
+      "scenario_id": "compatible_reusable",
+      "expected_status": "PASS",
+      "expected_exit_code": 0,
+      "expected_strings": [
+        "preferred_worker: `vmi1149989`",
+        "compatible_workers: `vmi1149989`",
+        "not evidence that the source patch failed"
+      ],
+      "inputs": {
+        "route_advisory_json": {
+          "schema_version": "franken-engine.native-dependency-routing-advisory.v1",
+          "validation_id": "operator-compatible",
+          "decision": "pass",
+          "truth_state": "confirmed",
+          "compatible_worker_ids": [
+            "vmi1149989"
+          ],
+          "incompatible_workers": [],
+          "fail_closed_workers": [],
+          "retry_advice": {
+            "preferred_worker_id": "vmi1149989"
+          },
+          "reason_codes": [
+            "compatible_worker_available"
+          ]
+        },
+        "abi_cache_ledger_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-ledger.v1",
+          "decision": "reuse_allowed",
+          "reason_codes": [
+            "abi_fingerprint_match"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "incompatible_worker_rejected",
+      "expected_status": "PASS",
+      "expected_exit_code": 0,
+      "expected_strings": [
+        "Rejected workers: `vmi1227854:hdf5`",
+        "hdf5_missing",
+        "validation environment blocker"
+      ],
+      "inputs": {
+        "route_advisory_json": {
+          "schema_version": "franken-engine.native-dependency-routing-advisory.v1",
+          "validation_id": "operator-rejected-worker",
+          "decision": "pass",
+          "truth_state": "confirmed",
+          "compatible_worker_ids": [
+            "vmi1149989"
+          ],
+          "incompatible_workers": [
+            {
+              "worker_id": "vmi1227854",
+              "missing_required_dependency_ids": [
+                "hdf5"
+              ],
+              "reason_codes": [
+                "hdf5_missing"
+              ]
+            }
+          ],
+          "fail_closed_workers": [],
+          "retry_advice": {
+            "preferred_worker_id": "vmi1149989"
+          },
+          "reason_codes": [
+            "compatible_worker_available",
+            "hdf5_missing",
+            "incompatible_worker_missing_native_dependency"
+          ]
+        },
+        "abi_cache_ledger_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-ledger.v1",
+          "decision": "reuse_allowed",
+          "reason_codes": [
+            "abi_fingerprint_match"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "stale_fail_closed",
+      "expected_status": "FAIL-CLOSED",
+      "expected_exit_code": 42,
+      "expected_strings": [
+        "status: `FAIL-CLOSED`",
+        "stale_worker_probe",
+        "Fail-closed workers: `vmi1149989:stale_worker_probe`"
+      ],
+      "inputs": {
+        "route_advisory_json": {
+          "schema_version": "franken-engine.native-dependency-routing-advisory.v1",
+          "validation_id": "operator-stale",
+          "decision": "fail_closed",
+          "truth_state": "unknown",
+          "compatible_worker_ids": [],
+          "incompatible_workers": [],
+          "fail_closed_workers": [
+            {
+              "worker_id": "vmi1149989",
+              "reason_codes": [
+                "stale_worker_probe"
+              ]
+            }
+          ],
+          "retry_advice": {
+            "preferred_worker_id": null
+          },
+          "reason_codes": [
+            "no_compatible_workers",
+            "stale_worker_probe"
+          ]
+        },
+        "abi_cache_ledger_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-ledger.v1",
+          "decision": "reuse_quarantined",
+          "reason_codes": [
+            "target_cache_fingerprint_mismatch"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "all_blocked_missing_hdf5",
+      "expected_status": "BLOCKED",
+      "expected_exit_code": 75,
+      "expected_strings": [
+        "status: `BLOCKED`",
+        "Rejected workers: `vmi1227854:hdf5,vmi1167313:hdf5`",
+        "no source failure claimed"
+      ],
+      "inputs": {
+        "route_advisory_json": {
+          "schema_version": "franken-engine.native-dependency-routing-advisory.v1",
+          "validation_id": "operator-all-blocked",
+          "decision": "blocked",
+          "truth_state": "blocked",
+          "compatible_worker_ids": [],
+          "incompatible_workers": [
+            {
+              "worker_id": "vmi1227854",
+              "missing_required_dependency_ids": [
+                "hdf5"
+              ],
+              "reason_codes": [
+                "hdf5_missing"
+              ]
+            },
+            {
+              "worker_id": "vmi1167313",
+              "missing_required_dependency_ids": [
+                "hdf5"
+              ],
+              "reason_codes": [
+                "hdf5_missing"
+              ]
+            }
+          ],
+          "fail_closed_workers": [],
+          "retry_advice": {
+            "preferred_worker_id": null
+          },
+          "reason_codes": [
+            "hdf5_missing",
+            "incompatible_worker_missing_native_dependency",
+            "no_compatible_workers"
+          ]
+        },
+        "abi_cache_ledger_json": {
+          "schema_version": "franken-engine.native-dependency-abi-cache-ledger.v1",
+          "decision": "reuse_quarantined",
+          "reason_codes": [
+            "target_cache_fingerprint_mismatch"
+          ]
+        }
+      }
+    }
+  ]
+}

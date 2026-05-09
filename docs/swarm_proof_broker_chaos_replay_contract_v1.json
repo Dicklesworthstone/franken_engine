@@ -1,0 +1,65 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-chaos-replay-contract.v1",
+  "bead_id": "bd-ua5n2.7",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.2",
+    "bd-ua5n2.3",
+    "bd-ua5n2.4",
+    "bd-ua5n2.5",
+    "bd-ua5n2.6"
+  ],
+  "script": "scripts/swarm_proof_broker_chaos_replay.sh",
+  "operator_docs": "docs/SWARM_PROOF_BROKER_CHAOS_REPLAY.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_broker_chaos_replay/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_broker_chaos_replay_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-broker-chaos-replay.v1",
+  "scenario_kinds": [
+    "duplicate_proof_storm",
+    "stale_artifact_storm",
+    "dirty_worktree_divergence",
+    "rch_local_fallback_contamination",
+    "agent_mail_degraded_capture",
+    "missing_source_evidence"
+  ],
+  "required_outputs": [
+    "chaos_replay_bundle.json",
+    "scenarios.jsonl",
+    "replay_commands.sh",
+    "classifier_input.json",
+    "artifact_index_input.json",
+    "batch_planner_input.json",
+    "operator_status_input.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_invariant_surfaces": [
+    "classifier_verdict",
+    "artifact_index_decision",
+    "batch_planner_action",
+    "operator_status_projection",
+    "agent_mail_status",
+    "exact_replay_commands_present"
+  ],
+  "fail_closed_reasons": [
+    "insufficient_source_evidence"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_broker_chaos_replay_contract_v1.json scripts/testdata/swarm_proof_broker_chaos_replay/cases.json",
+    "bash -n scripts/swarm_proof_broker_chaos_replay.sh",
+    "bash -n scripts/e2e/swarm_proof_broker_chaos_replay_smoke.sh",
+    "bash scripts/e2e/swarm_proof_broker_chaos_replay_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_broker_chaos_replay_smoke.sh selftest",
+    "git diff --check -- scripts/swarm_proof_broker_chaos_replay.sh docs/SWARM_PROOF_BROKER_CHAOS_REPLAY.md docs/swarm_proof_broker_chaos_replay_contract_v1.json scripts/testdata/swarm_proof_broker_chaos_replay/cases.json scripts/e2e/swarm_proof_broker_chaos_replay_smoke.sh"
+  ]
+}

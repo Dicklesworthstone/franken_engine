@@ -1,0 +1,286 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-chaos-replay-fixtures.v1",
+  "base_input": {
+    "original_evidence": {
+      "bundle_path": "fixtures/chaos/base/proof_bundle.json",
+      "proof_requests": [
+        {
+          "request_id": "req-chaos",
+          "agent": "MossySpire",
+          "proof_fingerprint": "fp-chaos",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+          "normalized_command_argv": [
+            "rch",
+            "exec",
+            "--",
+            "env",
+            "CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_chaos",
+            "CARGO_INCREMENTAL=0",
+            "CARGO_BUILD_JOBS=1",
+            "cargo",
+            "test",
+            "-p",
+            "frankenengine-engine",
+            "proof_broker",
+            "--lib",
+            "--",
+            "--nocapture"
+          ],
+          "command_kind": "cargo_test",
+          "package": "frankenengine-engine",
+          "target_kind": "lib_test_filter",
+          "target_name": "lib",
+          "test_filter": "proof_broker",
+          "feature_flags": [],
+          "accepted_env_allowlist": [
+            "CARGO_TARGET_DIR",
+            "CARGO_INCREMENTAL",
+            "CARGO_BUILD_JOBS"
+          ],
+          "source_revision": "fixture-source-revision",
+          "git_commit": "fixture-source-revision",
+          "dependency_closure_roots": [
+            "scripts/swarm_proof_request_capture.sh",
+            "scripts/swarm_proof_equivalence_classifier.sh",
+            "scripts/swarm_proof_artifact_index.sh",
+            "scripts/swarm_proof_batch_planner.sh",
+            "scripts/swarm_proof_broker_operator_status.sh"
+          ],
+          "dirty_paths": [],
+          "target_dir_policy": "disposable_remote_target_dir",
+          "rch_posture": "remote",
+          "evidence_paths": [
+            "fixtures/chaos/base/proof_request.json",
+            "fixtures/chaos/base/agent_mail_snapshot.json",
+            "fixtures/chaos/base/rch_summary.json"
+          ]
+        }
+      ],
+      "agent_mail": {
+        "status": "present",
+        "messages": [
+          {
+            "id": 1,
+            "thread_id": "bd-ua5n2",
+            "subject": "proof request"
+          }
+        ],
+        "reservations": [
+          {
+            "path": "scripts/swarm_proof_broker_chaos_replay.sh"
+          }
+        ]
+      },
+      "rch": {
+        "status": "present",
+        "worker_posture": "remote",
+        "summary_path": "fixtures/chaos/base/rch_summary.json"
+      }
+    },
+    "deltas": {
+      "request_timing_offsets_ms": [
+        0
+      ],
+      "duplicate_request_count": 1,
+      "changed_dirty_paths": [],
+      "changed_dependency_roots": [],
+      "rch_worker_posture": "remote",
+      "artifact_freshness": "fresh"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "duplicate_proof_storm",
+      "scenario_kind": "duplicate_proof_storm",
+      "deltas": {
+        "request_timing_offsets_ms": [
+          0,
+          5,
+          10,
+          15
+        ],
+        "duplicate_request_count": 4
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "replayable": true,
+        "reason_codes": [
+          "duplicate_command_burst"
+        ],
+        "invariant_agreement": true,
+        "expected_invariants": {
+          "classifier_verdict": "reuse_allowed",
+          "artifact_index_decision": "reuse_allowed",
+          "batch_planner_action": "coalesce",
+          "operator_status_projection": "coalesced",
+          "agent_mail_status": "present",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 4
+      }
+    },
+    {
+      "case_id": "stale_artifact_storm",
+      "scenario_kind": "stale_artifact_storm",
+      "deltas": {
+        "artifact_freshness": "expired"
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "replayable": true,
+        "reason_codes": [
+          "expired_ttl"
+        ],
+        "invariant_agreement": true,
+        "expected_invariants": {
+          "classifier_verdict": "reuse_allowed",
+          "artifact_index_decision": "reuse_refused",
+          "batch_planner_action": "rerun_later",
+          "operator_status_projection": "stale_refused",
+          "agent_mail_status": "present",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 1
+      }
+    },
+    {
+      "case_id": "dirty_worktree_divergence",
+      "scenario_kind": "dirty_worktree_divergence",
+      "deltas": {
+        "changed_dirty_paths": [
+          "scripts/swarm_proof_broker_chaos_replay.sh"
+        ],
+        "changed_dependency_roots": [
+          "docs/SWARM_PROOF_BROKER_CHAOS_REPLAY.md"
+        ]
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "replayable": true,
+        "reason_codes": [
+          "dirty_lane_mismatch",
+          "changed_dependency_root"
+        ],
+        "invariant_agreement": true,
+        "expected_invariants": {
+          "classifier_verdict": "reuse_refused",
+          "artifact_index_decision": "reuse_refused",
+          "batch_planner_action": "rerun_now",
+          "operator_status_projection": "reuse_refused",
+          "agent_mail_status": "present",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 1
+      }
+    },
+    {
+      "case_id": "rch_local_fallback_contamination",
+      "scenario_kind": "rch_local_fallback_contamination",
+      "deltas": {
+        "rch_worker_posture": "local_fallback"
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "replayable": true,
+        "reason_codes": [
+          "local_fallback_contamination"
+        ],
+        "invariant_agreement": true,
+        "expected_invariants": {
+          "classifier_verdict": "reuse_refused",
+          "artifact_index_decision": "reuse_refused",
+          "batch_planner_action": "rerun_now",
+          "operator_status_projection": "contaminated_refused",
+          "agent_mail_status": "present",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 1
+      }
+    },
+    {
+      "case_id": "agent_mail_degraded_capture",
+      "scenario_kind": "agent_mail_degraded_capture",
+      "original_evidence": {
+        "agent_mail": {
+          "status": "degraded_read_only",
+          "messages": [
+            {
+              "id": 2,
+              "thread_id": "bd-ua5n2",
+              "subject": "proof request captured before outage"
+            }
+          ],
+          "reservations": [
+            {
+              "path": "scripts/swarm_proof_broker_chaos_replay.sh"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "replayable": true,
+        "reason_codes": [
+          "agent_mail_degraded_capture"
+        ],
+        "invariant_agreement": true,
+        "expected_invariants": {
+          "classifier_verdict": "reuse_allowed",
+          "artifact_index_decision": "reuse_allowed",
+          "batch_planner_action": "rerun_now",
+          "operator_status_projection": "agent_mail_degraded_visible",
+          "agent_mail_status": "degraded_read_only",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 1
+      }
+    },
+    {
+      "case_id": "missing_source_evidence",
+      "scenario_kind": "missing_source_evidence",
+      "original_evidence": {
+        "proof_requests": [],
+        "agent_mail": {
+          "status": "missing",
+          "messages": [],
+          "reservations": []
+        },
+        "rch": {
+          "status": "missing",
+          "worker_posture": "unknown"
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "insufficient_source_evidence"
+        ],
+        "replayable": false,
+        "reason_codes": [
+          "insufficient_source_evidence"
+        ],
+        "invariant_agreement": false,
+        "expected_invariants": {
+          "classifier_verdict": "fail_closed",
+          "artifact_index_decision": "reuse_allowed",
+          "batch_planner_action": "human_review",
+          "operator_status_projection": "fail_closed",
+          "agent_mail_status": "missing",
+          "exact_replay_commands_present": true
+        },
+        "perturbed_request_count": 1
+      }
+    }
+  ]
+}

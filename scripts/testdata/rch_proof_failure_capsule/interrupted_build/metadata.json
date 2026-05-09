@@ -1,0 +1,13 @@
+{
+  "case_id": "interrupted_build",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-interrupted CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test",
+  "worker_id": "vmi-interrupted",
+  "build_id": "proof-interrupted-001",
+  "target_dir": "/tmp/rch-proof-interrupted",
+  "exit_code": 130,
+  "duration_ms": 120000,
+  "remote_started": true,
+  "remote_finished": false,
+  "started_at": "2026-05-09T13:00:00Z",
+  "recommended_narrow_command": "RCH_REQUIRE_REMOTE=1 rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-interrupted CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine"
+}

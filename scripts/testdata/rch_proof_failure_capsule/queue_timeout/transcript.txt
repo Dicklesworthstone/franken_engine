@@ -1,0 +1,3 @@
+[2026-05-09T12:40:00Z] queue timeout: timed out waiting for remote worker after 600s
+no remote worker available for requested cargo clippy proof
+Remote command was not started; no source verdict is available.

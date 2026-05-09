@@ -1,0 +1,12 @@
+{
+  "case_id": "local_fallback",
+  "command": "cargo test -p frankenengine-engine",
+  "worker_id": null,
+  "build_id": "proof-local-fallback-001",
+  "target_dir": "/tmp/rch-proof-local-fallback",
+  "exit_code": 0,
+  "duration_ms": 721,
+  "remote_started": false,
+  "remote_finished": false,
+  "recommended_narrow_command": "RCH_REQUIRE_REMOTE=1 rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-local-fallback CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine"
+}

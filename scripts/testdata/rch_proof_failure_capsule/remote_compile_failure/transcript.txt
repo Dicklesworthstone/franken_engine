@@ -1,0 +1,11 @@
+[2026-05-09T12:10:00Z] Selected worker: vmi-compile
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-compile CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+error[E0425]: cannot find value `proof_capsule_marker` in this scope
+   --> crates/franken-engine/src/lib.rs:42:9
+    |
+42  |         proof_capsule_marker
+    |         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+error: could not compile `frankenengine-engine` (lib test) due to 1 previous error
+Remote command finished: exit=101

@@ -1,0 +1,6 @@
+[2026-05-09T12:50:00Z] Selected worker: vmi-toolchain
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-toolchain CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --all-targets -- -D warnings
+error: 'cargo-clippy' is not installed for toolchain 'stable-x86_64-unknown-linux-gnu'
+help: run `rustup component add clippy`
+Remote command finished: exit=1

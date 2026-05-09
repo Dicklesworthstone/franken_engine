@@ -1,0 +1,13 @@
+{
+  "case_id": "remote_success",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-success CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests",
+  "worker_id": "vmi-success",
+  "build_id": "proof-success-001",
+  "target_dir": "/tmp/rch-proof-success",
+  "exit_code": 0,
+  "duration_ms": 18421,
+  "remote_started": true,
+  "remote_finished": true,
+  "started_at": "2026-05-09T12:00:00Z",
+  "completed_at": "2026-05-09T12:00:18Z"
+}

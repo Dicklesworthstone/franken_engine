@@ -1,0 +1,89 @@
+{
+  "schema_version": "franken-engine.rch-proof-failure-capsule-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "remote_success",
+      "expected": {
+        "case_id": "remote_success",
+        "classification": "remote_success",
+        "decision": "pass",
+        "reason_code": "remote_command_exit_zero",
+        "source_evidence": true,
+        "proof_usable": true,
+        "recommended_action": "record_success_evidence",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "remote_compile_failure",
+      "expected": {
+        "case_id": "remote_compile_failure",
+        "classification": "remote_compile_failure",
+        "decision": "source_failure",
+        "reason_code": "remote_source_diagnostic",
+        "source_evidence": true,
+        "proof_usable": true,
+        "recommended_action": "fix_or_file_touched_target_blocker",
+        "blocker_contains": "RCH remote proof failed on worker vmi-compile with exit 101",
+        "first_error_contains": "error[E0425]: cannot find value `proof_capsule_marker` in this scope",
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "local_fallback",
+      "expected": {
+        "case_id": "local_fallback",
+        "classification": "local_fallback",
+        "decision": "fail_closed",
+        "reason_code": "local_fallback_refused",
+        "source_evidence": false,
+        "proof_usable": false,
+        "recommended_action": "refuse_local_fallback_and_rerun_remote",
+        "blocker_contains": "local fallback markers were observed",
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "queue_timeout",
+      "expected": {
+        "case_id": "queue_timeout",
+        "classification": "queue_timeout",
+        "decision": "blocked",
+        "reason_code": "queue_timeout_no_remote_result",
+        "source_evidence": false,
+        "proof_usable": false,
+        "recommended_action": "wait_for_remote_capacity_or_split_target",
+        "blocker_contains": "queue timeout produced no remote source verdict",
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "worker_toolchain_missing",
+      "expected": {
+        "case_id": "worker_toolchain_missing",
+        "classification": "worker_toolchain_missing",
+        "decision": "blocked",
+        "reason_code": "worker_toolchain_missing",
+        "source_evidence": false,
+        "proof_usable": false,
+        "recommended_action": "reroute_or_repair_worker_toolchain",
+        "blocker_contains": "missing required toolchain support",
+        "exit_code": 42
+      }
+    },
+    {
+      "case_id": "interrupted_build",
+      "expected": {
+        "case_id": "interrupted_build",
+        "classification": "interrupted_build",
+        "decision": "interrupted",
+        "reason_code": "remote_build_interrupted",
+        "source_evidence": false,
+        "proof_usable": false,
+        "recommended_action": "rerun_exact_remote_proof",
+        "blocker_contains": "interrupted before a usable verdict",
+        "exit_code": 42
+      }
+    }
+  ]
+}

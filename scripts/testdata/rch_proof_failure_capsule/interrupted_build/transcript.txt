@@ -1,0 +1,5 @@
+[2026-05-09T13:00:00Z] Selected worker: vmi-interrupted
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-interrupted CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test
+received SIGINT; interrupted by operator before test harness completion
+Remote command finished: exit=130

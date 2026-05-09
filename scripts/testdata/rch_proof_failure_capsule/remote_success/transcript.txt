@@ -1,0 +1,5 @@
+[2026-05-09T12:00:00Z] Selected worker: vmi-success
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-success CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --tests
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 18.42s
+Remote command finished: exit=0

@@ -1,0 +1,14 @@
+{
+  "case_id": "remote_compile_failure",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-compile CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture",
+  "worker_id": "vmi-compile",
+  "build_id": "proof-compile-101",
+  "target_dir": "/tmp/rch-proof-compile",
+  "exit_code": 101,
+  "duration_ms": 939000,
+  "remote_started": true,
+  "remote_finished": true,
+  "started_at": "2026-05-09T12:10:00Z",
+  "completed_at": "2026-05-09T12:25:39Z",
+  "recommended_narrow_command": "RCH_REQUIRE_REMOTE=1 rch exec -- env CARGO_TARGET_DIR=/tmp/rch-proof-compile CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine active_builtin_regressions::object_create_applies_descriptors_and_preserves_prototype --lib -- --nocapture"
+}

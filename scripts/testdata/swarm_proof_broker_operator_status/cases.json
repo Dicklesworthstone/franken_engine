@@ -1,0 +1,381 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status-fixtures.v1",
+  "base_input": {
+    "operator_policy": {
+      "panel_claims_mutation_authority": false,
+      "hide_stale_evidence": false,
+      "omit_refusal_reasons": false
+    },
+    "proof_requests": [],
+    "artifact_index": [],
+    "batch_recommendations": [],
+    "equivalence_receipts": [],
+    "fairness_debt": []
+  },
+  "base_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+  "cases": [
+    {
+      "case_id": "healthy_reusable_proof",
+      "proof_requests": [
+        {
+          "request_id": "req-healthy",
+          "agent": "MossySpire",
+          "proof_fingerprint": "fp-healthy",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/healthy/proof_request.json"
+          ]
+        }
+      ],
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-healthy",
+          "reuse_eligible": true,
+          "freshness": "fresh",
+          "artifact_paths": {
+            "index": "fixtures/healthy/proof_artifact_index.json",
+            "receipt": "fixtures/healthy/reuse_receipt.json"
+          }
+        }
+      ],
+      "batch_recommendations": [
+        {
+          "recommendation_id": "rec-healthy",
+          "request_id": "req-healthy",
+          "proof_fingerprint": "fp-healthy",
+          "action": "reuse",
+          "evidence_paths": [
+            "fixtures/healthy/batch_plan.json"
+          ]
+        }
+      ],
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 1,
+          "reuse_refusal_count": 0,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "duplicate_storm_coalesced",
+      "proof_requests": [
+        {
+          "request_id": "req-dup-a",
+          "agent": "MossySpire",
+          "proof_fingerprint": "fp-dup",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/duplicate/proof_request_a.json"
+          ]
+        },
+        {
+          "request_id": "req-dup-b",
+          "agent": "FrostyPine",
+          "proof_fingerprint": "fp-dup",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/duplicate/proof_request_b.json"
+          ]
+        }
+      ],
+      "batch_recommendations": [
+        {
+          "recommendation_id": "rec-dup-a",
+          "request_id": "req-dup-a",
+          "proof_fingerprint": "fp-dup",
+          "action": "coalesce",
+          "evidence_paths": [
+            "fixtures/duplicate/batch_plan.json"
+          ]
+        },
+        {
+          "recommendation_id": "rec-dup-b",
+          "request_id": "req-dup-b",
+          "proof_fingerprint": "fp-dup",
+          "action": "coalesce",
+          "evidence_paths": [
+            "fixtures/duplicate/batch_plan.json"
+          ]
+        }
+      ],
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "summary_counts": {
+          "pending_request_count": 2,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 0,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 2
+        }
+      }
+    },
+    {
+      "case_id": "stale_proof_refused",
+      "proof_requests": [
+        {
+          "request_id": "req-stale",
+          "agent": "MaroonElk",
+          "proof_fingerprint": "fp-stale",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/stale/proof_request.json"
+          ]
+        }
+      ],
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-stale",
+          "reuse_eligible": false,
+          "freshness": "expired",
+          "invalidation_reasons": [
+            "expired_ttl"
+          ],
+          "artifact_paths": {
+            "index": "fixtures/stale/proof_artifact_index.json",
+            "refusal": "fixtures/stale/reuse_refusal_receipt.json"
+          }
+        }
+      ],
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 1,
+          "stale_proof_count": 1,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "fairness_debt_visible",
+      "proof_requests": [
+        {
+          "request_id": "req-fairness",
+          "agent": "FrostyPine",
+          "proof_fingerprint": "fp-fairness",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/fairness/proof_request.json"
+          ]
+        }
+      ],
+      "fairness_debt": [
+        {
+          "agent": "FrostyPine",
+          "deferred_count": 4,
+          "evidence_paths": [
+            "fixtures/fairness/fairness_debt.json"
+          ]
+        }
+      ],
+      "batch_recommendations": [
+        {
+          "recommendation_id": "rec-fairness",
+          "request_id": "req-fairness",
+          "proof_fingerprint": "fp-fairness",
+          "action": "rerun_now",
+          "reason": "fairness_debt_recovery",
+          "evidence_paths": [
+            "fixtures/fairness/batch_plan.json"
+          ]
+        }
+      ],
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 0,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 4,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "contaminated_local_fallback",
+      "proof_requests": [
+        {
+          "request_id": "req-contaminated",
+          "agent": "MossySpire",
+          "proof_fingerprint": "fp-contaminated",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/contaminated/proof_request.json"
+          ]
+        }
+      ],
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-contaminated",
+          "reuse_eligible": false,
+          "freshness": "invalidated",
+          "rch_posture": "local_fallback",
+          "invalidation_reasons": [
+            "local_fallback_contamination"
+          ],
+          "artifact_paths": {
+            "index": "fixtures/contaminated/proof_artifact_index.json",
+            "refusal": "fixtures/contaminated/reuse_refusal_receipt.json"
+          }
+        }
+      ],
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 1,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 1,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "mutation_claim_fail_closed",
+      "operator_policy": {
+        "panel_claims_mutation_authority": true,
+        "hide_stale_evidence": false,
+        "omit_refusal_reasons": false
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "panel_claims_live_mutation_authority"
+        ],
+        "summary_counts": {
+          "pending_request_count": 0,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 0,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "hidden_stale_fail_closed",
+      "operator_policy": {
+        "panel_claims_mutation_authority": false,
+        "hide_stale_evidence": true,
+        "omit_refusal_reasons": false
+      },
+      "proof_requests": [
+        {
+          "request_id": "req-hidden-stale",
+          "agent": "MaroonElk",
+          "proof_fingerprint": "fp-hidden-stale",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/hidden-stale/proof_request.json"
+          ]
+        }
+      ],
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-hidden-stale",
+          "reuse_eligible": false,
+          "freshness": "expired",
+          "invalidation_reasons": [
+            "expired_ttl"
+          ],
+          "artifact_paths": {
+            "index": "fixtures/hidden-stale/proof_artifact_index.json",
+            "refusal": "fixtures/hidden-stale/reuse_refusal_receipt.json"
+          }
+        }
+      ],
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "panel_hides_stale_evidence"
+        ],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 1,
+          "stale_proof_count": 1,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    },
+    {
+      "case_id": "omitted_refusal_reason_fail_closed",
+      "operator_policy": {
+        "panel_claims_mutation_authority": false,
+        "hide_stale_evidence": false,
+        "omit_refusal_reasons": true
+      },
+      "proof_requests": [
+        {
+          "request_id": "req-omitted-refusal",
+          "agent": "MossySpire",
+          "proof_fingerprint": "fp-omitted-refusal",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+          "evidence_paths": [
+            "fixtures/omitted-refusal/proof_request.json"
+          ]
+        }
+      ],
+      "artifact_index": [
+        {
+          "proof_fingerprint": "fp-omitted-refusal",
+          "reuse_eligible": false,
+          "freshness": "invalidated",
+          "invalidation_reasons": [
+            "changed_dependency_root"
+          ],
+          "artifact_paths": {
+            "index": "fixtures/omitted-refusal/proof_artifact_index.json",
+            "refusal": "fixtures/omitted-refusal/reuse_refusal_receipt.json"
+          }
+        }
+      ],
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "panel_omits_refusal_reasons"
+        ],
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 0,
+          "reuse_refusal_count": 1,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        }
+      }
+    }
+  ]
+}

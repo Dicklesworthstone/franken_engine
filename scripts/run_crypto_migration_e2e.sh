@@ -20,7 +20,6 @@ DECISION_ID="crypto-migration-verification"
 # Test colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
 # Global test counters
@@ -28,13 +27,21 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_TOTAL=10
 
+RCH_BIN="${RCH_BIN:-rch}"
+RCH_VISIBILITY="${RCH_VISIBILITY:-verbose}"
+RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="${RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS:-600}"
+RCH_PRIORITY="${RCH_PRIORITY:-low}"
+RCH_CARGO_ENV=(CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1)
+
 # Setup artifacts directory
 setup_artifacts() {
     mkdir -p "$ARTIFACTS_DIR"
-    echo "# Crypto Migration E2E Test Commands" > "$COMMANDS_FILE"
-    echo "# Started: $TIMESTAMP" >> "$COMMANDS_FILE"
-    echo "# Trace ID: $TRACE_ID" >> "$COMMANDS_FILE"
-    echo "" >> "$COMMANDS_FILE"
+    {
+        echo "# Crypto Migration E2E Test Commands"
+        echo "# Started: $TIMESTAMP"
+        echo "# Trace ID: $TRACE_ID"
+        echo ""
+    } > "$COMMANDS_FILE"
 
     # Create run manifest
     cat > "$MANIFEST_FILE" << EOF
@@ -77,24 +84,46 @@ log_test_result() {
     local output_hash="$5"
     local error="${6:-null}"
 
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
+    python3 - "$EVENTS_FILE" "$test_name" "$status" "$duration_ms" "$input_hash" "$output_hash" "$error" << 'PY'
+import datetime
+import json
+import sys
 
-    # Build JSON object
-    local json_line
-    if [[ "$error" == "null" ]]; then
-        json_line="{\"test_name\":\"$test_name\",\"status\":\"$status\",\"duration_ms\":$duration_ms,\"input_hash\":\"$input_hash\",\"output_hash\":\"$output_hash\",\"error\":null,\"timestamp\":\"$timestamp\"}"
-    else
-        local escaped_error=$(printf '%s\n' "$error" | sed 's/[[\.*^$()+?{|]/\\&/g' | sed 's/"/\\"/g')
-        json_line="{\"test_name\":\"$test_name\",\"status\":\"$status\",\"duration_ms\":$duration_ms,\"input_hash\":\"$input_hash\",\"output_hash\":\"$output_hash\",\"error\":\"$escaped_error\",\"timestamp\":\"$timestamp\"}"
-    fi
-
-    echo "$json_line" >> "$EVENTS_FILE"
+path, test_name, status, duration_ms, input_hash, output_hash, error = sys.argv[1:]
+record = {
+    "test_name": test_name,
+    "status": status,
+    "duration_ms": int(duration_ms),
+    "input_hash": input_hash,
+    "output_hash": output_hash,
+    "error": None if error == "null" else error,
+    "timestamp": datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+}
+with open(path, "a", encoding="utf-8") as fh:
+    json.dump(record, fh, sort_keys=True)
+    fh.write("\n")
+PY
 }
 
 # Log command execution
 log_command() {
     local cmd="$1"
     echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ"): $cmd" >> "$COMMANDS_FILE"
+}
+
+run_rch_test() {
+    local test_filter="$1"
+    local command=(
+        "$RCH_BIN" exec -- env
+        "${RCH_CARGO_ENV[@]}"
+        cargo test -p frankenengine-engine --lib "$test_filter" -- --nocapture
+    )
+
+    log_command "RCH_VISIBILITY=$RCH_VISIBILITY RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=$RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS RCH_PRIORITY=$RCH_PRIORITY ${command[*]}"
+    RCH_VISIBILITY="$RCH_VISIBILITY" \
+        RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS="$RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS" \
+        RCH_PRIORITY="$RCH_PRIORITY" \
+        "${command[@]}"
 }
 
 # Run a test with timing and error handling
@@ -105,13 +134,15 @@ run_test() {
 
     echo -n "Running $test_name... "
 
-    local start_time=$(date +%s%3N)
-    local input_hash=$(echo -n "$input_data" | sha256sum | cut -d' ' -f1)
+    local start_time
+    start_time=$(date +%s%3N)
+    local input_hash
+    input_hash=$(echo -n "$input_data" | sha256sum | cut -d' ' -f1)
     local output_hash=""
     local status="pass"
     local error="null"
 
-    if ! output=$(eval "$test_func" 2>&1); then
+    if ! output=$("$test_func" 2>&1); then
         status="fail"
         error="$output"
         output_hash="error"
@@ -123,7 +154,8 @@ run_test() {
         ((TESTS_PASSED++))
     fi
 
-    local end_time=$(date +%s%3N)
+    local end_time
+    end_time=$(date +%s%3N)
     local duration=$((end_time - start_time))
 
     log_test_result "$test_name" "$status" "$duration" "$input_hash" "$output_hash" "$error"
@@ -131,219 +163,102 @@ run_test() {
 
 # Test 1: ContentHash round-trip
 test_content_hash_roundtrip() {
-    log_command "cargo test --lib hash_tiers::content_hash::tests::test_round_trip"
-
-    # Create a test program that exercises ContentHash
-    local test_code='
-use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::canonical_value::CanonicalValue;
-use serde_json;
-
-fn main() {
-    let input = b"test-content-for-hash";
-    let hash = ContentHash::compute(input);
-    let canonical = CanonicalValue::ContentHash(hash);
-    let serialized = serde_json::to_string(&canonical).unwrap();
-    let deserialized: CanonicalValue = serde_json::from_str(&serialized).unwrap();
-
-    if let CanonicalValue::ContentHash(hash2) = deserialized {
-        if hash.as_bytes() == hash2.as_bytes() {
-            println!("round-trip-success:{}", hex::encode(hash.as_bytes()));
-        } else {
-            panic!("Hash mismatch after round-trip");
-        }
-    } else {
-        panic!("Deserialization failed");
-    }
-}'
-
-    # Execute the actual round-trip test instead of simulating
-    if timeout 30 cargo test --lib signature_preimage::tests::test_content_hash_round_trip 2>/dev/null; then
-        echo "round-trip-success:$(date +%s%N | sha256sum | cut -c1-24)"
-    else
-        echo "round-trip-failure:test-execution-failed"
-        return 1
-    fi
+    run_rch_test "hash_tiers::tests::content_hash_serialization_round_trip"
 }
 
 # Test 2: AuthenticityHash keyed HMAC
 test_authenticity_hash_keyed() {
-    log_command "cargo test --lib signature_preimage::tests::test_authenticity_hash"
-
-    # Test HMAC-SHA256 computation
-    local test_code='
-use frankenengine_engine::signature_preimage::AuthenticityHash;
-
-fn main() {
-    let key = b"test-hmac-key-32-bytes-long-abc123";
-    let data = b"test-data-for-hmac";
-    let auth_hash = AuthenticityHash::compute_keyed(data, key);
-    println!("hmac-success:{}", hex::encode(auth_hash.as_bytes()));
-}'
-
-    # Simulate HMAC computation
-    echo "hmac-success:def789abc123"
+    run_rch_test "hash_tiers::tests::authenticity_hash_known_hmac_sha256_vector"
 }
 
 # Test 3: Ed25519 sign/verify
 test_ed25519_sign_verify() {
-    log_command "cargo test --lib signature_preimage::tests::test_ed25519_signing"
-
-    # Test Ed25519 signing and verification
-    local test_code='
-use frankenengine_engine::signature_preimage::{generate_ed25519_keypair, sign_ed25519, verify_ed25519_signature};
-
-fn main() {
-    let (signing_key, verification_key) = generate_ed25519_keypair().unwrap();
-    let message = b"test-message-for-signing";
-
-    let signature = sign_ed25519(&signing_key, message).unwrap();
-    let is_valid = verify_ed25519_signature(&verification_key, message, &signature).unwrap();
-
-    if is_valid {
-        println!("ed25519-verify-success");
-    } else {
-        panic!("Ed25519 signature verification failed");
-    }
-}'
-
-    # Simulate Ed25519 signing
-    echo "ed25519-verify-success"
+    run_rch_test "signature_preimage::tests::sign_verify_round_trip"
 }
 
 # Test 4: Ed25519 non-repudiation
 test_ed25519_nonrepudiation() {
-    log_command "cargo test --lib signature_preimage::tests::test_ed25519_nonrepudiation"
-
-    # Verify that public key alone cannot forge signatures
-    local test_code='
-use frankenengine_engine::signature_preimage::{generate_ed25519_keypair, sign_ed25519, verify_ed25519_signature};
-
-fn main() {
-    let (signing_key1, verification_key1) = generate_ed25519_keypair().unwrap();
-    let (signing_key2, verification_key2) = generate_ed25519_keypair().unwrap();
-    let message = b"test-message-for-nonrepudiation";
-
-    let signature = sign_ed25519(&signing_key1, message).unwrap();
-
-    // Verify with correct key
-    let valid = verify_ed25519_signature(&verification_key1, message, &signature).unwrap();
-    // Verify with wrong key (should fail)
-    let invalid = verify_ed25519_signature(&verification_key2, message, &signature).unwrap();
-
-    if valid && !invalid {
-        println!("nonrepudiation-success");
-    } else {
-        panic!("Non-repudiation test failed: valid={}, invalid={}", valid, invalid);
-    }
-}'
-
-    # Simulate non-repudiation test
-    echo "nonrepudiation-success"
+    run_rch_test "signature_preimage::tests::ed25519_non_repudiation"
 }
 
 # Test 5: ContentHash vs AuthenticityHash tier separation
 test_tier_separation() {
-    log_command "cargo test --lib hash_tiers::tests::test_tier_separation"
-
-    # Verify different hash types produce different outputs for same input
-    local test_code='
-use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::signature_preimage::AuthenticityHash;
-
-fn main() {
-    let input = b"same-input-data";
-    let key = b"test-key-32-bytes-long-padding!!";
-
-    let content_hash = ContentHash::compute(input);
-    let auth_hash = AuthenticityHash::compute_keyed(input, key);
-
-    if content_hash.as_bytes() != auth_hash.as_bytes() {
-        println!("tier-separation-success");
-    } else {
-        panic!("Hash tiers produced identical output for same input");
-    }
-}'
-
-    # Simulate tier separation test
-    echo "tier-separation-success"
+    run_rch_test "hash_tiers::tests::authenticity_hash_keyed_differs_from_content_hash"
 }
 
 # Test 6: Evidence entry
 test_evidence_entry() {
-    log_command "cargo test --lib evidence_ledger::tests::test_evidence_entry"
-
-    # Test evidence entry creation and hash persistence
-    echo "evidence-entry-success"
+    run_rch_test "evidence_ledger::tests::evidence_entry_serialization_round_trip"
 }
 
 # Test 7: Capability token
 test_capability_token() {
-    log_command "cargo test --lib capability_token::tests::test_token_signing"
-
-    # Test capability token with Ed25519
-    echo "capability-token-success"
+    run_rch_test "capability_token::tests::verify_token_correct_presenter_passes"
 }
 
 # Test 8: Token audience binding
 test_token_audience_binding() {
-    log_command "cargo test --lib capability_token::tests::test_audience_binding"
-
-    # Test token audience verification
-    echo "audience-binding-success"
+    run_rch_test "capability_token::tests::verify_token_wrong_presenter_fails_with_audience_mismatch"
 }
 
 # Test 9: Replay determinism
 test_replay_determinism() {
-    log_command "cargo test --lib hash_tiers::tests::test_determinism"
-
-    # Run hash computation 1000 times, verify all identical
-    local input="determinism-test-input"
-    local expected=""
-
-    for i in $(seq 1 1000); do
-        local hash=$(echo -n "$input-$i" | sha256sum | cut -d' ' -f1)
-        if [[ -z "$expected" ]]; then
-            expected="$hash"
-        elif [[ "$hash" != "$expected" ]]; then
-            return 1
-        fi
-    done
-
-    echo "determinism-success:1000-iterations"
+    run_rch_test "signature_preimage::tests::sign_is_deterministic"
 }
 
 # Test 10: Cross-module consistency
 test_cross_module_consistency() {
-    log_command "cargo test --lib hash_consistency::tests::test_cross_module"
-
-    # Test hash computed in hash_tiers matches evidence_ledger for same input
-    echo "cross-module-success"
+    run_rch_test "signature_preimage::tests::preimage_hash_is_deterministic"
 }
 
 # Create golden vectors file
 create_golden_vectors() {
-    cat > "$GOLDEN_VECTORS_FILE" << 'EOF'
-{
-  "content_hash": {
-    "input": "test-content-for-hash",
-    "expected_sha256": "expected-hash-value-here"
-  },
-  "authenticity_hash": {
-    "input": "test-data-for-hmac",
-    "key": "test-hmac-key-32-bytes-long-abc123",
-    "expected_hmac": "expected-hmac-value-here"
-  },
-  "ed25519": {
-    "message": "test-message-for-signing",
-    "expected_signature_length": 64
-  },
-  "tier_separation": {
-    "input": "same-input-data",
-    "content_hash_differs_from_auth_hash": true
-  }
+    python3 - "$GOLDEN_VECTORS_FILE" << 'PY'
+import hashlib
+import hmac
+import json
+import sys
+
+path = sys.argv[1]
+content_input = b"test-content-for-hash"
+auth_input = b"test-data-for-hmac"
+auth_key = b"test-hmac-key-32-bytes-long-abc123"
+tier_input = b"same-input-data"
+tier_key = b"test-key-32-bytes-long-padding!!"
+
+content_sha256 = hashlib.sha256(content_input).hexdigest()
+auth_hmac = hmac.new(auth_key, auth_input, hashlib.sha256).hexdigest()
+tier_content = hashlib.sha256(tier_input).hexdigest()
+tier_auth = hmac.new(tier_key, tier_input, hashlib.sha256).hexdigest()
+
+vectors = {
+    "schema_version": "franken-engine.crypto-migration-e2e.golden-vectors.v1",
+    "content_hash": {
+        "input": content_input.decode("ascii"),
+        "expected_sha256": content_sha256,
+    },
+    "authenticity_hash": {
+        "input": auth_input.decode("ascii"),
+        "key": auth_key.decode("ascii"),
+        "expected_hmac_sha256": auth_hmac,
+    },
+    "ed25519": {
+        "message": "test-message-for-signing",
+        "expected_signature_length": 64,
+        "proof_filter": "signature_preimage::tests::sign_verify_round_trip",
+    },
+    "tier_separation": {
+        "input": tier_input.decode("ascii"),
+        "content_sha256": tier_content,
+        "authenticity_hmac_sha256": tier_auth,
+        "content_hash_differs_from_auth_hash": tier_content != tier_auth,
+    },
 }
-EOF
+
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(vectors, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
 }
 
 # Main execution

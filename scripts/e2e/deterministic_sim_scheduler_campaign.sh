@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${root_dir}"
+
 mode="${1:-ci}"
 seed="${SIM_SCHEDULER_SEED:-803}"
 trials="${SIM_SCHEDULER_TRIALS:-3}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 out_dir="${SIM_SCHEDULER_ARTIFACT_DIR:-artifacts/deterministic_sim_scheduler/${run_id}}"
 log_prefix="[deterministic-sim-scheduler]"
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${root_dir}/target/deterministic_sim_scheduler}"
+
+if ! command -v rch >/dev/null 2>&1; then
+  echo "${log_prefix} rch is required for Cargo campaign steps" >&2
+  exit 2
+fi
 
 log() {
   printf '%s %s\n' "${log_prefix}" "$*"
@@ -29,10 +41,19 @@ require_file() {
   log_json "required_artifact_present" "pass" "${path}"
 }
 
+run_cargo_step() {
+  rch exec -- env \
+    "RUSTC_WRAPPER=${RUSTC_WRAPPER}" \
+    "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+    "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
+    cargo "$@"
+}
+
 log_json "start" "running" "mode=${mode}"
 mkdir -p "${out_dir}"
 
-cargo run -p frankenengine-engine --bin franken_deterministic_sim_scheduler_artifacts -- \
+run_cargo_step run -p frankenengine-engine --bin franken_deterministic_sim_scheduler_artifacts -- \
   --out-dir "${out_dir}" \
   --seed "${seed}" \
   --trials "${trials}"
@@ -61,10 +82,10 @@ grep -q '"outcome":"pass"' "${out_dir}/events.jsonl"
 
 if [[ "${mode}" == "full" ]]; then
   log_json "focused_tests" "running" "cargo test deterministic scheduler surfaces"
-  cargo test -p frankenengine-engine --test deterministic_sim_scheduler_integration
-  cargo test -p frankenengine-engine --test deterministic_sim_scheduler_enrichment_integration
-  cargo test -p frankenengine-engine --test scheduler_metamorphic_queue_shape
-  cargo test -p frankenengine-engine --test deterministic_sim_scheduler_artifacts
+  run_cargo_step test -p frankenengine-engine --test deterministic_sim_scheduler_integration
+  run_cargo_step test -p frankenengine-engine --test deterministic_sim_scheduler_enrichment_integration
+  run_cargo_step test -p frankenengine-engine --test scheduler_metamorphic_queue_shape
+  run_cargo_step test -p frankenengine-engine --test deterministic_sim_scheduler_artifacts
 fi
 
 log_json "complete" "pass" "artifact bundle verified"

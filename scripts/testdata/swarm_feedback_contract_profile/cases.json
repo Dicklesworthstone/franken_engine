@@ -1,0 +1,599 @@
+{
+  "schema_version": "franken-engine.swarm-feedback-contract-profile.fixtures.v1",
+  "cases": [
+    {
+      "case_id": "complete_profile",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-contract-profile.input.v1",
+        "case_id": "complete_profile",
+        "authorities": [
+          {
+            "authority_id": "bd-eozx0",
+            "artifact": "live_state_contract.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "agent_id",
+              "bead_id",
+              "claim_status",
+              "evidence_epoch_seconds",
+              "proof_state"
+            ]
+          },
+          {
+            "authority_id": "bd-x82vp",
+            "artifact": "resource_lease_plan.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "lease_id",
+              "target_dir_class",
+              "worker_id",
+              "slot_pressure",
+              "admission_decision"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "profile_id": "proof_portfolio",
+            "output_artifact": "proof_portfolio_plan.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "recommended_command",
+              "risk_class",
+              "expected_evidence",
+              "safe_alternative",
+              "proof_state"
+            ],
+            "freshness_policy": "required authorities must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale evidence",
+            "fail_closed_behavior": "fail closed on local fallback, stale, or contradictory artifacts",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "target_dir_heatmap",
+            "output_artifact": "target_dir_heatmap.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "worker_id",
+              "target_dir_class",
+              "pressure_level",
+              "cache_reuse_score",
+              "proof_state"
+            ],
+            "freshness_policy": "worker and resource evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale worker evidence",
+            "fail_closed_behavior": "fail closed on missing rch snapshot or local fallback contamination",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "agent_mail_sla",
+            "output_artifact": "agent_mail_sla_report.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "agent_name",
+              "thread_id",
+              "reservation_expiry",
+              "message_age",
+              "proof_state"
+            ],
+            "freshness_policy": "mail export and live-state evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing Agent Mail snapshots",
+            "fail_closed_behavior": "fail closed on contradictory ownership or expired exclusive reservation",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "stalled_ownership_reopen",
+            "output_artifact": "stalled_ownership_reopen_recommendations.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "bead_id",
+              "assignee",
+              "inactivity_threshold",
+              "evidence_hash",
+              "manual_command"
+            ],
+            "freshness_policy": "ownership, mail, reservation, and git snapshots must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade to manual-review when evidence is incomplete",
+            "fail_closed_behavior": "fail closed on missing br snapshot or contradictory ownership evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "since_green_diff",
+            "output_artifact": "since_green_diff.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "green_artifact_hash",
+              "current_artifact_hash",
+              "decision_transition",
+              "first_bad_evidence",
+              "proof_state"
+            ],
+            "freshness_policy": "current evidence must be fresh and baseline must be preserved",
+            "proof_state_wording": "observed proof-state only; downgrade missing or contaminated evidence",
+            "fail_closed_behavior": "fail closed on missing baseline, schema drift, or local fallback contamination",
+            "mutation_policy": "advisory_only"
+          }
+        ],
+        "contradictions": []
+      },
+      "expected": {
+        "decision": "pass",
+        "fail_closed_reasons": []
+      }
+    },
+    {
+      "case_id": "missing_upstream_live_state",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-contract-profile.input.v1",
+        "case_id": "missing_upstream_live_state",
+        "authorities": [
+          {
+            "authority_id": "bd-x82vp",
+            "artifact": "resource_lease_plan.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "lease_id",
+              "worker_id"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "profile_id": "proof_portfolio",
+            "output_artifact": "proof_portfolio_plan.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "recommended_command",
+              "proof_state"
+            ],
+            "freshness_policy": "required authorities must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale evidence",
+            "fail_closed_behavior": "fail closed on missing upstream authority",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "target_dir_heatmap",
+            "output_artifact": "target_dir_heatmap.json",
+            "input_authorities": [
+              "bd-x82vp"
+            ],
+            "fields": [
+              "worker_id",
+              "proof_state"
+            ],
+            "freshness_policy": "resource evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale worker evidence",
+            "fail_closed_behavior": "fail closed on missing resource evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "agent_mail_sla",
+            "output_artifact": "agent_mail_sla_report.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "agent_name",
+              "proof_state"
+            ],
+            "freshness_policy": "mail export must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing Agent Mail snapshots",
+            "fail_closed_behavior": "fail closed on contradictory ownership",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "stalled_ownership_reopen",
+            "output_artifact": "stalled_ownership_reopen_recommendations.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "bead_id",
+              "proof_state"
+            ],
+            "freshness_policy": "ownership snapshot must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade to manual-review",
+            "fail_closed_behavior": "fail closed on missing br snapshot",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "since_green_diff",
+            "output_artifact": "since_green_diff.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "decision_transition",
+              "proof_state"
+            ],
+            "freshness_policy": "current evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing evidence",
+            "fail_closed_behavior": "fail closed on missing baseline",
+            "mutation_policy": "advisory_only"
+          }
+        ],
+        "contradictions": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "missing_upstream_live_state"
+        ]
+      }
+    },
+    {
+      "case_id": "missing_resource_authority",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-contract-profile.input.v1",
+        "case_id": "missing_resource_authority",
+        "authorities": [
+          {
+            "authority_id": "bd-eozx0",
+            "artifact": "live_state_contract.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "agent_id",
+              "proof_state"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "profile_id": "proof_portfolio",
+            "output_artifact": "proof_portfolio_plan.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "recommended_command",
+              "proof_state"
+            ],
+            "freshness_policy": "required authorities must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale evidence",
+            "fail_closed_behavior": "fail closed on missing resource authority",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "target_dir_heatmap",
+            "output_artifact": "target_dir_heatmap.json",
+            "input_authorities": [
+              "bd-x82vp"
+            ],
+            "fields": [
+              "worker_id",
+              "proof_state"
+            ],
+            "freshness_policy": "resource evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale worker evidence",
+            "fail_closed_behavior": "fail closed on missing resource evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "agent_mail_sla",
+            "output_artifact": "agent_mail_sla_report.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "agent_name",
+              "proof_state"
+            ],
+            "freshness_policy": "mail export must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing Agent Mail snapshots",
+            "fail_closed_behavior": "fail closed on contradictory ownership",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "stalled_ownership_reopen",
+            "output_artifact": "stalled_ownership_reopen_recommendations.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "bead_id",
+              "proof_state"
+            ],
+            "freshness_policy": "ownership snapshot must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade to manual-review",
+            "fail_closed_behavior": "fail closed on missing br snapshot",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "since_green_diff",
+            "output_artifact": "since_green_diff.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "decision_transition",
+              "proof_state"
+            ],
+            "freshness_policy": "current evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing evidence",
+            "fail_closed_behavior": "fail closed on missing baseline",
+            "mutation_policy": "advisory_only"
+          }
+        ],
+        "contradictions": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "missing_resource_authority"
+        ]
+      }
+    },
+    {
+      "case_id": "stale_proof_state",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-contract-profile.input.v1",
+        "case_id": "stale_proof_state",
+        "authorities": [
+          {
+            "authority_id": "bd-eozx0",
+            "artifact": "live_state_contract.json",
+            "present": true,
+            "freshness": {
+              "status": "stale"
+            },
+            "required_fields": [
+              "agent_id",
+              "proof_state"
+            ]
+          },
+          {
+            "authority_id": "bd-x82vp",
+            "artifact": "resource_lease_plan.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "lease_id",
+              "worker_id"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "profile_id": "proof_portfolio",
+            "output_artifact": "proof_portfolio_plan.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "recommended_command",
+              "proof_state"
+            ],
+            "freshness_policy": "required authorities must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale evidence",
+            "fail_closed_behavior": "fail closed on stale evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "target_dir_heatmap",
+            "output_artifact": "target_dir_heatmap.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "worker_id",
+              "proof_state"
+            ],
+            "freshness_policy": "resource evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale worker evidence",
+            "fail_closed_behavior": "fail closed on stale resource evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "agent_mail_sla",
+            "output_artifact": "agent_mail_sla_report.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "agent_name",
+              "proof_state"
+            ],
+            "freshness_policy": "mail export must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing Agent Mail snapshots",
+            "fail_closed_behavior": "fail closed on contradictory ownership",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "stalled_ownership_reopen",
+            "output_artifact": "stalled_ownership_reopen_recommendations.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "bead_id",
+              "proof_state"
+            ],
+            "freshness_policy": "ownership snapshot must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade to manual-review",
+            "fail_closed_behavior": "fail closed on stale br snapshot",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "since_green_diff",
+            "output_artifact": "since_green_diff.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "decision_transition",
+              "proof_state"
+            ],
+            "freshness_policy": "current evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing evidence",
+            "fail_closed_behavior": "fail closed on missing baseline",
+            "mutation_policy": "advisory_only"
+          }
+        ],
+        "contradictions": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "stale_proof_state_evidence"
+        ]
+      }
+    },
+    {
+      "case_id": "contradictory_advisory_inputs",
+      "input": {
+        "schema_version": "franken-engine.swarm-feedback-contract-profile.input.v1",
+        "case_id": "contradictory_advisory_inputs",
+        "authorities": [
+          {
+            "authority_id": "bd-eozx0",
+            "artifact": "live_state_contract.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "agent_id",
+              "proof_state"
+            ]
+          },
+          {
+            "authority_id": "bd-x82vp",
+            "artifact": "resource_lease_plan.json",
+            "present": true,
+            "freshness": {
+              "status": "fresh"
+            },
+            "required_fields": [
+              "lease_id",
+              "worker_id"
+            ]
+          }
+        ],
+        "profiles": [
+          {
+            "profile_id": "proof_portfolio",
+            "output_artifact": "proof_portfolio_plan.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "recommended_command",
+              "proof_state"
+            ],
+            "freshness_policy": "required authorities must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale evidence",
+            "fail_closed_behavior": "fail closed on contradictions",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "target_dir_heatmap",
+            "output_artifact": "target_dir_heatmap.json",
+            "input_authorities": [
+              "bd-eozx0",
+              "bd-x82vp"
+            ],
+            "fields": [
+              "worker_id",
+              "proof_state"
+            ],
+            "freshness_policy": "resource evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade stale worker evidence",
+            "fail_closed_behavior": "fail closed on contradictory worker evidence",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "agent_mail_sla",
+            "output_artifact": "agent_mail_sla_report.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "agent_name",
+              "proof_state"
+            ],
+            "freshness_policy": "mail export must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing Agent Mail snapshots",
+            "fail_closed_behavior": "fail closed on contradictory ownership",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "stalled_ownership_reopen",
+            "output_artifact": "stalled_ownership_reopen_recommendations.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "bead_id",
+              "proof_state"
+            ],
+            "freshness_policy": "ownership snapshot must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade to manual-review",
+            "fail_closed_behavior": "fail closed on contradictory ownership",
+            "mutation_policy": "advisory_only"
+          },
+          {
+            "profile_id": "since_green_diff",
+            "output_artifact": "since_green_diff.json",
+            "input_authorities": [
+              "bd-eozx0"
+            ],
+            "fields": [
+              "decision_transition",
+              "proof_state"
+            ],
+            "freshness_policy": "current evidence must be fresh",
+            "proof_state_wording": "observed proof-state only; downgrade missing evidence",
+            "fail_closed_behavior": "fail closed on missing baseline",
+            "mutation_policy": "advisory_only"
+          }
+        ],
+        "contradictions": [
+          {
+            "source_id": "agent_mail_sla",
+            "detail": "reservation owner and br assignee disagree",
+            "remediation": "Resolve the ownership snapshot before recommending reopen or proof scheduling."
+          }
+        ]
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "fail_closed_reasons": [
+          "contradictory_advisory_input"
+        ]
+      }
+    }
+  ]
+}

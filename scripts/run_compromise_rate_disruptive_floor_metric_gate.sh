@@ -10,7 +10,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-input_path="${2:-tests/fixtures/compromise_rate_disruptive_floor_metric_input_v1.json}"
+input_path="${2:-crates/franken-engine/tests/fixtures/compromise_rate_disruptive_floor_metric_input_v1.json}"
 output_dir="${3:-artifacts/compromise_rate_disruptive_floor_metric}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${output_dir}/${timestamp}"
@@ -81,8 +81,31 @@ echo "Scenario set: $scenario_set"
 echo "Reduction threshold: ${reduction_threshold_factor}x"
 echo "Evidence count: $evidence_count"
 
-# Compute metrics (placeholder implementation - in production this would call the Rust binary)
-# For now, we'll use jq to compute basic metrics from the input
+has_fictional_data="$(
+  jq -r '
+    any(.evidence[];
+      ((.scenario_path // "") | startswith("/test/scenarios/")) or
+      ((.output_path // "") | startswith("/test/output/")) or
+      ((.verification_command // "") | test("verify_(compromise|malware|prototype|supply_chain)_results\\.sh")) or
+      ((.reproducibility_command // "") | test("(run_phishing_campaign|inject_malware|pollute_prototypes|deploy_malicious_packages)\\.sh"))
+    )
+  ' < "$input_path"
+)"
+
+if [[ "$has_fictional_data" == "true" ]]; then
+  data_quality="targeted"
+  confidence_millionths=0
+  coverage_millionths=0
+  outcome_reason="placeholder_or_fictional_evidence_detected"
+else
+  data_quality="observed"
+  confidence_millionths=950000
+  coverage_millionths=900000
+  outcome_reason="threshold_evaluated_from_live_evidence"
+fi
+
+# Compute report metrics from the supplied evidence rows. Fictional rows are
+# still summarized for diagnostics, but they cannot produce a passing proof.
 
 node_evidence_count="$(jq -r '[.evidence[] | select(.runtime_denominator == "node")] | length' < "$input_path")"
 bun_evidence_count="$(jq -r '[.evidence[] | select(.runtime_denominator == "bun")] | length' < "$input_path")"
@@ -126,9 +149,12 @@ else
   weighted_reduction_ratio_millionths="1000000"  # 1x if no evidence
 fi
 
-# Determine outcome
+# Determine outcome. Placeholder or fictional evidence is fail-closed even when
+# its caller-supplied reduction ratios would otherwise meet the threshold.
 threshold_millionths="$(( reduction_threshold_factor * 1000000 ))"
-if [[ "$weighted_reduction_ratio_millionths" -ge "$threshold_millionths" ]]; then
+if [[ "$has_fictional_data" == "true" ]]; then
+  overall_outcome="inconclusive"
+elif [[ "$weighted_reduction_ratio_millionths" -ge "$threshold_millionths" ]]; then
   overall_outcome="pass"
 else
   overall_outcome="fail"
@@ -141,10 +167,25 @@ echo "Node evidence count: $node_evidence_count (geometric mean: $node_geometric
 echo "Bun evidence count: $bun_evidence_count (geometric mean: $bun_geometric_mean)"
 echo "Weighted reduction ratio: $weighted_reduction_ratio_millionths millionths"
 echo "Passing evidence: $passing_evidence_count / $evidence_count"
+echo "Data quality: $data_quality"
 echo "Overall outcome: $overall_outcome"
 
 # Generate verification commands array
 verification_commands="$(jq -r '[.evidence[].verification_command] | unique' < "$input_path")"
+
+json_string() {
+  jq -Rn --arg value "$1" '$value'
+}
+
+if [[ "$has_fictional_data" == "true" ]]; then
+  uncertainty_notes="Contains placeholder or fictional red-team scenarios with non-existent paths. Baseline measurements require live integration. Geometric mean across $evidence_count scenarios. Status: TARGETED until real red-team scenarios are supplied."
+else
+  uncertainty_notes="Baseline measurements from live red-team integration. Geometric mean across $evidence_count scenarios."
+fi
+coverage_notes="Coverage: $node_evidence_count Node, $bun_evidence_count Bun scenarios. Threshold: ${reduction_threshold_factor}x reduction. Data quality: $data_quality."
+uncertainty_notes_json="$(json_string "$uncertainty_notes")"
+coverage_notes_json="$(json_string "$coverage_notes")"
+outcome_reason_json="$(json_string "$outcome_reason")"
 
 # Create report JSON
 cat > "$report_path" <<EOF
@@ -160,8 +201,11 @@ cat > "$report_path" <<EOF
   "node_reduction_ratio_millionths": $node_geometric_mean,
   "bun_reduction_ratio_millionths": $bun_geometric_mean,
   "threshold_factor": $reduction_threshold_factor,
-  "uncertainty_notes": "Baseline measurements TODO: live integration. Geometric mean across $evidence_count scenarios.",
-  "coverage_notes": "Coverage: $node_evidence_count Node, $bun_evidence_count Bun scenarios. Threshold: ${reduction_threshold_factor}x reduction.",
+  "data_quality": "$data_quality",
+  "fictional_evidence_detected": $has_fictional_data,
+  "outcome_reason": $outcome_reason_json,
+  "uncertainty_notes": $uncertainty_notes_json,
+  "coverage_notes": $coverage_notes_json,
   "scenario_set": "$scenario_set",
   "code_revision": "$code_revision",
   "verification_commands": $verification_commands,
@@ -191,8 +235,8 @@ cat > "$manifest_path" <<EOF
   "artifact_hash": "$report_hash",
   "code_revision": "$code_revision",
   "freshness_days": $(jq -r '.max_freshness_days' < "$input_path"),
-  "confidence_millionths": 950000,
-  "coverage_millionths": 900000,
+  "confidence_millionths": $confidence_millionths,
+  "coverage_millionths": $coverage_millionths,
   "verification_command": "./scripts/run_compromise_rate_disruptive_floor_metric_gate.sh verify $report_path",
   "redaction_status": "none",
   "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -203,8 +247,8 @@ echo "✓ Generated compromise rate metric report: $report_path"
 echo "✓ Generated manifest: $manifest_path"
 echo "✓ Report hash: $report_hash"
 
-if [[ "$overall_outcome" == "fail" ]]; then
-  echo "❌ Compromise rate metric gate FAILED: weighted reduction $weighted_reduction_ratio_millionths < threshold $threshold_millionths"
+if [[ "$overall_outcome" != "pass" ]]; then
+  echo "❌ Compromise rate metric gate FAILED: $outcome_reason (weighted reduction $weighted_reduction_ratio_millionths, threshold $threshold_millionths)"
   exit 1
 else
   echo "✅ Compromise rate metric gate PASSED: weighted reduction $weighted_reduction_ratio_millionths >= threshold $threshold_millionths"

@@ -4323,10 +4323,8 @@ mod tests {
         A: TypedStorageAdapterExt,
         T: TypedStoreRecord + Clone + PartialEq + std::fmt::Debug,
     {
-        let context = EventContext {
-            trace_id: "typed-conformance-test".to_string(),
-            span_id: "span-test".to_string(),
-        };
+        let context = EventContext::new("typed-conformance-test", "decision-test", "policy-test")
+            .expect("typed conformance context is valid");
 
         // Test 1: Basic roundtrip put_typed → get_typed
         let record = &records[0];
@@ -4354,8 +4352,10 @@ mod tests {
         );
 
         // Test 3: get_typed with non-existent key returns None
+        let missing_key =
+            T::typed_record_key_for_id(999999).expect("missing typed key should be valid");
         let missing = adapter
-            .get_typed::<T>("typed/test_store/999999", &context)
+            .get_typed::<T>(&missing_key, &context)
             .expect("get_typed should handle missing keys gracefully");
         assert_eq!(
             missing, None,

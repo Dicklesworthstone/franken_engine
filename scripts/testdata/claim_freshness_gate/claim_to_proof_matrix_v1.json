@@ -1,0 +1,94 @@
+{
+  "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+  "max_observed_freshness_days": 30,
+  "claims": [
+    {
+      "claim_id": "CLAIM-FRESH-OBSERVED",
+      "source_path": "docs/README.md",
+      "file_section": "Observed runtime proof",
+      "source_span": {
+        "start_line": 3,
+        "end_line": 3,
+        "must_contain": "Observed runtime proof is backed by a fresh bundle."
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "artifacts/fresh_observed",
+      "expected_source_revision": "fixture-revision",
+      "downgrade_text": "Use TARGET wording until a fresh live proof bundle is generated."
+    },
+    {
+      "claim_id": "CLAIM-STALE-OBSERVED",
+      "source_path": "docs/README.md",
+      "file_section": "Stale runtime proof",
+      "source_span": {
+        "start_line": 5,
+        "end_line": 5,
+        "must_contain": "Observed stale proof still appears too strong."
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "artifacts/stale_observed",
+      "expected_source_revision": "fixture-revision",
+      "downgrade_text": "Use TARGET wording until a fresh live proof bundle is generated."
+    },
+    {
+      "claim_id": "CLAIM-MISSING-ARTIFACT",
+      "source_path": "docs/README.md",
+      "file_section": "Missing runtime proof",
+      "source_span": {
+        "start_line": 7,
+        "end_line": 7,
+        "must_contain": "Observed missing proof should trigger downgrade."
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "artifacts/missing_observed",
+      "expected_source_revision": "fixture-revision",
+      "downgrade_text": "Downgrade to HYPOTHESIS until a proof artifact exists."
+    },
+    {
+      "claim_id": "CLAIM-DEGRADED-ARTIFACT",
+      "source_path": "docs/README.md",
+      "file_section": "Degraded runtime proof",
+      "source_span": {
+        "start_line": 9,
+        "end_line": 9,
+        "must_contain": "Observed degraded proof must be alarmed."
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "artifacts/degraded_observed",
+      "expected_source_revision": "fixture-revision",
+      "downgrade_text": "Downgrade to TARGET until artifact doctor reports pass."
+    },
+    {
+      "claim_id": "CLAIM-TARGET-ALLOWED",
+      "source_path": "docs/README.md",
+      "file_section": "Target runtime proof",
+      "source_span": {
+        "start_line": 11,
+        "end_line": 11,
+        "must_contain": "Target wording remains allowed without observed proof."
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "downgrade_text": "Target: runtime proof after fresh evidence lands."
+    },
+    {
+      "claim_id": "CLAIM-HYPOTHESIS-ALLOWED",
+      "source_path": "docs/README.md",
+      "file_section": "Hypothesis runtime proof",
+      "source_span": {
+        "start_line": 13,
+        "end_line": 13,
+        "must_contain": "Hypothesis wording remains allowed for future proof."
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "downgrade_text": "Hypothesis: future proof may promote this claim."
+    }
+  ]
+}

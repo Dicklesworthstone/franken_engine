@@ -1,0 +1,6 @@
+{
+  "schema_version": "franken-engine.fixture-claim-artifact.v1",
+  "generated_at_utc": "2026-05-09T12:00:00Z",
+  "source_revision": "fixture-revision",
+  "status": "degraded"
+}

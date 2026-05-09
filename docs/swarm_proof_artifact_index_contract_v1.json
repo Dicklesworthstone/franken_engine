@@ -1,0 +1,50 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index-contract.v1",
+  "bead_id": "bd-ua5n2.4",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.3"
+  ],
+  "script": "scripts/swarm_proof_artifact_index.sh",
+  "operator_docs": "docs/SWARM_PROOF_ARTIFACT_INDEX.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_artifact_index/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_artifact_index_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-artifact-index.v1",
+  "required_outputs": [
+    "proof_artifact_index.json",
+    "proof_artifact_index.jsonl",
+    "reuse_receipts.jsonl",
+    "reuse_refusal_receipts.jsonl",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "invalidation_reasons": [
+    "expired_ttl",
+    "changed_dependency_root",
+    "changed_source_revision",
+    "changed_toolchain",
+    "changed_rch_version",
+    "incomplete_rch_artifact_retrieval",
+    "missing_artifact_members",
+    "failed_proof_reuse_refusal",
+    "local_fallback_contamination",
+    "unknown_dirty_state"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_artifact_index_contract_v1.json scripts/testdata/swarm_proof_artifact_index/cases.json",
+    "bash -n scripts/swarm_proof_artifact_index.sh",
+    "bash -n scripts/e2e/swarm_proof_artifact_index_smoke.sh",
+    "bash scripts/e2e/swarm_proof_artifact_index_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_artifact_index_smoke.sh selftest",
+    "git diff --check -- docs/swarm_proof_artifact_index_contract_v1.json docs/SWARM_PROOF_ARTIFACT_INDEX.md scripts/swarm_proof_artifact_index.sh scripts/testdata/swarm_proof_artifact_index/cases.json scripts/e2e/swarm_proof_artifact_index_smoke.sh"
+  ]
+}

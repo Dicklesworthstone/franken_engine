@@ -1,0 +1,122 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index-fixtures.v1",
+  "base_proof": {
+    "proof_fingerprint": "spbreq-fixture",
+    "verdict_status": "passed",
+    "source_revision": "fixture-source",
+    "expected_source_revision": "fixture-source",
+    "dependency_closure_fingerprint": "dep-a",
+    "expected_dependency_closure_fingerprint": "dep-a",
+    "toolchain": "rust-2026-05-09",
+    "expected_toolchain": "rust-2026-05-09",
+    "rch_version": "rch-1",
+    "expected_rch_version": "rch-1",
+    "now_epoch": 1778364000,
+    "expires_at_epoch": 1778367600,
+    "retrieval_complete": true,
+    "dirty_state": "known_clean",
+    "rch_posture": "remote",
+    "local_fallback_observed": false,
+    "artifact_bundle": {
+      "complete": true,
+      "members": [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "proof_transcript.txt",
+        "verdict_receipt.json",
+        "report.md"
+      ]
+    },
+    "artifact_paths": {
+      "run_manifest_json": "fixtures/run_manifest.json",
+      "verdict_receipt_json": "fixtures/verdict_receipt.json"
+    }
+  },
+  "cases": [
+    {
+      "case_id": "fresh_reusable_proof",
+      "proof": {},
+      "expected": {
+        "reusable_count": 1,
+        "refused_count": 0,
+        "invalidation_reasons": []
+      }
+    },
+    {
+      "case_id": "expired_proof_refused",
+      "proof": {
+        "expires_at_epoch": 1778360000
+      },
+      "expected": {
+        "reusable_count": 0,
+        "refused_count": 1,
+        "invalidation_reasons": [
+          "expired_ttl"
+        ]
+      }
+    },
+    {
+      "case_id": "changed_dependency_root_refused",
+      "proof": {
+        "dependency_closure_fingerprint": "dep-old",
+        "expected_dependency_closure_fingerprint": "dep-new"
+      },
+      "expected": {
+        "reusable_count": 0,
+        "refused_count": 1,
+        "invalidation_reasons": [
+          "changed_dependency_root"
+        ]
+      }
+    },
+    {
+      "case_id": "incomplete_rch_artifact_retrieval",
+      "proof": {
+        "retrieval_complete": false,
+        "artifact_bundle": {
+          "complete": false,
+          "members": [
+            "run_manifest.json",
+            "commands.txt"
+          ]
+        }
+      },
+      "expected": {
+        "reusable_count": 0,
+        "refused_count": 1,
+        "invalidation_reasons": [
+          "incomplete_rch_artifact_retrieval",
+          "missing_artifact_members"
+        ]
+      }
+    },
+    {
+      "case_id": "failed_proof_refusal",
+      "proof": {
+        "verdict_status": "failed"
+      },
+      "expected": {
+        "reusable_count": 0,
+        "refused_count": 1,
+        "invalidation_reasons": [
+          "failed_proof_reuse_refusal"
+        ]
+      }
+    },
+    {
+      "case_id": "local_fallback_contaminated",
+      "proof": {
+        "rch_posture": "local_fallback",
+        "local_fallback_observed": true
+      },
+      "expected": {
+        "reusable_count": 0,
+        "refused_count": 1,
+        "invalidation_reasons": [
+          "local_fallback_contamination"
+        ]
+      }
+    }
+  ]
+}

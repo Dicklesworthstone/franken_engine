@@ -7,6 +7,24 @@ set -euo pipefail
 
 echo "=== Basic Standard Library Test ==="
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+cd "${repo_root}"
+
+if ! command -v rch >/dev/null 2>&1; then
+    echo "rch is required for basic stdlib Cargo execution" >&2
+    exit 2
+fi
+
+export RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/target/stdlib_basic}"
+
+run_frankenctl() {
+    timeout 30 rch exec -- env "RUSTC_WRAPPER=${RUSTC_WRAPPER}" "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" cargo run --bin frankenctl -- "$@"
+}
+
 # Test basic array operations
 cat > /tmp/test_array.js << 'EOF'
 const arr = [1, 2, 3];
@@ -15,7 +33,7 @@ arr.length;
 EOF
 
 echo "Testing Array.push..."
-if timeout 30 cargo run --bin frankenctl -- run --input /tmp/test_array.js --out /tmp/result.json >/dev/null 2>&1; then
+if run_frankenctl run --input /tmp/test_array.js --out /tmp/result.json >/dev/null 2>&1; then
     if [[ -f /tmp/result.json ]]; then
         result=$(jq -r '.execution_value // "error"' /tmp/result.json 2>/dev/null || echo "parse_error")
         if [[ "$result" == "4" ]]; then
@@ -37,7 +55,7 @@ Object.keys(obj).length;
 EOF
 
 echo "Testing Object.keys..."
-if timeout 30 cargo run --bin frankenctl -- run --input /tmp/test_object.js --out /tmp/result2.json >/dev/null 2>&1; then
+if run_frankenctl run --input /tmp/test_object.js --out /tmp/result2.json >/dev/null 2>&1; then
     if [[ -f /tmp/result2.json ]]; then
         result=$(jq -r '.execution_value // "error"' /tmp/result2.json 2>/dev/null || echo "parse_error")
         if [[ "$result" == "2" ]]; then
@@ -59,7 +77,7 @@ JSON.stringify(obj);
 EOF
 
 echo "Testing JSON.stringify..."
-if timeout 30 cargo run --bin frankenctl -- run --input /tmp/test_json.js --out /tmp/result3.json >/dev/null 2>&1; then
+if run_frankenctl run --input /tmp/test_json.js --out /tmp/result3.json >/dev/null 2>&1; then
     if [[ -f /tmp/result3.json ]]; then
         result=$(jq -r '.execution_value // "error"' /tmp/result3.json 2>/dev/null || echo "parse_error")
         if echo "$result" | grep -q "hello"; then

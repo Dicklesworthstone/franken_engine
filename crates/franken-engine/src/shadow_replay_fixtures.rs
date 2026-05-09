@@ -631,13 +631,13 @@ mod tests {
 
         for fixture in fixtures {
             // First event should have no parent
-            assert!(fixture.events[0].parent_id.is_none());
+            assert!(fixture.rows[0].parent_event_ids.is_empty());
 
             // Subsequent events should link to previous events
-            for i in 1..fixture.events.len() {
-                assert!(fixture.events[i].parent_id.is_some());
-                let parent_id = fixture.events[i].parent_id.as_ref().unwrap();
-                let expected_parent_id = &fixture.events[i - 1].id;
+            for i in 1..fixture.rows.len() {
+                assert_eq!(fixture.rows[i].parent_event_ids.len(), 1);
+                let parent_id = fixture.rows[i].parent_event_ids[0];
+                let expected_parent_id = fixture.rows[i - 1].journal_event_id;
                 assert_eq!(parent_id, expected_parent_id);
             }
         }

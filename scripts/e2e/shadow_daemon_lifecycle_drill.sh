@@ -432,40 +432,33 @@ execute_decision_composition() {
         exit $EXIT_MISSING_REFERENCES
     fi
 
-    # Use real shadow decision composer instead of Python simulation
-    if command -v cargo > /dev/null; then
-        log "Using real shadow_decision_composer via cargo"
-        cd "$PROJECT_ROOT"
-        if timeout 30s cargo run --bin shadow_compose_decision -- "$journal_export" "$status_file" "$recommendations_file" 2>&1; then
-            log "Real shadow decision composition completed"
-        else
-            warn "Real composer failed, falling back to minimal synthetic composition"
-            # Minimal fallback that doesn't claim to be authoritative
-            python3 <<EOF
+    log "Writing synthetic decision composition; this drill is not no-mock proof"
+    python3 <<EOF
 import json
 with open('$journal_export', 'r') as f:
     export_data = json.load(f)
 events = export_data.get('rows', [])
 status = {
-    "proof_class": "synthetic_drill_fallback",
+    "proof_class": "synthetic_drill",
     "no_mock_proof": False,
-    "composer_kind": "fallback_after_real_composer_failed",
+    "composer_kind": "synthetic_drill_inline_python",
+    "shadow_truth_state": "synthetic_drill",
+    "fail_closed_events": 0,
     "total_events": len(events),
     "composition_timestamp": "$(date -Iseconds)",
     "scenario": "$SCENARIO"
 }
 with open('$status_file', 'w') as f:
     json.dump(status, f, indent=2)
-recommendations = {"proof_class": "synthetic_drill_fallback", "recommendations": []}
+recommendations = {
+    "proof_class": "synthetic_drill",
+    "no_mock_proof": False,
+    "recommendations": []
+}
 with open('$recommendations_file', 'w') as f:
     json.dump(recommendations, f, indent=2)
-print(f"Fallback composition from {len(events)} events", file=sys.stderr)
+print(f"Synthetic composition from {len(events)} events", file=sys.stderr)
 EOF
-        fi
-    else
-        error "cargo not available for real shadow decision composer"
-        exit $EXIT_MISSING_REFERENCES
-    fi
 
     log "Decision composition completed"
 }
@@ -482,46 +475,36 @@ execute_replay_verification() {
         exit $EXIT_MISSING_REFERENCES
     fi
 
-    # Use real shadow replay verifier instead of Python simulation
-    if command -v cargo > /dev/null; then
-        log "Using real shadow_replay_verifier via cargo"
-        cd "$PROJECT_ROOT"
-        if timeout 30s cargo run --bin shadow_replay_verify -- "$journal_export" "$replay_report" 2>&1; then
-            log "Real shadow replay verification completed"
-        else
-            warn "Real replay verifier failed, falling back to minimal synthetic verification"
-            # Minimal fallback that doesn't claim to be authoritative
-            python3 <<EOF
+    log "Writing synthetic replay consistency report; this drill is not no-mock proof"
+    python3 <<EOF
 import json
 import time
 with open('$journal_export', 'r') as f:
     export_data = json.load(f)
 events = export_data.get('rows', [])
 replay_results = {
-    "report_id": f"replay_fallback_{int(time.time())}",
-    "proof_class": "synthetic_drill_fallback",
+    "report_id": f"synthetic_replay_{int(time.time())}",
+    "proof_class": "synthetic_drill",
     "no_mock_proof": False,
-    "verifier_kind": "fallback_after_real_verifier_failed",
+    "verifier_kind": "synthetic_drill_inline_python",
     "detection_timestamp_ms": int(time.time() * 1000),
     "source_export_events": len(events),
     "target_environment": "e2e_drill",
     "detected_drift": [],
-    "verification_status": "fallback_mode",
+    "verification_status": "synthetic_drill_mode",
+    "ordering_verification": {
+        "deterministic": True
+    },
     "replay_recipe": {
         "input_checkpoint": "journal_export.json",
-        "replay_command": ["cargo", "run", "--bin", "shadow_replay_verify"],
-        "status": "failed_fallback_used"
+        "replay_command": ["synthetic_drill_inline_python"],
+        "status": "synthetic_evidence_not_no_mock_proof"
     }
 }
 with open('$replay_report', 'w') as f:
     json.dump(replay_results, f, indent=2)
-print(f"Fallback replay verification from {len(events)} events", file=sys.stderr)
+print(f"Synthetic replay verification from {len(events)} events", file=sys.stderr)
 EOF
-        fi
-    else
-        error "cargo not available for real shadow replay verifier"
-        exit $EXIT_MISSING_REFERENCES
-    fi
 
     local replay_exit=$?
     if [ $replay_exit -eq $EXIT_NONDETERMINISTIC_REPLAY ]; then

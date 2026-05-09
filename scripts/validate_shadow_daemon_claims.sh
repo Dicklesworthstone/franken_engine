@@ -167,6 +167,44 @@ check_script_command_examples() {
     return "$has_violations"
 }
 
+check_shadow_no_mock_gate_truth() {
+    local proof_doc="docs/SHADOW_DAEMON_PROOF_STATE.md"
+    local lifecycle_drill="scripts/e2e/shadow_daemon_lifecycle_drill.sh"
+
+    if [[ ! -f "$proof_doc" || ! -f "$lifecycle_drill" ]]; then
+        log "$RED" "  ❌ Missing shadow proof-state inputs"
+        return 1
+    fi
+
+    if grep -A3 'no_mock_drill' "$proof_doc" | grep -Eq 'GREEN|🟢'; then
+        log "$RED" "  ❌ no_mock_drill is still documented as green"
+        return 1
+    fi
+
+    if ! grep -A4 'no_mock_drill' "$proof_doc" | grep -Eq 'BLOCKED|🔴'; then
+        log "$RED" "  ❌ no_mock_drill is not documented as blocked"
+        return 1
+    fi
+
+    if ! grep -q 'synthetic evidence exercise' "$proof_doc"; then
+        log "$RED" "  ❌ Proof-state doc does not name the lifecycle drill as synthetic"
+        return 1
+    fi
+
+    if ! grep -q 'EXIT_SYNTHETIC_EVIDENCE' "$lifecycle_drill"; then
+        log "$RED" "  ❌ Lifecycle drill no longer has a synthetic-evidence exit guard"
+        return 1
+    fi
+
+    if grep -q 'cargo run --bin shadow_' "$lifecycle_drill"; then
+        log "$RED" "  ❌ Synthetic lifecycle drill still invokes shadow helper binaries via bare cargo"
+        return 1
+    fi
+
+    log "$GREEN" "  ✅ no_mock_drill remains blocked and synthetic drill evidence fails closed"
+    return 0
+}
+
 # Main validation function
 main() {
     log "$BLUE" "🚦 Shadow Daemon Documentation Claims Validation"
@@ -202,12 +240,16 @@ main() {
     run_check "Proof state contains gate status" \
         "grep -q 'Gate Status\|gate status' 'docs/SHADOW_DAEMON_PROOF_STATE.md' || grep -q 'BLOCKED CAPABILITIES' 'docs/SHADOW_DAEMON_PROOF_STATE.md'"
 
+    run_check "No-mock lifecycle gate truth" \
+        "check_shadow_no_mock_gate_truth"
+
     # Rust compile/test gates are enforced by the standard rch workflow, not this
     # documentation scanner.
 
-    # Check for dangerous command examples in scripts in this Bash process.
-    run_check "Script command examples validation" \
-        "check_script_command_examples"
+    # Do not scan implementation scripts for br/git/rch command execution here:
+    # those commands are normal implementation details in this repo. The
+    # shadow-lifecycle adoption risk is covered by the targeted no-mock gate
+    # truth check above.
 
     # Summary
     echo ""

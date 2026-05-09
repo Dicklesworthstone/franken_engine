@@ -1,0 +1,410 @@
+{
+  "schema_version": "franken-engine.rch-first-error-conveyor-no-mock-drill-fixtures.v1",
+  "primary_scenario_id": "first_error_chain",
+  "cases": [
+    {
+      "scenario_id": "first_error_chain",
+      "transcript_lines": [
+        "error[E0308]: mismatched types",
+        "  --> crates/franken-engine/src/baseline_interpreter.rs:412:17",
+        "   |",
+        "412 |     return value;",
+        "   |            ^^^^^ expected RuntimeValue, found Option<RuntimeValue>"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine baseline_interpreter::tests::object_create_replay --no-run",
+        "worker_id": "fixture-worker-a",
+        "build_id": "fixture-build-first-error",
+        "target_dir": "/remote/target/first-error",
+        "package": "frankenengine-engine",
+        "target": "baseline_interpreter::tests::object_create_replay",
+        "validation_scope": "exact integration test",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/baseline_interpreter.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "pass",
+        "classification": {
+          "proof_strength": "strong",
+          "target_relevance": "target_relevant"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "block_current_bead",
+        "primary_disposition": "block_current_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 1,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0
+      }
+    },
+    {
+      "scenario_id": "blocked_golden_lane",
+      "transcript_lines": [
+        "error[E0599]: no method named `to_descriptor` found for struct `GoldenObject`",
+        "  --> crates/franken-engine/tests/golden_object_create.rs:77:24",
+        "   |",
+        "77 |     object.to_descriptor();",
+        "   |            ^^^^^^^^^^^^^ method not found"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine golden_object_create --no-run",
+        "worker_id": "fixture-worker-b",
+        "build_id": "fixture-build-golden",
+        "target_dir": "/remote/target/golden",
+        "package": "frankenengine-engine",
+        "target": "golden_object_create",
+        "validation_scope": "exact integration test",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/baseline_interpreter.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-golden-lane",
+            "status": "blocked",
+            "title": "[COMPILE-BLOCKER] Existing golden Object.create lane",
+            "file_path": "crates/franken-engine/tests/golden_object_create.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "error_family": "stale_test_api",
+            "command_target": "",
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "dedupe_suppressed",
+        "primary_disposition": "duplicate_existing_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 1,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "duplicate_existing_bead",
+        "matched_bead_id": "bd-golden-lane"
+      }
+    },
+    {
+      "scenario_id": "blocked_object_create_lane",
+      "transcript_lines": [
+        "error[E0599]: no function named `define_property_descriptor` found",
+        "  --> crates/franken-engine/src/stdlib.rs:1198:31",
+        "   |",
+        "1198 |     ObjectRuntime::define_property_descriptor();",
+        "   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ function not found"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine object_create_descriptor --no-run",
+        "worker_id": "fixture-worker-c",
+        "build_id": "fixture-build-object-create",
+        "target_dir": "/remote/target/object-create",
+        "package": "frankenengine-engine",
+        "target": "object_create_descriptor",
+        "validation_scope": "exact lib test filter",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/baseline_interpreter.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-object-create-lane",
+            "status": "blocked",
+            "title": "[COMPILE-BLOCKER] Existing Object.create descriptor lane",
+            "file_path": "crates/franken-engine/src/stdlib.rs",
+            "error_codes": [
+              "E0599"
+            ],
+            "error_family": "rustc_E0599",
+            "command_target": "",
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "dedupe_suppressed",
+        "primary_disposition": "duplicate_existing_bead",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 1,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "duplicate_existing_bead",
+        "matched_bead_id": "bd-object-create-lane"
+      }
+    },
+    {
+      "scenario_id": "fresh_active_owner",
+      "transcript_lines": [
+        "error[E0277]: `ShadowReplayVerifier` doesn't implement `Debug`",
+        "  --> crates/franken-engine/src/shadow_replay_verifier.rs:1063:22",
+        "   |",
+        "1063 |     verifier.unwrap_err();",
+        "   |              ^^^^^^^^^^ the trait `Debug` is not implemented"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine shadow_replay_verifier --no-run",
+        "worker_id": "fixture-worker-d",
+        "build_id": "fixture-build-active-owner",
+        "target_dir": "/remote/target/shadow",
+        "package": "frankenengine-engine",
+        "target": "shadow_replay_verifier",
+        "validation_scope": "exact lib test filter",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/baseline_interpreter.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "reservations_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-reservations-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "reservations": [
+          {
+            "id": "res-shadow-active",
+            "agent_name": "OtherAgent",
+            "path_pattern": "crates/franken-engine/src/shadow_replay_verifier.rs",
+            "active": true,
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "announcements_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-announcements-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "announcements": [
+          {
+            "id": "mail-shadow-active",
+            "from": "OtherAgent",
+            "subject": "[COMPILE-BLOCKER] Working shadow replay verifier",
+            "file_paths": [
+              "crates/franken-engine/src/shadow_replay_verifier.rs"
+            ],
+            "freshness": "fresh"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "defer_active_owner",
+        "primary_disposition": "defer_active_owner",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 1,
+        "insufficient_evidence_count": 0,
+        "reason_code": "active_owner_present",
+        "matched_reservation_id": "res-shadow-active",
+        "matched_announcement_id": "mail-shadow-active"
+      }
+    },
+    {
+      "scenario_id": "stale_owner",
+      "transcript_lines": [
+        "error[E0277]: the trait bound `ReplayEvent: Clone` is not satisfied",
+        "  --> crates/franken-engine/src/replay.rs:233:13",
+        "   |",
+        "233 |     events.clone();",
+        "   |            ^^^^^ the trait `Clone` is not implemented"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo test -p frankenengine-engine replay --no-run",
+        "worker_id": "fixture-worker-e",
+        "build_id": "fixture-build-stale-owner",
+        "target_dir": "/remote/target/replay",
+        "package": "frankenengine-engine",
+        "target": "replay",
+        "validation_scope": "exact lib test filter",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/baseline_interpreter.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/baseline_interpreter.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "degraded",
+        "classification": {
+          "proof_strength": "weak",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": false,
+          "transcript_truncated": false,
+          "fail_closed_reasons": []
+        }
+      },
+      "beads_snapshot": {
+        "schema_version": "franken-engine.rch-first-error-conveyor-beads-snapshot.v1",
+        "health": {
+          "contradictory_evidence": false,
+          "fail_closed_reasons": []
+        },
+        "beads": [
+          {
+            "id": "bd-stale-owner",
+            "status": "in_progress",
+            "title": "[COMPILE-BLOCKER] Stale replay owner",
+            "file_path": "crates/franken-engine/src/replay.rs",
+            "error_codes": [
+              "E0277"
+            ],
+            "error_family": "rustc_E0277",
+            "command_target": "",
+            "freshness": "stale"
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 0,
+        "decision": "recommend_follow_up",
+        "primary_disposition": "new_bead_candidate",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 1,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 0,
+        "reason_code": "stale_owner_manual_reopen_candidate",
+        "matched_bead_id": "bd-stale-owner"
+      }
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "transcript_lines": [
+        "[RCH] local fallback observed after remote queue timeout",
+        "error[E0432]: unresolved import `crate::fallback_only`",
+        "  --> crates/franken-engine/src/lib.rs:91:5",
+        "   |",
+        "91 | use crate::fallback_only;",
+        "   |     ^^^^^^^^^^^^^^^^^^^^ no `fallback_only` in the root"
+      ],
+      "metadata": {
+        "command": "rch exec -- cargo check -p frankenengine-engine --tests",
+        "worker_id": "local-fallback",
+        "build_id": "fixture-build-local-fallback",
+        "target_dir": "/tmp/local-target",
+        "package": "frankenengine-engine",
+        "target": "all-tests",
+        "validation_scope": "broad tests",
+        "exit_code": 101,
+        "touched_paths": [
+          "crates/franken-engine/src/lib.rs"
+        ],
+        "intended_target_path": "crates/franken-engine/src/lib.rs",
+        "transcript_truncated": false
+      },
+      "profile": {
+        "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+        "decision": "fail_closed",
+        "classification": {
+          "proof_strength": "none",
+          "target_relevance": "target_ambiguous"
+        },
+        "evidence_health": {
+          "local_fallback_observed": true,
+          "transcript_truncated": false,
+          "fail_closed_reasons": [
+            "local_rch_fallback_observed"
+          ]
+        }
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "fail_closed",
+        "primary_disposition": "insufficient_evidence",
+        "recommendation_count": 1,
+        "block_current_bead_count": 0,
+        "new_bead_candidate_count": 0,
+        "duplicate_existing_bead_count": 0,
+        "defer_active_owner_count": 0,
+        "insufficient_evidence_count": 1,
+        "reason_code": "local_rch_fallback_observed"
+      }
+    }
+  ]
+}

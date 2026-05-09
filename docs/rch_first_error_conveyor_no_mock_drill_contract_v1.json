@@ -1,0 +1,89 @@
+{
+  "schema_version": "franken-engine.rch-first-error-conveyor-no-mock-drill-contract.v1",
+  "bead_id": "bd-pkxky.6",
+  "component": "rch_first_error_conveyor_no_mock_drill",
+  "purpose": "Replay preserved compile-blocker transcripts through the shipped cluster and first-error conveyor scripts, then verify a pinned output bundle without live mutation.",
+  "drill_script": "scripts/e2e/rch_first_error_conveyor_no_mock_drill.sh",
+  "smoke_script": "scripts/e2e/rch_first_error_conveyor_no_mock_drill_smoke.sh",
+  "operator_docs": "docs/RCH_FIRST_ERROR_CONVEYOR_NO_MOCK_DRILL.md",
+  "fixture_bundle": "scripts/testdata/rch_first_error_conveyor_no_mock_drill/cases.json",
+  "modes": [
+    "fixture",
+    "replay",
+    "check",
+    "selftest"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "case_results.jsonl",
+    "trace_ids.json",
+    "first_error_conveyor_plan.json",
+    "report.md",
+    "proposed_commands.txt",
+    "artifact_hashes.json",
+    "truth_gate_report.json"
+  ],
+  "producer_scripts": [
+    "scripts/rch_compile_blocker_cluster.sh",
+    "scripts/rch_first_error_conveyor.sh"
+  ],
+  "drill_scenarios": [
+    {
+      "scenario_id": "first_error_chain",
+      "expected_decision": "block_current_bead",
+      "expected_disposition": "block_current_bead"
+    },
+    {
+      "scenario_id": "blocked_golden_lane",
+      "expected_decision": "dedupe_suppressed",
+      "expected_disposition": "duplicate_existing_bead"
+    },
+    {
+      "scenario_id": "blocked_object_create_lane",
+      "expected_decision": "dedupe_suppressed",
+      "expected_disposition": "duplicate_existing_bead"
+    },
+    {
+      "scenario_id": "fresh_active_owner",
+      "expected_decision": "defer_active_owner",
+      "expected_disposition": "defer_active_owner"
+    },
+    {
+      "scenario_id": "stale_owner",
+      "expected_decision": "recommend_follow_up",
+      "expected_disposition": "new_bead_candidate"
+    },
+    {
+      "scenario_id": "local_fallback_contamination",
+      "expected_decision": "fail_closed",
+      "expected_disposition": "insufficient_evidence"
+    }
+  ],
+  "truth_requirements": [
+    "fixture mode must run the shipped cluster and conveyor scripts against preserved transcript-shaped inputs",
+    "replay mode must verify pinned bundle hashes without rerunning producer scripts",
+    "every recommendation must carry evidence paths",
+    "local fallback contamination must fail closed",
+    "mutation policy must keep live br, Agent Mail, Cargo, rch, and worker mutation disabled"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "replay_verification_only": true,
+    "mutates_br": false,
+    "creates_beads": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/rch_first_error_conveyor_no_mock_drill_contract_v1.json scripts/testdata/rch_first_error_conveyor_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/rch_first_error_conveyor_no_mock_drill.sh scripts/e2e/rch_first_error_conveyor_no_mock_drill_smoke.sh",
+    "shellcheck -x scripts/e2e/rch_first_error_conveyor_no_mock_drill.sh scripts/e2e/rch_first_error_conveyor_no_mock_drill_smoke.sh",
+    "scripts/e2e/rch_first_error_conveyor_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- docs/rch_first_error_conveyor_no_mock_drill_contract_v1.json docs/RCH_FIRST_ERROR_CONVEYOR_NO_MOCK_DRILL.md scripts/e2e/rch_first_error_conveyor_no_mock_drill.sh scripts/e2e/rch_first_error_conveyor_no_mock_drill_smoke.sh scripts/testdata/rch_first_error_conveyor_no_mock_drill/cases.json"
+  ]
+}

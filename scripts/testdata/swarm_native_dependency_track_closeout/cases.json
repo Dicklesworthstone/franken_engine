@@ -1,0 +1,343 @@
+{
+  "schema_version": "franken-engine.swarm-native-dependency-track-closeout-cases.v1",
+  "parent_bead_id": "bd-sqm14",
+  "child_beads": [
+    {
+      "bead_id": "bd-sqm14.1",
+      "title": "Native dependency capability contract and source inventory",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "docs/SWARM_NATIVE_DEPENDENCY_ROUTING_CONTRACT.md",
+        "docs/swarm_native_dependency_routing_contract_v1.json",
+        "scripts/e2e/swarm_native_dependency_contract_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_contract/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.2",
+      "title": "Cargo/path dependency native requirement inference",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_requirement_infer.sh",
+        "docs/swarm_native_dependency_requirement_map_v1.json",
+        "scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_requirement_infer/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.3",
+      "title": "Worker native dependency probe normalization",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_worker_probe_normalizer.sh",
+        "docs/swarm_native_dependency_worker_probe_contract_v1.json",
+        "scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_worker_probe/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.4",
+      "title": "Native-aware validation route planner",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_route_planner.sh",
+        "docs/swarm_native_dependency_route_planner_contract_v1.json",
+        "scripts/e2e/swarm_native_dependency_route_planner_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_route_planner/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.5",
+      "title": "ABI-fingerprinted target/cache safety ledger",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_abi_cache_ledger.sh",
+        "docs/swarm_native_dependency_abi_cache_ledger_contract_v1.json",
+        "scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_abi_cache_ledger/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.6",
+      "title": "Operator status and handoff text",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_operator_status.sh",
+        "docs/SWARM_NATIVE_DEPENDENCY_OPERATOR_STATUS.md",
+        "scripts/e2e/swarm_native_dependency_operator_status_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_operator_status/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.7",
+      "title": "No-mock HDF5 native dependency replay drill",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_hdf5_replay_drill.sh",
+        "docs/SWARM_NATIVE_DEPENDENCY_HDF5_REPLAY_DRILL.md",
+        "scripts/e2e/swarm_native_dependency_hdf5_replay_drill_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_hdf5_replay_drill/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.8",
+      "title": "Graph and closeout proof",
+      "parent_child": true,
+      "allowed_statuses": [
+        "in_progress",
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_native_dependency_track_closeout.sh",
+        "docs/SWARM_NATIVE_DEPENDENCY_ROUTING_TRACK_CLOSEOUT.md",
+        "scripts/e2e/swarm_native_dependency_track_closeout_smoke.sh",
+        "scripts/testdata/swarm_native_dependency_track_closeout/cases.json"
+      ]
+    },
+    {
+      "bead_id": "bd-sqm14.9",
+      "title": "Validation planner native dependency route verdict integration",
+      "parent_child": true,
+      "allowed_statuses": [
+        "closed"
+      ],
+      "artifacts": [
+        "scripts/swarm_validation_planner.sh",
+        "scripts/e2e/swarm_validation_planner_smoke.sh",
+        "scripts/testdata/goldens/swarm_validation_planner_native_dependency_compatible.golden",
+        "scripts/testdata/goldens/swarm_validation_planner_native_dependency_blocked.golden",
+        "scripts/testdata/goldens/swarm_validation_planner_native_dependency_fail_closed.golden"
+      ]
+    }
+  ],
+  "expected_dependency_edges": [
+    {
+      "child": "bd-sqm14.1",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.2",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.2",
+      "parent": "bd-sqm14.1"
+    },
+    {
+      "child": "bd-sqm14.3",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.3",
+      "parent": "bd-sqm14.1"
+    },
+    {
+      "child": "bd-sqm14.4",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.4",
+      "parent": "bd-sqm14.1"
+    },
+    {
+      "child": "bd-sqm14.4",
+      "parent": "bd-sqm14.2"
+    },
+    {
+      "child": "bd-sqm14.4",
+      "parent": "bd-sqm14.3"
+    },
+    {
+      "child": "bd-sqm14.5",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.5",
+      "parent": "bd-sqm14.2"
+    },
+    {
+      "child": "bd-sqm14.5",
+      "parent": "bd-sqm14.3"
+    },
+    {
+      "child": "bd-sqm14.6",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.6",
+      "parent": "bd-sqm14.4"
+    },
+    {
+      "child": "bd-sqm14.6",
+      "parent": "bd-sqm14.5"
+    },
+    {
+      "child": "bd-sqm14.7",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.7",
+      "parent": "bd-sqm14.4"
+    },
+    {
+      "child": "bd-sqm14.7",
+      "parent": "bd-sqm14.5"
+    },
+    {
+      "child": "bd-sqm14.7",
+      "parent": "bd-sqm14.6"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.1"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.2"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.3"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.4"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.5"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.6"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.7"
+    },
+    {
+      "child": "bd-sqm14.8",
+      "parent": "bd-sqm14.9"
+    },
+    {
+      "child": "bd-sqm14.9",
+      "parent": "bd-sqm14"
+    },
+    {
+      "child": "bd-sqm14.9",
+      "parent": "bd-sqm14.4"
+    },
+    {
+      "child": "bd-sqm14.9",
+      "parent": "bd-sqm14.5"
+    }
+  ],
+  "graph_check": {
+    "argv": [
+      "env",
+      "BV_INSIGHTS_MAP_LIMIT=1",
+      "bv",
+      "--robot-insights"
+    ],
+    "expected_cycle_count": 0
+  },
+  "proof_commands": [
+    {
+      "id": "contract_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_contract_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "requirement_infer_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_requirement_infer_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "worker_probe_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_worker_probe_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "route_planner_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_route_planner_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "abi_cache_ledger_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_abi_cache_ledger_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "operator_status_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_operator_status_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "hdf5_replay_drill_selftest",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_native_dependency_hdf5_replay_drill_smoke.sh",
+        "selftest"
+      ],
+      "expected_exit_code": 0
+    },
+    {
+      "id": "validation_planner_native_goldens",
+      "argv": [
+        "bash",
+        "scripts/e2e/swarm_validation_planner_smoke.sh",
+        "check"
+      ],
+      "expected_exit_code": 0
+    }
+  ]
+}

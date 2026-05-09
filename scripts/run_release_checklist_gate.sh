@@ -5,8 +5,12 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-toolchain="${RUSTUP_TOOLCHAIN:-default}"
+toolchain="${RUSTUP_TOOLCHAIN:-}"
+toolchain_display="${toolchain:-default}"
 target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_release_checklist_gate}"
+cargo_build_jobs="${CARGO_BUILD_JOBS:-1}"
+cargo_incremental="${CARGO_INCREMENTAL:-0}"
+rch_timeout_seconds="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 component="release_checklist_gate"
 bead_id="bd-ag4"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -17,8 +21,29 @@ commands_path="${run_dir}/commands.txt"
 
 mkdir -p "$run_dir"
 
+if ! command -v rch >/dev/null 2>&1; then
+  echo "rch is required for release checklist gate heavy commands" >&2
+  exit 2
+fi
+
 run_rch() {
-  rch exec -- env CARGO_TARGET_DIR="${target_dir}" "$@"
+  local -a env_args=(
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_INCREMENTAL=${cargo_incremental}" \
+  )
+  if [[ -n "$toolchain" ]]; then
+    env_args+=("RUSTUP_TOOLCHAIN=${toolchain}")
+  fi
+  rch exec -- env "${env_args[@]}" "$@"
+}
+
+reject_local_fallback() {
+  local log_path="$1"
+  if grep -Eiq 'Remote toolchain failure, falling back to local|falling back to local|fallback to local|local fallback|\[RCH\] local \(|running locally' "$log_path"; then
+    echo "rch reported local fallback; refusing local execution for heavy command" >&2
+    return 1
+  fi
 }
 
 declare -a commands_run=()
@@ -27,11 +52,25 @@ manifest_written=false
 
 run_step() {
   local command_text="$1"
+  local log_path step_index run_status
   shift
+  step_index="${#commands_run[@]}"
   commands_run+=("$command_text")
   echo "==> $command_text"
-  if ! run_rch "$@"; then
-    failed_command="$command_text"
+
+  log_path="${run_dir}/rch-log-${step_index}.log"
+  if ! timeout "${rch_timeout_seconds}" run_rch "$@" > >(tee "$log_path") 2>&1; then
+    run_status="$?"
+    if [[ "$run_status" == "124" ]]; then
+      failed_command="${command_text} (outer-timeout=${rch_timeout_seconds}s)"
+    else
+      failed_command="${command_text} (rch-exit=${run_status})"
+    fi
+    return 1
+  fi
+
+  if ! reject_local_fallback "$log_path"; then
+    failed_command="${command_text} (rch-local-fallback-detected)"
     return 1
   fi
 }
@@ -120,7 +159,11 @@ write_manifest() {
     echo "  \"bead_id\": \"${bead_id}\","
     echo "  \"mode\": \"${mode}\","
     echo "  \"generated_at_utc\": \"${timestamp}\","
-    echo "  \"toolchain\": \"${toolchain}\","
+    echo "  \"toolchain\": \"${toolchain_display}\","
+    echo "  \"cargo_target_dir\": \"${target_dir}\","
+    echo "  \"cargo_build_jobs\": ${cargo_build_jobs},"
+    echo "  \"cargo_incremental\": ${cargo_incremental},"
+    echo "  \"rch_exec_timeout_seconds\": ${rch_timeout_seconds},"
     echo "  \"git_commit\": \"${git_commit}\","
     echo "  \"dirty_worktree\": ${dirty_worktree},"
     echo "  \"outcome\": \"${outcome}\","

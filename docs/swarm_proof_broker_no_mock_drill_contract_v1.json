@@ -1,0 +1,72 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-no-mock-drill-contract.v1",
+  "bead_id": "bd-ua5n2.8",
+  "parent_bead_id": "bd-ua5n2",
+  "depends_on": [
+    "bd-ua5n2.2",
+    "bd-ua5n2.3",
+    "bd-ua5n2.4",
+    "bd-ua5n2.5",
+    "bd-ua5n2.6",
+    "bd-ua5n2.7",
+    "bd-ua5n2.9"
+  ],
+  "script": "scripts/e2e/swarm_proof_broker_no_mock_drill.sh",
+  "operator_docs": "docs/SWARM_PROOF_BROKER_NO_MOCK_DRILL.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_broker_no_mock_drill/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_broker_no_mock_drill_smoke.sh",
+  "output_schema_version": "franken-engine.swarm-proof-broker-no-mock-drill.v1",
+  "truth_gate_schema_version": "franken-engine.swarm-proof-broker-truth-gate.v1",
+  "required_outputs": [
+    "proof_broker_lifecycle_bundle.json",
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "request_capture.json",
+    "equivalence_report.json",
+    "artifact_index.json",
+    "batch_plan.json",
+    "chaos_scenarios.json",
+    "operator_status_bundle.json",
+    "truth_gate_report.json"
+  ],
+  "fail_closed_reasons": [
+    "stale_br_bv_snapshot",
+    "missing_agent_mail_evidence",
+    "local_fallback_contamination",
+    "incomplete_rch_artifact_retrieval",
+    "dirty_paths_outside_lane",
+    "hidden_reuse_refusal",
+    "unsupported_shell_wrapped_cargo",
+    "stale_proof_rejection",
+    "under_specified_replay_bundle"
+  ],
+  "modes": [
+    "live",
+    "replay"
+  ],
+  "truth_gate_policy": {
+    "replay_mode_requires_preserved_bundle": true,
+    "live_mode_forbids_synthetic_substitution": true,
+    "hidden_green_status_allowed": false,
+    "shell_wrapped_cargo_allowed": false
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "verification_commands": [
+    "jq empty docs/swarm_proof_broker_no_mock_drill_contract_v1.json scripts/testdata/swarm_proof_broker_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/swarm_proof_broker_no_mock_drill.sh",
+    "bash -n scripts/e2e/swarm_proof_broker_no_mock_drill_smoke.sh",
+    "bash scripts/e2e/swarm_proof_broker_no_mock_drill_smoke.sh check",
+    "bash scripts/e2e/swarm_proof_broker_no_mock_drill_smoke.sh selftest",
+    "git diff --check -- scripts/e2e/swarm_proof_broker_no_mock_drill.sh scripts/e2e/swarm_proof_broker_no_mock_drill_smoke.sh docs/SWARM_PROOF_BROKER_NO_MOCK_DRILL.md docs/swarm_proof_broker_no_mock_drill_contract_v1.json scripts/testdata/swarm_proof_broker_no_mock_drill/cases.json"
+  ]
+}

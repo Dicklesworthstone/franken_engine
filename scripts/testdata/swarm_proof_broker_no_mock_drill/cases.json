@@ -1,0 +1,403 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-no-mock-drill-fixtures.v1",
+  "base_input": {
+    "mode": "replay",
+    "claimed_paths": [
+      "scripts/e2e/swarm_proof_broker_no_mock_drill.sh",
+      "docs/SWARM_PROOF_BROKER_NO_MOCK_DRILL.md"
+    ],
+    "sources": {
+      "br": {
+        "fresh": true,
+        "source": "preserved-br-ready"
+      },
+      "agent_mail": {
+        "status": "present",
+        "messages": [
+          {
+            "id": 10,
+            "thread_id": "bd-ua5n2.8",
+            "subject": "proof request captured"
+          }
+        ],
+        "reservations": [
+          {
+            "path": "scripts/e2e/swarm_proof_broker_no_mock_drill.sh"
+          }
+        ]
+      },
+      "git": {
+        "dirty_paths": [
+          "scripts/e2e/swarm_proof_broker_no_mock_drill.sh"
+        ],
+        "claimed_paths": [
+          "scripts/e2e/swarm_proof_broker_no_mock_drill.sh"
+        ]
+      },
+      "rch": {
+        "status": "present",
+        "retrieval_complete": true,
+        "local_fallback_observed": false,
+        "worker_posture": "remote"
+      },
+      "request_capture": {
+        "proof_requests": [
+          {
+            "trace_id": "trace-healthy",
+            "request_id": "req-healthy",
+            "agent": "MossySpire",
+            "proof_fingerprint": "fp-healthy",
+            "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_no_mock CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "source_evidence": [
+              {
+                "kind": "br",
+                "evidence_path": "fixtures/no-mock/healthy/br.json",
+                "id": "bd-ua5n2.8"
+              },
+              {
+                "kind": "agent_mail",
+                "evidence_path": "fixtures/no-mock/healthy/mail.json",
+                "id": "10"
+              },
+              {
+                "kind": "rch_summary",
+                "evidence_path": "fixtures/no-mock/healthy/rch.json",
+                "id": "rch-healthy"
+              }
+            ]
+          }
+        ]
+      },
+      "equivalence_report": {
+        "verdict": "reuse_allowed",
+        "reason_codes": [
+          "identical_request"
+        ]
+      },
+      "artifact_index": {
+        "rows": [
+          {
+            "proof_fingerprint": "fp-healthy",
+            "reuse_eligible": true,
+            "freshness": "fresh",
+            "invalidation_reasons": [],
+            "artifact_bundle": {
+              "complete": true
+            }
+          }
+        ]
+      },
+      "batch_plan": {
+        "recommendations": [
+          {
+            "request_id": "req-healthy",
+            "proof_fingerprint": "fp-healthy",
+            "action": "reuse"
+          }
+        ]
+      },
+      "chaos_scenarios": {
+        "scenario": {
+          "replayable": true,
+          "invariant_agreement": true,
+          "scenario_hash": "fixture-healthy-hash"
+        }
+      },
+      "operator_status": {
+        "overall_status": "advisory",
+        "hidden_green_status": false,
+        "hidden_reuse_refusal": false,
+        "summary_counts": {
+          "pending_request_count": 1,
+          "reusable_verdict_count": 1,
+          "reuse_refusal_count": 0,
+          "stale_proof_count": 0,
+          "contaminated_proof_count": 0,
+          "fairness_debt_total": 0,
+          "coalesced_count": 0
+        },
+        "rows": [
+          {
+            "row_id": "reuse-fp-healthy",
+            "status": "reuse_allowed"
+          }
+        ]
+      }
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_reuse_lifecycle",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "trace_ids": [
+          "trace-healthy"
+        ],
+        "component_summaries": {
+          "request_capture_count": 1,
+          "equivalence_verdict": "reuse_allowed",
+          "artifact_rows": 1,
+          "batch_recommendations": 1,
+          "chaos_replayable": true,
+          "operator_status": "advisory"
+        }
+      }
+    },
+    {
+      "case_id": "duplicate_storm_coalescing",
+      "sources": {
+        "request_capture": {
+          "proof_requests": [
+            {
+              "trace_id": "trace-dup-a",
+              "request_id": "req-dup-a",
+              "proof_fingerprint": "fp-dup",
+              "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_no_mock CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+              "source_evidence": [
+                {
+                  "kind": "br",
+                  "evidence_path": "fixtures/no-mock/dup/br-a.json",
+                  "id": "bd-ua5n2.8"
+                }
+              ]
+            },
+            {
+              "trace_id": "trace-dup-b",
+              "request_id": "req-dup-b",
+              "proof_fingerprint": "fp-dup",
+              "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_no_mock CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+              "source_evidence": [
+                {
+                  "kind": "br",
+                  "evidence_path": "fixtures/no-mock/dup/br-b.json",
+                  "id": "bd-ua5n2.8"
+                }
+              ]
+            }
+          ]
+        },
+        "batch_plan": {
+          "recommendations": [
+            {
+              "request_id": "req-dup-a",
+              "proof_fingerprint": "fp-dup",
+              "action": "coalesce"
+            },
+            {
+              "request_id": "req-dup-b",
+              "proof_fingerprint": "fp-dup",
+              "action": "coalesce"
+            }
+          ]
+        },
+        "operator_status": {
+          "overall_status": "advisory",
+          "hidden_green_status": false,
+          "hidden_reuse_refusal": false,
+          "summary_counts": {
+            "pending_request_count": 2,
+            "reusable_verdict_count": 0,
+            "reuse_refusal_count": 0,
+            "stale_proof_count": 0,
+            "contaminated_proof_count": 0,
+            "fairness_debt_total": 0,
+            "coalesced_count": 2
+          },
+          "rows": [
+            {
+              "row_id": "coalesced-req-dup-a",
+              "status": "coalesced"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "fail_closed_reasons": [],
+        "trace_ids": [
+          "trace-dup-a",
+          "trace-dup-b"
+        ],
+        "component_summaries": {
+          "request_capture_count": 2,
+          "equivalence_verdict": "reuse_allowed",
+          "artifact_rows": 1,
+          "batch_recommendations": 2,
+          "chaos_replayable": true,
+          "operator_status": "advisory"
+        }
+      }
+    },
+    {
+      "case_id": "stale_proof_rejection",
+      "sources": {
+        "artifact_index": {
+          "rows": [
+            {
+              "proof_fingerprint": "fp-stale",
+              "reuse_eligible": false,
+              "freshness": "expired",
+              "invalidation_reasons": [
+                "expired_ttl"
+              ],
+              "artifact_bundle": {
+                "complete": true
+              }
+            }
+          ]
+        },
+        "batch_plan": {
+          "recommendations": [
+            {
+              "request_id": "req-healthy",
+              "proof_fingerprint": "fp-stale",
+              "action": "rerun_later"
+            }
+          ]
+        },
+        "operator_status": {
+          "overall_status": "blocked",
+          "hidden_green_status": false,
+          "hidden_reuse_refusal": false,
+          "summary_counts": {
+            "pending_request_count": 1,
+            "reusable_verdict_count": 0,
+            "reuse_refusal_count": 1,
+            "stale_proof_count": 1,
+            "contaminated_proof_count": 0,
+            "fairness_debt_total": 0,
+            "coalesced_count": 0
+          },
+          "rows": [
+            {
+              "row_id": "refusal-fp-stale",
+              "status": "stale_refused",
+              "refusal_reasons": [
+                "expired_ttl"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "stale_proof_rejection"
+        ],
+        "trace_ids": [
+          "trace-healthy"
+        ],
+        "component_summaries": {
+          "request_capture_count": 1,
+          "equivalence_verdict": "reuse_allowed",
+          "artifact_rows": 1,
+          "batch_recommendations": 1,
+          "chaos_replayable": true,
+          "operator_status": "blocked"
+        }
+      }
+    },
+    {
+      "case_id": "local_fallback_quarantine",
+      "sources": {
+        "rch": {
+          "status": "present",
+          "retrieval_complete": true,
+          "local_fallback_observed": true,
+          "worker_posture": "local_fallback"
+        },
+        "artifact_index": {
+          "rows": [
+            {
+              "proof_fingerprint": "fp-contaminated",
+              "reuse_eligible": false,
+              "freshness": "invalidated",
+              "rch_posture": "local_fallback",
+              "invalidation_reasons": [
+                "local_fallback_contamination"
+              ],
+              "artifact_bundle": {
+                "complete": true
+              }
+            }
+          ]
+        },
+        "operator_status": {
+          "overall_status": "blocked",
+          "hidden_green_status": false,
+          "hidden_reuse_refusal": false,
+          "summary_counts": {
+            "pending_request_count": 1,
+            "reusable_verdict_count": 0,
+            "reuse_refusal_count": 1,
+            "stale_proof_count": 0,
+            "contaminated_proof_count": 1,
+            "fairness_debt_total": 0,
+            "coalesced_count": 0
+          },
+          "rows": [
+            {
+              "row_id": "refusal-fp-contaminated",
+              "status": "contaminated_refused",
+              "refusal_reasons": [
+                "local_fallback_contamination"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "local_fallback_contamination"
+        ],
+        "trace_ids": [
+          "trace-healthy"
+        ],
+        "component_summaries": {
+          "request_capture_count": 1,
+          "equivalence_verdict": "reuse_allowed",
+          "artifact_rows": 1,
+          "batch_recommendations": 1,
+          "chaos_replayable": true,
+          "operator_status": "blocked"
+        }
+      }
+    },
+    {
+      "case_id": "under_specified_replay_rejection",
+      "sources": {
+        "chaos_scenarios": {
+          "scenario": {
+            "replayable": false,
+            "invariant_agreement": false,
+            "scenario_hash": "fixture-under-specified"
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "fail_closed_reasons": [
+          "under_specified_replay_bundle"
+        ],
+        "trace_ids": [
+          "trace-healthy"
+        ],
+        "component_summaries": {
+          "request_capture_count": 1,
+          "equivalence_verdict": "reuse_allowed",
+          "artifact_rows": 1,
+          "batch_recommendations": 1,
+          "chaos_replayable": false,
+          "operator_status": "advisory"
+        }
+      }
+    }
+  ]
+}

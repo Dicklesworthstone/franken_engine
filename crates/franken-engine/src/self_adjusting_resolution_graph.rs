@@ -2127,7 +2127,14 @@ mod tests {
             version: "1".to_string(),
             content_hash: ContentHash::compute(b"same"),
         };
-        assert_ne!(node_a.compute_hash(), node_b.compute_hash());
+        assert_ne!(
+            node_a
+                .compute_hash()
+                .expect("node hash computation should not fail"),
+            node_b
+                .compute_hash()
+                .expect("node hash computation should not fail")
+        );
     }
 
     #[test]

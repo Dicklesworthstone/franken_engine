@@ -1,0 +1,341 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-contract.v1",
+  "bead_id": "bd-ua5n2.1",
+  "parent_bead_id": "bd-ua5n2",
+  "component": "swarm_proof_broker",
+  "purpose": "Define an advisory proof request fingerprint and verdict receipt contract so repeated validation requests can be compared, reused, or refused without claiming bead completion by receipt alone.",
+  "contract_status": "advisory_evidence_contract",
+  "operator_docs": "docs/SWARM_PROOF_BROKER.md",
+  "fixture_bundle": "scripts/testdata/swarm_proof_broker/contracts/cases.json",
+  "smoke_script": "scripts/e2e/swarm_proof_broker_contract_smoke.sh",
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "receipt_can_close_beads": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "proof_request_fingerprint": {
+    "id_prefix": "spbreq-",
+    "id_algorithm": "sha256 over canonical proof_request JSON after the canonicalization rules below",
+    "canonicalization": {
+      "json_encoding": "utf8 JSON with sorted object keys and no insignificant whitespace",
+      "argv_normalization": "preserve command argv order exactly after path separators and repeated whitespace inside each argument are normalized",
+      "env_normalization": "keep only accepted env allowlist entries, sort by name, and redact values not marked fingerprint-safe",
+      "path_normalization": "store repository-relative paths with forward slashes; reject absolute target-dir and temp paths unless their policy name is included",
+      "set_normalization": "sort feature flags, dirty paths, dependency closure roots, source evidence ids, and allowed env names lexicographically",
+      "case_normalization": "enum fields are lowercase snake_case"
+    },
+    "required_inputs": [
+      {
+        "field": "normalized_command_argv",
+        "type": "array<string>",
+        "reason": "The command shape is the primary proof surface and argv order is semantic."
+      },
+      {
+        "field": "command_kind",
+        "type": "string",
+        "reason": "Cargo check, Cargo test, clippy, shell, jq, and docs-only proof requests are not interchangeable."
+      },
+      {
+        "field": "accepted_env_allowlist",
+        "type": "array<string>",
+        "reason": "Only declared environment variables can influence the fingerprint."
+      },
+      {
+        "field": "package",
+        "type": "string|null",
+        "reason": "Package-scoped Rust proof cannot satisfy a different package."
+      },
+      {
+        "field": "target_kind",
+        "type": "string",
+        "reason": "Library tests, integration tests, all-targets checks, and shell gates have different coverage."
+      },
+      {
+        "field": "target_name",
+        "type": "string|null",
+        "reason": "Specific integration tests and lib-test filters must remain distinguishable."
+      },
+      {
+        "field": "test_filter",
+        "type": "string|null",
+        "reason": "A filtered proof cannot be widened or narrowed silently."
+      },
+      {
+        "field": "feature_flags",
+        "type": "array<string>",
+        "reason": "Feature selection changes compiled code and test reachability."
+      },
+      {
+        "field": "git_commit",
+        "type": "string",
+        "reason": "Receipts are anchored to a specific commit or source revision."
+      },
+      {
+        "field": "git_tree_status",
+        "type": "string",
+        "reason": "Clean, dirty, and mixed worktrees are separate proof states."
+      },
+      {
+        "field": "dirty_paths",
+        "type": "array<string>",
+        "reason": "Dirty-file overlap can invalidate otherwise matching receipts."
+      },
+      {
+        "field": "dependency_closure_roots",
+        "type": "array<string>",
+        "reason": "Changes under these roots invalidate cached proof even when the command text is unchanged."
+      },
+      {
+        "field": "rch_version",
+        "type": "string|null",
+        "reason": "RCH behavior and local-fallback detection are part of proof trust."
+      },
+      {
+        "field": "rch_posture",
+        "type": "string",
+        "reason": "remote, local-fallback, direct-local, and shell-only proof requests have different trust levels."
+      },
+      {
+        "field": "target_dir_policy",
+        "type": "string",
+        "reason": "Shared, disposable, warmed, and unknown target-dir policies affect contamination risk."
+      },
+      {
+        "field": "proof_purpose",
+        "type": "string",
+        "reason": "Closeout, regression, smoke, docs, and exploratory proofs have different reuse authority."
+      },
+      {
+        "field": "requested_by",
+        "type": "string",
+        "reason": "Agent ownership makes duplicate-proof and collision diagnosis auditable."
+      },
+      {
+        "field": "source_evidence",
+        "type": "array<object>",
+        "reason": "A request without br, Agent Mail, git, or RCH evidence cannot support reuse."
+      }
+    ],
+    "stable_input_fields": [
+      "normalized_command_argv",
+      "command_kind",
+      "accepted_env_allowlist",
+      "package",
+      "target_kind",
+      "target_name",
+      "test_filter",
+      "feature_flags",
+      "git_commit",
+      "git_tree_status",
+      "dirty_paths",
+      "dependency_closure_roots",
+      "rch_version",
+      "rch_posture",
+      "target_dir_policy",
+      "proof_purpose",
+      "requested_by",
+      "source_evidence"
+    ]
+  },
+  "accepted_env_allowlist": [
+    "CARGO_BUILD_JOBS",
+    "CARGO_INCREMENTAL",
+    "CARGO_TARGET_DIR",
+    "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS",
+    "RCH_PRIORITY",
+    "RCH_VISIBILITY",
+    "RUSTFLAGS"
+  ],
+  "command_shape_policy": {
+    "accepted_rust_proof_prefix": "rch exec -- env ... cargo ...",
+    "accepted_lightweight_proofs": [
+      "bash -n",
+      "git diff --check",
+      "jq empty"
+    ],
+    "rejected_shapes": [
+      "bare cargo without rch",
+      "shell-wrapped rch command that can fail open into local cargo",
+      "rch transcript with local fallback markers",
+      "proof command missing CARGO_TARGET_DIR policy for Rust validation",
+      "all-targets proof claimed as an exact filtered proof"
+    ]
+  },
+  "verdict_receipt": {
+    "schema_version": "franken-engine.swarm-proof-broker-verdict-receipt.v1",
+    "required_fields": [
+      "receipt_id",
+      "proof_request_id",
+      "request_fingerprint",
+      "status",
+      "reuse_eligible",
+      "invalidation_reasons",
+      "artifact_bundle",
+      "source_revision",
+      "expires_at",
+      "remediation"
+    ],
+    "statuses": [
+      {
+        "status": "passed",
+        "reuse_eligible_when_fresh": true,
+        "meaning": "The proof command completed successfully and all required artifacts are complete."
+      },
+      {
+        "status": "failed",
+        "reuse_eligible_when_fresh": false,
+        "meaning": "The proof command ran but did not pass. It can explain failure, not satisfy green proof."
+      },
+      {
+        "status": "stale",
+        "reuse_eligible_when_fresh": false,
+        "meaning": "The receipt no longer matches current source, dependency, toolchain, RCH, or TTL state."
+      },
+      {
+        "status": "contaminated",
+        "reuse_eligible_when_fresh": false,
+        "meaning": "The proof surface observed local fallback, dirty overlap, or other contamination."
+      },
+      {
+        "status": "inconclusive",
+        "reuse_eligible_when_fresh": false,
+        "meaning": "The broker lacks enough evidence to decide reuse."
+      },
+      {
+        "status": "reuse_refused",
+        "reuse_eligible_when_fresh": false,
+        "meaning": "The broker has enough evidence to reject reuse for this request."
+      }
+    ],
+    "reuse_policy": [
+      "Only passed receipts may be reused, and only when the proof request fingerprint is exact or later equivalence logic proves the request stronger without changing the accepted inputs.",
+      "Failed receipts may be reused as failure evidence only; they cannot satisfy closeout or green proof.",
+      "Stale, contaminated, inconclusive, and reuse_refused receipts cannot satisfy acceptance or close a bead.",
+      "A verdict receipt is evidence only. It cannot mutate br state, release reservations, send Agent Mail, or mark a bead closed by itself."
+    ]
+  },
+  "invalidation_reasons": [
+    {
+      "code": "proof_failed",
+      "receipt_status": "failed",
+      "fail_closed": true,
+      "description": "The validation command returned a failing exit status.",
+      "required_remediation": "Inspect the captured artifact bundle, fix the failing behavior or environment issue, and rerun the exact proof request."
+    },
+    {
+      "code": "changed_source",
+      "receipt_status": "stale",
+      "fail_closed": true,
+      "description": "A source path in the request or dependency closure changed after the receipt was emitted.",
+      "required_remediation": "Rerun the proof from the current source revision and record the new git commit and dirty-path summary."
+    },
+    {
+      "code": "changed_dependency_root",
+      "receipt_status": "stale",
+      "fail_closed": true,
+      "description": "A dependency closure root changed, including sibling crates or script fixtures that influence the request.",
+      "required_remediation": "Refresh dependency closure evidence and rerun a proof that covers the changed root."
+    },
+    {
+      "code": "changed_rch_version",
+      "receipt_status": "stale",
+      "fail_closed": true,
+      "description": "The RCH client, daemon, or remote-worker posture changed since the receipt.",
+      "required_remediation": "Capture the new RCH version/posture and rerun the exact command through the current RCH path."
+    },
+    {
+      "code": "changed_toolchain",
+      "receipt_status": "stale",
+      "fail_closed": true,
+      "description": "Rust toolchain, Cargo metadata, or relevant shell tool versions changed.",
+      "required_remediation": "Record the current toolchain metadata and rerun the proof request against that toolchain."
+    },
+    {
+      "code": "local_fallback",
+      "receipt_status": "contaminated",
+      "fail_closed": true,
+      "description": "The transcript contains RCH local fallback or direct local execution markers for a proof that required remote execution.",
+      "required_remediation": "Do not reuse the receipt. Rerun with a remote-only RCH path or downgrade to a shell/json proof if the lane is non-Rust."
+    },
+    {
+      "code": "dirty_workspace_mismatch",
+      "receipt_status": "contaminated",
+      "fail_closed": true,
+      "description": "The current dirty paths differ from the receipt or overlap the proof surface unexpectedly.",
+      "required_remediation": "Refresh the dirty-path summary, isolate unrelated edits, and rerun the proof with the current overlap recorded."
+    },
+    {
+      "code": "expired_ttl",
+      "receipt_status": "stale",
+      "fail_closed": true,
+      "description": "The receipt exceeded its freshness deadline.",
+      "required_remediation": "Rerun the proof request or extend reuse only after a fresh broker receipt proves the same fingerprint remains valid."
+    },
+    {
+      "code": "incomplete_artifact_bundle",
+      "receipt_status": "inconclusive",
+      "fail_closed": true,
+      "description": "Required artifacts such as run_manifest.json, events.jsonl, commands.txt, transcript, or report are missing or unreadable.",
+      "required_remediation": "Regenerate the full artifact bundle and rerun smoke validation before considering reuse."
+    },
+    {
+      "code": "narrower_command_mismatch",
+      "receipt_status": "reuse_refused",
+      "fail_closed": true,
+      "description": "The cached receipt proves a narrower surface than the requested command.",
+      "required_remediation": "Run the requested wider command or file a separate bead that explicitly accepts the narrower proof."
+    },
+    {
+      "code": "wider_command_mismatch",
+      "receipt_status": "reuse_refused",
+      "fail_closed": true,
+      "description": "The cached receipt is broader than the requested surface and current-head drift could hide target-specific behavior.",
+      "required_remediation": "Rerun the exact requested filtered proof or attach equivalence evidence in the later classifier lane."
+    },
+    {
+      "code": "missing_evidence",
+      "receipt_status": "inconclusive",
+      "fail_closed": true,
+      "description": "The request or receipt lacks required br, Agent Mail, git, RCH, or artifact evidence.",
+      "required_remediation": "Capture the missing evidence source and emit a new receipt before any reuse decision."
+    },
+    {
+      "code": "unsupported_command_shape",
+      "receipt_status": "reuse_refused",
+      "fail_closed": true,
+      "description": "The command shape cannot be classified safely, such as shell-wrapped cargo or an unrecognized local build wrapper.",
+      "required_remediation": "Normalize the command into an accepted RCH, bash syntax, jq, or git diff proof shape and rerun."
+    }
+  ],
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "proof_transcript.txt",
+    "verdict_receipt.json",
+    "report.md"
+  ],
+  "fixture_cases": [
+    "fresh_pass_reusable",
+    "failed_proof_not_green",
+    "stale_ttl_and_source_change",
+    "contaminated_local_fallback_dirty_workspace",
+    "reuse_refused_command_scope_mismatch",
+    "inconclusive_missing_artifact_bundle",
+    "changed_dependency_or_toolchain",
+    "unsupported_shell_wrapped_command"
+  ],
+  "verification_commands": [
+    "jq empty docs/swarm_proof_broker_contract_v1.json scripts/testdata/swarm_proof_broker/contracts/cases.json",
+    "bash -n scripts/e2e/swarm_proof_broker_contract_smoke.sh",
+    "bash scripts/e2e/swarm_proof_broker_contract_smoke.sh check",
+    "git diff --check -- docs/SWARM_PROOF_BROKER.md docs/swarm_proof_broker_contract_v1.json scripts/e2e/swarm_proof_broker_contract_smoke.sh scripts/testdata/swarm_proof_broker/contracts/cases.json"
+  ]
+}

@@ -1,0 +1,393 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-contract-fixtures.v1",
+  "contract_schema_version": "franken-engine.swarm-proof-broker-contract.v1",
+  "base_proof_request": {
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_swarm_proof_broker",
+      "cargo",
+      "test",
+      "-p",
+      "frankenengine-engine",
+      "proof_broker_contract",
+      "--lib",
+      "--",
+      "--nocapture"
+    ],
+    "command_kind": "cargo_test",
+    "accepted_env_allowlist": [
+      "CARGO_BUILD_JOBS",
+      "CARGO_INCREMENTAL",
+      "CARGO_TARGET_DIR",
+      "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS",
+      "RCH_PRIORITY",
+      "RCH_VISIBILITY"
+    ],
+    "package": "frankenengine-engine",
+    "target_kind": "lib_test_filter",
+    "target_name": "lib",
+    "test_filter": "proof_broker_contract",
+    "feature_flags": [],
+    "git_commit": "fixture-source-revision",
+    "git_tree_status": "clean",
+    "dirty_paths": [],
+    "dependency_closure_roots": [
+      "crates/franken-engine",
+      "docs/swarm_proof_broker_contract_v1.json",
+      "scripts/e2e/swarm_proof_broker_contract_smoke.sh"
+    ],
+    "rch_version": "fixture-rch-1",
+    "rch_posture": "remote",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "proof_purpose": "bead_closeout",
+    "requested_by": "MossySpire",
+    "source_evidence": [
+      {
+        "kind": "br_show",
+        "id": "bd-ua5n2.1",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      {
+        "kind": "git_status",
+        "id": "clean-status",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      {
+        "kind": "rch_transcript",
+        "id": "remote-transcript",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    ]
+  },
+  "canonicalization_samples": [
+    {
+      "sample_id": "env_allowlist_sorted",
+      "expected_same_fingerprint": true,
+      "input_delta": "accepted_env_allowlist order differs but sorted canonicalization preserves identity"
+    },
+    {
+      "sample_id": "argv_order_semantic",
+      "expected_same_fingerprint": false,
+      "input_delta": "command argv order differs and must produce a different fingerprint"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "fresh_pass_reusable",
+      "request_patch": {},
+      "receipt": {
+        "receipt_id": "receipt-fresh-pass-reusable",
+        "proof_request_id": "spbreq-fresh-pass-reusable",
+        "request_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "status": "passed",
+        "reuse_eligible": true,
+        "invalidation_reasons": [],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "No remediation required; retain the receipt only until TTL, source, dependency, toolchain, or RCH posture changes."
+      },
+      "expected": {
+        "status": "passed",
+        "reuse_eligible": true,
+        "fail_closed": false,
+        "invalidation_reasons": []
+      }
+    },
+    {
+      "case_id": "failed_proof_not_green",
+      "request_patch": {},
+      "receipt": {
+        "receipt_id": "receipt-failed-proof-not-green",
+        "proof_request_id": "spbreq-failed-proof-not-green",
+        "request_fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "status": "failed",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "proof_failed"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "Treat the receipt as failure evidence only, fix the failing behavior or environment, and rerun the exact proof request."
+      },
+      "expected": {
+        "status": "failed",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "proof_failed"
+        ]
+      }
+    },
+    {
+      "case_id": "stale_ttl_and_source_change",
+      "request_patch": {
+        "git_commit": "older-source-revision"
+      },
+      "receipt": {
+        "receipt_id": "receipt-stale-ttl-and-source-change",
+        "proof_request_id": "spbreq-stale-ttl-and-source-change",
+        "request_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "status": "stale",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "changed_source",
+          "expired_ttl"
+        ],
+        "source_revision": "older-source-revision",
+        "expires_at": "2026-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "Rerun the proof from the current source revision and emit a fresh receipt with current TTL and dirty-path evidence."
+      },
+      "expected": {
+        "status": "stale",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "changed_source",
+          "expired_ttl"
+        ]
+      }
+    },
+    {
+      "case_id": "contaminated_local_fallback_dirty_workspace",
+      "request_patch": {
+        "git_tree_status": "dirty",
+        "dirty_paths": [
+          "crates/franken-engine/src/lib.rs"
+        ],
+        "rch_posture": "local_fallback"
+      },
+      "receipt": {
+        "receipt_id": "receipt-contaminated-local-fallback-dirty-workspace",
+        "proof_request_id": "spbreq-contaminated-local-fallback-dirty-workspace",
+        "request_fingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "status": "contaminated",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "local_fallback",
+          "dirty_workspace_mismatch"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "Discard the contaminated receipt, refresh the dirty-path summary, and rerun through a remote-only RCH path."
+      },
+      "expected": {
+        "status": "contaminated",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "local_fallback",
+          "dirty_workspace_mismatch"
+        ]
+      }
+    },
+    {
+      "case_id": "reuse_refused_command_scope_mismatch",
+      "request_patch": {
+        "test_filter": "different_exact_filter"
+      },
+      "receipt": {
+        "receipt_id": "receipt-reuse-refused-command-scope-mismatch",
+        "proof_request_id": "spbreq-reuse-refused-command-scope-mismatch",
+        "request_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "status": "reuse_refused",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "narrower_command_mismatch",
+          "wider_command_mismatch"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "Rerun the exact requested command or wait for the later equivalence classifier to prove safe substitution."
+      },
+      "expected": {
+        "status": "reuse_refused",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "narrower_command_mismatch",
+          "wider_command_mismatch"
+        ]
+      }
+    },
+    {
+      "case_id": "inconclusive_missing_artifact_bundle",
+      "request_patch": {},
+      "receipt": {
+        "receipt_id": "receipt-inconclusive-missing-artifact-bundle",
+        "proof_request_id": "spbreq-inconclusive-missing-artifact-bundle",
+        "request_fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "status": "inconclusive",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "missing_evidence",
+          "incomplete_artifact_bundle"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": false,
+          "artifacts": [
+            "run_manifest.json",
+            "commands.txt",
+            "verdict_receipt.json"
+          ]
+        },
+        "remediation": "Capture missing events, transcript, report, and source evidence before emitting a replacement receipt."
+      },
+      "expected": {
+        "status": "inconclusive",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "missing_evidence",
+          "incomplete_artifact_bundle"
+        ]
+      }
+    },
+    {
+      "case_id": "changed_dependency_or_toolchain",
+      "request_patch": {
+        "dependency_closure_roots": [
+          "crates/franken-engine",
+          "Cargo.toml"
+        ],
+        "rch_version": "fixture-rch-2"
+      },
+      "receipt": {
+        "receipt_id": "receipt-changed-dependency-or-toolchain",
+        "proof_request_id": "spbreq-changed-dependency-or-toolchain",
+        "request_fingerprint": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "status": "stale",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "changed_dependency_root",
+          "changed_rch_version",
+          "changed_toolchain"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": true,
+          "artifacts": [
+            "run_manifest.json",
+            "events.jsonl",
+            "commands.txt",
+            "proof_transcript.txt",
+            "verdict_receipt.json",
+            "report.md"
+          ]
+        },
+        "remediation": "Refresh dependency closure, RCH, and toolchain metadata, then rerun the exact proof request."
+      },
+      "expected": {
+        "status": "stale",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "changed_dependency_root",
+          "changed_rch_version",
+          "changed_toolchain"
+        ]
+      }
+    },
+    {
+      "case_id": "unsupported_shell_wrapped_command",
+      "request_patch": {
+        "normalized_command_argv": [
+          "bash",
+          "-lc",
+          "rch exec -- cargo test -p frankenengine-engine"
+        ],
+        "command_kind": "shell_wrapped_cargo"
+      },
+      "receipt": {
+        "receipt_id": "receipt-unsupported-shell-wrapped-command",
+        "proof_request_id": "spbreq-unsupported-shell-wrapped-command",
+        "request_fingerprint": "9999999999999999999999999999999999999999999999999999999999999999",
+        "status": "reuse_refused",
+        "reuse_eligible": false,
+        "invalidation_reasons": [
+          "unsupported_command_shape"
+        ],
+        "source_revision": "fixture-source-revision",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "artifact_bundle": {
+          "complete": false,
+          "artifacts": [
+            "commands.txt",
+            "report.md"
+          ]
+        },
+        "remediation": "Normalize the command into direct rch exec argv or a lightweight bash, jq, or git diff gate before reuse."
+      },
+      "expected": {
+        "status": "reuse_refused",
+        "reuse_eligible": false,
+        "fail_closed": true,
+        "invalidation_reasons": [
+          "unsupported_command_shape"
+        ]
+      }
+    }
+  ]
+}

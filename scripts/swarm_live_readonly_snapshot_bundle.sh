@@ -591,12 +591,18 @@ jq '.swarm_ops_state_bundle' "$snapshot_path" >"$swarm_ops_bundle_path"
 
 summary_decision="$(jq -r '.decision' "$snapshot_path")"
 summary_error_code="$(jq -r '(.sources[] | select(.error_code != null) | .error_code) // ""' "$snapshot_path" | sed -n '1p')"
+summary_fail_closed_reasons="$(jq -r 'if (.fail_closed_reasons | length) == 0 then "none" else (.fail_closed_reasons | join(", ")) end' "$snapshot_path")"
+summary_blocked_reasons="$(jq -r 'if (.blocked_reasons | length) == 0 then "none" else (.blocked_reasons | join(", ")) end' "$snapshot_path")"
+summary_degraded_reasons="$(jq -r 'if (.degraded_reasons | length) == 0 then "none" else (.degraded_reasons | join(", ")) end' "$snapshot_path")"
 write_event "swarm_live_readonly_snapshot_bundle" "bundle_written" "$summary_decision" "$summary_error_code" "${snapshot_path#"$root_dir"/}" "summary" "$(sha256_text summary)" "$(sha256_file "$snapshot_path")"
 
 cat >"$report_path" <<EOF
 # SWARM Live Read-Only Snapshot Bundle
 
 - decision: ${summary_decision}
+- fail closed reasons: ${summary_fail_closed_reasons}
+- blocked reasons: ${summary_blocked_reasons}
+- degraded reasons: ${summary_degraded_reasons}
 - snapshot: ${snapshot_path}
 - swarm ops bundle: ${swarm_ops_bundle_path}
 - events: ${events_path}

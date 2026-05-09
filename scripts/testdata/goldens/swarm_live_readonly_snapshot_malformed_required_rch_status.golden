@@ -1,0 +1,771 @@
+=== CASE ===
+malformed_required_rch_status
+=== SNAPSHOT ===
+{
+  "artifact_paths": {
+    "capture_profile_json": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/capture_profile.json",
+    "commands_txt": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/events.jsonl",
+    "redaction_report_json": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redaction_report.json",
+    "report_md": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/report.md",
+    "snapshot_json": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/snapshot.json",
+    "swarm_ops_state_bundle_json": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/swarm_ops_state_bundle.json"
+  },
+  "blocked_reasons": [],
+  "decision": "fail_closed",
+  "degraded_reasons": [],
+  "fail_closed_reasons": [
+    "malformed_source"
+  ],
+  "generated_at": "2026-05-09T12:00:00Z",
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "creates_scheduler": false,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "mutates_remote_workers": false,
+    "proof_only": true,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch_exec": false,
+    "sends_agent_mail": false,
+    "writes_outside_output_dir": false
+  },
+  "run_id": "[RUN_ID]",
+  "schema_version": "franken-engine.swarm-live-readonly-capture-bundle.v1",
+  "source_revision": "fixture-revision",
+  "sources": [
+    {
+      "age_seconds": 30,
+      "captured_at": "2026-05-09T11:59:30Z",
+      "command": "bd-eozx0-compatible live state JSON",
+      "component": "swarm_ops_state",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "swarm_ops_state_bundle",
+      "mutating_command_observed": false,
+      "mutation_class": "input_file_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/swarm_ops_state.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/swarm_ops_state.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": true,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "br ready --json",
+      "component": "br_ready",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "br_ready",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_ready.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_ready.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "br list --status=in_progress --json",
+      "component": "br_in_progress",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "br_ready",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_in_progress.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_in_progress.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "br sync --status --json",
+      "component": "br_sync_status",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "br_ready",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only_status",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_sync_status.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_sync_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "bv --recipe actionable --robot-plan",
+      "component": "bv_plan",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "bv_plan",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/bv_plan.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/bv_plan.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "operator-supplied Agent Mail snapshot JSON file",
+      "component": "agent_mail_snapshot",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "agent_mail",
+      "mutating_command_observed": false,
+      "mutation_class": "input_file_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/agent_mail_snapshot.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/agent_mail_snapshot.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": null,
+      "captured_at": null,
+      "command": "rch status --workers --jobs --json",
+      "component": "rch_status",
+      "dirty_unowned_count": 0,
+      "error_code": "FE-SWARM-LIVE-MALFORMED-SOURCE",
+      "freshness_state": "missing",
+      "freshness_window_seconds": 120,
+      "local_fallback_observed": false,
+      "malformed": true,
+      "maps_to_swarm_ops_component": "rch",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_status.json",
+      "reason_code": "malformed_source",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": true,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "fail_closed"
+    },
+    {
+      "age_seconds": 15,
+      "captured_at": "2026-05-09T11:59:45Z",
+      "command": "rch queue --json",
+      "component": "rch_queue",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 120,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "rch",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_queue.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_queue.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "git status --short",
+      "component": "git_status",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "git",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_status.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 25,
+      "captured_at": "2026-05-09T11:59:35Z",
+      "command": "git diff --check -- <paths>",
+      "component": "git_diff_check",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 300,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "git",
+      "mutating_command_observed": false,
+      "mutation_class": "read_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_diff_check.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_diff_check.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 15,
+      "captured_at": "2026-05-09T11:59:45Z",
+      "command": "operator-supplied resource pressure JSON file",
+      "component": "resource_pressure",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 120,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "rch",
+      "mutating_command_observed": false,
+      "mutation_class": "input_file_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/resource_pressure.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/resource_pressure.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    },
+    {
+      "age_seconds": 1800,
+      "captured_at": "2026-05-09T11:30:00Z",
+      "command": "operator-supplied prior proof transcript file",
+      "component": "proof_transcript",
+      "dirty_unowned_count": 0,
+      "error_code": null,
+      "freshness_state": "fresh",
+      "freshness_window_seconds": 86400,
+      "local_fallback_observed": false,
+      "malformed": false,
+      "maps_to_swarm_ops_component": "proof_cache_locality",
+      "mutating_command_observed": false,
+      "mutation_class": "input_file_only",
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/proof_transcript.json",
+      "reason_code": null,
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/proof_transcript.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false,
+      "required": false,
+      "source_command_hash": "[SHA256]",
+      "trust_state": "trusted"
+    }
+  ],
+  "swarm_ops_state_bundle": {
+    "decision": "fail_closed",
+    "produced_by": "scripts/swarm_live_readonly_snapshot_bundle.sh",
+    "schema_version": "franken-engine.swarm-ops-state-bundle.v1",
+    "source_components": [
+      {
+        "capture_source": "swarm_ops_state",
+        "component": "swarm_ops_state_bundle",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/swarm_ops_state.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "br_ready",
+        "component": "br_ready",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_ready.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "br_in_progress",
+        "component": "br_ready",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_in_progress.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "br_sync_status",
+        "component": "br_ready",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_sync_status.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "bv_plan",
+        "component": "bv_plan",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/bv_plan.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "agent_mail_snapshot",
+        "component": "agent_mail",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/agent_mail_snapshot.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "rch_status",
+        "component": "rch",
+        "error_code": "FE-SWARM-LIVE-MALFORMED-SOURCE",
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_status.json",
+        "freshness_state": "missing",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "fail_closed"
+      },
+      {
+        "capture_source": "rch_queue",
+        "component": "rch",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_queue.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "git_status",
+        "component": "git",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_status.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "git_diff_check",
+        "component": "git",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_diff_check.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "resource_pressure",
+        "component": "rch",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/resource_pressure.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      },
+      {
+        "capture_source": "proof_transcript",
+        "component": "proof_cache_locality",
+        "error_code": null,
+        "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/proof_transcript.json",
+        "freshness_state": "fresh",
+        "payload_hash": "[SHA256]",
+        "source_command_hash": "[SHA256]",
+        "trust_state": "trusted"
+      }
+    ],
+    "source_contract": "docs/swarm_ops_state_contract_v1.json"
+  },
+  "upstream_authority": {
+    "canonical_live_state_bead_id": "bd-eozx0",
+    "canonical_live_state_contract": "docs/swarm_ops_state_contract_v1.json",
+    "canonical_resource_lease_bead_id": "bd-x82vp",
+    "canonical_resource_lease_runbook": "docs/SWARM_RESOURCE_LEASE_PLANNER.md"
+  }
+}
+=== REDACTION REPORT ===
+{
+  "capture_profile": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/capture_profile.json",
+  "generated_at": "2026-05-09T12:00:00Z",
+  "redaction_rules": [
+    "agent_mail_tokens",
+    "absolute_home_paths",
+    "environment_secrets",
+    "large_stdout"
+  ],
+  "schema_version": "franken-engine.swarm-live-readonly-redaction-report.v1",
+  "sources": [
+    {
+      "component": "swarm_ops_state",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/swarm_ops_state.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/swarm_ops_state.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "br_ready",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_ready.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_ready.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "br_in_progress",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_in_progress.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_in_progress.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "br_sync_status",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_sync_status.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/br_sync_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "bv_plan",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/bv_plan.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/bv_plan.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "agent_mail_snapshot",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/agent_mail_snapshot.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/agent_mail_snapshot.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "rch_status",
+      "malformed": true,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_status.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": true
+    },
+    {
+      "component": "rch_queue",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_queue.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/rch_queue.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "git_status",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_status.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_status.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "git_diff_check",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_diff_check.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/git_diff_check.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "resource_pressure",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/resource_pressure.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/resource_pressure.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    },
+    {
+      "component": "proof_transcript",
+      "malformed": false,
+      "payload_hash": "[SHA256]",
+      "raw_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/proof_transcript.json",
+      "redacted_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/redacted/proof_transcript.json",
+      "redacted_payload_hash": "[SHA256]",
+      "redaction_applied": false
+    }
+  ]
+}
+=== EVENTS ===
+[
+  {
+    "capture_source": "swarm_ops_state",
+    "component": "swarm_ops_state",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/swarm_ops_state.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "br_ready",
+    "component": "br_ready",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_ready.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "br_in_progress",
+    "component": "br_in_progress",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_in_progress.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "br_sync_status",
+    "component": "br_sync_status",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/br_sync_status.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "bv_plan",
+    "component": "bv_plan",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/bv_plan.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "agent_mail_snapshot",
+    "component": "agent_mail_snapshot",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/agent_mail_snapshot.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "rch_status",
+    "component": "rch_status",
+    "error_code": "FE-SWARM-LIVE-MALFORMED-SOURCE",
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_status.json",
+    "outcome": "fail_closed",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "rch_queue",
+    "component": "rch_queue",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/rch_queue.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "git_status",
+    "component": "git_status",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_status.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "git_diff_check",
+    "component": "git_diff_check",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/git_diff_check.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "resource_pressure",
+    "component": "resource_pressure",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/resource_pressure.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "proof_transcript",
+    "component": "proof_transcript",
+    "error_code": null,
+    "event": "source_normalized",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/raw/proof_transcript.json",
+    "outcome": "captured",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  },
+  {
+    "capture_source": "summary",
+    "component": "swarm_live_readonly_snapshot_bundle",
+    "error_code": "FE-SWARM-LIVE-MALFORMED-SOURCE",
+    "event": "bundle_written",
+    "evidence_path": "[SMOKE_ROOT]/cases/malformed_required_rch_status/out/snapshot.json",
+    "outcome": "fail_closed",
+    "payload_hash": "[SHA256]",
+    "schema_version": "franken-engine.swarm-live-readonly-capture-event.v1",
+    "source_command_hash": "[SHA256]",
+    "trace_id": "trace-swarm-live-readonly-[RUN_ID]"
+  }
+]
+=== COMMANDS ===
+component=swarm_ops_state mutation_class=input_file_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=bd-eozx0-compatible\ live\ state\ JSON
+component=br_ready mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=br\ ready\ --json
+component=br_in_progress mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=br\ list\ --status=in_progress\ --json
+component=br_sync_status mutation_class=read_only_status command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=br\ sync\ --status\ --json
+component=bv_plan mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=bv\ --recipe\ actionable\ --robot-plan
+component=agent_mail_snapshot mutation_class=input_file_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=operator-supplied\ Agent\ Mail\ snapshot\ JSON\ file
+component=rch_status mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=rch\ status\ --workers\ --jobs\ --json
+component=rch_queue mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=rch\ queue\ --json
+component=git_status mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=git\ status\ --short
+component=git_diff_check mutation_class=read_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=git\ diff\ --check\ --\ \<paths\>
+component=resource_pressure mutation_class=input_file_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=operator-supplied\ resource\ pressure\ JSON\ file
+component=proof_transcript mutation_class=input_file_only command_hash=[SHA256] payload_hash=[SHA256] redacted_payload_hash=[SHA256] command=operator-supplied\ prior\ proof\ transcript\ file
+=== REPORT ===
+# SWARM Live Read-Only Snapshot Bundle
+
+- decision: fail_closed
+- fail closed reasons: malformed_source
+- blocked reasons: none
+- degraded reasons: none
+- snapshot: [SMOKE_ROOT]/cases/malformed_required_rch_status/out/snapshot.json
+- swarm ops bundle: [SMOKE_ROOT]/cases/malformed_required_rch_status/out/swarm_ops_state_bundle.json
+- events: [SMOKE_ROOT]/cases/malformed_required_rch_status/out/events.jsonl
+- commands: [SMOKE_ROOT]/cases/malformed_required_rch_status/out/commands.txt
+- redaction report: [SMOKE_ROOT]/cases/malformed_required_rch_status/out/redaction_report.json
+- canonical live state: bd-eozx0 / docs/swarm_ops_state_contract_v1.json
+- canonical resource lease planner: bd-x82vp / docs/SWARM_RESOURCE_LEASE_PLANNER.md
+
+This bundle is fixture-fed, proof-only, advisory-only, and non-mutating.

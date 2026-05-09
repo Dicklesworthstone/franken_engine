@@ -8016,6 +8016,46 @@ impl InterpreterCore {
         Ok(false)
     }
 
+    fn apply_object_create_properties(
+        &mut self,
+        target_id: ObjectId,
+        properties_arg: Value,
+    ) -> Result<(), InterpreterError> {
+        let properties_id = match properties_arg {
+            Value::Object(id) => id,
+            _ => return Ok(()),
+        };
+
+        let descriptors = {
+            let properties_object = self.heap.get(properties_id.0 as usize).ok_or(
+                InterpreterError::ObjectNotFound {
+                    id: properties_id.0,
+                },
+            )?;
+            properties_object
+                .properties
+                .iter()
+                .map(|(key, descriptor)| (key.clone(), descriptor.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        for (key, descriptor) in descriptors {
+            let effective_value = match descriptor {
+                Value::Object(descriptor_id) => self
+                    .heap
+                    .get(descriptor_id.0 as usize)
+                    .and_then(|descriptor_object| {
+                        descriptor_object.properties.get("value").cloned()
+                    })
+                    .unwrap_or(Value::Undefined),
+                _ => Value::Undefined,
+            };
+            self.set_object_property(target_id, key, effective_value)?;
+        }
+
+        Ok(())
+    }
+
     fn read_object_argument(
         &self,
         args: RegRange,
@@ -11754,35 +11794,24 @@ impl InterpreterCore {
             }
             "builtin:ObjectCreate" => {
                 // Object.create implementation - creates new object with specified prototype
-                if args.count == 0 {
-                    // Object.create() with no arguments creates object with null prototype
-                    let obj_id = self.alloc_object_with_prototype(None)?;
-                    return Ok(Value::Object(obj_id));
+                let prototype = if args.count == 0 {
+                    None
+                } else {
+                    let prototype_arg = self.read_reg(args.start)?;
+                    match prototype_arg {
+                        Value::Null => None,
+                        Value::Object(proto_id) => Some(proto_id),
+                        _ => return Ok(Value::Undefined),
+                    }
+                };
+
+                let obj_id = self.alloc_object_with_prototype(prototype)?;
+                if args.count >= 2 {
+                    let properties_arg = self.read_reg(args.start + 1)?;
+                    self.apply_object_create_properties(obj_id, properties_arg)?;
                 }
 
-                let prototype_arg = self.read_reg(args.start)?;
-                match prototype_arg {
-                    Value::Null => {
-                        // Object.create(null) creates object with null prototype (no inherited properties)
-                        let obj_id = self.alloc_object_with_prototype(None)?;
-                        Ok(Value::Object(obj_id))
-                    }
-                    Value::Object(proto_id) => {
-                        // Object.create(prototypeObject) - sets prototype chain
-                        // In a full implementation, we would establish prototype inheritance
-                        // For now, we create a new object without setting up the prototype chain
-                        let obj_id = self.alloc_object_with_prototype(Some(proto_id))?;
-                        Ok(Value::Object(obj_id))
-                    }
-                    _ => {
-                        // JavaScript throws TypeError for non-object, non-null prototypes
-                        // For simplicity, we'll return undefined to indicate error
-                        Ok(Value::Undefined)
-                    }
-                }
-
-                // TODO: Handle property descriptors (second argument) if provided
-                // TODO: Implement proper prototype chain inheritance
+                Ok(Value::Object(obj_id))
             }
 
             // String methods
@@ -20904,6 +20933,85 @@ mod active_builtin_regressions {
             matches!(err, InterpreterError::TypeError { ref expected, .. }
                 if expected == "u32-bounded test function id allocation")
         );
+    }
+
+    #[test]
+    fn object_create_applies_descriptors_and_preserves_prototype() {
+        let mut core = test_core();
+
+        let prototype_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test prototype allocation should succeed");
+        core.set_object_property(
+            prototype_id,
+            "inherited".to_string(),
+            Value::Str("from-prototype".to_string()),
+        )
+        .expect("test prototype property write should succeed");
+
+        let descriptors_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test descriptor map allocation should succeed");
+        let answer_descriptor_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test answer descriptor allocation should succeed");
+        core.set_object_property(answer_descriptor_id, "value".to_string(), Value::Int(42))
+            .expect("test descriptor value write should succeed");
+        core.set_object_property(
+            descriptors_id,
+            "answer".to_string(),
+            Value::Object(answer_descriptor_id),
+        )
+        .expect("test descriptor map write should succeed");
+
+        let empty_descriptor_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test empty descriptor allocation should succeed");
+        core.set_object_property(
+            descriptors_id,
+            "missing_value".to_string(),
+            Value::Object(empty_descriptor_id),
+        )
+        .expect("test descriptor map write should succeed");
+        core.set_object_property(descriptors_id, "raw_descriptor".to_string(), Value::Int(7))
+            .expect("test descriptor map write should succeed");
+
+        core.registers[0] = Value::Object(prototype_id);
+        core.registers[1] = Value::Object(descriptors_id);
+
+        assert_eq!(
+            core.builtin_name_from_id(5),
+            Some("builtin:ObjectCreate".to_string())
+        );
+        let created_value = core
+            .call_builtin_by_id(5, RegRange { start: 0, count: 2 })
+            .expect("ObjectCreate should execute");
+        let created_id = match created_value {
+            Value::Object(id) => id,
+            other => panic!("expected ObjectCreate to return object, got {other:?}"),
+        };
+
+        {
+            let created = core
+                .heap
+                .get(created_id.0 as usize)
+                .expect("created object should remain allocated");
+            assert_eq!(created.prototype, Some(prototype_id));
+            assert_eq!(created.properties.get("answer"), Some(&Value::Int(42)));
+            assert_eq!(
+                created.properties.get("missing_value"),
+                Some(&Value::Undefined)
+            );
+            assert_eq!(
+                created.properties.get("raw_descriptor"),
+                Some(&Value::Undefined)
+            );
+        }
+
+        let inherited = core
+            .prototype_chain_get(created_id, "inherited")
+            .expect("prototype-chain lookup should execute");
+        assert_eq!(inherited, Value::Str("from-prototype".to_string()));
     }
 
     #[test]

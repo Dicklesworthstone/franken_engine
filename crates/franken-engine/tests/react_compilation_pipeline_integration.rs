@@ -8,6 +8,7 @@ use frankenengine_engine::react_compilation_pipeline::{
     ReactCompileConfig, ReactInputLanguage, compile_react_source, generate_compilation_evidence,
 };
 use frankenengine_engine::react_jsx_lowering::{CallConvention, LoweredPropValue, PropsEntry};
+use frankenengine_engine::security_epoch::SecurityEpoch;
 
 #[test]
 fn test_simple_jsx_compilation() {
@@ -119,7 +120,8 @@ fn test_compilation_evidence_generation() {
     let config = ReactCompileConfig::default();
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
-    let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
+    let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
+        .expect("evidence generation should succeed");
 
     assert!(evidence.output_spec.success);
     assert!(!evidence.compile_receipt.input_hash.as_bytes().is_empty());
@@ -136,7 +138,8 @@ fn test_tsx_language_detection() {
     assert!(result.is_ok(), "TSX should compile successfully");
 
     let evidence =
-        generate_compilation_evidence(&result.unwrap(), &config, ReactInputLanguage::Tsx);
+        generate_compilation_evidence(&result.unwrap(), &config, ReactInputLanguage::Tsx)
+            .expect("evidence generation should succeed");
     assert_eq!(evidence.input_spec.language, ReactInputLanguage::Tsx);
 }
 
@@ -169,7 +172,10 @@ fn test_malformed_jsx() {
 #[test]
 fn test_compilation_metadata() {
     let source = r#"<div><span>Nested</span></div>"#;
-    let config = ReactCompileConfig::default();
+    let config = ReactCompileConfig {
+        compile_epoch: SecurityEpoch::from_raw(42),
+        ..Default::default()
+    };
 
     let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
 
@@ -181,7 +187,11 @@ fn test_compilation_metadata() {
         !result.metadata.config_hash.as_bytes().is_empty(),
         "Should have config hash"
     );
-    assert!(result.metadata.timestamp > 0, "Should have timestamp");
+    assert_eq!(
+        result.metadata.timestamp,
+        config.compile_epoch.as_u64(),
+        "metadata should use the deterministic compile epoch"
+    );
     assert!(
         !result.metadata.feature_families.is_empty(),
         "Should identify feature families"
@@ -245,17 +255,28 @@ fn test_classic_vs_automatic_runtime() {
 #[test]
 fn test_deterministic_compilation() {
     let source = r#"<div className="test">Deterministic test</div>"#;
-    let config = ReactCompileConfig::default();
+    let config = ReactCompileConfig {
+        compile_epoch: SecurityEpoch::from_raw(7),
+        ..Default::default()
+    };
 
     // Compile the same source twice
     let result1 = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
     let result2 = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
 
-    // Results should be identical (except timestamp)
+    // Results should be identical, including evidence timestamps.
     assert_eq!(result1.source, result2.source);
     assert_eq!(result1.generated_code, result2.generated_code);
     assert_eq!(result1.metadata.input_hash, result2.metadata.input_hash);
     assert_eq!(result1.metadata.config_hash, result2.metadata.config_hash);
+    assert_eq!(result1.metadata, result2.metadata);
+
+    let evidence1 =
+        generate_compilation_evidence(&result1, &config, ReactInputLanguage::Jsx).unwrap();
+    let evidence2 =
+        generate_compilation_evidence(&result2, &config, ReactInputLanguage::Jsx).unwrap();
+    assert_eq!(evidence1, evidence2);
+    assert_eq!(evidence1.timestamp, config.compile_epoch.as_u64());
 }
 
 #[test]

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash_tiers::ContentHash;
 use crate::jsx_tsx_parser::{JsxParseResult, JsxParserConfig, parse_jsx};
 use crate::react_jsx_lowering::{ReactLoweringConfig, ReactLoweringResult, lower_parse_result};
+use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,7 +39,7 @@ pub const REACT_COMPILATION_POLICY_ID: &str = "RGC-206";
 // ---------------------------------------------------------------------------
 
 /// Configuration for the React compilation pipeline.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReactCompileConfig {
     /// JSX parser configuration.
     pub parser_config: JsxParserConfig,
@@ -48,6 +49,25 @@ pub struct ReactCompileConfig {
     pub generate_source_maps: bool,
     /// Whether to include debug information.
     pub include_debug_info: bool,
+    /// Deterministic epoch stamped into compile metadata and evidence.
+    #[serde(default = "default_compile_epoch")]
+    pub compile_epoch: SecurityEpoch,
+}
+
+impl Default for ReactCompileConfig {
+    fn default() -> Self {
+        Self {
+            parser_config: JsxParserConfig::default(),
+            lowering_config: ReactLoweringConfig::default(),
+            generate_source_maps: false,
+            include_debug_info: false,
+            compile_epoch: default_compile_epoch(),
+        }
+    }
+}
+
+fn default_compile_epoch() -> SecurityEpoch {
+    SecurityEpoch::GENESIS
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +98,7 @@ pub struct ReactCompileMetadata {
     pub input_hash: ContentHash,
     /// Configuration hash.
     pub config_hash: ContentHash,
-    /// Compilation timestamp (for evidence).
+    /// Deterministic compilation epoch stamp for evidence.
     pub timestamp: u64,
     /// Feature families encountered during parsing.
     pub feature_families: Vec<String>,
@@ -278,10 +298,7 @@ pub fn compile_react_source(
             &serde_json::to_vec(config)
                 .map_err(|e| ReactCompileError::SerializationError(e.to_string()))?,
         ),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        timestamp: config.compile_epoch.as_u64(),
         feature_families: extract_feature_families(&parse_result),
         transform_counts: count_transforms(&lowering_result),
     };

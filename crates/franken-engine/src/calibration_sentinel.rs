@@ -1966,15 +1966,17 @@ mod tests {
             serde_json::to_string_pretty(&report).expect("SentinelReport should serialize to JSON");
 
         // Check for golden file update mode
-        let golden_path = "tests/golden/build_report_output.golden";
+        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/golden/build_report_output.golden");
 
         if std::env::var("UPDATE_GOLDEN").is_ok() {
             // Write new golden file
-            std::fs::write(golden_path, &json_output).expect("Should be able to write golden file");
-            println!("Updated golden file: {}", golden_path);
+            std::fs::write(&golden_path, &json_output)
+                .expect("Should be able to write golden file");
+            println!("Updated golden file: {}", golden_path.display());
         } else {
             // Read expected output and compare
-            let expected = std::fs::read_to_string(golden_path)
+            let expected = std::fs::read_to_string(&golden_path)
                 .expect("Golden file should exist. Run with UPDATE_GOLDEN=1 to create it.");
 
             assert_eq!(

@@ -10,7 +10,7 @@
 // Generated artifacts follow the cd3d2b4d proof contract for verification.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -841,17 +841,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Generate proof artifacts
-    let output_dir = std::path::Path::new("/tmp/ifc_declassification_example");
-    fs::create_dir_all(output_dir)?;
+    let output_dir = std::env::var_os("IFC_DECLASSIFICATION_OUTPUT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp/ifc_declassification_example"));
+    fs::create_dir_all(&output_dir)?;
 
     println!("Generating proof artifacts...");
-    generate_ifc_proof_artifacts(&results, &policy, output_dir)?;
+    generate_ifc_proof_artifacts(&results, &policy, &output_dir)?;
 
     println!("✅ Live IFC declassification example completed successfully");
     println!();
     println!("📁 Artifacts generated in: {}", output_dir.display());
     println!("📄 Files:");
-    for entry in fs::read_dir(output_dir)? {
+    for entry in fs::read_dir(&output_dir)? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             println!("   {}", entry.file_name().to_string_lossy());

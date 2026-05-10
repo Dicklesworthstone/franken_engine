@@ -6,15 +6,19 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-target_dir="${CARGO_TARGET_DIR:-target_PearlTower_focused}"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+target_dir="${CARGO_TARGET_DIR:-${IFC_DECLASSIFICATION_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_ifc_declassification_$(date +%s)_$$}}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${repo_root}/artifacts/live_ifc_declassification_example/${timestamp}"
+live_artifacts_dir="${artifact_dir}/live"
 
 example_id="bd-dpfvh-ifc-declassification"
 component="live_ifc_declassification_example"
 schema_version="franken-engine.ifc-declassification-example.v1"
 
-mkdir -p "${artifact_dir}"
+mkdir -p "${artifact_dir}" "${live_artifacts_dir}"
 cd "${repo_root}"
 
 echo "Live IFC/declassification source-to-sink example"
@@ -36,15 +40,31 @@ ifc_stdout="${artifact_dir}/live_ifc_stdout.log"
 ifc_stderr="${artifact_dir}/live_ifc_stderr.log"
 ifc_exit_code=0
 
-# Use the actual FrankenEngine live IFC example instead of node simulation
-cd "${repo_root}"
-CARGO_TARGET_DIR="${target_dir}" cargo run --example live_ifc_declassification_example --no-default-features > "${ifc_stdout}" 2> "${ifc_stderr}" || ifc_exit_code=$?
+if ! command -v "${RCH_BIN}" >/dev/null 2>&1; then
+    echo "Required rch binary not found: ${RCH_BIN}" >&2
+    exit 2
+fi
+
+set +e
+"${RCH_BIN}" exec -- env \
+    "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    "IFC_DECLASSIFICATION_OUTPUT_DIR=${live_artifacts_dir}" \
+    cargo run --example live_ifc_declassification_example --no-default-features > "${ifc_stdout}" 2> "${ifc_stderr}"
+ifc_exit_code=$?
+set -e
+
+if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${ifc_stdout}" "${ifc_stderr}"; then
+    cat "${ifc_stderr}" >&2
+    echo "rch reported local fallback; refusing local execution" >&2
+    exit 125
+fi
 
 if [[ $ifc_exit_code -eq 0 ]]; then
     echo "✓ Live IFC declassification example completed successfully"
 
     # Copy artifacts from live example output to expected directory
-    live_artifacts_dir="/tmp/ifc_declassification_example"
     if [[ -d "${live_artifacts_dir}" ]]; then
         echo "Copying live example artifacts..."
         cp "${live_artifacts_dir}"/*.json "${artifact_dir}/" 2>/dev/null || true
@@ -300,10 +320,12 @@ cat > "${verifier_report}" <<EOF
     "declassification_decision.json",
     "signed_declassification_receipt.json",
     "provenance_trace.json",
-    "denied_flow_stdout.log",
-    "denied_flow_stderr.log",
-    "allowed_flow_stdout.log",
-    "allowed_flow_stderr.log"
+    "manifest.json",
+    "report.json",
+    "events.jsonl",
+    "commands.txt",
+    "live_ifc_stdout.log",
+    "live_ifc_stderr.log"
   ],
   "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -321,19 +343,12 @@ file: ${script_dir}/source_confidential.txt
 hash: ${source_hash}
 label: confidential
 
-## Test 1: Denied Flow (No Declassification)
-command: node ${script_dir}/denied_flow.js
-exit_code: ${denied_exit_code}
-stdout_lines: $(wc -l < "${denied_stdout}")
-stderr_lines: $(wc -l < "${denied_stderr}")
-expected: flow_denied
-
-## Test 2: Allowed Flow (With Declassification)
-command: node ${script_dir}/allowed_flow.js
-exit_code: ${allowed_exit_code}
-stdout_lines: $(wc -l < "${allowed_stdout}")
-stderr_lines: $(wc -l < "${allowed_stderr}")
-expected: flow_allowed_with_receipt
+## Live IFC Example
+command: ${RCH_BIN} exec -- env RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} CARGO_TARGET_DIR=${target_dir} IFC_DECLASSIFICATION_OUTPUT_DIR=${live_artifacts_dir} cargo run --example live_ifc_declassification_example --no-default-features
+exit_code: ${ifc_exit_code}
+stdout_lines: $(wc -l < "${ifc_stdout}")
+stderr_lines: $(wc -l < "${ifc_stderr}")
+expected: allowed and denied live IFC scenarios complete with manifest/report artifacts
 
 ## Verification Results
 ✓ IFC flow policy discrimination verified

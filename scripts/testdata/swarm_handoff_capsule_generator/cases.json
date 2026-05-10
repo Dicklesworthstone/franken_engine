@@ -1,0 +1,281 @@
+{
+  "schema_version": "franken-engine.swarm-handoff-capsule-generator-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "clean_repo_fixture",
+      "git_status_json": {
+        "branch": "main",
+        "main_ref": "origin/main",
+        "ahead": 0,
+        "behind": 0,
+        "dirty_paths": []
+      },
+      "br_state_json": {
+        "agent_name": "RainyBadger",
+        "active_bead_id": "bd-d5kxj",
+        "ready": [],
+        "in_progress": [
+          {
+            "id": "bd-d5kxj",
+            "title": "Add deterministic swarm handoff capsule generator",
+            "status": "in_progress",
+            "assignee": "RainyBadger",
+            "priority": 2
+          }
+        ]
+      },
+      "owned_paths_json": {
+        "owned_paths": []
+      },
+      "recent_commits_json": {
+        "commits": [
+          {
+            "commit": "abc1234",
+            "subject": "Prior proof surface",
+            "author": "OtherAgent",
+            "timestamp": "2026-05-10T11:00:00Z"
+          }
+        ]
+      },
+      "rch_jobs_json": {
+        "jobs": []
+      },
+      "validation_receipts_json": {
+        "receipts": [
+          {
+            "receipt_id": "smoke-check",
+            "command_id": "jq-empty-contract",
+            "status": "passed",
+            "source_revision": "fixture-clean",
+            "transcript_digest": "sha256-clean",
+            "artifact_path": "artifacts/clean/jq.log",
+            "reuse_eligible": true
+          }
+        ]
+      },
+      "mail_health_json": {
+        "status": "ok",
+        "health_level": "green"
+      },
+      "operator_notes_json": {
+        "notes": [
+          {
+            "note_id": "note-clean",
+            "source": "operator",
+            "digest": "sha256-note-clean",
+            "body": "this body must not be copied"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "ready",
+        "owned_dirty_count": 0,
+        "unrelated_dirty_count": 0,
+        "active_rch_count": 0,
+        "mail_decision": "available",
+        "bad_receipt_count": 0
+      }
+    },
+    {
+      "case_id": "dirty_multi_agent_fixture",
+      "git_status_json": {
+        "branch": "feature/handoff",
+        "main_ref": "origin/main",
+        "ahead": 2,
+        "behind": 1,
+        "dirty_paths": [
+          {
+            "path": "scripts/swarm_handoff_capsule_generator.sh",
+            "status": "M"
+          },
+          {
+            "path": "crates/franken-engine/src/shadow_replay_verifier.rs",
+            "status": "M",
+            "owner": "CreamRobin"
+          }
+        ]
+      },
+      "br_state_json": {
+        "agent_name": "RainyBadger",
+        "active_bead_id": "bd-d5kxj",
+        "ready": [
+          {
+            "id": "bd-f7zfw",
+            "title": "Add high-core validation pressure dashboard v2",
+            "status": "open",
+            "priority": 2
+          }
+        ],
+        "in_progress": [
+          {
+            "id": "bd-d5kxj",
+            "title": "Add deterministic swarm handoff capsule generator",
+            "status": "in_progress",
+            "assignee": "RainyBadger",
+            "priority": 2
+          },
+          {
+            "id": "bd-w8jfe",
+            "title": "Add objective-to-artifact completion audit gate",
+            "status": "in_progress",
+            "assignee": "CreamRobin",
+            "priority": 1
+          }
+        ]
+      },
+      "owned_paths_json": {
+        "owned_paths": [
+          "scripts/swarm_handoff_capsule_generator.sh"
+        ]
+      },
+      "recent_commits_json": {
+        "commits": [
+          {
+            "commit": "def5678",
+            "subject": "Strengthen Parquet export format tests",
+            "author": "RainyBadger",
+            "timestamp": "2026-05-10T12:48:00Z"
+          }
+        ]
+      },
+      "rch_jobs_json": {
+        "jobs": []
+      },
+      "validation_receipts_json": {
+        "receipts": []
+      },
+      "mail_health_json": {
+        "status": "ok",
+        "health_level": "green"
+      },
+      "operator_notes_json": {
+        "notes": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "owned_dirty_count": 1,
+        "unrelated_dirty_count": 1,
+        "active_rch_count": 0,
+        "mail_decision": "available",
+        "bad_receipt_count": 0,
+        "required_reason_code": "FE-IW3-HANDOFF-UNRELATED-DIRTY"
+      }
+    },
+    {
+      "case_id": "active_rch_process_fixture",
+      "git_status_json": {
+        "branch": "feature/handoff",
+        "main_ref": "origin/main",
+        "ahead": 1,
+        "behind": 0,
+        "dirty_paths": []
+      },
+      "br_state_json": {
+        "agent_name": "RainyBadger",
+        "active_bead_id": "bd-d5kxj",
+        "ready": [],
+        "in_progress": [
+          {
+            "id": "bd-d5kxj",
+            "title": "Add deterministic swarm handoff capsule generator",
+            "status": "in_progress",
+            "assignee": "RainyBadger",
+            "priority": 2
+          }
+        ]
+      },
+      "owned_paths_json": {
+        "owned_paths": []
+      },
+      "recent_commits_json": {
+        "commits": []
+      },
+      "rch_jobs_json": {
+        "jobs": [
+          {
+            "job_id": "3068838",
+            "command": "rch exec -- cargo test",
+            "status": "running",
+            "owner": "other-agent",
+            "started_at": "2026-05-10T12:40:00Z"
+          }
+        ]
+      },
+      "validation_receipts_json": {
+        "receipts": []
+      },
+      "mail_health_json": {
+        "status": "ok",
+        "health_level": "green"
+      },
+      "operator_notes_json": {
+        "notes": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "owned_dirty_count": 0,
+        "unrelated_dirty_count": 0,
+        "active_rch_count": 1,
+        "mail_decision": "available",
+        "bad_receipt_count": 0,
+        "required_reason_code": "FE-IW3-HANDOFF-ACTIVE-RCH"
+      }
+    },
+    {
+      "case_id": "corrupted_agent_mail_fixture",
+      "git_status_json": {
+        "branch": "feature/handoff",
+        "main_ref": "origin/main",
+        "ahead": 1,
+        "behind": 0,
+        "dirty_paths": []
+      },
+      "br_state_json": {
+        "agent_name": "RainyBadger",
+        "active_bead_id": "bd-d5kxj",
+        "ready": [],
+        "in_progress": [
+          {
+            "id": "bd-d5kxj",
+            "title": "Add deterministic swarm handoff capsule generator",
+            "status": "in_progress",
+            "assignee": "RainyBadger",
+            "priority": 2
+          }
+        ]
+      },
+      "owned_paths_json": {
+        "owned_paths": []
+      },
+      "recent_commits_json": {
+        "commits": []
+      },
+      "rch_jobs_json": {
+        "jobs": []
+      },
+      "validation_receipts_json": {
+        "receipts": []
+      },
+      "mail_health_json": {
+        "status": "error",
+        "health_level": "red",
+        "recovery": {
+          "mode": "corrupt",
+          "next_action": "repair outside this proof"
+        }
+      },
+      "operator_notes_json": {
+        "notes": []
+      },
+      "expected": {
+        "decision": "degraded",
+        "owned_dirty_count": 0,
+        "unrelated_dirty_count": 0,
+        "active_rch_count": 0,
+        "mail_decision": "degraded",
+        "bad_receipt_count": 0,
+        "required_reason_code": "FE-IW3-HANDOFF-MAIL-DEGRADED"
+      }
+    }
+  ]
+}

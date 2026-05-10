@@ -327,14 +327,17 @@ fn typed_record_validation_enforces_constraints() {
 
     assert!(err.to_string().contains("expected 64-hex SHA-256 digest"));
 
-    // Test that advisory event without parent is rejected
+    // Test that advisory events cannot reference future parent sequence ids.
     let mut invalid_advisory = create_advisory_event("bd-djejh.2", 0, 1_700_000_000_500);
-    invalid_advisory.parent_event_ids = vec![999]; // Non-existent parent
+    invalid_advisory.parent_event_ids = vec![999];
 
     let err = append_journal_events(&mut storage, &[invalid_advisory], &context)
-        .expect_err("non-existent parent should be rejected");
+        .expect_err("future parent sequence id should be rejected");
 
-    assert!(err.to_string().contains("parent event 999 does not exist"));
+    assert!(
+        err.to_string()
+            .contains("parent event links must reference earlier journal sequence ids")
+    );
 }
 
 #[test]

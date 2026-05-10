@@ -11490,21 +11490,116 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "API drift: BaselineInterpreter type removed (renamed to InterpreterCore, helpers gone)"]
         fn value_to_js_value_conversion() {
-            unimplemented!("needs rewrite - BaselineInterpreter removed");
+            let cases = [
+                (Value::Undefined, crate::object_model::JsValue::Undefined),
+                (Value::Null, crate::object_model::JsValue::Null),
+                (Value::Bool(true), crate::object_model::JsValue::Bool(true)),
+                (
+                    Value::Bool(false),
+                    crate::object_model::JsValue::Bool(false),
+                ),
+                (Value::Int(42), crate::object_model::JsValue::Int(42)),
+                (
+                    Value::Float(Float64::new(3.25)),
+                    crate::object_model::JsValue::Float(3.25f64.to_bits()),
+                ),
+                (
+                    Value::Str("hello".to_string()),
+                    crate::object_model::JsValue::Str("hello".to_string()),
+                ),
+                (
+                    Value::Object(ObjectId(100)),
+                    crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(100)),
+                ),
+                (
+                    Value::Function(5),
+                    crate::object_model::JsValue::Function(5),
+                ),
+            ];
+
+            for (input, expected) in cases {
+                assert_eq!(InterpreterCore::value_to_js_value(&input), expected);
+            }
+
+            assert!(matches!(
+                InterpreterCore::value_to_js_value(&Value::Promise(7)),
+                crate::object_model::JsValue::Str(_)
+            ));
         }
 
         #[test]
-        #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_creation() {
-            unimplemented!("needs rewrite - run_module gone");
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-generator-create");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            core.execute(&module)
+                .expect("async generator function creation should succeed");
+
+            assert_eq!(core.closures.len(), 1);
+            assert_eq!(core.closures[0].function_index, 0);
+            assert!(matches!(
+                core.registers[0],
+                Value::AsyncGeneratorFunction(0)
+            ));
         }
 
         #[test]
-        #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_function_call_creates_object() {
-            unimplemented!("needs rewrite - run_module gone");
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-generator-call");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            core.execute(&module)
+                .expect("async generator function call should succeed");
+
+            assert_eq!(core.async_generators.len(), 1);
+            let created = &core.async_generators[0];
+            assert_eq!(created.function_index, 0);
+            assert_eq!(created.closure_index, Some(0));
+            assert!(matches!(created.phase, AsyncGeneratorPhase::SuspendedStart));
+            assert!(matches!(core.registers[1], Value::AsyncGeneratorObject(0)));
         }
 
         #[test]

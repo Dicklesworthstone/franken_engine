@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-request-capture.v1",
+  "case_id": "dirty_outside_claimed_lane",
+  "bead_id": "bd-ua5n2.2",
+  "source_revision": "fdf5e0e0",
+  "decision": "fail_closed",
+  "fail_closed_reasons": [
+    "dirty_outside_claimed_lane"
+  ],
+  "proof_request_count": 0,
+  "proof_requests": [],
+  "diagnostics": {
+    "br_fresh": true,
+    "agent_mail_present": true,
+    "command_candidates": [
+      "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/capture cargo check -p frankenengine-engine --tests"
+    ],
+    "dirty_paths": [
+      "crates/franken-engine/src/lib.rs"
+    ],
+    "claimed_paths": [
+      "scripts/swarm_proof_request_capture.sh"
+    ],
+    "dirty_outside_claimed_lane": [
+      null
+    ],
+    "local_fallback_observed": false
+  },
+  "artifact_paths": {
+    "proof_request_capture_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/proof_request_capture.json",
+    "proof_requests_jsonl": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/proof_requests.jsonl",
+    "run_manifest_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/run_manifest.json",
+    "events_jsonl": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/report.md",
+    "br_snapshot_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/source_br_snapshot.json",
+    "agent_mail_snapshot_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/source_agent_mail_snapshot.json",
+    "git_status_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/source_git_status.json",
+    "rch_summary_json": "[SMOKE_ROOT]/dirty_outside_claimed_lane/out/source_rch_summary.json"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

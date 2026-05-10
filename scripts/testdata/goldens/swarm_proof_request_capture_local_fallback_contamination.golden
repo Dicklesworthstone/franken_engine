@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-engine.swarm-proof-request-capture.v1",
+  "case_id": "local_fallback_contamination",
+  "bead_id": "bd-ua5n2.2",
+  "source_revision": "fdf5e0e0",
+  "decision": "fail_closed",
+  "fail_closed_reasons": [
+    "local_fallback_contamination"
+  ],
+  "proof_request_count": 0,
+  "proof_requests": [],
+  "diagnostics": {
+    "br_fresh": true,
+    "agent_mail_present": true,
+    "command_candidates": [
+      "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/capture cargo test -p frankenengine-engine --lib"
+    ],
+    "dirty_paths": [],
+    "claimed_paths": [],
+    "dirty_outside_claimed_lane": [],
+    "local_fallback_observed": true
+  },
+  "artifact_paths": {
+    "proof_request_capture_json": "[SMOKE_ROOT]/local_fallback_contamination/out/proof_request_capture.json",
+    "proof_requests_jsonl": "[SMOKE_ROOT]/local_fallback_contamination/out/proof_requests.jsonl",
+    "run_manifest_json": "[SMOKE_ROOT]/local_fallback_contamination/out/run_manifest.json",
+    "events_jsonl": "[SMOKE_ROOT]/local_fallback_contamination/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/local_fallback_contamination/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/local_fallback_contamination/out/report.md",
+    "br_snapshot_json": "[SMOKE_ROOT]/local_fallback_contamination/out/source_br_snapshot.json",
+    "agent_mail_snapshot_json": "[SMOKE_ROOT]/local_fallback_contamination/out/source_agent_mail_snapshot.json",
+    "git_status_json": "[SMOKE_ROOT]/local_fallback_contamination/out/source_git_status.json",
+    "rch_summary_json": "[SMOKE_ROOT]/local_fallback_contamination/out/source_rch_summary.json"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

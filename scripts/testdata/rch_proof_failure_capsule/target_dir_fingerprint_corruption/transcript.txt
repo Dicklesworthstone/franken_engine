@@ -1,0 +1,13 @@
+[2026-05-10T20:31:00Z] Selected worker: local-bypass-after-hdf5-gap
+Executing command remotely:
+rch exec -- env CARGO_TARGET_DIR=/tmp/local_target_franken_engine_root_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+error: could not parse/generate dep info at: /tmp/local_target_franken_engine_root_test/debug/deps/claim_publication_gate_enrichment_integration-149983411556655e.d
+
+Caused by:
+  failed to write `/tmp/local_target_franken_engine_root_test/debug/.fingerprint/frankenengine-engine-149983411556655e/dep-test-integration-test-claim_publication_gate_enrichment_integration`
+
+Caused by:
+  No such file or directory (os error 2)
+error: extern location for serde_core does not exist: /tmp/local_target_franken_engine_root_test/debug/deps/libserde_core-101b8587dd0b8291.rmeta
+Remote command finished: exit=101

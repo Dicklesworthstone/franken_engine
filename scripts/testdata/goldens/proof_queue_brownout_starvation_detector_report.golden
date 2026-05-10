@@ -1,0 +1,97 @@
+{
+  "trace_id": "trace-0c947d1871f94e75",
+  "counterfactual_id": "counterfactual-5f096bcd0d837182",
+  "policy_decision": "fail_closed",
+  "severity_counts": {
+    "error": 1,
+    "warning": 2
+  },
+  "agent_slot_shares": [
+    {
+      "agent_id": "AgentNoisy",
+      "command_count": 3,
+      "share_millionths": 600000
+    },
+    {
+      "agent_id": "AgentAlpha",
+      "command_count": 1,
+      "share_millionths": 200000
+    },
+    {
+      "agent_id": "AgentBeta",
+      "command_count": 1,
+      "share_millionths": 200000
+    }
+  ],
+  "brownout_receipts": [
+    {
+      "receipt_id": "brownout-finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+      "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+      "code": "queue_brownout_all_workers_busy",
+      "severity": "error",
+      "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+      "evidence": {
+        "command_count": 5,
+        "trace_id": "trace-0c947d1871f94e75"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+      "severity": "error",
+      "code": "queue_brownout_all_workers_busy",
+      "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+      "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+      "evidence": {
+        "command_count": 5,
+        "trace_id": "trace-0c947d1871f94e75"
+      }
+    },
+    {
+      "finding_id": "finding-low_priority_starvation-bd-p3-broad-beta",
+      "severity": "warning",
+      "code": "low_priority_starvation",
+      "message": "Low-priority proof work is deferred by counterfactual policy and needs bounded remediation.",
+      "remediation": "Bound the P3 deferral window, split the broad proof target, and schedule a retry after protected P1/P2 lanes drain.",
+      "evidence": {
+        "bead_id": "bd-p3-broad-beta",
+        "agent_id": "AgentBeta",
+        "priority": 3,
+        "policy_name": "",
+        "fairness_reason": "pressure-aware deferral",
+        "explanation": "pressure-aware deferral: high-pressure mode defers low-priority broad proof work"
+      }
+    },
+    {
+      "finding_id": "finding-unfair_agent_slot_share-agentnoisy",
+      "severity": "warning",
+      "code": "unfair_agent_slot_share",
+      "message": "One agent owns more than the configured proof queue share.",
+      "remediation": "Split the monopolizing agent work into one heavy proof slot, rotate remaining work behind other agents, and require a new counterfactual report before re-admission.",
+      "evidence": {
+        "agent_id": "AgentNoisy",
+        "share_millionths": 600000,
+        "threshold_millionths": 400000
+      }
+    }
+  ],
+  "summary": {
+    "command_count": 5,
+    "policy_count": 3,
+    "finding_count": 3,
+    "max_agent_share_millionths": 600000,
+    "all_workers_busy": true
+  },
+  "schema_version": "franken-engine.proof-queue-brownout-report.v1",
+  "brownout_id": "brownout-6aaf19c600c11031",
+  "hash_basis": {
+    "brownout_hash": "brownout-6aaf19c600c11031"
+  },
+  "artifact_paths": {
+    "brownout_report_json": "[SMOKE_ROOT]/brownout-a/brownout_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/brownout-a/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/brownout-a/commands.txt",
+    "report_md": "[SMOKE_ROOT]/brownout-a/report.md"
+  }
+}

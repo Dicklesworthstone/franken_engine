@@ -7,6 +7,7 @@ counterfactual_runner="${root_dir}/scripts/proof_economy_counterfactual_replay_r
 detector="${root_dir}/scripts/proof_queue_brownout_starvation_detector.sh"
 docs_path="${root_dir}/docs/PROOF_QUEUE_BROWNOUT_STARVATION_DETECTOR.md"
 contract_path="${root_dir}/docs/proof_queue_brownout_detector_contract_v1.json"
+golden_path="${PROOF_QUEUE_BROWNOUT_GOLDEN:-${root_dir}/scripts/testdata/goldens/proof_queue_brownout_starvation_detector_report.golden}"
 
 record_pass() {
   printf 'PASS proof-queue-brownout %s\n' "$1"
@@ -79,12 +80,58 @@ write_trace_fixture() {
   jq -n '{cache_hit_artifacts: [], required_refreshes: []}' >"${dir}/proof_cache.json"
 }
 
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_report_golden() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden_path")"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    record_pass "updated brownout report golden"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing brownout report golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "brownout report golden drift"
+    return 1
+  fi
+  record_pass "brownout report golden matches"
+}
+
 run_check() {
   local scope_file
 
   bash -n "$detector"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
+  if [[ "${UPDATE_GOLDENS:-0}" != "1" ]]; then
+    [[ -f "$golden_path" ]] || { record_failure "missing brownout report golden"; return 1; }
+    jq empty "$golden_path"
+  fi
   grep -q 'franken-engine.proof-queue-brownout-report.v1' "$docs_path"
   grep -q 'brownout_report.json' "$docs_path"
 
@@ -150,6 +197,7 @@ run_selftest() {
     and any(.findings[]; .code == "low_priority_starvation" and .evidence.bead_id == "bd-p3-broad-beta" and (.remediation | length) > 0)
   ' "${brownout_a}/brownout_report.json" >/dev/null
   record_pass "busy queue monopolization and low-priority starvation findings"
+  assert_report_golden "${brownout_a}/brownout_report.json" "$tmp_root"
 
   brownout_b="${tmp_root}/brownout-b"
   set +e

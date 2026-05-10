@@ -970,7 +970,7 @@ impl EvidenceLog {
         // is critical for bd-ldm0f. The extension_id must propagate correctly through
         // the entire receipt pipeline without corruption or loss.
         let mut receipt = DecisionReceipt {
-            extension_id,  // <- CRITICAL: extension_id propagation point for bd-ldm0f
+            extension_id, // <- CRITICAL: extension_id propagation point for bd-ldm0f
             operation_type,
             risk_score,
             action_taken,
@@ -7007,7 +7007,13 @@ impl InterpreterCore {
                 let json_str = match value {
                     Value::Undefined => "undefined".to_string(),
                     Value::Null => "null".to_string(),
-                    Value::Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+                    Value::Bool(b) => {
+                        if b {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }
+                    }
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => {
                         let val = f.inner();
@@ -7016,8 +7022,10 @@ impl InterpreterCore {
                         } else {
                             val.to_string()
                         }
-                    },
-                    Value::Str(s) => format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\")),
+                    }
+                    Value::Str(s) => {
+                        format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
+                    }
                     Value::Object(_) => "{}".to_string(), // Basic object stringification
                     Value::Function(_) => "undefined".to_string(),
                     Value::Closure(_) => "undefined".to_string(),
@@ -7041,11 +7049,7 @@ impl InterpreterCore {
         }
     }
 
-    fn optional_arg(
-        &self,
-        args: RegRange,
-        offset: u32,
-    ) -> Result<Option<Value>, InterpreterError> {
+    fn optional_arg(&self, args: RegRange, offset: u32) -> Result<Option<Value>, InterpreterError> {
         if offset >= args.count {
             return Ok(None);
         }
@@ -8147,15 +8151,19 @@ mod tests {
     /// baseline to actually dispatch VM instructions and allocate objects.
     fn test_quickjs_config() -> InterpreterConfig {
         let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities =
-            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
         config
     }
 
     fn test_v8_config() -> InterpreterConfig {
         let mut config = InterpreterConfig::v8_defaults();
-        config.granted_capabilities =
-            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
         config
     }
 
@@ -9109,10 +9117,7 @@ mod tests {
         );
 
         let popped = core
-            .dispatch_builtin_hostcall(
-                "builtin:ArrayPrototypePop",
-                RegRange { start: 0, count: 1 },
-            )
+            .dispatch_builtin_hostcall("builtin:ArrayPrototypePop", RegRange { start: 0, count: 1 })
             .unwrap();
         assert_eq!(popped, Value::Str("x".to_string()));
         assert_eq!(
@@ -11492,19 +11497,21 @@ mod tests {
         #[test]
         #[ignore = "API drift: BaselineInterpreter type removed (renamed to InterpreterCore, helpers gone)"]
         fn value_to_js_value_conversion() {
-            unimplemented!("needs rewrite - BaselineInterpreter removed");
+            panic!(
+                "legacy lib test requires rewrite before re-enable: BaselineInterpreter removed"
+            );
         }
 
         #[test]
         #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_creation() {
-            unimplemented!("needs rewrite - run_module gone");
+            panic!("legacy lib test requires rewrite before re-enable: run_module removed");
         }
 
         #[test]
         #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_function_call_creates_object() {
-            unimplemented!("needs rewrite - run_module gone");
+            panic!("legacy lib test requires rewrite before re-enable: run_module removed");
         }
 
         #[test]

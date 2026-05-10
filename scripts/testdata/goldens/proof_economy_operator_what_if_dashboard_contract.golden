@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.proof-economy-operator-dashboard-contract.v1",
+  "ui_reuse_policy": "Future interactive UI must reuse /dp/frankentui; this artifact is JSON/Markdown only.",
+  "field_inventory": [
+    {
+      "field": "queue_depth",
+      "type": "integer",
+      "source_json_pointer": "/dashboard/queue_depth",
+      "required": true
+    },
+    {
+      "field": "fair_share_score_millionths",
+      "type": "integer",
+      "source_json_pointer": "/dashboard/fair_share_score_millionths",
+      "required": true
+    },
+    {
+      "field": "p1_slo_risk",
+      "type": "string",
+      "source_json_pointer": "/dashboard/p1_slo_risk",
+      "required": true
+    },
+    {
+      "field": "brownout_state",
+      "type": "string",
+      "source_json_pointer": "/dashboard/brownout_state",
+      "required": true
+    },
+    {
+      "field": "recommended_operator_action",
+      "type": "string",
+      "source_json_pointer": "/dashboard/recommended_operator_action",
+      "required": true
+    }
+  ],
+  "what_if_id": "what-if-6bfb0597610dd653",
+  "report_json": "[SMOKE_ROOT]/what-if-a/what_if_report.json",
+  "dashboard_sample": {
+    "queue_depth": 5,
+    "fair_share_score_millionths": 666667,
+    "p1_slo_risk": "protected",
+    "brownout_state": "fail_closed",
+    "recommended_operator_action": "Pause broad proof fanout, drain protected P1/P2 work, refresh queue capacity, and rerun counterfactual replay."
+  }
+}

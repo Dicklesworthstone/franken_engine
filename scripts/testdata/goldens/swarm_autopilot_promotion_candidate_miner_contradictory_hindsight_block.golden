@@ -1,0 +1,48 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+  "bead_id": "bd-gra1z.3",
+  "source_revision": "fixture-contradictory_hindsight_block",
+  "decision": "fail_closed",
+  "truth_state": "unknown",
+  "candidate_summary": {
+    "candidate_count": 0,
+    "promotion_candidate_count": 0,
+    "stable_non_promotion_count": 0,
+    "degraded_insufficient_evidence_count": 0,
+    "required_evidence_count": 2,
+    "warehouse_row_count": 2,
+    "scenario_count": 2
+  },
+  "candidates": [],
+  "fail_closed_reasons": [
+    {
+      "code": "FE-SWARM-AUTOPILOT-PROMOTION-CONTRADICTORY-HINDSIGHT",
+      "source_id": "source_material",
+      "detail": "contradictory warehouse or hindsight outcomes block promotion truth",
+      "remediation_command": "Resolve contradictory outcomes before suggesting promotion candidates."
+    }
+  ],
+  "artifact_paths": {
+    "promotion_candidates_json": "[CASE_ROOT]/output/swarm_autopilot_promotion_candidates.json",
+    "promotion_candidate_receipts_json": "[CASE_ROOT]/output/swarm_autopilot_promotion_candidate_receipts.json",
+    "events_jsonl": "[CASE_ROOT]/output/events.jsonl",
+    "commands_txt": "[CASE_ROOT]/output/commands.txt",
+    "report_md": "[CASE_ROOT]/output/report.md",
+    "evidence_warehouse_json": "[CASE_ROOT]/evidence_warehouse.json",
+    "hindsight_chaos_scenarios_json": "[CASE_ROOT]/hindsight_chaos_scenarios.json"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "promotes_candidates_automatically": false
+  }
+}

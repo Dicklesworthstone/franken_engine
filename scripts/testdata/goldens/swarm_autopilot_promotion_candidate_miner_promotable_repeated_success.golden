@@ -1,0 +1,67 @@
+{
+  "schema_version": "franken-engine.swarm-autopilot-promotion-candidates.v1",
+  "bead_id": "bd-gra1z.3",
+  "source_revision": "fixture-promotable_repeated_success",
+  "decision": "pass",
+  "truth_state": "confirmed",
+  "candidate_summary": {
+    "candidate_count": 1,
+    "promotion_candidate_count": 1,
+    "stable_non_promotion_count": 0,
+    "degraded_insufficient_evidence_count": 0,
+    "required_evidence_count": 2,
+    "warehouse_row_count": 2,
+    "scenario_count": 2
+  },
+  "candidates": [
+    {
+      "candidate_id": "promotion-candidate-repeated-stable-advisory",
+      "candidate_type": "promotion_candidate",
+      "confidence_millionths": 850000,
+      "confidence_band": "high",
+      "required_evidence_count": 2,
+      "observed_evidence_count": 4,
+      "supporting_source_ids": [
+        "warehouse-advisory-a",
+        "warehouse-advisory-b"
+      ],
+      "supporting_scenarios": [
+        "hindsight-replay-a",
+        "hindsight-replay-b"
+      ],
+      "contradictory_outcome_reasons": [],
+      "source_artifact_paths": {
+        "commands_txt": "fixtures/warehouse/commands.txt",
+        "evidence_warehouse_json": "fixtures/warehouse/evidence_warehouse.json",
+        "run_manifest_json": "fixtures/warehouse/run_manifest.json",
+        "hindsight_chaos_scenarios_json": "fixtures/hindsight/hindsight_chaos_scenarios.json",
+        "hindsight_replay_index_json": "fixtures/hindsight/replay_index.json"
+      },
+      "recommendation": "queue for human promotion review; do not promote automatically"
+    }
+  ],
+  "fail_closed_reasons": [],
+  "artifact_paths": {
+    "promotion_candidates_json": "[CASE_ROOT]/output/swarm_autopilot_promotion_candidates.json",
+    "promotion_candidate_receipts_json": "[CASE_ROOT]/output/swarm_autopilot_promotion_candidate_receipts.json",
+    "events_jsonl": "[CASE_ROOT]/output/events.jsonl",
+    "commands_txt": "[CASE_ROOT]/output/commands.txt",
+    "report_md": "[CASE_ROOT]/output/report.md",
+    "evidence_warehouse_json": "[CASE_ROOT]/evidence_warehouse.json",
+    "hindsight_chaos_scenarios_json": "[CASE_ROOT]/hindsight_chaos_scenarios.json"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "promotes_candidates_automatically": false
+  }
+}

@@ -4556,34 +4556,10 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        // For now, return a placeholder promise that resolves to {value: undefined, done: true}
-        // Full implementation would execute the async generator body with suspension/resumption
-        let result_promise = self.promise_store.create().0;
-        let result_id = self.alloc_object_with_prototype(None)?;
-        {
-            self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-            self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-        }
-        let js_val =
-            crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id.0));
-        let label = crate::ifc_artifacts::Label::Public;
-        self.promise_store
-            .fulfill(
-                crate::promise_model::PromiseHandle(result_promise),
-                js_val,
-                label,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "promise fulfillment".into(),
-                got: format!("failed to fulfill promise: {e:?}"),
-            })?;
-
-        // Mark as completed for simplicity
-        let async_gen = &mut self.async_generators[gen_id as usize];
-        async_gen.phase = AsyncGeneratorPhase::Completed;
-
-        Ok(Value::Promise(result_promise))
+        Err(InterpreterError::TypeError {
+            expected: "implemented async generator body execution".into(),
+            got: "async generator .next() body execution is not implemented".into(),
+        })
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -26678,13 +26654,53 @@ mod tests {
         let mut core = InterpreterCore::new(config, "class-constructor-test");
 
         // Test basic constructor functionality
-        // This should work with current implementation since it just creates a function
-        let module = test_module(vec![
-            // Test that new Foo() creates an object
-            Ir3Instruction::Halt, // TODO: implement proper test
-        ]);
+        // Create a constructor function and test instantiation
+        let module = test_module_with_functions(
+            vec![
+                // Load constructor function into r0
+                Ir3Instruction::LoadConstant {
+                    dst: 0,
+                    value: Value::Function(0), // First function in table
+                },
+                // Create instance with no arguments
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1,
+                },
+                // Store result for verification
+                Ir3Instruction::Halt,
+            ],
+            vec![crate::ir_contract::Ir3FunctionDesc {
+                id: 0,
+                name: "TestClass".to_string(),
+                param_count: 0,
+                instructions: vec![
+                    // Constructor should return undefined (object created implicitly)
+                    Ir3Instruction::LoadConstant {
+                        dst: 0,
+                        value: Value::Undefined,
+                    },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+            }],
+        );
         let result = core.execute(&module);
         assert!(result.is_ok());
+
+        // Verify that Construct created an object instance
+        let constructed_value = core.read_reg(1).unwrap();
+        match constructed_value {
+            Value::Object(obj_id) => {
+                // Verify object has correct constructor property
+                let obj = &core.heap[obj_id.0 as usize];
+                assert_eq!(obj.constructor_function, Some(0));
+            }
+            _ => panic!(
+                "Construct should create an object, got {:?}",
+                constructed_value
+            ),
+        }
     }
 
     #[test]
@@ -26698,10 +26714,88 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "class-method-test");
 
-        // TODO: implement test for method on prototype
-        let module = test_module(vec![Ir3Instruction::Halt]);
+        // Test that class methods are accessible on instances through prototype chain
+        let module = test_module_with_functions(
+            vec![
+                // Load constructor function
+                Ir3Instruction::LoadConstant {
+                    dst: 0,
+                    value: Value::Function(0), // Constructor
+                },
+                // Create instance
+                Ir3Instruction::Construct {
+                    callee: 0,
+                    args: RegRange { start: 1, count: 0 },
+                    dst: 1, // Instance in r1
+                },
+                // Load method function
+                Ir3Instruction::LoadConstant {
+                    dst: 2,
+                    value: Value::Function(1), // Method
+                },
+                // Get constructor's prototype and set method on it
+                Ir3Instruction::GetProperty {
+                    object: 0,
+                    key: "prototype".to_string(),
+                    dst: 3,
+                },
+                Ir3Instruction::SetProperty {
+                    object: 3,
+                    key: "testMethod".to_string(),
+                    value: 2,
+                },
+                // Call method on instance - should find it via prototype chain
+                Ir3Instruction::GetProperty {
+                    object: 1,
+                    key: "testMethod".to_string(),
+                    dst: 4,
+                },
+                // Verify method is found
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                // Constructor function
+                crate::ir_contract::Ir3FunctionDesc {
+                    id: 0,
+                    name: "TestClass".to_string(),
+                    param_count: 0,
+                    instructions: vec![
+                        Ir3Instruction::LoadConstant {
+                            dst: 0,
+                            value: Value::Undefined,
+                        },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                },
+                // Method function
+                crate::ir_contract::Ir3FunctionDesc {
+                    id: 1,
+                    name: "testMethod".to_string(),
+                    param_count: 0,
+                    instructions: vec![
+                        Ir3Instruction::LoadConstant {
+                            dst: 0,
+                            value: Value::String("method called".to_string()),
+                        },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                },
+            ],
+        );
         let result = core.execute(&module);
         assert!(result.is_ok());
+
+        // Verify the method is accessible on the instance
+        let method_value = core.read_reg(4).unwrap();
+        match method_value {
+            Value::Function(1) => {
+                // Method correctly retrieved from prototype
+            }
+            _ => panic!(
+                "Method should be accessible via prototype chain, got {:?}",
+                method_value
+            ),
+        }
     }
 
     #[test]
@@ -26715,10 +26809,95 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "class-extends-test");
 
-        // TODO: implement test for inheritance
-        let module = test_module(vec![Ir3Instruction::Halt]);
+        // Test that class extends properly sets up prototype chain
+        let module = test_module_with_functions(
+            vec![
+                // Create parent class constructor
+                Ir3Instruction::LoadConstant {
+                    dst: 0,
+                    value: Value::Function(0), // Parent constructor
+                },
+                // Create child class constructor
+                Ir3Instruction::LoadConstant {
+                    dst: 1,
+                    value: Value::Function(1), // Child constructor
+                },
+                // Set up inheritance: Child.prototype = Object.create(Parent.prototype)
+                // Get Parent.prototype
+                Ir3Instruction::GetProperty {
+                    object: 0,
+                    key: "prototype".to_string(),
+                    dst: 2, // Parent prototype
+                },
+                // Get Child.prototype
+                Ir3Instruction::GetProperty {
+                    object: 1,
+                    key: "prototype".to_string(),
+                    dst: 3, // Child prototype
+                },
+                // Set Child.prototype.__proto__ = Parent.prototype
+                Ir3Instruction::SetProperty {
+                    object: 3,
+                    key: "__proto__".to_string(),
+                    value: 2,
+                },
+                // Create child instance
+                Ir3Instruction::Construct {
+                    callee: 1,
+                    args: RegRange { start: 4, count: 0 },
+                    dst: 4, // Child instance
+                },
+                // Verify inheritance by checking prototype chain
+                Ir3Instruction::GetProperty {
+                    object: 4,
+                    key: "__proto__".to_string(),
+                    dst: 5, // Should be Child.prototype
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![
+                // Parent constructor
+                crate::ir_contract::Ir3FunctionDesc {
+                    id: 0,
+                    name: "ParentClass".to_string(),
+                    param_count: 0,
+                    instructions: vec![
+                        Ir3Instruction::LoadConstant {
+                            dst: 0,
+                            value: Value::Undefined,
+                        },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                },
+                // Child constructor
+                crate::ir_contract::Ir3FunctionDesc {
+                    id: 1,
+                    name: "ChildClass".to_string(),
+                    param_count: 0,
+                    instructions: vec![
+                        Ir3Instruction::LoadConstant {
+                            dst: 0,
+                            value: Value::Undefined,
+                        },
+                        Ir3Instruction::Return { value: 0 },
+                    ],
+                },
+            ],
+        );
         let result = core.execute(&module);
         assert!(result.is_ok());
+
+        // Verify prototype chain is correctly established
+        let child_instance = core.read_reg(4).unwrap();
+        let child_proto = core.read_reg(5).unwrap();
+        match (child_instance, child_proto) {
+            (Value::Object(instance_id), Value::Object(proto_id)) => {
+                let instance = &core.heap[instance_id.0 as usize];
+                assert_eq!(instance.constructor_function, Some(1)); // Child constructor
+                // The prototype chain should be set up correctly
+            }
+            _ => panic!("Inheritance setup should create proper prototype chain"),
+        }
     }
 
     #[test]
@@ -28048,6 +28227,35 @@ mod tests {
                 Value::Promise(_) => {}
                 _ => panic!("Expected Promise value, got {:?}", result),
             }
+        }
+
+        #[test]
+        fn async_generator_next_fails_closed_for_suspended_body() {
+            let mut core = test_interpreter();
+            core.async_generators.push(AsyncGeneratorObject {
+                function_index: 0,
+                closure_index: None,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncGeneratorPhase::SuspendedStart,
+            });
+
+            let err = core
+                .async_generator_next(&test_module(vec![]), 0, Value::Undefined)
+                .expect_err("suspended async generator body execution is unsupported");
+
+            assert_eq!(
+                err,
+                InterpreterError::TypeError {
+                    expected: "implemented async generator body execution".into(),
+                    got: "async generator .next() body execution is not implemented".into(),
+                }
+            );
+            assert!(matches!(
+                core.async_generators[0].phase,
+                AsyncGeneratorPhase::SuspendedStart
+            ));
         }
 
         #[test]

@@ -19,7 +19,13 @@
 )]
 
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
+use frankenengine_engine::module_async_evaluation::{
+    AsyncEvalEventType, AsyncModuleEvaluator, AsyncModulePhase,
+};
+use frankenengine_engine::module_live_binding::LiveBindingMap;
+use frankenengine_engine::object_model::JsValue;
 use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser, ParseResult};
+use frankenengine_engine::promise_model::PromiseHandle;
 use frankenengine_engine::static_semantics::{StaticErrorKind, analyze};
 
 fn parse(source: &str, goal: ParseGoal) -> ParseResult<SyntaxTree> {
@@ -126,23 +132,31 @@ fn tla_with_complex_expressions() {
 
 #[test]
 fn module_with_tla_has_async_phase() {
-    // This test verifies that a module containing top-level await
-    // is detected as requiring async evaluation
     let source = "const data = await fetchData();";
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
 
-    // Static analysis should pass
     let result = analyze(&tree);
     assert!(result.passed());
 
-    // TODO: When module evaluation is implemented, verify that
-    // modules with TLA are marked as async
+    let mut evaluator = AsyncModuleEvaluator::with_defaults();
+    evaluator.register_module("app.js", true, &[], Some(PromiseHandle(1)));
+    evaluator
+        .suspend_at_top_level_await("app.js", PromiseHandle(2))
+        .expect("registered module should suspend at top-level await");
+
+    let state = &evaluator.states()["app.js"];
+    assert_eq!(state.phase, AsyncModulePhase::Suspended);
+    assert!(state.has_top_level_await);
+    assert_eq!(state.evaluation_promise, Some(PromiseHandle(1)));
+    assert_eq!(state.suspensions.len(), 1);
+    assert!(evaluator.witness_events().iter().any(|event| {
+        event.module_specifier == "app.js"
+            && event.event_type == AsyncEvalEventType::TopLevelAwaitSuspended
+    }));
 }
 
 #[test]
 fn module_without_tla_remains_sync() {
-    // This test verifies that modules without top-level await
-    // remain synchronous
     let source = r#"
         export const value = 42;
         export function greet(name) {
@@ -151,24 +165,25 @@ fn module_without_tla_remains_sync() {
     "#;
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
 
-    // Static analysis should pass
     let result = analyze(&tree);
     assert!(result.passed());
 
-    // TODO: When module evaluation is implemented, verify that
-    // modules without TLA remain synchronous
+    let mut evaluator = AsyncModuleEvaluator::with_defaults();
+    evaluator.register_module("sync.js", false, &[], None);
+
+    let state = &evaluator.states()["sync.js"];
+    assert_eq!(state.phase, AsyncModulePhase::Synchronous);
+    assert!(!state.has_top_level_await);
+    assert_eq!(state.evaluation_promise, None);
+    assert!(state.suspensions.is_empty());
 }
 
 // ---------------------------------------------------------------------------
-// Import ordering tests (placeholders for now)
+// Import ordering and rejection propagation tests
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tla_import_ordering_placeholder() {
-    // TODO: Implement test for import ordering when module B uses TLA
-    // and module A imports from B. A should wait for B's evaluation.
-
-    // For now, just verify that the parser can handle imports
+fn tla_import_ordering_waits_for_async_dependency() {
     let source = r#"
         import { helper } from './helper.js';
         const data = await fetchData();
@@ -180,13 +195,41 @@ fn tla_import_ordering_placeholder() {
         result.passed(),
         "Module with imports and TLA should parse and validate"
     );
+
+    let mut evaluator = AsyncModuleEvaluator::with_defaults();
+    evaluator.register_module("helper.js", true, &[], Some(PromiseHandle(10)));
+    evaluator
+        .suspend_at_top_level_await("helper.js", PromiseHandle(11))
+        .expect("async dependency should suspend at top-level await");
+    evaluator.register_module("app.js", false, &["helper.js".to_string()], None);
+
+    let app = &evaluator.states()["app.js"];
+    assert_eq!(app.phase, AsyncModulePhase::AwaitingDependencies);
+    assert!(app.pending_dependencies.contains("helper.js"));
+    assert!(evaluator.witness_events().iter().any(|event| {
+        event.module_specifier == "app.js"
+            && event.event_type == AsyncEvalEventType::DependencySuspended
+            && event.detail.contains("awaiting=helper.js")
+    }));
+
+    let resumable = evaluator
+        .settle_module("helper.js")
+        .expect("settled dependency should notify importers");
+    assert!(resumable.contains(&"app.js".to_string()));
+    evaluator
+        .resume_evaluation("app.js")
+        .expect("importer should resume after async dependency settles");
+    evaluator
+        .settle_module("app.js")
+        .expect("importer should settle after resumption");
+    assert_eq!(
+        evaluator.states()["app.js"].phase,
+        AsyncModulePhase::Settled
+    );
 }
 
 #[test]
-fn tla_error_propagation_placeholder() {
-    // TODO: Implement test for error propagation from TLA modules
-
-    // For now, just verify parsing of error handling with TLA
+fn tla_error_propagates_to_importers() {
     let source = r#"
         let result;
         try {
@@ -202,6 +245,41 @@ fn tla_error_propagation_placeholder() {
         result.passed(),
         "Module with TLA error handling should parse and validate"
     );
+
+    let mut evaluator = AsyncModuleEvaluator::with_defaults();
+    evaluator.register_module("risky.js", true, &[], Some(PromiseHandle(20)));
+    evaluator.register_module("consumer.js", false, &["risky.js".to_string()], None);
+
+    let mut live_bindings = LiveBindingMap::new();
+    let linkage = evaluator
+        .reject_module(
+            "risky.js",
+            &JsValue::Str("top-level await rejected".to_string()),
+            &mut live_bindings,
+        )
+        .expect("rejected dependency should produce a linkage record");
+
+    assert_eq!(linkage.rejected_module, "risky.js");
+    assert!(
+        linkage
+            .linked_modules
+            .iter()
+            .any(|module| module.module_specifier == "consumer.js")
+    );
+    assert!(linkage.transitive_closure.contains("consumer.js"));
+    let consumer = &evaluator.states()["consumer.js"];
+    assert_eq!(consumer.phase, AsyncModulePhase::Rejected);
+    assert!(
+        consumer
+            .rejection_reason_description
+            .as_deref()
+            .is_some_and(|reason| reason.contains("top-level await rejected"))
+    );
+    assert!(evaluator.witness_events().iter().any(|event| {
+        event.module_specifier == "consumer.js"
+            && event.event_type == AsyncEvalEventType::RejectionPropagated
+            && event.detail.contains("from=risky.js")
+    }));
 }
 
 // ---------------------------------------------------------------------------

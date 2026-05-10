@@ -1,0 +1,110 @@
+{
+  "schema_version": "franken-engine.swarm-validation-admission-recommender-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "idle_focused_lane",
+      "bead_id": "bd-7eefz",
+      "agent_id": "RainyBadger",
+      "command_class": "focused_lib_test",
+      "ps_snapshot": "",
+      "br_snapshot": {
+        "issues": [
+          {
+            "id": "bd-7eefz",
+            "status": "in_progress",
+            "assignee": "RainyBadger"
+          }
+        ]
+      },
+      "dirty_files": {
+        "files": []
+      },
+      "expected": {
+        "exit_code": 0,
+        "recommendation": "run_focused_rch_now",
+        "reason_code": "idle_focused_proof_lane_available",
+        "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_7eefz_focused_lib_test"
+      }
+    },
+    {
+      "case_id": "active_all_targets_wait",
+      "bead_id": "bd-zy517",
+      "agent_id": "RainyBadger",
+      "command_class": "package_all_targets",
+      "ps_snapshot": "1803252 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS=-C linker=cc CARGO_BUILD_JOBS=1 cargo check --all-targets\n1804555 rustc --crate-name frankenengine_engine\n",
+      "br_snapshot": {
+        "issues": [
+          {
+            "id": "bd-zy517",
+            "status": "in_progress",
+            "assignee": "RainyBadger"
+          }
+        ]
+      },
+      "dirty_files": {
+        "files": []
+      },
+      "expected": {
+        "exit_code": 75,
+        "recommendation": "wait_existing_all_targets",
+        "reason_code": "active_all_targets_in_progress",
+        "recommended_target_dir": "/tmp/rch_target_franken_engine_bd_zy517_all_targets"
+      }
+    },
+    {
+      "case_id": "missing_process_snapshot_blocks",
+      "bead_id": "bd-missing",
+      "agent_id": "RainyBadger",
+      "command_class": "focused_lib_test",
+      "omit_ps_snapshot": true,
+      "br_snapshot": {
+        "issues": [
+          {
+            "id": "bd-missing",
+            "status": "in_progress",
+            "assignee": "RainyBadger"
+          }
+        ]
+      },
+      "dirty_files": {
+        "files": []
+      },
+      "expected": {
+        "exit_code": 42,
+        "recommendation": "validation_blocked",
+        "reason_code": "blocked_by_missing_or_conflicting_evidence",
+        "finding_reason": "process_inspection_unavailable"
+      }
+    },
+    {
+      "case_id": "dirty_overlap_blocks",
+      "bead_id": "bd-overlap",
+      "agent_id": "RainyBadger",
+      "command_class": "focused_integration_test",
+      "ps_snapshot": "",
+      "br_snapshot": {
+        "issues": [
+          {
+            "id": "bd-overlap",
+            "status": "in_progress",
+            "assignee": "RainyBadger"
+          }
+        ]
+      },
+      "dirty_files": {
+        "files": [
+          {
+            "path": "crates/franken-engine/tests/shadow_handoff_contracts_integration.rs",
+            "overlap": true
+          }
+        ]
+      },
+      "expected": {
+        "exit_code": 42,
+        "recommendation": "validation_blocked",
+        "reason_code": "blocked_by_missing_or_conflicting_evidence",
+        "finding_reason": "dirty_overlap"
+      }
+    }
+  ]
+}

@@ -3,8 +3,13 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
+# shellcheck disable=SC1091
 source "${repo_root}/scripts/lib/proof_artifact_contract.sh"
 
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${SIGNED_DECISION_RECEIPT_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_signed_decision_receipt_$(date +%s)_$$}"
 artifact_root="${SIGNED_DECISION_RECEIPT_ARTIFACT_ROOT:-${repo_root}/artifacts/signed_decision_receipt}"
 run_id="${SIGNED_DECISION_RECEIPT_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 run_dir="${SIGNED_DECISION_RECEIPT_RUN_DIR:-${artifact_root}/${run_id}}"
@@ -16,10 +21,40 @@ mkdir -p "${run_dir}"
 : >"${events_path}"
 printf './examples/02_signed_decision_receipt/verify.sh\n' >"${commands_path}"
 
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+  echo "Required rch binary not found: $RCH_BIN" >&2
+  exit 2
+fi
+
+run_decision_demo() {
+  local receipt_output="$1"
+  local stderr_output="$2"
+
+  printf 'rch exec -- env RUSTUP_TOOLCHAIN=%q CARGO_BUILD_JOBS=%q CARGO_TARGET_DIR=%q cargo run --bin franken-decision-demo\n' \
+    "$RUSTUP_TOOLCHAIN" "$CARGO_BUILD_JOBS" "$CARGO_TARGET_DIR" >>"${commands_path}"
+
+  (
+    cd "${repo_root}"
+    "$RCH_BIN" exec -- env \
+      "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+      "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+      "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+      cargo run --bin franken-decision-demo
+  ) >"${receipt_output}" 2>"${stderr_output}"
+  local status=$?
+
+  if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${receipt_output}" "${stderr_output}"; then
+    echo "rch reported local fallback; refusing local execution" >&2
+    return 125
+  fi
+
+  return "${status}"
+}
+
 cd "${repo_root}"
 start_ms="$(date +%s%3N)"
 set +e
-cargo run --bin franken-decision-demo >"${receipt_path}" 2>"${run_dir}/cargo.stderr"
+run_decision_demo "${receipt_path}" "${run_dir}/cargo.stderr"
 cargo_exit=$?
 set -e
 end_ms="$(date +%s%3N)"
@@ -46,7 +81,7 @@ failure_count=0
 if [[ "${cargo_exit}" -ne 0 ]]; then
   decision="failed"
   severity="error"
-  remediation="cargo run failed; inspect cargo.stderr and rerun the example verifier."
+  remediation="rch-backed cargo run failed; inspect cargo.stderr and rerun the example verifier."
   failure_count=1
 elif [[ "${validation_exit}" -ne 0 ]]; then
   decision="failed"
@@ -64,7 +99,7 @@ jq -nc \
   --arg event_name "signed_decision_receipt.example_verified" \
   --arg severity "${severity}" \
   --arg step_id "signed-decision-receipt" \
-  --arg command_id "cargo-run-franken-decision-demo" \
+  --arg command_id "rch-cargo-run-franken-decision-demo" \
   --arg artifact_path "${receipt_path_rel}" \
   --arg artifact_sha256 "${receipt_sha256}" \
   --argjson exit_code "${exit_code}" \

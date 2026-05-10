@@ -20,6 +20,10 @@ OBSERVED_RESULTS_FILE="${TEST262_GATE_OBSERVED_RESULTS_FILE:-}"
 RUN_DATE="${TEST262_GATE_RUN_DATE:-$(date -u +%Y-%m-%d)}"
 WORKER_COUNT="${TEST262_GATE_WORKER_COUNT:-8}"
 ACKNOWLEDGE_PASS_REGRESSION="${TEST262_GATE_ACKNOWLEDGE_PASS_REGRESSION:-false}"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${TEST262_GATE_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_test262_gate_$(date +%s)_$$}"
 
 echo "🚦 Test262 Regression Gate"
 echo "Mode: $GATE_MODE"
@@ -36,6 +40,24 @@ fail() {
 require_command() {
     local command_name="$1"
     command -v "$command_name" >/dev/null 2>&1 || fail "Required command not found: $command_name"
+}
+
+run_rch_runner() {
+    local log_file="$1"
+    shift
+
+    "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        "$@" > >(tee "$log_file") 2>&1
+    local status=$?
+
+    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$log_file"; then
+        fail "rch reported local fallback while running franken_test262_runner"
+    fi
+
+    return "$status"
 }
 
 # Function to parse TOML value (simple implementation)
@@ -87,7 +109,7 @@ if [[ ! -f "$HIGH_WATER_MARK_FILE" && "$GATE_MODE" != "update" ]]; then
 
     # Run actual Test262 runner to get baseline measurements instead of fake values
     echo "🧪 Running Test262 baseline measurement..."
-    require_command cargo
+    require_command "$RCH_BIN"
     require_command jq
 
     BASELINE_OUTPUT_ROOT="$ARTIFACTS_DIR/baseline_test262_runner"
@@ -106,7 +128,7 @@ if [[ ! -f "$HIGH_WATER_MARK_FILE" && "$GATE_MODE" != "update" ]]; then
         --worker-count "$WORKER_COUNT"
     )
 
-    if ! "${BASELINE_RUNNER_ARGS[@]}" > >(tee "$BASELINE_LOG") 2>&1; then
+    if ! run_rch_runner "$BASELINE_LOG" "${BASELINE_RUNNER_ARGS[@]}"; then
         fail "Baseline franken_test262_runner failed; cannot create initial high-water mark with real data"
     fi
 
@@ -291,7 +313,7 @@ EOF
 
     "update")
         echo "🔄 Updating Test262 high-water mark from runner results..."
-        require_command cargo
+        require_command "$RCH_BIN"
         require_command jq
         require_command awk
 
@@ -322,7 +344,7 @@ EOF
         printf '%q ' "${RUNNER_ARGS[@]}" > "$ARTIFACTS_DIR/update_command.txt"
         echo "" >> "$ARTIFACTS_DIR/update_command.txt"
 
-        if ! "${RUNNER_ARGS[@]}" > >(tee "$RUNNER_LOG") 2>&1; then
+        if ! run_rch_runner "$RUNNER_LOG" "${RUNNER_ARGS[@]}"; then
             fail "franken_test262_runner failed; leaving $HIGH_WATER_MARK_FILE unchanged"
         fi
 

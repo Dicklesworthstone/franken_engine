@@ -6,8 +6,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
-
 use frankenengine_engine::shadow_evidence_journal::{
     SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, ShadowEvidenceJournalAppend, append_journal_events,
     export_journal, import_journal_export, read_all_events, read_events_for_bead,
@@ -16,7 +14,8 @@ use frankenengine_engine::storage_adapter::{EventContext, InMemoryStorageAdapter
 use frankenengine_engine::typed_persistence_models::{
     ShadowEvidenceJournalEntry, TypedStoreRecord,
 };
-use serde_json::json;
+use serde_json::{Map, Value, json};
+use sha2::Digest;
 
 fn test_context() -> EventContext {
     EventContext::new(
@@ -27,17 +26,36 @@ fn test_context() -> EventContext {
     .expect("test context creation should succeed")
 }
 
+fn canonical_payload_hash(payload: &Value) -> String {
+    let payload_json =
+        serde_json::to_string(&canonicalize_json(payload)).expect("payload serialization");
+    format!(
+        "sha256:{}",
+        hex::encode(sha2::Sha256::digest(payload_json.as_bytes()))
+    )
+}
+
+fn canonicalize_json(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut ordered = Map::new();
+            for (key, value) in map.iter().collect::<std::collections::BTreeMap<_, _>>() {
+                ordered.insert(key.clone(), canonicalize_json(value));
+            }
+            Value::Object(ordered)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize_json).collect()),
+        _ => value.clone(),
+    }
+}
+
 fn create_source_snapshot(bead_id: &str, timestamp_ms: i64) -> ShadowEvidenceJournalAppend {
     let payload = json!({
         "schema_version": "franken-engine.shadow-source.v1",
         "beads": [{"id": bead_id, "status": "in_progress"}],
         "agent_status": "active"
     });
-    let payload_json = serde_json::to_string(&payload).expect("payload serialization");
-    let payload_hash = format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(payload_json.as_bytes()))
-    );
+    let payload_hash = canonical_payload_hash(&payload);
 
     ShadowEvidenceJournalAppend {
         bead_id: bead_id.to_string(),
@@ -70,11 +88,7 @@ fn create_advisory_event(
         "confidence": 0.85,
         "reasoning": "high queue pressure detected"
     });
-    let payload_json = serde_json::to_string(&payload).expect("payload serialization");
-    let payload_hash = format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(payload_json.as_bytes()))
-    );
+    let payload_hash = canonical_payload_hash(&payload);
 
     ShadowEvidenceJournalAppend {
         bead_id: bead_id.to_string(),
@@ -107,11 +121,7 @@ fn create_replay_checkpoint(
         "event_count": 2,
         "retention_floor": parent_event_id
     });
-    let payload_json = serde_json::to_string(&payload).expect("payload serialization");
-    let payload_hash = format!(
-        "sha256:{}",
-        hex::encode(sha2::Sha256::digest(payload_json.as_bytes()))
-    );
+    let payload_hash = canonical_payload_hash(&payload);
 
     ShadowEvidenceJournalAppend {
         bead_id: bead_id.to_string(),
@@ -178,6 +188,7 @@ fn read_events_returns_deterministic_order() {
 
     let appended = append_journal_events(&mut storage, &[source1, source2], &context)
         .expect("batch append should succeed");
+    assert_eq!(appended.len(), 2);
 
     let all_events =
         read_all_events(&mut storage, &context).expect("reading all events should succeed");

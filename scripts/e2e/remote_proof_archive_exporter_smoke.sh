@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 exporter="${root_dir}/scripts/remote_proof_archive_exporter.sh"
+golden_dir="${REMOTE_PROOF_ARCHIVE_EXPORTER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS remote-proof-archive-exporter %s\n' "$1"
@@ -12,10 +13,87 @@ record_failure() {
   printf 'FAIL remote-proof-archive-exporter %s\n' "$1" >&2
 }
 
+golden_case_names() {
+  cat <<'EOF'
+archive-export-success
+missing-replay-critical
+restore-verify-success
+tampered-archive-fails
+EOF
+}
+
 write_json() {
   local path="$1"
   local text="$2"
   printf '%s\n' "$text" >"$path"
+}
+
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local report_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/remote_proof_archive_exporter_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/remote_proof_archive_exporter_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
 }
 
 assert_outputs() {
@@ -73,6 +151,7 @@ run_export_case() {
     return 1
   fi
   assert_outputs "$case_dir" "$expected_exit"
+  assert_case_golden "$case_name" "${case_dir}/restore_verification_report.json" "$tmp_root"
 }
 
 run_verify_case() {
@@ -109,6 +188,7 @@ run_verify_case() {
     return 1
   fi
   assert_outputs "$case_dir" "$expected_exit"
+  assert_case_golden "$case_name" "${case_dir}/restore_verification_report.json" "$tmp_root"
 }
 
 run_selftest() {
@@ -193,6 +273,7 @@ run_check() {
   bash -n "${BASH_SOURCE[0]}"
   shellcheck -x "$exporter" "${BASH_SOURCE[0]}"
   jq empty "${root_dir}/docs/remote_proof_archive_exporter_contract_v1.json" >/dev/null
+  goldens_shape_ok
   record_pass "shell syntax, shellcheck, and contract JSON"
 }
 

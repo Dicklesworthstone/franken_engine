@@ -7182,6 +7182,15 @@ impl InterpreterCore {
         let constructor = self.read_reg(rhs)?;
         let func_idx = match constructor {
             Value::Function(func_idx) => func_idx,
+            Value::Closure(closure_id) => {
+                let closure = self.closures.get(closure_id as usize).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    }
+                })?;
+                closure.function_index
+            }
             other => {
                 return Err(InterpreterError::TypeError {
                     expected: "function".to_string(),

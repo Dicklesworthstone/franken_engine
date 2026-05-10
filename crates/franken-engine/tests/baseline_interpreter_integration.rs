@@ -2021,10 +2021,14 @@ fn instanceof_requires_function_rhs() {
 }
 
 #[test]
-#[ignore = "needs IR3 LoadFunction instruction to populate callee register"]
 fn instanceof_returns_false_for_primitive_lhs_across_lanes() {
     let m = test_module_with_functions(
         vec![
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
             Ir3Instruction::LoadInt { dst: 1, value: 7 },
             Ir3Instruction::InstanceOf {
                 dst: 2,
@@ -2048,10 +2052,14 @@ fn instanceof_returns_false_for_primitive_lhs_across_lanes() {
 }
 
 #[test]
-#[ignore = "needs IR3 LoadFunction instruction to populate callee register"]
 fn constructed_object_is_instanceof_constructor_across_lanes() {
     let m = test_module_with_functions(
         vec![
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
             Ir3Instruction::Construct {
                 callee: 0,
                 args: RegRange { start: 1, count: 0 },
@@ -10773,52 +10781,20 @@ fn test_math_random_deterministic_replay() {
 // This commit removed duplicate implementations and should retain fail-closed behavior
 
 #[test]
-#[ignore = "stale eval-shim expectation: Array.prototype.some now fails closed until callback dispatch is implemented."]
-fn test_array_prototype_some_current_simplified_behavior() {
-    // Regression test for commit de0c1906: Current simplified Array.some behavior
-    // NOTE: This tests the CURRENT simplified implementation that checks for truthy values
-    // without actual callback invocation. When proper callback support is added,
-    // these tests should be updated to expect callback-based behavior.
+fn test_array_prototype_some_current_fail_closed_behavior() {
     let mut interpreter = make_default_interpreter();
-
-    // Empty array returns false
-    assert_eq!(
-        interpreter.evaluate_expression("[].some()").unwrap(),
-        Value::Bool(false),
-        "Empty array should return false"
-    );
-
-    // Array with truthy values returns true (current simplified behavior)
-    assert_eq!(
-        interpreter.evaluate_expression("[1, 2, 3].some()").unwrap(),
-        Value::Bool(true),
-        "Array with truthy values should return true"
-    );
-
-    // Array with only falsy values returns false
-    assert_eq!(
-        interpreter
-            .evaluate_expression("[false, 0, '', null, undefined].some()")
-            .unwrap(),
-        Value::Bool(false),
-        "Array with only falsy values should return false"
-    );
-
-    // Array with mixed truthy/falsy returns true (finds first truthy)
-    assert_eq!(
-        interpreter
-            .evaluate_expression("[0, false, 1].some()")
-            .unwrap(),
-        Value::Bool(true),
-        "Array with some truthy values should return true"
-    );
-
-    // Non-array objects return false
-    assert_eq!(
-        interpreter.evaluate_expression("({}).some()").unwrap(),
-        Value::Bool(false),
-        "Non-array objects should return false"
-    );
+    for expression in [
+        "[].some()",
+        "[1, 2, 3].some()",
+        "[false, 0, '', null, undefined].some()",
+        "[0, false, 1].some()",
+        "({}).some()",
+    ] {
+        assert!(
+            interpreter.evaluate_expression(expression).is_err(),
+            "Array.prototype.some without callback must fail closed for {expression}"
+        );
+    }
 }
 
 #[test]
@@ -10848,67 +10824,37 @@ fn test_array_prototype_some_sparse_arrays() {
 }
 
 #[test]
-#[ignore = "stale eval-shim expectation: Array.prototype.some now fails closed until callback dispatch is implemented."]
-fn test_array_prototype_some_edge_cases() {
-    // Test edge cases in current simplified implementation
+fn test_array_prototype_some_edge_cases_fail_closed_until_callback_dispatch() {
     let mut interpreter = make_default_interpreter();
-
-    // String values
-    assert_eq!(
-        interpreter.evaluate_expression("['hello'].some()").unwrap(),
-        Value::Bool(true),
-        "Non-empty string should be truthy"
-    );
-
-    assert_eq!(
-        interpreter.evaluate_expression("[''].some()").unwrap(),
-        Value::Bool(false),
-        "Empty string should be falsy"
-    );
-
-    // Numeric values including edge cases
-    assert_eq!(
-        interpreter.evaluate_expression("[NaN].some()").unwrap(),
-        Value::Bool(false),
-        "NaN should be falsy"
-    );
-
-    assert_eq!(
-        interpreter.evaluate_expression("[-1].some()").unwrap(),
-        Value::Bool(true),
-        "Negative numbers should be truthy"
-    );
-
-    assert_eq!(
-        interpreter
-            .evaluate_expression("[Infinity].some()")
-            .unwrap(),
-        Value::Bool(true),
-        "Infinity should be truthy"
-    );
+    for expression in [
+        "['hello'].some()",
+        "[''].some()",
+        "[NaN].some()",
+        "[-1].some()",
+        "[Infinity].some()",
+    ] {
+        assert!(
+            interpreter.evaluate_expression(expression).is_err(),
+            "Array.prototype.some edge case must fail closed for {expression}"
+        );
+    }
 }
 
 #[test]
-#[ignore = "stale eval-shim expectation: Array.prototype.some now fails closed until callback dispatch is implemented."]
 fn test_array_prototype_some_duplicate_removal_verification() {
     // Regression test to verify duplicate implementations were completely removed
     // This test exists to catch any reintroduction of duplicate implementations
     let mut interpreter = make_default_interpreter();
 
-    // Test consistent behavior across different array types
-    let test_cases = vec![
-        ("[1, 2, 3].some()", Value::Bool(true)),
-        ("[0, false, ''].some()", Value::Bool(false)),
-        ("[null, undefined, 0].some()", Value::Bool(false)),
-        ("['test', 42].some()", Value::Bool(true)),
-    ];
-
-    for (expression, expected) in test_cases {
-        let result = interpreter.evaluate_expression(expression).unwrap();
-        assert_eq!(
-            result, expected,
-            "Expression '{}' should consistently return {:?}",
-            expression, expected
+    for expression in [
+        "[1, 2, 3].some()",
+        "[0, false, ''].some()",
+        "[null, undefined, 0].some()",
+        "['test', 42].some()",
+    ] {
+        assert!(
+            interpreter.evaluate_expression(expression).is_err(),
+            "Array.prototype.some must fail closed consistently for {expression}"
         );
     }
 
@@ -10923,8 +10869,8 @@ fn test_array_prototype_some_duplicate_removal_verification() {
     );
 
     assert!(
-        complex_result.is_ok(),
-        "Complex some() calls should not cause internal conflicts"
+        complex_result.is_err(),
+        "Complex some() calls must fail closed before callback dispatch is implemented"
     );
 }
 

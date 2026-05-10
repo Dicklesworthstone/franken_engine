@@ -495,12 +495,18 @@ fn enrichment_module_node_hash_sensitivity_to_content() {
     node2.content_hash = ContentHash::compute(b"different content");
 
     // Same node_id, different content → different hash
-    assert_ne!(node1.compute_hash(), node2.compute_hash());
+    assert_ne!(
+        node1.compute_hash().expect("node1 hash should compute"),
+        node2.compute_hash().expect("node2 hash should compute")
+    );
 
     // Same content → same hash
     node1.content_hash = ContentHash::compute(b"same");
     node2.content_hash = ContentHash::compute(b"same");
-    assert_eq!(node1.compute_hash(), node2.compute_hash());
+    assert_eq!(
+        node1.compute_hash().expect("node1 hash should compute"),
+        node2.compute_hash().expect("node2 hash should compute")
+    );
 }
 
 // =========================================================================
@@ -960,7 +966,10 @@ fn enrichment_dependency_edge_hash_condition_order_sensitive() {
         conditions: vec!["node".to_string(), "import".to_string()],
     };
     // Different condition order → different hash
-    assert_ne!(edge1.compute_hash(), edge2.compute_hash());
+    assert_ne!(
+        edge1.compute_hash().expect("edge1 hash should compute"),
+        edge2.compute_hash().expect("edge2 hash should compute")
+    );
 }
 
 // =========================================================================

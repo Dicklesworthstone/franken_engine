@@ -333,6 +333,7 @@ pub mod quarantine_mesh_gate;
 pub mod quarantine_propagation;
 pub mod queueing_admission_control;
 pub mod quickening_feedback_lattice;
+pub mod rch_validation_telemetry;
 pub mod react_compilation_pipeline;
 pub mod react_compile_operator_surface;
 pub mod react_compile_run_parity;

@@ -1,0 +1,141 @@
+{
+  "schema_version": "franken-engine.all-target-cargo-proof-shard-planner-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "fixture_workspace_targets",
+      "cargo_metadata_json": {
+        "packages": [
+          {
+            "name": "frankenengine-engine",
+            "id": "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0",
+            "targets": [
+              {
+                "name": "frankenengine_engine",
+                "kind": ["lib"],
+                "crate_types": ["lib"]
+              },
+              {
+                "name": "frankenctl",
+                "kind": ["bin"],
+                "crate_types": ["bin"]
+              },
+              {
+                "name": "scheduler_replay_metamorphic",
+                "kind": ["test"],
+                "crate_types": ["bin"]
+              }
+            ]
+          }
+        ],
+        "workspace_members": [
+          "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0"
+        ]
+      },
+      "prior_rch_failures_json": {
+        "failures": []
+      },
+      "expected": {
+        "decision": "pass",
+        "lanes": ["bin_test", "check", "clippy", "doctest", "integration_test", "lib_test"],
+        "shard_count": 6,
+        "stale_diagnostics": 0
+      }
+    },
+    {
+      "case_id": "clippy_only_lint_fixture",
+      "cargo_metadata_json": {
+        "packages": [
+          {
+            "name": "frankenengine-engine",
+            "id": "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0",
+            "targets": [
+              {
+                "name": "frankenengine_engine",
+                "kind": ["lib"],
+                "crate_types": ["lib"]
+              }
+            ]
+          }
+        ],
+        "workspace_members": [
+          "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0"
+        ]
+      },
+      "prior_rch_failures_json": {
+        "failures": [
+          {
+            "package": "frankenengine-engine",
+            "lane": "clippy",
+            "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_old CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p frankenengine-engine --all-targets -- -D warnings",
+            "first_error_kind": "clippy_lint"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "pass",
+        "lanes": ["check", "clippy", "doctest", "lib_test"],
+        "shard_count": 4,
+        "clippy_prior_failure_matches": 1,
+        "stale_diagnostics": 0
+      }
+    },
+    {
+      "case_id": "malformed_metadata_fixture",
+      "cargo_metadata_json": {
+        "workspace_members": []
+      },
+      "prior_rch_failures_json": {
+        "failures": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "required_reason_code": "FE-IW3-SHARD-MALFORMED-METADATA",
+        "shard_count": 0,
+        "stale_diagnostics": 0
+      }
+    },
+    {
+      "case_id": "stale_target_fixture",
+      "cargo_metadata_json": {
+        "packages": [
+          {
+            "name": "frankenengine-engine",
+            "id": "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0",
+            "targets": [
+              {
+                "name": "frankenengine_engine",
+                "kind": ["lib"],
+                "crate_types": ["lib"]
+              },
+              {
+                "name": "current_integration",
+                "kind": ["test"],
+                "crate_types": ["bin"]
+              }
+            ]
+          }
+        ],
+        "workspace_members": [
+          "path+file:///repo/crates/franken-engine#frankenengine-engine@0.1.0"
+        ]
+      },
+      "prior_rch_failures_json": {
+        "failures": [
+          {
+            "package": "frankenengine-engine",
+            "target_name": "removed_integration",
+            "target_kind": "test",
+            "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_removed CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test removed_integration -- --nocapture"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "degraded",
+        "required_reason_code": "FE-IW3-SHARD-STALE-TARGET",
+        "lanes": ["check", "clippy", "doctest", "integration_test", "lib_test"],
+        "shard_count": 5,
+        "stale_diagnostics": 1
+      }
+    }
+  ]
+}

@@ -82,6 +82,8 @@ crates/franken-engine/tests/artifacts/test262_release_gate/
 
 # Editor/script backup files
 *.backup
+*.orig
+*.rej
 
 # UBS (Ultimate Bug Scanner) output
 ubs_*.txt

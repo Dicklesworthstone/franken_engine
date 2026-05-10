@@ -4,23 +4,58 @@ set -euo pipefail
 # Fleet simulation E2E test script - RC-5.1
 # Tests N in-process engine instances with deterministic message bus
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+RUN_TIMESTAMP="$(date +%s)"
+RCH_BIN="${RCH_BIN:-rch}"
+CARGO_TARGET_DIR="${FLEET_SIMULATION_E2E_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_fleet_simulation_${RUN_TIMESTAMP}_$$}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 LOG="artifacts/test_fleet_simulation_$(date +%s).jsonl"
 ARTIFACTS="artifacts/fleet_simulation_evidence/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$(dirname "$LOG")"
 mkdir -p "$ARTIFACTS"
 
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "Required rch binary not found: $RCH_BIN" >&2
+    exit 2
+fi
+
 echo "=== Fleet Simulation Test ==="
 echo "Artifacts directory: $ARTIFACTS"
 echo "Log file: $LOG"
+echo "RCH target dir: $CARGO_TARGET_DIR"
 
-echo '{"suite":"fleet_simulation","started":"'$(date -Iseconds)'"}' >> "$LOG"
+printf '{"suite":"fleet_simulation","started":"%s"}\n' "$(date -Iseconds)" >> "$LOG"
+
+run_rch_cargo_test() {
+    local step_name="$1"
+    shift
+
+    local output_file="${ARTIFACTS}/${step_name}.rch.log"
+
+    "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        cargo test "$@" 2>&1 | tee "$output_file"
+    local status=${PIPESTATUS[0]}
+
+    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$output_file"; then
+        echo "rch reported local fallback for $step_name; refusing local execution" >&2
+        return 125
+    fi
+
+    return "$status"
+}
 
 run_fleet_test() {
     local test_name=$1
     echo "Running fleet simulation test: $test_name"
 
-    # Run cargo test for the specific fleet simulator tests
-    if cargo test --lib -p frankenengine-engine fleet_simulator::tests::${test_name} -- --nocapture 2>&1; then
+    # Run cargo test for the specific fleet simulator tests through rch.
+    if run_rch_cargo_test "fleet_${test_name}" --lib -p frankenengine-engine "fleet_simulator::tests::${test_name}" -- --nocapture; then
         test_exit=0
     else
         test_exit=1
@@ -77,7 +112,7 @@ test9_exit=$?
 
 # Additional integration test: Full fleet simulation scenario
 echo "Test 10: Full simulation scenario"
-if cargo test --lib -p frankenengine-engine fleet_simulator -- --nocapture 2>&1; then
+if run_rch_cargo_test "full_simulation" --lib -p frankenengine-engine fleet_simulator -- --nocapture; then
     test10_exit=0
 else
     test10_exit=1
@@ -153,7 +188,8 @@ EOF
 
 echo "{\"demo\":\"fleet_simulation_created\",\"instances\":10,\"time\":\"$(date -Iseconds)\"}" >> "$LOG"
 
-echo '{"suite":"fleet_simulation","completed":"'$(date -Iseconds)'","total":'$total_tests',"passed":'$passed_tests',"failed":'$failed_tests'}' >> "$LOG"
+printf '{"suite":"fleet_simulation","completed":"%s","total":%s,"passed":%s,"failed":%s}\n' \
+    "$(date -Iseconds)" "$total_tests" "$passed_tests" "$failed_tests" >> "$LOG"
 
 if [ $failed_tests -eq 0 ]; then
     echo "✅ All fleet simulation tests passed!"

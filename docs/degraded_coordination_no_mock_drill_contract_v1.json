@@ -1,0 +1,91 @@
+{
+  "schema_version": "franken-engine.degraded-coordination-no-mock-drill-contract.v1",
+  "bead_id": "bd-y59d4",
+  "surface_id": "degraded_coordination_no_mock_drill",
+  "drill_script": "scripts/e2e/degraded_coordination_no_mock_drill.sh",
+  "fixture_bundle": "scripts/testdata/degraded_coordination_no_mock_drill/cases.json",
+  "composed_scripts": [
+    "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+    "scripts/swarm_handoff_capsule_generator.sh",
+    "scripts/high_core_validation_pressure_dashboard.sh",
+    "scripts/objective_artifact_completion_audit_gate.sh"
+  ],
+  "depends_on": [
+    "bd-dl3q2",
+    "bd-d5kxj",
+    "bd-f7zfw",
+    "bd-w8jfe"
+  ],
+  "modes": [
+    "fixture",
+    "replay",
+    "check",
+    "selftest"
+  ],
+  "required_outputs": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "drill_report.json"
+  ],
+  "required_step_log_globs": [
+    "scenarios/*/steps/*/stdout.log",
+    "scenarios/*/steps/*/stderr.log"
+  ],
+  "required_component_artifacts": [
+    "mail_outage_continuity_bridge.json",
+    "swarm_handoff_capsule.json",
+    "high_core_validation_pressure_dashboard.json",
+    "completion_audit_report.json"
+  ],
+  "scenario_expectations": [
+    {
+      "scenario_id": "agent_mail_red_zero_ready_dirty_active_rch",
+      "overall_decision": "degraded_continue_source_only",
+      "bridge_decision": "degraded",
+      "handoff_decision": "degraded",
+      "dashboard_recommendation": "split_file_blocker_bead",
+      "completion_decision": "complete",
+      "required_reason_codes": [
+        "FE-IW3-MAIL-DB-CORRUPT",
+        "FE-IW3-HANDOFF-MAIL-DEGRADED",
+        "FE-IW3-HANDOFF-UNRELATED-DIRTY",
+        "FE-IW3-HANDOFF-ACTIVE-RCH",
+        "HCVD2-ZERO-READY-BEADS",
+        "HCVD2-MAIL-DEGRADED"
+      ]
+    }
+  ],
+  "mutation_policy": {
+    "fixture_fed": true,
+    "replay_verification_only": true,
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "mutates_br": false,
+    "claims_beads": false,
+    "closes_beads": false,
+    "queries_live_workers": false,
+    "mutates_live_workers": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "runs_heavy_local_cargo": false,
+    "reruns_component_commands_during_replay": false
+  },
+  "forbidden_executed_command_patterns": [
+    "(^|[[:space:]])cargo([[:space:]]|$)",
+    "rch[[:space:]]+exec",
+    "send_message",
+    "file_reservation_paths|release_file_reservations|force_release_file_reservation",
+    "am[[:space:]]+doctor[[:space:]]+repair",
+    "worker[[:space:]]+(kill|stop|restart)"
+  ],
+  "verification_commands": [
+    "jq empty docs/degraded_coordination_no_mock_drill_contract_v1.json scripts/testdata/degraded_coordination_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/degraded_coordination_no_mock_drill.sh",
+    "shellcheck -x scripts/e2e/degraded_coordination_no_mock_drill.sh",
+    "TMPDIR=/data/tmp bash scripts/e2e/degraded_coordination_no_mock_drill.sh check",
+    "TMPDIR=/data/tmp bash scripts/e2e/degraded_coordination_no_mock_drill.sh selftest"
+  ]
+}

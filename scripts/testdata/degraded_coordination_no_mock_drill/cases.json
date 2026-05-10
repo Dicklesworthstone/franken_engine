@@ -1,0 +1,244 @@
+{
+  "schema_version": "franken-engine.degraded-coordination-no-mock-drill-fixtures.v1",
+  "cases": [
+    {
+      "scenario_id": "agent_mail_red_zero_ready_dirty_active_rch",
+      "description": "Agent Mail is corrupt, br has no ready work for proof admission, the worktree has owned and unrelated dirty paths, and one RCH proof is already active.",
+      "sources": {
+        "bridge": {
+          "mail_health_json": {
+            "status": "red",
+            "healthy": false,
+            "errors": [
+              "sqlite schema missing required tables: projects, agents, messages, message_recipients"
+            ],
+            "recovery_mode": "corrupt"
+          },
+          "mail_bootstrap_json": {
+            "ok": false,
+            "status": "failed",
+            "error": "A database error occurred"
+          },
+          "agent_profiles_json": {
+            "agents": [
+              {
+                "name": "RainyBadger",
+                "last_active_ts": "2026-05-10T15:05:00Z"
+              }
+            ]
+          },
+          "br_in_progress_json": {
+            "issues": [
+              {
+                "id": "bd-y59d4",
+                "title": "Add no-mock degraded coordination drill and replay gate",
+                "status": "in_progress",
+                "assignee": "RainyBadger",
+                "updated_at": "2026-05-10T15:05:00Z"
+              },
+              {
+                "id": "bd-observed",
+                "title": "Observed dependency repair",
+                "status": "in_progress",
+                "assignee": "CreamRobin",
+                "updated_at": "2026-05-10T15:01:00Z"
+              }
+            ]
+          },
+          "git_status_json": {
+            "dirty_paths": [
+              {
+                "path": "scripts/e2e/degraded_coordination_no_mock_drill.sh",
+                "status": "M",
+                "owner": "RainyBadger"
+              },
+              {
+                "path": "crates/franken-engine/src/shadow_replay_verifier.rs",
+                "status": "M",
+                "owner": "CreamRobin"
+              }
+            ]
+          },
+          "file_reservations_json": {
+            "reservations": []
+          }
+        },
+        "handoff": {
+          "git_status_json": {
+            "branch": "stash-recovery-2026-05-09",
+            "main_ref": "origin/main",
+            "ahead": 3,
+            "behind": 0,
+            "dirty_paths": [
+              {
+                "path": "scripts/e2e/degraded_coordination_no_mock_drill.sh",
+                "status": "M",
+                "owner": "RainyBadger"
+              },
+              {
+                "path": "crates/franken-engine/src/shadow_replay_verifier.rs",
+                "status": "M",
+                "owner": "CreamRobin"
+              }
+            ]
+          },
+          "br_state_json": {
+            "agent_name": "RainyBadger",
+            "active_bead_id": "bd-y59d4",
+            "ready": [],
+            "in_progress": [
+              {
+                "id": "bd-y59d4",
+                "title": "Add no-mock degraded coordination drill and replay gate",
+                "status": "in_progress",
+                "assignee": "RainyBadger",
+                "priority": 2
+              },
+              {
+                "id": "bd-observed",
+                "title": "Observed dependency repair",
+                "status": "in_progress",
+                "assignee": "CreamRobin",
+                "priority": 2
+              }
+            ]
+          },
+          "owned_paths_json": {
+            "owned_paths": [
+              "scripts/e2e/degraded_coordination_no_mock_drill.sh",
+              "docs/degraded_coordination_no_mock_drill_contract_v1.json",
+              "docs/DEGRADED_COORDINATION_NO_MOCK_DRILL.md",
+              "scripts/testdata/degraded_coordination_no_mock_drill/cases.json"
+            ]
+          },
+          "recent_commits_json": {
+            "commits": [
+              {
+                "commit": "18692d22",
+                "subject": "Add Agent Mail outage bridge artifacts",
+                "author": "RainyBadger",
+                "timestamp": "2026-05-10T15:12:00Z"
+              }
+            ]
+          },
+          "rch_jobs_json": {
+            "jobs": [
+              {
+                "job_id": "rch-1542",
+                "command": "rch exec -- cargo check --all-targets",
+                "status": "running",
+                "owner": "CreamRobin",
+                "started_at": "2026-05-10T15:00:00Z"
+              }
+            ]
+          },
+          "validation_receipts_json": {
+            "receipts": [
+              {
+                "receipt_id": "bridge-smoke",
+                "command_id": "bridge-selftest",
+                "status": "passed",
+                "source_revision": "18692d22",
+                "transcript_digest": "sha256:bridge",
+                "reuse_eligible": true
+              }
+            ]
+          },
+          "mail_health_json": {
+            "status": "red",
+            "health_level": "red",
+            "recovery": {
+              "mode": "corrupt"
+            }
+          },
+          "operator_notes_json": {
+            "notes": [
+              {
+                "note_id": "objective-2026-05-10",
+                "source": "operator",
+                "digest": "sha256:broad-objective"
+              }
+            ]
+          }
+        },
+        "dashboard": {
+          "resource_envelope_json": {
+            "schema_version": "franken-engine.swarm-resource-envelope.v1",
+            "decision": "pass",
+            "memory_state": "nominal",
+            "disk_state": "nominal",
+            "rch_state": "nominal"
+          },
+          "rch_jobs_json": {
+            "schema_version": "franken-engine.rch-job-snapshot.v1",
+            "active_count": 1,
+            "max_active": 4,
+            "jobs": [
+              {
+                "job_id": "rch-1542",
+                "command": "rch exec -- cargo check --all-targets",
+                "status": "running",
+                "owner": "CreamRobin"
+              }
+            ]
+          },
+          "process_counts_json": {
+            "schema_version": "franken-engine.process-counts.v1",
+            "cargo_count": 0,
+            "rustc_count": 0,
+            "max_local_compile_count": 2
+          },
+          "proof_shard_plan_json": {
+            "schema_version": "franken-engine.proof-shard-plan.v1",
+            "decision": "ready",
+            "stale": false,
+            "shards": [
+              {
+                "shard_id": "script-only-degraded-coordination-proof",
+                "status": "ready",
+                "cost_class": "cheap"
+              }
+            ]
+          },
+          "br_readiness_json": {
+            "schema_version": "franken-engine.br-readiness.v1",
+            "ready_count": 0,
+            "open_count": 0,
+            "ready": []
+          },
+          "mail_health_json": {
+            "status": "red",
+            "health_level": "red",
+            "recovery": {
+              "mode": "corrupt"
+            }
+          }
+        }
+      },
+      "expected": {
+        "overall_decision": "degraded_continue_source_only",
+        "bridge_decision": "degraded",
+        "bridge_soft_lock_count": 2,
+        "bridge_reason_codes": [
+          "FE-IW3-MAIL-DB-CORRUPT",
+          "FE-IW3-MAIL-BOOTSTRAP-FAILED"
+        ],
+        "handoff_decision": "degraded",
+        "handoff_ready_count": 0,
+        "handoff_active_rch_count": 1,
+        "handoff_reason_codes": [
+          "FE-IW3-HANDOFF-MAIL-DEGRADED",
+          "FE-IW3-HANDOFF-UNRELATED-DIRTY",
+          "FE-IW3-HANDOFF-ACTIVE-RCH"
+        ],
+        "dashboard_recommendation": "split_file_blocker_bead",
+        "dashboard_pressure_level": "blocked",
+        "dashboard_reason_codes": [
+          "HCVD2-ZERO-READY-BEADS",
+          "HCVD2-MAIL-DEGRADED"
+        ],
+        "completion_decision": "complete"
+      }
+    }
+  ]
+}

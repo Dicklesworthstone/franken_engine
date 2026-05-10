@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 recommender="${root_dir}/scripts/stale_lock_stalled_bead_recommender.sh"
 docs_path="${root_dir}/docs/STALE_LOCK_STALLED_BEAD_RECOMMENDER.md"
+golden_dir="${STALE_LOCK_RECOMMENDER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS stale-lock-stalled-bead-recommender %s\n' "$1"
@@ -11,6 +12,16 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL stale-lock-stalled-bead-recommender %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+active-owner
+stale-owner-no-reservations
+stale-owner-recent-git-activity
+missing-agent-mail-degraded-mode
+high-priority-contact-first
+EOF
 }
 
 write_empty_agent_mail() {
@@ -22,10 +33,79 @@ write_empty_agent_mail() {
   jq -n '{activity:[]}' >"${fixture_dir}/git-empty.json"
 }
 
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local report_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/stale_lock_stalled_bead_recommender_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/stale_lock_stalled_bead_recommender_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
+}
+
 run_case() {
   local case_name="$1"
   local output_dir="$2"
-  shift 2
+  local tmp_root="$3"
+  shift 3
   local output
   local exit_code
 
@@ -54,6 +134,7 @@ run_case() {
   test -s "${output_dir}/events.jsonl"
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/report.md"
+  assert_case_golden "$case_name" "${output_dir}/stale_lock_recommendations.json" "$tmp_root"
   record_pass "${case_name} produced recommendation packet"
 }
 
@@ -83,6 +164,7 @@ run_check() {
   bash -n "$recommender"
   bash -n "${BASH_SOURCE[0]}"
   test -f "$docs_path"
+  goldens_shape_ok
   record_pass "bash syntax and docs exist"
 
   scope_file="$(mktemp "${TMPDIR:-/tmp}/stale-lock-rch-scope.XXXXXX")"
@@ -110,7 +192,7 @@ run_selftest() {
 
   jq -n '{issues:[{id:"bd-active", title:"active owner", priority:2, assignee:"ActiveAgent"}]}' >"${fixture_dir}/active-in-progress.json"
   jq -n '{agents:[{name:"ActiveAgent", last_active_epoch_seconds:99900}]}' >"${fixture_dir}/active-agents.json"
-  run_case "active-owner" "${tmp_root}/active-owner" \
+  run_case "active-owner" "${tmp_root}/active-owner" "$tmp_root" \
     --in-progress-json "${fixture_dir}/active-in-progress.json" \
     --agent-profiles-json "${fixture_dir}/active-agents.json" \
     --thread-timestamps-json "${fixture_dir}/threads-empty.json" \
@@ -124,7 +206,7 @@ run_selftest() {
 
   jq -n '{issues:[{id:"bd-stale", title:"stale owner", priority:2, assignee:"OldAgent"}]}' >"${fixture_dir}/stale-in-progress.json"
   jq -n '{agents:[{name:"OldAgent", last_active_epoch_seconds:80000}]}' >"${fixture_dir}/stale-agents.json"
-  run_case "stale-owner-no-reservations" "${tmp_root}/stale-owner" \
+  run_case "stale-owner-no-reservations" "${tmp_root}/stale-owner" "$tmp_root" \
     --in-progress-json "${fixture_dir}/stale-in-progress.json" \
     --agent-profiles-json "${fixture_dir}/stale-agents.json" \
     --thread-timestamps-json "${fixture_dir}/threads-empty.json" \
@@ -140,7 +222,7 @@ run_selftest() {
   jq -n '{issues:[{id:"bd-git", title:"recent git", priority:2, assignee:"OldGit"}]}' >"${fixture_dir}/git-in-progress.json"
   jq -n '{agents:[{name:"OldGit", last_active_epoch_seconds:80000}]}' >"${fixture_dir}/git-agents.json"
   jq -n '{activity:[{bead_id:"bd-git", agent_id:"OldGit", touched_epoch_seconds:99950, path:"scripts/owned-by-oldgit.sh"}]}' >"${fixture_dir}/git-recent.json"
-  run_case "stale-owner-recent-git-activity" "${tmp_root}/recent-git" \
+  run_case "stale-owner-recent-git-activity" "${tmp_root}/recent-git" "$tmp_root" \
     --in-progress-json "${fixture_dir}/git-in-progress.json" \
     --agent-profiles-json "${fixture_dir}/git-agents.json" \
     --thread-timestamps-json "${fixture_dir}/threads-empty.json" \
@@ -153,7 +235,7 @@ run_selftest() {
   assert_recommendation "$report" bd-git contact_first_recent_git_activity
 
   jq -n '{issues:[{id:"bd-degraded", title:"missing mail", priority:2, assignee:"MissingMail"}]}' >"${fixture_dir}/degraded-in-progress.json"
-  run_case "missing-agent-mail-degraded-mode" "${tmp_root}/degraded" \
+  run_case "missing-agent-mail-degraded-mode" "${tmp_root}/degraded" "$tmp_root" \
     --in-progress-json "${fixture_dir}/degraded-in-progress.json" \
     --now-epoch-seconds "$now" \
     --stale-owner-seconds 1000
@@ -164,7 +246,7 @@ run_selftest() {
 
   jq -n '{issues:[{id:"bd-p1", title:"high priority", priority:1, assignee:"OldP1"}]}' >"${fixture_dir}/p1-in-progress.json"
   jq -n '{agents:[{name:"OldP1", last_active_epoch_seconds:80000}]}' >"${fixture_dir}/p1-agents.json"
-  run_case "high-priority-contact-first" "${tmp_root}/high-priority" \
+  run_case "high-priority-contact-first" "${tmp_root}/high-priority" "$tmp_root" \
     --in-progress-json "${fixture_dir}/p1-in-progress.json" \
     --agent-profiles-json "${fixture_dir}/p1-agents.json" \
     --thread-timestamps-json "${fixture_dir}/threads-empty.json" \

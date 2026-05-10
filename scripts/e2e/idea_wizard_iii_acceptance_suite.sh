@@ -213,7 +213,7 @@ run_suite() {
     run_step "br-show-${bead_id}" br show "$bead_id"
   done < <(child_bead_ids)
   write_closeout_summary
-  jq -e 'all(.state == "closed")' "$closeout_evidence_path" >/dev/null
+  jq -s -e 'all(.[]; .state == "closed")' "$closeout_evidence_path" >/dev/null
 
   run_step "all-target-cargo-proof-shard-planner-selftest" \
     bash "${root_dir}/scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh" selftest

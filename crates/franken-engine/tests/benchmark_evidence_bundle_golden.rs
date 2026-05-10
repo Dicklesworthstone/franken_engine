@@ -10,8 +10,8 @@ use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
-    BenchmarkRun, BundleConfig, EvidenceBundle, EnvironmentSnapshot,
-    ParityTarget, ParityVerdict, WorkloadCategory, WorkloadProvenance, generate_report,
+    BenchmarkRun, BundleConfig, EnvironmentSnapshot, EvidenceBundle, ParityTarget, ParityVerdict,
+    WorkloadCategory, WorkloadProvenance, generate_report,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -104,7 +104,7 @@ fn create_benchmark_run(
     run_id: &str,
     workload_id: &str,
     duration_us: u64,
-    iteration: u32
+    iteration: u32,
 ) -> BenchmarkRun {
     BenchmarkRun {
         run_id: run_id.into(),
@@ -122,7 +122,7 @@ fn create_benchmark_run(
 fn create_parity_verdict(
     workload_id: &str,
     target: ParityTarget,
-    ratio_millionths: u64
+    ratio_millionths: u64,
 ) -> ParityVerdict {
     ParityVerdict {
         workload_id: workload_id.into(),
@@ -139,32 +139,48 @@ fn create_deterministic_bundle() -> EvidenceBundle {
     let mut bundle = EvidenceBundle::new("test-bundle-001".into(), epoch(42));
 
     // Add workload provenances in deterministic order
-    bundle.add_provenance(create_workload_provenance("micro-001", WorkloadCategory::Micro))
+    bundle
+        .add_provenance(create_workload_provenance(
+            "micro-001",
+            WorkloadCategory::Micro,
+        ))
         .unwrap();
-    bundle.add_provenance(create_workload_provenance("app-001", WorkloadCategory::Application))
+    bundle
+        .add_provenance(create_workload_provenance(
+            "app-001",
+            WorkloadCategory::Application,
+        ))
         .unwrap();
 
     // Add benchmark runs in deterministic order
-    bundle.add_run(create_benchmark_run("run-001", "micro-001", 1500, 1))
+    bundle
+        .add_run(create_benchmark_run("run-001", "micro-001", 1500, 1))
         .unwrap();
-    bundle.add_run(create_benchmark_run("run-002", "micro-001", 1450, 2))
+    bundle
+        .add_run(create_benchmark_run("run-002", "micro-001", 1450, 2))
         .unwrap();
-    bundle.add_run(create_benchmark_run("run-003", "app-001", 15000, 1))
+    bundle
+        .add_run(create_benchmark_run("run-003", "app-001", 15000, 1))
         .unwrap();
-    bundle.add_run(create_benchmark_run("run-004", "app-001", 14800, 2))
+    bundle
+        .add_run(create_benchmark_run("run-004", "app-001", 14800, 2))
         .unwrap();
 
     // Add parity verdicts
-    bundle.add_parity_verdict(create_parity_verdict(
-        "micro-001",
-        ParityTarget::NodeJs,
-        950_000 // 0.95 ratio
-    )).unwrap();
-    bundle.add_parity_verdict(create_parity_verdict(
-        "app-001",
-        ParityTarget::Deno,
-        1_050_000 // 1.05 ratio
-    )).unwrap();
+    bundle
+        .add_parity_verdict(create_parity_verdict(
+            "micro-001",
+            ParityTarget::NodeJs,
+            950_000, // 0.95 ratio
+        ))
+        .unwrap();
+    bundle
+        .add_parity_verdict(create_parity_verdict(
+            "app-001",
+            ParityTarget::Deno,
+            1_050_000, // 1.05 ratio
+        ))
+        .unwrap();
 
     // Seal bundle to prevent further modifications
     bundle.seal().unwrap();
@@ -197,8 +213,8 @@ fn golden_bundle_report_deterministic_output() {
     let report = generate_report(&bundle, &config);
 
     // Serialize to JSON with consistent formatting
-    let report_json = serde_json::to_string_pretty(&report)
-        .expect("BundleReport should be JSON serializable");
+    let report_json =
+        serde_json::to_string_pretty(&report).expect("BundleReport should be JSON serializable");
 
     // Assert against golden snapshot
     assert_golden("bundle_report_output", &report_json);

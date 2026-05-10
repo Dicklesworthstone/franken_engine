@@ -1,0 +1,147 @@
+{
+  "source_revision": "fixture-rev",
+  "input_statuses": {
+    "br_ready": "provided",
+    "br_in_progress": "provided",
+    "agent_mail_reservations": "provided",
+    "resource_lease_plans": "provided",
+    "proof_cache_plan": "provided",
+    "resident_bundle_report": "provided",
+    "no_mock_drill_report": "provided"
+  },
+  "degraded_mode": false,
+  "agents": [
+    {
+      "agent_id": "AgentAlpha",
+      "sources": []
+    },
+    {
+      "agent_id": "AgentBeta",
+      "sources": []
+    },
+    {
+      "agent_id": "AgentGamma",
+      "sources": []
+    }
+  ],
+  "bead_rows": [
+    {
+      "bead_id": "bd-active-gamma",
+      "title": "Active proof lane",
+      "priority": 2,
+      "status": "in_progress",
+      "assignee": "AgentGamma"
+    },
+    {
+      "bead_id": "bd-p1-proof-alpha",
+      "title": "P1 focused proof",
+      "priority": 1,
+      "status": "open",
+      "assignee": null
+    },
+    {
+      "bead_id": "bd-p3-broad-beta",
+      "title": "P3 broad validation",
+      "priority": 3,
+      "status": "open",
+      "assignee": null
+    }
+  ],
+  "reservation_rows": [
+    {
+      "path_pattern": "crates/franken-engine/src/runtime.rs",
+      "agent_id": "AgentGamma",
+      "bead_id": "bd-active-gamma",
+      "exclusive": true
+    },
+    {
+      "path_pattern": "docs/PROOF.md",
+      "agent_id": "AgentAlpha",
+      "bead_id": "bd-p1-proof-alpha",
+      "exclusive": true
+    }
+  ],
+  "command_rows": [
+    {
+      "agent_id": "AgentAlpha",
+      "bead_id": "bd-p1-proof-alpha",
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/alpha cargo test -p frankenengine-engine --test focused -- --nocapture",
+      "target_dir": "[RCH_TARGET]/alpha",
+      "lease_decision": "admit",
+      "estimated_cpu_slots": 4,
+      "memory_class": "large"
+    },
+    {
+      "agent_id": "AgentBeta",
+      "bead_id": "bd-p3-broad-beta",
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/beta cargo check --all-targets",
+      "target_dir": "[RCH_TARGET]/beta",
+      "lease_decision": "defer",
+      "estimated_cpu_slots": 8,
+      "memory_class": "xlarge"
+    }
+  ],
+  "proof_rows": [
+    {
+      "source": "no_mock_drill_report",
+      "artifact_id": "batch_manifest_json",
+      "artifact_path": "artifacts/batch_manifest.json",
+      "role": "batch_manifest_json",
+      "decision": "pass"
+    },
+    {
+      "source": "no_mock_drill_report",
+      "artifact_id": "resident_remote_proof_no_mock_drill_report_json",
+      "artifact_path": "artifacts/resident_remote_proof_no_mock_drill_report.json",
+      "role": "resident_remote_proof_no_mock_drill_report_json",
+      "decision": "pass"
+    },
+    {
+      "source": "proof_cache_plan",
+      "artifact_id": "proof-alpha",
+      "artifact_path": "artifacts/proofs/proof-alpha.json",
+      "role": "replay-critical",
+      "decision": "cache_hit"
+    },
+    {
+      "source": "proof_cache_plan",
+      "artifact_id": "proof-beta",
+      "artifact_path": "artifacts/proofs/proof-beta.json",
+      "role": "broad-check",
+      "decision": "refresh_required"
+    },
+    {
+      "source": "resident_bundle_report",
+      "artifact_id": "bundle_report_json",
+      "artifact_path": "artifacts/bundle_report.json",
+      "role": "bundle_report_json",
+      "decision": "pass"
+    },
+    {
+      "source": "resident_bundle_report",
+      "artifact_id": "phase_manifest_json",
+      "artifact_path": "artifacts/phase_manifest.json",
+      "role": "phase_manifest_json",
+      "decision": "pass"
+    }
+  ],
+  "findings": [],
+  "summary": {
+    "agent_count": 3,
+    "bead_count": 3,
+    "reservation_count": 2,
+    "command_count": 2,
+    "proof_artifact_count": 6
+  },
+  "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+  "trace_id": "trace-9a0ce855f938741e",
+  "hash_basis": {
+    "trace_hash": "trace-9a0ce855f938741e"
+  },
+  "artifact_paths": {
+    "replay_trace_normalized_json": "[SMOKE_ROOT]/run-a/replay_trace.normalized.json",
+    "events_jsonl": "[SMOKE_ROOT]/run-a/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/run-a/commands.txt",
+    "report_md": "[SMOKE_ROOT]/run-a/report.md"
+  }
+}

@@ -5,6 +5,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 normalizer="${root_dir}/scripts/proof_economy_replay_trace_normalizer.sh"
 docs_path="${root_dir}/docs/PROOF_ECONOMY_REPLAY_TRACE_NORMALIZER.md"
 contract_path="${root_dir}/docs/proof_economy_replay_trace_contract_v1.json"
+golden_path="${PROOF_ECONOMY_REPLAY_TRACE_GOLDEN:-${root_dir}/scripts/testdata/goldens/proof_economy_replay_trace_normalized.golden}"
 
 record_pass() {
   printf 'PASS proof-economy-replay-trace %s\n' "$1"
@@ -85,12 +86,58 @@ write_fixtures() {
   }' >"${dir}/no_mock_drill.json"
 }
 
+canonicalize_trace() {
+  local trace_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$trace_path"
+}
+
+assert_trace_golden() {
+  local trace_path="$1"
+  local tmp_root="$2"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden_path")"
+    canonicalize_trace "$trace_path" "$tmp_root" >"$golden_path"
+    record_pass "updated replay trace golden"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing replay trace golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_trace "$trace_path" "$tmp_root"); then
+    record_failure "replay trace golden drift"
+    return 1
+  fi
+  record_pass "replay trace golden matches"
+}
+
 run_check() {
   local scope_file
 
   bash -n "$normalizer"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
+  if [[ "${UPDATE_GOLDENS:-0}" != "1" ]]; then
+    [[ -f "$golden_path" ]] || { record_failure "missing replay trace golden"; return 1; }
+    jq empty "$golden_path"
+  fi
   grep -q 'franken-engine.proof-economy-replay-trace.v1' "$docs_path"
   grep -q 'replay_trace.normalized.json' "$docs_path"
 
@@ -141,6 +188,7 @@ run_selftest() {
     and ([.proof_rows[] | select(.artifact_path == "artifacts/proofs/proof-alpha.json")] | length) == 1
   ' "${run_a}/replay_trace.normalized.json" >/dev/null
   record_pass "balanced fixture normalizes and deduplicates proof rows"
+  assert_trace_golden "${run_a}/replay_trace.normalized.json" "$tmp_root"
 
   run_b="${tmp_root}/run-b"
   "$normalizer" \

@@ -13,6 +13,10 @@ use std::collections::BTreeSet;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::module_cache::*;
 
+fn valid_default_s3fifo_trace_corpus_manifest() -> CacheTraceCorpusManifest {
+    default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid")
+}
+
 // ---------------------------------------------------------------------------
 // Schema constants
 // ---------------------------------------------------------------------------
@@ -300,7 +304,7 @@ fn enrichment_adoption_wedge_serde_roundtrip() {
 
 #[test]
 fn enrichment_default_corpus_manifest_has_five_workload_classes() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     assert!(manifest.validate().is_ok());
     let workload_strs: BTreeSet<_> = manifest
         .cases
@@ -316,14 +320,14 @@ fn enrichment_default_corpus_manifest_has_five_workload_classes() {
 
 #[test]
 fn enrichment_default_corpus_manifest_trace_ids_unique() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let ids: BTreeSet<_> = manifest.cases.iter().map(|c| &c.trace_id).collect();
     assert_eq!(ids.len(), manifest.cases.len());
 }
 
 #[test]
 fn enrichment_default_corpus_manifest_serde_roundtrip() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let json = serde_json::to_string(&manifest).unwrap();
     let back: CacheTraceCorpusManifest = serde_json::from_str(&json).unwrap();
     assert_eq!(manifest, back);
@@ -342,7 +346,7 @@ fn enrichment_default_baseline_report_succeeds() {
 
 #[test]
 fn enrichment_default_baseline_report_validates() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let report = default_s3fifo_baseline_report().unwrap();
     assert!(report.validate(&manifest).is_ok());
 }
@@ -669,7 +673,7 @@ fn enrichment_snapshot_merge_converges() {
 
 #[test]
 fn enrichment_annotate_trace_preserves_structure() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let case = &manifest.cases[0];
     let annotated = annotate_trace_with_default_values(case);
     assert_eq!(annotated.trace_id, case.trace_id);
@@ -688,7 +692,7 @@ fn enrichment_annotate_trace_preserves_structure() {
 
 #[test]
 fn enrichment_simulate_adaptive_default_produces_metrics() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let case = &manifest.cases[0];
     let annotated = annotate_trace_with_default_values(case);
     let config = default_s3fifo_adaptive_config();
@@ -702,7 +706,7 @@ fn enrichment_simulate_adaptive_default_produces_metrics() {
 
 #[test]
 fn enrichment_simulate_adaptive_deterministic() {
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest = valid_default_s3fifo_trace_corpus_manifest();
     let case = &manifest.cases[0];
     let annotated = annotate_trace_with_default_values(case);
     let config = default_s3fifo_adaptive_config();

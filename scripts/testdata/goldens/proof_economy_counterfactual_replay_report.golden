@@ -1,0 +1,378 @@
+{
+  "trace_id": "trace-5184f25e82c8636b",
+  "source_revision": "fixture-rev",
+  "policy_decision": "pass",
+  "trace_fixture_order": [
+    "bd-p1-proof-alpha",
+    "bd-p3-broad-beta",
+    "bd-p2-warm-mismatch",
+    "bd-p2-noisy-1",
+    "bd-p2-noisy-2"
+  ],
+  "policy_matrix": [
+    {
+      "policy_index": 0,
+      "policy_name": "baseline",
+      "policy_label": "Fixture-order baseline",
+      "pressure_mode": "normal",
+      "max_heavy_per_agent": 99,
+      "ordering_strategy": "fixture",
+      "explanation": "Reproduce fixture command order and measure baseline slot share."
+    },
+    {
+      "policy_index": 1,
+      "policy_name": "fair_share",
+      "policy_label": "Fair-share cap",
+      "pressure_mode": "normal",
+      "max_heavy_per_agent": 1,
+      "ordering_strategy": "priority_preempt",
+      "explanation": "Bound per-agent heavy proof fanout while preserving P1 admission."
+    },
+    {
+      "policy_index": 2,
+      "policy_name": "high_pressure",
+      "policy_label": "High-pressure brownout",
+      "pressure_mode": "high",
+      "max_heavy_per_agent": 1,
+      "ordering_strategy": "priority_preempt",
+      "explanation": "Defer broad P3 proof work when slots are under pressure."
+    }
+  ],
+  "policy_outcomes": [
+    {
+      "policy_index": 0,
+      "policy_name": "baseline",
+      "policy_label": "Fixture-order baseline",
+      "pressure_mode": "normal",
+      "max_heavy_per_agent": 99,
+      "ordering_strategy": "fixture",
+      "policy_id": "policy-9d546d9e8f11fdd8",
+      "policy_decision": "pass",
+      "p1_slo_risk": "protected",
+      "scheduled_order": [
+        "bd-p1-proof-alpha",
+        "bd-p3-broad-beta",
+        "bd-p2-warm-mismatch",
+        "bd-p2-noisy-1",
+        "bd-p2-noisy-2"
+      ],
+      "deferred_order": [],
+      "fixture_order_match": true,
+      "scheduled_count": 5,
+      "deferred_count": 0,
+      "fail_closed_count": 0,
+      "max_agent_slot_share_millionths": 400000,
+      "agent_slot_shares": [
+        {
+          "agent_id": "AgentAlpha",
+          "scheduled_count": 1,
+          "share_millionths": 200000
+        },
+        {
+          "agent_id": "AgentBeta",
+          "scheduled_count": 1,
+          "share_millionths": 200000
+        },
+        {
+          "agent_id": "AgentMismatch",
+          "scheduled_count": 1,
+          "share_millionths": 200000
+        },
+        {
+          "agent_id": "AgentNoisy",
+          "scheduled_count": 2,
+          "share_millionths": 400000
+        }
+      ],
+      "changed_commands": [],
+      "deferred_commands": [],
+      "unchanged_commands": [
+        {
+          "bead_id": "bd-p1-proof-alpha",
+          "agent_id": "AgentAlpha",
+          "decision": "admit_preempt",
+          "fixture_order": 1,
+          "scheduled_order": 1,
+          "explanation": "high-priority SLO protection: P1 proof lane protected by proof-economy policy"
+        },
+        {
+          "bead_id": "bd-p3-broad-beta",
+          "agent_id": "AgentBeta",
+          "decision": "admit",
+          "fixture_order": 2,
+          "scheduled_order": 2,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-warm-mismatch",
+          "agent_id": "AgentMismatch",
+          "decision": "admit",
+          "fixture_order": 3,
+          "scheduled_order": 3,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-noisy-1",
+          "agent_id": "AgentNoisy",
+          "decision": "admit",
+          "fixture_order": 4,
+          "scheduled_order": 4,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-noisy-2",
+          "agent_id": "AgentNoisy",
+          "decision": "admit",
+          "fixture_order": 5,
+          "scheduled_order": 5,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        }
+      ],
+      "delta_from_baseline": {
+        "order_changed": false,
+        "deferred_delta": 0,
+        "monopoly_reduction_millionths": 0,
+        "p1_slo_preserved": true
+      }
+    },
+    {
+      "policy_index": 1,
+      "policy_name": "fair_share",
+      "policy_label": "Fair-share cap",
+      "pressure_mode": "normal",
+      "max_heavy_per_agent": 1,
+      "ordering_strategy": "priority_preempt",
+      "policy_id": "policy-390dee648a21d033",
+      "policy_decision": "pass",
+      "p1_slo_risk": "protected",
+      "scheduled_order": [
+        "bd-p1-proof-alpha",
+        "bd-p3-broad-beta",
+        "bd-p2-warm-mismatch",
+        "bd-p2-noisy-1"
+      ],
+      "deferred_order": [
+        "bd-p2-noisy-2"
+      ],
+      "fixture_order_match": false,
+      "scheduled_count": 4,
+      "deferred_count": 1,
+      "fail_closed_count": 0,
+      "max_agent_slot_share_millionths": 250000,
+      "agent_slot_shares": [
+        {
+          "agent_id": "AgentAlpha",
+          "scheduled_count": 1,
+          "share_millionths": 250000
+        },
+        {
+          "agent_id": "AgentBeta",
+          "scheduled_count": 1,
+          "share_millionths": 250000
+        },
+        {
+          "agent_id": "AgentMismatch",
+          "scheduled_count": 1,
+          "share_millionths": 250000
+        },
+        {
+          "agent_id": "AgentNoisy",
+          "scheduled_count": 1,
+          "share_millionths": 250000
+        }
+      ],
+      "changed_commands": [
+        {
+          "bead_id": "bd-p2-noisy-2",
+          "agent_id": "AgentNoisy",
+          "before": "scheduled",
+          "after": "defer",
+          "fairness_reason": "agent fairness throttle",
+          "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded"
+        }
+      ],
+      "deferred_commands": [
+        {
+          "bead_id": "bd-p2-noisy-2",
+          "agent_id": "AgentNoisy",
+          "priority": 2,
+          "fairness_reason": "agent fairness throttle",
+          "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded"
+        }
+      ],
+      "unchanged_commands": [
+        {
+          "bead_id": "bd-p1-proof-alpha",
+          "agent_id": "AgentAlpha",
+          "decision": "admit_preempt",
+          "fixture_order": 1,
+          "scheduled_order": 1,
+          "explanation": "high-priority SLO protection: P1 proof lane protected by proof-economy policy"
+        },
+        {
+          "bead_id": "bd-p3-broad-beta",
+          "agent_id": "AgentBeta",
+          "decision": "admit",
+          "fixture_order": 2,
+          "scheduled_order": 2,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-warm-mismatch",
+          "agent_id": "AgentMismatch",
+          "decision": "admit",
+          "fixture_order": 3,
+          "scheduled_order": 3,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-noisy-1",
+          "agent_id": "AgentNoisy",
+          "decision": "admit",
+          "fixture_order": 4,
+          "scheduled_order": 4,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        }
+      ],
+      "delta_from_baseline": {
+        "order_changed": true,
+        "deferred_delta": 1,
+        "monopoly_reduction_millionths": 150000,
+        "p1_slo_preserved": true
+      }
+    },
+    {
+      "policy_index": 2,
+      "policy_name": "high_pressure",
+      "policy_label": "High-pressure brownout",
+      "pressure_mode": "high",
+      "max_heavy_per_agent": 1,
+      "ordering_strategy": "priority_preempt",
+      "policy_id": "policy-7c8e54462ef24d4f",
+      "policy_decision": "pass",
+      "p1_slo_risk": "protected",
+      "scheduled_order": [
+        "bd-p1-proof-alpha",
+        "bd-p2-warm-mismatch",
+        "bd-p2-noisy-1"
+      ],
+      "deferred_order": [
+        "bd-p3-broad-beta",
+        "bd-p2-noisy-2"
+      ],
+      "fixture_order_match": false,
+      "scheduled_count": 3,
+      "deferred_count": 2,
+      "fail_closed_count": 0,
+      "max_agent_slot_share_millionths": 333333,
+      "agent_slot_shares": [
+        {
+          "agent_id": "AgentAlpha",
+          "scheduled_count": 1,
+          "share_millionths": 333333
+        },
+        {
+          "agent_id": "AgentMismatch",
+          "scheduled_count": 1,
+          "share_millionths": 333333
+        },
+        {
+          "agent_id": "AgentNoisy",
+          "scheduled_count": 1,
+          "share_millionths": 333333
+        }
+      ],
+      "changed_commands": [
+        {
+          "bead_id": "bd-p3-broad-beta",
+          "agent_id": "AgentBeta",
+          "before": "scheduled",
+          "after": "defer",
+          "fairness_reason": "pressure-aware deferral",
+          "explanation": "pressure-aware deferral: high-pressure mode defers low-priority broad proof work"
+        },
+        {
+          "bead_id": "bd-p2-noisy-2",
+          "agent_id": "AgentNoisy",
+          "before": "scheduled",
+          "after": "defer",
+          "fairness_reason": "agent fairness throttle",
+          "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded"
+        }
+      ],
+      "deferred_commands": [
+        {
+          "bead_id": "bd-p3-broad-beta",
+          "agent_id": "AgentBeta",
+          "priority": 3,
+          "fairness_reason": "pressure-aware deferral",
+          "explanation": "pressure-aware deferral: high-pressure mode defers low-priority broad proof work"
+        },
+        {
+          "bead_id": "bd-p2-noisy-2",
+          "agent_id": "AgentNoisy",
+          "priority": 2,
+          "fairness_reason": "agent fairness throttle",
+          "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded"
+        }
+      ],
+      "unchanged_commands": [
+        {
+          "bead_id": "bd-p1-proof-alpha",
+          "agent_id": "AgentAlpha",
+          "decision": "admit_preempt",
+          "fixture_order": 1,
+          "scheduled_order": 1,
+          "explanation": "high-priority SLO protection: P1 proof lane protected by proof-economy policy"
+        },
+        {
+          "bead_id": "bd-p2-warm-mismatch",
+          "agent_id": "AgentMismatch",
+          "decision": "admit",
+          "fixture_order": 3,
+          "scheduled_order": 2,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        },
+        {
+          "bead_id": "bd-p2-noisy-1",
+          "agent_id": "AgentNoisy",
+          "decision": "admit",
+          "fixture_order": 4,
+          "scheduled_order": 3,
+          "explanation": "within agent fair-share budget: within fair-share policy budget"
+        }
+      ],
+      "delta_from_baseline": {
+        "order_changed": true,
+        "deferred_delta": 2,
+        "monopoly_reduction_millionths": 66667,
+        "p1_slo_preserved": true
+      }
+    }
+  ],
+  "assertions": {
+    "baseline_reproduces_fixture_order": true,
+    "fair_share_reduces_starvation": true,
+    "high_pressure_defers_broad_p3": true,
+    "all_p1_slo_preserved": true
+  },
+  "findings": [],
+  "summary": {
+    "policy_count": 3,
+    "command_count": 5,
+    "changed_policy_count": 2,
+    "fail_closed_policy_count": 0
+  },
+  "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+  "counterfactual_id": "counterfactual-a92b87ac890c0ae5",
+  "hash_basis": {
+    "counterfactual_hash": "counterfactual-a92b87ac890c0ae5"
+  },
+  "artifact_paths": {
+    "counterfactual_replay_report_json": "[SMOKE_ROOT]/counterfactual-a/counterfactual_replay_report.json",
+    "policy_scorecards_json": "[SMOKE_ROOT]/counterfactual-a/policy_scorecards.json",
+    "events_jsonl": "[SMOKE_ROOT]/counterfactual-a/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/counterfactual-a/commands.txt",
+    "report_md": "[SMOKE_ROOT]/counterfactual-a/report.md"
+  }
+}

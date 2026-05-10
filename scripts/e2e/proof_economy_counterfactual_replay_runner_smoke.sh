@@ -7,6 +7,7 @@ evaluator="${root_dir}/scripts/proof_economy_policy_evaluator.sh"
 runner="${root_dir}/scripts/proof_economy_counterfactual_replay_runner.sh"
 docs_path="${root_dir}/docs/PROOF_ECONOMY_COUNTERFACTUAL_REPLAY_RUNNER.md"
 contract_path="${root_dir}/docs/proof_economy_counterfactual_replay_contract_v1.json"
+golden_path="${PROOF_ECONOMY_COUNTERFACTUAL_GOLDEN:-${root_dir}/scripts/testdata/goldens/proof_economy_counterfactual_replay_report.golden}"
 
 record_pass() {
   printf 'PASS proof-economy-counterfactual %s\n' "$1"
@@ -80,6 +81,47 @@ write_trace_fixture() {
   jq -n '{cache_hit_artifacts: [], required_refreshes: []}' >"${dir}/proof_cache.json"
 }
 
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_report_golden() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden_path")"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    record_pass "updated counterfactual report golden"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing counterfactual report golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "counterfactual report golden drift"
+    return 1
+  fi
+  record_pass "counterfactual report golden matches"
+}
+
 run_check() {
   local scope_file
 
@@ -87,6 +129,10 @@ run_check() {
   bash -n "${BASH_SOURCE[0]}"
   bash -n "$evaluator"
   jq empty "$contract_path"
+  if [[ "${UPDATE_GOLDENS:-0}" != "1" ]]; then
+    [[ -f "$golden_path" ]] || { record_failure "missing golden $(realpath --relative-to="$root_dir" "$golden_path")"; return 1; }
+    jq empty "$golden_path"
+  fi
   grep -q 'franken-engine.proof-economy-counterfactual-replay-report.v1' "$docs_path"
   grep -q 'counterfactual_replay_report.json' "$docs_path"
 
@@ -166,6 +212,7 @@ run_selftest() {
     and any(.policy_outcomes[].unchanged_commands[]?; (.explanation | length) > 0)
   ' "${run_a}/counterfactual_replay_report.json" >/dev/null
   record_pass "operator explanations for changed deferred and unchanged commands"
+  assert_report_golden "${run_a}/counterfactual_replay_report.json" "$tmp_root"
 
   run_b="${tmp_root}/counterfactual-b"
   "$runner" \

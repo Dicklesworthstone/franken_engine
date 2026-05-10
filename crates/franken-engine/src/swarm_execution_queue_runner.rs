@@ -333,6 +333,14 @@ fn validate_input(input: &NormalizedExecutionQueueInput) -> Result<(), Execution
             detail: "input decision is fail_closed".to_string(),
         });
     }
+    let mut task_ids = BTreeSet::new();
+    for task in &input.tasks {
+        if !task_ids.insert(task.task_id.as_str()) {
+            return Err(ExecutionQueueRunnerError::InvalidInput {
+                detail: format!("duplicate task_id {}", task.task_id),
+            });
+        }
+    }
     for degraded in &input.degraded_inputs {
         if !degraded.is_recognized() {
             return Err(ExecutionQueueRunnerError::InvalidInput {

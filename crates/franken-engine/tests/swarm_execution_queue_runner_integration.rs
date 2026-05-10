@@ -227,6 +227,37 @@ fn runner_rejects_unrecognized_degraded_evidence() {
 }
 
 #[test]
+fn runner_rejects_duplicate_task_ids_before_writing_artifacts() {
+    let value = input(vec![
+        task("bd-duplicate", &[], 800000, 0, "none"),
+        task("bd-duplicate", &[], 700000, 20000, "none"),
+    ]);
+    let dir = tempdir().unwrap();
+    let input_path = write_input(dir.path(), &value);
+    let output_dir = dir.path().join("out");
+    let err = run_normalized_input_file(
+        &input_path,
+        &output_dir,
+        ExecutionQueueRunOptions::default(),
+    )
+    .unwrap_err();
+
+    assert_eq!(err.exit_code(), 42);
+    assert!(
+        err.to_string().contains("duplicate task_id bd-duplicate"),
+        "unexpected diagnostic: {err}"
+    );
+    assert!(
+        !output_dir.exists()
+            || fs::read_dir(&output_dir)
+                .expect("output dir should remain readable if it exists")
+                .next()
+                .is_none(),
+        "duplicate task IDs must fail before runner artifacts are written"
+    );
+}
+
+#[test]
 fn runner_artifact_hash_is_stable_across_repeated_runs() {
     let value = input(vec![
         task("bd-alpha", &[], 800000, 10000, "none"),
@@ -441,7 +472,9 @@ fn assert_fail_closed_invalid_input_contract() {
         // Pre-existing fail_closed_reasons
         {
             let mut invalid = input(vec![task("bd-invalid", &[], 700000, 0, "none")]);
-            invalid["fail_closed_reasons"] = json!(["pre-existing-failure"]);
+            invalid["fail_closed_reasons"] = json!([
+                {"kind": "pre_existing_failure", "label": "bd-invalid"}
+            ]);
             invalid
         },
     ];

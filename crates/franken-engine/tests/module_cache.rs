@@ -1684,7 +1684,8 @@ fn evaluate_s3fifo_baseline_default_succeeds() {
         default_s3fifo_baseline_config, default_s3fifo_candidate_config,
         default_s3fifo_trace_corpus_manifest, evaluate_s3fifo_baseline,
     };
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest =
+        default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid");
     let report = evaluate_s3fifo_baseline(
         &manifest,
         &default_s3fifo_baseline_config(),
@@ -1703,7 +1704,8 @@ fn evaluate_s3fifo_baseline_is_deterministic() {
         default_s3fifo_baseline_config, default_s3fifo_candidate_config,
         default_s3fifo_trace_corpus_manifest, evaluate_s3fifo_baseline,
     };
-    let manifest = default_s3fifo_trace_corpus_manifest();
+    let manifest =
+        default_s3fifo_trace_corpus_manifest().expect("default S3-FIFO corpus should be valid");
     let r1 = evaluate_s3fifo_baseline(
         &manifest,
         &default_s3fifo_baseline_config(),

@@ -3,8 +3,224 @@
 //! This integration test verifies that shadow replay functionality works end-to-end
 //! and exits non-zero on nondeterminism or missing provenance as required by bd-djejh.5.
 
-use frankenengine_engine::shadow_replay_fixtures::*;
+use std::collections::BTreeMap;
+
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::shadow_evidence_journal::{
+    SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION, ShadowEvidenceJournalExport,
+    ShadowEvidenceJournalExportRow,
+};
 use frankenengine_engine::shadow_replay_verifier::{ReplayConfig, ShadowReplayVerifier};
+use serde_json::{Value, json};
+
+const FIXTURE_BASE_TIMESTAMP_MS: i64 = 1_704_067_200_000;
+
+fn create_healthy_journal_fixture() -> ShadowEvidenceJournalExport {
+    create_journal_fixture("healthy", 1000, 5, 1_000, 300_000, false)
+}
+
+fn create_degraded_journal_fixture() -> ShadowEvidenceJournalExport {
+    create_journal_fixture("degraded", 2000, 4, 5_000, 600_000, false)
+}
+
+fn create_contaminated_journal_fixture() -> ShadowEvidenceJournalExport {
+    create_journal_fixture("contaminated", 3000, 3, 2_000, 300_000, true)
+}
+
+fn create_stale_source_journal_fixture() -> ShadowEvidenceJournalExport {
+    create_journal_fixture("stale", 4000, 6, 1_000, 60_000, false)
+}
+
+fn create_journal_fixture(
+    state: &str,
+    first_event_id: i64,
+    count: usize,
+    interval_ms: i64,
+    freshness_window_ms: i64,
+    corrupt_normalized_hash: bool,
+) -> ShadowEvidenceJournalExport {
+    let base_timestamp = if state == "stale" {
+        FIXTURE_BASE_TIMESTAMP_MS - 86_400_000
+    } else {
+        FIXTURE_BASE_TIMESTAMP_MS
+    };
+
+    let rows = (0..count)
+        .map(|index| {
+            let journal_event_id = first_event_id + index as i64;
+            let collected_timestamp_ms = base_timestamp + (index as i64 * interval_ms);
+            let payload = event_payload(state, index);
+            let payload_hash =
+                hex_encode(ContentHash::compute(&payload_bytes(&payload)).as_bytes());
+            let normalized_payload_hash = if corrupt_normalized_hash {
+                corrupt_hex_hash(&payload_hash)
+            } else {
+                payload_hash.clone()
+            };
+
+            let mut metadata = BTreeMap::new();
+            metadata.insert("event_index".to_string(), Value::Number(index.into()));
+            metadata.insert(
+                "journal_state".to_string(),
+                Value::String(state.to_string()),
+            );
+            metadata.insert(
+                "expected_decision_hash".to_string(),
+                Value::String(expected_decision_hash(&payload)),
+            );
+
+            ShadowEvidenceJournalExportRow {
+                journal_event_id,
+                bead_id: format!("{state}_bead_{index}"),
+                event_kind: format!("{state}_event"),
+                source_kind: "test_fixture".to_string(),
+                source_locator: format!("fixture://{state}/event_{index}"),
+                collected_timestamp_ms,
+                sequence_id: journal_event_id,
+                payload_content_hash: payload_hash,
+                normalized_payload_path: None,
+                normalized_payload: payload,
+                normalized_payload_hash,
+                raw_evidence_hashes: Vec::new(),
+                freshness_window_ms,
+                freshness_deadline_ms: collected_timestamp_ms + freshness_window_ms,
+                degradation_state: state.to_string(),
+                retention_class: retention_class_for_state(state).to_string(),
+                parent_event_ids: if index == 0 {
+                    Vec::new()
+                } else {
+                    vec![journal_event_id - 1]
+                },
+                metadata: Value::Object(metadata.into_iter().collect()),
+            }
+        })
+        .collect();
+
+    ShadowEvidenceJournalExport {
+        schema_version: SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION.to_string(),
+        rows,
+    }
+}
+
+fn event_payload(state: &str, index: usize) -> Value {
+    match state {
+        "degraded" => json!({
+            "event_type": "degraded_operation",
+            "index": index,
+            "operation_id": format!("degraded_op_{index}"),
+            "resource_utilization": {
+                "cpu_usage": 0.85,
+                "memory_usage": 0.90,
+                "disk_usage": 0.75
+            },
+            "latency_metrics": {
+                "p50_ms": 250,
+                "p95_ms": 1200,
+                "p99_ms": 3400
+            },
+            "status": "degraded",
+            "warnings": ["high_resource_usage", "elevated_latency"],
+        }),
+        "contaminated" => json!({
+            "event_type": "contaminated_operation",
+            "index": index,
+            "operation_id": format!("contaminated_op_{index}"),
+            "resource_utilization": {
+                "cpu_usage": -0.5,
+                "memory_usage": null,
+                "disk_usage": "invalid_type"
+            },
+            "latency_metrics": {
+                "p50_ms": 15,
+                "p95_ms": 32,
+                "p99_ms": 48,
+                "invalid_metric": "should_not_exist"
+            },
+            "status": "contaminated",
+            "errors": ["data_corruption", "schema_violation"],
+        }),
+        "stale" => json!({
+            "event_type": "stale_operation",
+            "index": index,
+            "operation_id": format!("stale_op_{index}"),
+            "resource_utilization": {
+                "cpu_usage": 0.20,
+                "memory_usage": 0.10,
+                "disk_usage": 0.03
+            },
+            "latency_metrics": {
+                "p50_ms": 10,
+                "p95_ms": 25,
+                "p99_ms": 40
+            },
+            "status": "stale",
+            "source_timestamp": "2023-12-31T00:00:00Z",
+            "data_age_hours": 24,
+        }),
+        _ => json!({
+            "event_type": "healthy_operation",
+            "index": index,
+            "operation_id": format!("healthy_op_{index}"),
+            "resource_utilization": {
+                "cpu_usage": 0.25,
+                "memory_usage": 0.15,
+                "disk_usage": 0.05
+            },
+            "latency_metrics": {
+                "p50_ms": 12,
+                "p95_ms": 28,
+                "p99_ms": 45
+            },
+            "status": "success",
+        }),
+    }
+}
+
+fn retention_class_for_state(state: &str) -> &'static str {
+    match state {
+        "degraded" => "extended",
+        "contaminated" => "quarantine",
+        "stale" => "archived",
+        _ => "normal",
+    }
+}
+
+fn expected_decision_hash(payload: &Value) -> String {
+    let payload_summary = payload
+        .get("operation_id")
+        .cloned()
+        .unwrap_or_else(|| json!("unknown"));
+    let status = payload
+        .get("status")
+        .cloned()
+        .unwrap_or_else(|| json!("unknown"));
+    let decision_data = json!({
+        "decision_type": "test_decision",
+        "payload_summary": payload_summary,
+        "status": status,
+        "deterministic_seed": "replay_fixture_v1"
+    });
+    hex_encode(ContentHash::compute(&payload_bytes(&decision_data)).as_bytes())
+}
+
+fn payload_bytes(payload: &Value) -> Vec<u8> {
+    serde_json::to_vec(payload).expect("fixture payload should serialize")
+}
+
+fn corrupt_hex_hash(hash: &str) -> String {
+    let mut corrupt = hash.to_string();
+    let replacement = if corrupt.starts_with('0') { "1" } else { "0" };
+    corrupt.replace_range(0..1, replacement);
+    corrupt
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
 
 /// Smoke test that exits non-zero on nondeterminism or missing provenance.
 /// This test ensures the replay verification system works as required.
@@ -12,7 +228,8 @@ use frankenengine_engine::shadow_replay_verifier::{ReplayConfig, ShadowReplayVer
 fn shadow_replay_smoke_test() {
     println!("🧪 Starting shadow replay verification smoke test...");
 
-    let mut verifier = ShadowReplayVerifier::with_default_config();
+    let mut verifier =
+        ShadowReplayVerifier::with_default_config().expect("default replay config should be valid");
 
     // Test fixtures for healthy, degraded, contaminated, and stale-source journals
     let test_cases = vec![
@@ -65,6 +282,7 @@ fn shadow_replay_smoke_test() {
                 );
 
                 // Test determinism by replaying twice
+                let expected_schema_version = export.schema_version.clone();
                 let second_result =
                     verifier.replay_export(export, format!("smoke_test_{}_repeat", case_name));
                 match second_result {
@@ -110,7 +328,7 @@ fn shadow_replay_smoke_test() {
 
                 // Verify schema version consistency
                 assert_eq!(
-                    report.source_export.schema_version, export.schema_version,
+                    report.source_export.schema_version, expected_schema_version,
                     "Schema version mismatch in {} fixture",
                     case_name
                 );
@@ -156,6 +374,7 @@ fn test_replay_config_smoke() {
     let default_config = ReplayConfig::default();
     assert!(default_config.max_events_per_batch > 0);
     assert!(default_config.replay_timeout_ms > 0);
+    assert_eq!(default_config.replay_timestamp_ms, None);
     assert!(default_config.verify_payload_hashes);
     assert!(default_config.require_deterministic_ordering);
 
@@ -163,16 +382,23 @@ fn test_replay_config_smoke() {
     let custom_config = ReplayConfig {
         max_events_per_batch: 500,
         replay_timeout_ms: 15_000,
+        replay_timestamp_ms: Some(FIXTURE_BASE_TIMESTAMP_MS as u64),
         allow_schema_migration: false,
         freshness_tolerance_ms: 2000,
         verify_payload_hashes: true,
         require_deterministic_ordering: false,
     };
 
-    let verifier = ShadowReplayVerifier::new(custom_config, 600);
-    assert_eq!(verifier.config.max_events_per_batch, 500);
-    assert_eq!(verifier.config.replay_timeout_ms, 15_000);
-    assert!(!verifier.config.allow_schema_migration);
+    let mut verifier = ShadowReplayVerifier::new(custom_config, 600)
+        .expect("custom replay config should be valid");
+    let report = verifier
+        .replay_export(create_healthy_journal_fixture(), "config_test".to_string())
+        .expect("custom replay config should replay a healthy fixture");
+    assert_eq!(
+        report.detection_timestamp_ms,
+        FIXTURE_BASE_TIMESTAMP_MS as u64
+    );
+    assert!(!report.is_expected_migration);
 
     println!("✅ Replay configuration validation passed!");
 }
@@ -182,7 +408,8 @@ fn test_replay_config_smoke() {
 fn test_replay_recipe_completeness() {
     println!("📋 Testing replay recipe completeness...");
 
-    let mut verifier = ShadowReplayVerifier::with_default_config();
+    let mut verifier =
+        ShadowReplayVerifier::with_default_config().expect("default replay config should be valid");
     let export = create_healthy_journal_fixture();
 
     let result = verifier

@@ -10,9 +10,8 @@
 //! The main Test262 runner executes tests through the full franken_engine pipeline:
 //! parse -> lower -> execute, providing concrete metrics for JS compatibility.
 //!
-//! The differential harness currently uses simulated execution for cross-runtime
-//! comparison rather than the full pipeline. See DifferentialConformanceHarness
-//! implementation for details.
+//! The differential harness executes through the native eval path and compares
+//! captured console output against reference-engine golden fixtures.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -1214,94 +1213,27 @@ pub mod differential_testing {
             source: &str,
             _security_epoch: SecurityEpoch,
         ) -> Result<ActualOutput, String> {
-            // Mock implementation - in reality this would go through the full pipeline:
-            // parse -> lower_ir0_to_ir1 -> lower_ir1_to_ir2 -> lower_ir2_to_ir3 -> execute
-
-            // For now, simulate execution with deterministic outputs
-            let mock_stdout = if source.contains("console.log") {
-                self.simulate_console_output(source)
-            } else {
-                String::new()
-            };
-
-            let mock_stderr = if source.contains("let x = ;") {
-                "SyntaxError: Unexpected token ;".to_string()
-            } else {
-                String::new()
-            };
-
-            let mock_exit_code = if mock_stderr.is_empty() { 0 } else { 1 };
-
-            Ok(ActualOutput {
-                stdout: mock_stdout,
-                stderr: mock_stderr.clone(),
-                exit_code: mock_exit_code,
-                error_message: if mock_exit_code != 0 {
-                    Some(mock_stderr)
-                } else {
-                    None
-                },
-            })
-        }
-
-        /// Simulate console.log output for mock execution.
-        fn simulate_console_output(&self, source: &str) -> String {
-            let mut output = String::new();
-
-            // Very basic simulation - extract console.log arguments
-            if source.contains("console.log(42)") {
-                output.push_str("42\n");
+            let mut engine = HybridRouter::default();
+            match engine.eval(source) {
+                Ok(outcome) => {
+                    let (stdout, stderr) = format_console_output(&outcome.console_output);
+                    Ok(ActualOutput {
+                        stdout,
+                        stderr,
+                        exit_code: 0,
+                        error_message: None,
+                    })
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    Ok(ActualOutput {
+                        stdout: String::new(),
+                        stderr: message.clone(),
+                        exit_code: 2,
+                        error_message: Some(message),
+                    })
+                }
             }
-            if source.contains("console.log('hello')") {
-                output.push_str("hello\n");
-            }
-            if source.contains("console.log(true)") {
-                output.push_str("true\n");
-            }
-            if source.contains("console.log(null)") {
-                output.push_str("null\n");
-            }
-            if source.contains("console.log(2 + 3)") {
-                output.push_str("5\n");
-            }
-            if source.contains("console.log(10 - 4)") {
-                output.push_str("6\n");
-            }
-            if source.contains("console.log(6 * 7)") {
-                output.push_str("42\n");
-            }
-            if source.contains("console.log(15 / 3)") {
-                output.push_str("5\n");
-            }
-            if source.contains("console.log(x + y)") && source.contains("let x = 10; let y = 20") {
-                output.push_str("30\n");
-            }
-            if source.contains("console.log(add(5, 7))") {
-                output.push_str("12\n");
-            }
-            if source.contains("console.log(obj.x)") {
-                output.push_str("10\n");
-            }
-            if source.contains("console.log(obj.y)") {
-                output.push_str("20\n");
-            }
-            if source.contains("console.log(arr[0])") {
-                output.push_str("1\n");
-            }
-            if source.contains("console.log(arr.length)") {
-                output.push_str("3\n");
-            }
-            if source.contains("console.log('5' + 3)") {
-                output.push_str("53\n");
-            }
-            if source.contains("console.log('10' - 2)") {
-                output.push_str("8\n");
-            }
-            if source.contains("console.log(+'42')") {
-                output.push_str("42\n");
-            }
-
-            output
         }
 
         /// Compare franken_engine output against reference engine output.
@@ -1397,6 +1329,33 @@ pub mod differential_testing {
 
             Ok(())
         }
+    }
+
+    fn format_console_output(
+        entries: &[crate::baseline_interpreter::ConsoleEntry],
+    ) -> (String, String) {
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+
+        for entry in entries {
+            match entry.level {
+                crate::baseline_interpreter::ConsoleLevel::Log
+                | crate::baseline_interpreter::ConsoleLevel::Info => {
+                    push_console_line(&mut stdout, &entry.message);
+                }
+                crate::baseline_interpreter::ConsoleLevel::Warn
+                | crate::baseline_interpreter::ConsoleLevel::Error => {
+                    push_console_line(&mut stderr, &entry.message);
+                }
+            }
+        }
+
+        (stdout, stderr)
+    }
+
+    fn push_console_line(target: &mut String, message: &str) {
+        target.push_str(message);
+        target.push('\n');
     }
 
     impl ExpectedOutput {
@@ -1799,25 +1758,37 @@ pub mod differential_testing {
             let report = result.expect("serde deserialization should succeed");
             assert_eq!(report.test_results.len(), 8);
             assert_eq!(report.statistics.total_tests, 8);
-            // All tests should be skipped since no reference engines are available
-            assert_eq!(report.statistics.skipped, 8);
+            assert_eq!(report.statistics.passed, 0);
+            assert_eq!(report.statistics.failed, 0);
+            assert_eq!(
+                report.statistics.skipped + report.statistics.errored,
+                report.statistics.total_tests
+            );
         }
 
         #[test]
-        fn mock_execution_simulates_console_output() {
+        fn native_execution_captures_console_output() {
             let harness = DifferentialHarness::new();
-            let output = harness.simulate_console_output("console.log(42); console.log('hello');");
-            assert_eq!(output, "42\nhello\n");
+            let output = harness
+                .execute_franken_engine(
+                    "console.log(42); console.log('hello');",
+                    SecurityEpoch::from_raw(1),
+                )
+                .expect("native execution should return an output envelope");
+            assert_eq!(output.exit_code, 0);
+            assert_eq!(output.stdout, "42\nhello\n");
+            assert!(output.stderr.is_empty());
         }
 
         #[test]
-        fn mock_execution_handles_syntax_errors() {
+        fn native_execution_reports_syntax_errors() {
             let harness = DifferentialHarness::new();
             let result = harness.execute_franken_engine("let x = ;", SecurityEpoch::from_raw(1));
             assert!(result.is_ok());
             let output = result.expect("serde deserialization should succeed");
-            assert_eq!(output.exit_code, 1);
-            assert!(output.stderr.contains("SyntaxError"));
+            assert_eq!(output.exit_code, 2);
+            assert!(output.error_message.is_some());
+            assert!(!output.stderr.is_empty());
         }
 
         #[test]

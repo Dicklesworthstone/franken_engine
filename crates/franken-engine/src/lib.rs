@@ -1191,6 +1191,8 @@ pub struct EvalOutcome {
     pub value: String,
     pub route_reason: RouteReason,
     #[serde(default)]
+    pub console_output: Vec<baseline_interpreter::ConsoleEntry>,
+    #[serde(default)]
     pub source_ingestion: SourceIngestionSummary,
 }
 
@@ -1637,11 +1639,12 @@ fn eval_with_lane(
     lane: LaneChoice,
     route_reason: RouteReason,
 ) -> EvalResult<EvalOutcome> {
-    let value = eval_via_native_pipeline(&prepared, lane)?;
+    let output = eval_via_native_pipeline(&prepared, lane)?;
     Ok(EvalOutcome {
         engine: engine_kind_for_lane(lane),
-        value,
+        value: output.value,
         route_reason,
+        console_output: output.console_output,
         source_ingestion: prepared.source_ingestion,
     })
 }
@@ -1653,8 +1656,16 @@ fn engine_kind_for_lane(lane: LaneChoice) -> EngineKind {
     }
 }
 
+struct NativeEvalOutput {
+    value: String,
+    console_output: Vec<baseline_interpreter::ConsoleEntry>,
+}
+
 #[allow(clippy::result_large_err)]
-fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> EvalResult<String> {
+fn eval_via_native_pipeline(
+    prepared: &PreparedEvalSource,
+    lane: LaneChoice,
+) -> EvalResult<NativeEvalOutput> {
     let parser = CanonicalEs2020Parser;
     let syntax_tree = parser
         .parse_with_options(
@@ -1709,7 +1720,10 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
             )
         })?;
 
-    Ok(routed.result.value.to_string())
+    Ok(NativeEvalOutput {
+        value: routed.result.value.to_string(),
+        console_output: routed.result.console_output,
+    })
 }
 
 fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
@@ -2410,6 +2424,7 @@ mod tests {
             engine: EngineKind::V8InspiredNative,
             value: "42".to_string(),
             route_reason: RouteReason::ContainsAwaitKeyword,
+            console_output: Vec::new(),
             source_ingestion: SourceIngestionSummary::default(),
         };
         let json = serde_json::to_string(&outcome).expect("eval outcome should serialize to JSON");

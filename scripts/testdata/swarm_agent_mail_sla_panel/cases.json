@@ -179,6 +179,47 @@
       }
     },
     {
+      "case_id": "schema_corrupt_mail_snapshot",
+      "now_ts": "2026-05-09T15:00:00Z",
+      "mail_snapshot": {
+        "schema_version": "franken-engine.agent-mail-snapshot.v1",
+        "health": {
+          "status": "red",
+          "recovery_mode": "corrupt"
+        },
+        "diagnostics": [
+          {
+            "code": "schema_corrupt",
+            "detail": "Agent Mail database schema is missing required tables"
+          }
+        ],
+        "agents": [
+          {
+            "name": "SchemaCorruptAgent",
+            "last_active_ts": "2026-05-09T14:55:00Z",
+            "contact_policy": "auto"
+          }
+        ],
+        "messages": [],
+        "reservations": []
+      },
+      "br_in_progress": {
+        "issues": [
+          {
+            "id": "bd-mail-corrupt",
+            "assignee": "SchemaCorruptAgent",
+            "status": "in_progress"
+          }
+        ]
+      },
+      "expected": {
+        "decision": "degraded",
+        "diagnostic_codes": [
+          "schema_corrupt_mail_snapshot"
+        ]
+      }
+    },
+    {
       "case_id": "contact_policy_blocked_recipient",
       "now_ts": "2026-05-09T15:00:00Z",
       "mail_snapshot": {

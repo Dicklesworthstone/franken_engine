@@ -14,6 +14,7 @@ case_ids=(
   expired_reservation
   inactive_assignee_active_reservation
   missing_mail_snapshot
+  schema_corrupt_mail_snapshot
   contact_policy_blocked_recipient
   contradictory_ownership_reservation
 )
@@ -43,6 +44,7 @@ fixtures_shape_ok() {
       "healthy_response_times",
       "inactive_assignee_active_reservation",
       "missing_mail_snapshot",
+      "schema_corrupt_mail_snapshot",
       "stale_ack_required_thread"
     ] | sort)
     and any(.cases[]; .case_id == "healthy_response_times" and .expected.decision == "pass")
@@ -50,6 +52,7 @@ fixtures_shape_ok() {
     and any(.cases[]; .case_id == "expired_reservation" and (.expected.diagnostic_codes | index("expired_reservation") != null))
     and any(.cases[]; .case_id == "inactive_assignee_active_reservation" and (.expected.diagnostic_codes | index("inactive_assignee_active_reservation") != null))
     and any(.cases[]; .case_id == "missing_mail_snapshot" and (.expected.diagnostic_codes | index("missing_mail_snapshot") != null))
+    and any(.cases[]; .case_id == "schema_corrupt_mail_snapshot" and (.expected.diagnostic_codes | index("schema_corrupt_mail_snapshot") != null))
     and any(.cases[]; .case_id == "contact_policy_blocked_recipient" and (.expected.diagnostic_codes | index("contact_policy_blocked_recipient") != null))
     and any(.cases[]; .case_id == "contradictory_ownership_reservation" and (.expected.diagnostic_codes | index("contradictory_ownership_reservation") != null))
   ' "$fixtures_path" >/dev/null
@@ -170,6 +173,20 @@ run_case() {
     jq -e 'any(.diagnostics[]?; .code == "expired_reservation" and (.reservation_expired_seconds // 0) > 0 and (.reservation_path // "") != "")' \
       "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
       record_failure "${case_id} missing reservation expiry evidence"
+      return
+    }
+  fi
+  if [[ "$case_id" == "schema_corrupt_mail_snapshot" ]]; then
+    jq -e '
+      .decision == "degraded"
+      and any(.diagnostics[]?;
+        .code == "schema_corrupt_mail_snapshot"
+        and .severity == "warning"
+        and (.mail_health_status // "") == "red"
+        and ((.mail_diagnostic_codes // []) | index("schema_corrupt") != null)
+      )
+    ' "${case_dir}/out/agent_mail_sla_report.json" >/dev/null || {
+      record_failure "${case_id} missing schema-corrupt health evidence"
       return
     }
   fi

@@ -243,6 +243,16 @@ jq -n \
     (if mail_doc == null then [
       diag("warning"; "missing_mail_snapshot"; null; null; null; "Agent Mail snapshot is missing"; "Export Agent Mail snapshot before trusting response SLA panel."; "high")
     ] else [] end)
+    + (if mail_doc != null and (
+          ((mail_doc.health.status // mail_doc.status // "") | test("red|corrupt|degraded_read_only|database"; "i"))
+          or any(arr(mail_doc.diagnostics // [])[]; ((.code // "") | test("schema|database|corrupt"; "i")))
+        ) then [
+      diag("warning"; "schema_corrupt_mail_snapshot"; null; null; null; "Agent Mail snapshot reports schema/database corruption"; "Treat Agent Mail ownership and SLA evidence as degraded until the mail database is repaired."; "high")
+        + {
+            mail_health_status:(mail_doc.health.status // mail_doc.status // null),
+            mail_diagnostic_codes:(arr(mail_doc.diagnostics // []) | map(.code // "unknown"))
+          }
+    ] else [] end)
     + [message_rows[] as $m
     | (message_age($m)) as $age
     | select(($m.ack_required // false) == true and (($m.acknowledged // $m.acknowledged_at // false) == false) and ($age != null and $age > $ack_sla_seconds))

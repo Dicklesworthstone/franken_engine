@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+  "proof_index_path": "[SMOKE_ROOT]/exact-hit-index.json",
+  "expected_source_revision": "current-rev",
+  "changed_paths": [],
+  "proof_cache_decision": "cache_hit",
+  "reason": "all requested proof artifacts are safely reusable",
+  "cache_hit_artifacts": [
+    {
+      "artifact_id": "artifact-shell",
+      "artifact_path": "artifacts/shell-proof/report.json",
+      "bead_id": "bd-proof",
+      "artifact_role": "proof_manifest",
+      "receipt_kind": "proof_artifact",
+      "source_revision": "current-rev",
+      "freshness_state": "fresh",
+      "reason": "freshness report allows reuse",
+      "covered_paths": [
+        "scripts/e2e/proof_cost_history_index_smoke.sh"
+      ]
+    }
+  ],
+  "required_refreshes": [],
+  "invalid_artifacts": [],
+  "invalidated_paths": [],
+  "refresh_commands": [],
+  "freshness_reports": [
+    "[SMOKE_ROOT]/exact-hit.json"
+  ],
+  "summary": {
+    "cache_hit_count": 1,
+    "refresh_count": 0,
+    "invalid_count": 0
+  },
+  "errors": [],
+  "artifact_paths": {
+    "proof_cache_plan_json": "[SMOKE_ROOT]/exact-cache-hit/proof_cache_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/exact-cache-hit/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/exact-cache-hit/commands.txt",
+    "report_md": "[SMOKE_ROOT]/exact-cache-hit/report.md"
+  }
+}

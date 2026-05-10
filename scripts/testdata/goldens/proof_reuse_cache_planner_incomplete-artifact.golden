@@ -1,0 +1,37 @@
+{
+  "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+  "proof_index_path": "[SMOKE_ROOT]/incomplete-index.json",
+  "expected_source_revision": "current-rev",
+  "changed_paths": [],
+  "proof_cache_decision": "fail_closed",
+  "reason": "proof reuse cache planner is missing required freshness evidence or encountered invalid artifacts",
+  "cache_hit_artifacts": [],
+  "required_refreshes": [],
+  "invalid_artifacts": [
+    {
+      "artifact_id": "artifact-heavy",
+      "artifact_path": "artifacts/heavy-proof/report.json",
+      "bead_id": "bd-proof",
+      "artifact_role": "proof_manifest",
+      "receipt_kind": "proof_artifact",
+      "reason": "freshness report is missing source revision, freshness_state, or covered_paths"
+    }
+  ],
+  "invalidated_paths": [],
+  "refresh_commands": [],
+  "freshness_reports": [
+    "[SMOKE_ROOT]/incomplete.json"
+  ],
+  "summary": {
+    "cache_hit_count": 0,
+    "refresh_count": 0,
+    "invalid_count": 1
+  },
+  "errors": [],
+  "artifact_paths": {
+    "proof_cache_plan_json": "[SMOKE_ROOT]/incomplete-artifact/proof_cache_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/incomplete-artifact/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/incomplete-artifact/commands.txt",
+    "report_md": "[SMOKE_ROOT]/incomplete-artifact/report.md"
+  }
+}

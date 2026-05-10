@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 planner="${root_dir}/scripts/proof_reuse_cache_planner.sh"
 docs_path="${root_dir}/docs/PROOF_REUSE_CACHE_PLANNER.md"
+golden_dir="${PROOF_REUSE_CACHE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS proof-reuse-cache %s\n' "$1"
@@ -11,6 +12,18 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL proof-reuse-cache %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+exact-cache-hit
+stale-by-time-miss
+stale-by-source-miss
+changed-path-invalidation
+incomplete-artifact
+superseded-artifact
+mixed-partial-hit-refresh
+EOF
 }
 
 write_proof_index() {
@@ -143,6 +156,50 @@ write_incomplete_freshness_report() {
     }' >"$output_path"
 }
 
+canonicalize_plan() {
+  local plan_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$plan_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local plan_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/proof_reuse_cache_planner_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_plan "$plan_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_plan "$plan_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
 assert_plan() {
   local plan_path="$1"
   local expected_decision="$2"
@@ -199,10 +256,35 @@ run_case() {
   fi
 
   assert_plan "${case_dir}/proof_cache_plan.json" "$expected_decision" "$expected_hits" "$expected_refreshes" "$expected_invalid"
+  assert_case_golden "$case_name" "${case_dir}/proof_cache_plan.json" "$tmp_root"
   test -s "${case_dir}/events.jsonl"
   test -s "${case_dir}/commands.txt"
   test -s "${case_dir}/report.md"
   record_pass "${case_name} planned as ${expected_decision}"
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/proof_reuse_cache_planner_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
 }
 
 run_check() {
@@ -216,6 +298,7 @@ run_check() {
   grep -q 'rch exec -- env CARGO_TARGET_DIR=' "$docs_path"
   grep -q './scripts/proof_reuse_cache_planner.sh' "$docs_path"
   record_pass "docs contract and rch guidance"
+  goldens_shape_ok
 
   scope_file="${PROOF_REUSE_CACHE_SMOKE_SCOPE_FILE:-/tmp/franken-engine-proof-reuse-cache-scope.txt}"
   printf '%s\n' \

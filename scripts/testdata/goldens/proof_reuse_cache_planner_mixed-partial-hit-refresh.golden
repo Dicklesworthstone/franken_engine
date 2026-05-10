@@ -1,0 +1,61 @@
+{
+  "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+  "proof_index_path": "[SMOKE_ROOT]/mixed-index.json",
+  "expected_source_revision": "current-rev",
+  "changed_paths": [],
+  "proof_cache_decision": "partial_refresh",
+  "reason": "some proof artifacts may be reused while others require refresh",
+  "cache_hit_artifacts": [
+    {
+      "artifact_id": "artifact-shell",
+      "artifact_path": "artifacts/shell-proof/report.json",
+      "bead_id": "bd-proof",
+      "artifact_role": "gate_report",
+      "receipt_kind": "gate_report",
+      "source_revision": "current-rev",
+      "freshness_state": "fresh",
+      "reason": "freshness report allows reuse",
+      "covered_paths": [
+        "scripts/e2e/proof_cost_history_index_smoke.sh"
+      ]
+    }
+  ],
+  "required_refreshes": [
+    {
+      "artifact_id": "artifact-heavy",
+      "artifact_path": "artifacts/heavy-proof/report.json",
+      "bead_id": "bd-proof",
+      "artifact_role": "proof_manifest",
+      "receipt_kind": "proof_artifact",
+      "source_revision": "current-rev",
+      "freshness_state": "stale_by_time",
+      "refresh_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_proof_reuse cargo test -p frankenengine-engine --test proof_evidence_index_integration -- --nocapture",
+      "reason": "state=stale_by_time",
+      "covered_paths": [
+        "crates/franken-engine/src/proof_evidence_index.rs"
+      ],
+      "invalidated_paths": []
+    }
+  ],
+  "invalid_artifacts": [],
+  "invalidated_paths": [],
+  "refresh_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_proof_reuse cargo test -p frankenengine-engine --test proof_evidence_index_integration -- --nocapture"
+  ],
+  "freshness_reports": [
+    "[SMOKE_ROOT]/mixed-shell.json",
+    "[SMOKE_ROOT]/mixed-heavy.json"
+  ],
+  "summary": {
+    "cache_hit_count": 1,
+    "refresh_count": 1,
+    "invalid_count": 0
+  },
+  "errors": [],
+  "artifact_paths": {
+    "proof_cache_plan_json": "[SMOKE_ROOT]/mixed-partial-hit-refresh/proof_cache_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/mixed-partial-hit-refresh/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/mixed-partial-hit-refresh/commands.txt",
+    "report_md": "[SMOKE_ROOT]/mixed-partial-hit-refresh/report.md"
+  }
+}

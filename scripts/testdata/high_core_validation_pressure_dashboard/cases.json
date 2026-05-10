@@ -1,0 +1,294 @@
+{
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard-fixtures.v2",
+  "cases": [
+    {
+      "case_id": "idle_host_fixture",
+      "resource_envelope_json": {
+        "schema_version": "franken-engine.swarm-resource-envelope.v1",
+        "decision": "pass",
+        "memory_state": "nominal",
+        "disk_state": "nominal",
+        "rch_state": "nominal"
+      },
+      "rch_jobs_json": {
+        "schema_version": "franken-engine.rch-job-snapshot.v1",
+        "active_count": 0,
+        "max_active": 2,
+        "jobs": []
+      },
+      "process_counts_json": {
+        "schema_version": "franken-engine.process-counts.v1",
+        "cargo_count": 0,
+        "rustc_count": 0,
+        "max_local_compile_count": 2
+      },
+      "proof_shard_plan_json": {
+        "schema_version": "franken-engine.proof-shard-plan.v1",
+        "decision": "ready",
+        "stale": false,
+        "shards": [
+          {
+            "shard_id": "check-all-targets",
+            "status": "ready",
+            "cost_class": "heavy",
+            "command": "cargo check --all-targets"
+          },
+          {
+            "shard_id": "script-smoke",
+            "status": "ready",
+            "cost_class": "cheap",
+            "command": "bash -n scripts/example.sh"
+          }
+        ]
+      },
+      "br_readiness_json": {
+        "schema_version": "franken-engine.br-readiness.v1",
+        "ready_count": 3,
+        "open_count": 5,
+        "ready": [
+          {
+            "id": "bd-f7zfw",
+            "priority": 2
+          }
+        ]
+      },
+      "mail_health_json": {
+        "status": "healthy",
+        "health_level": "green"
+      },
+      "expected": {
+        "recommendation": "run_rch_proof",
+        "pressure_level": "nominal",
+        "reason_code": null
+      }
+    },
+    {
+      "case_id": "saturated_rch_fixture",
+      "resource_envelope_json": {
+        "schema_version": "franken-engine.swarm-resource-envelope.v1",
+        "decision": "degraded",
+        "memory_state": "nominal",
+        "disk_state": "nominal",
+        "rch_state": "saturated"
+      },
+      "rch_jobs_json": {
+        "schema_version": "franken-engine.rch-job-snapshot.v1",
+        "active_count": 4,
+        "max_active": 2,
+        "jobs": [
+          {
+            "job_id": "101",
+            "command": "rch exec -- cargo test",
+            "status": "running",
+            "owner": "CreamRobin"
+          },
+          {
+            "job_id": "102",
+            "command": "rch exec -- cargo check",
+            "status": "running",
+            "owner": "RainyBadger"
+          }
+        ]
+      },
+      "process_counts_json": {
+        "schema_version": "franken-engine.process-counts.v1",
+        "cargo_count": 0,
+        "rustc_count": 0,
+        "max_local_compile_count": 2
+      },
+      "proof_shard_plan_json": {
+        "schema_version": "franken-engine.proof-shard-plan.v1",
+        "decision": "ready",
+        "stale": false,
+        "shards": [
+          {
+            "shard_id": "check-all-targets",
+            "status": "ready",
+            "cost_class": "heavy"
+          }
+        ]
+      },
+      "br_readiness_json": {
+        "schema_version": "franken-engine.br-readiness.v1",
+        "ready_count": 2,
+        "open_count": 4,
+        "ready": [
+          {
+            "id": "bd-f7zfw",
+            "priority": 2
+          }
+        ]
+      },
+      "mail_health_json": {
+        "status": "healthy",
+        "health_level": "green"
+      },
+      "expected": {
+        "recommendation": "wait",
+        "pressure_level": "saturated",
+        "reason_code": "HCVD2-RCH-SATURATED"
+      }
+    },
+    {
+      "case_id": "local_cargo_contention_fixture",
+      "resource_envelope_json": {
+        "schema_version": "franken-engine.swarm-resource-envelope.v1",
+        "decision": "pass",
+        "memory_state": "nominal",
+        "disk_state": "nominal",
+        "rch_state": "nominal"
+      },
+      "rch_jobs_json": {
+        "schema_version": "franken-engine.rch-job-snapshot.v1",
+        "active_count": 0,
+        "max_active": 3,
+        "jobs": []
+      },
+      "process_counts_json": {
+        "schema_version": "franken-engine.process-counts.v1",
+        "cargo_count": 2,
+        "rustc_count": 3,
+        "max_local_compile_count": 2
+      },
+      "proof_shard_plan_json": {
+        "schema_version": "franken-engine.proof-shard-plan.v1",
+        "decision": "ready",
+        "stale": false,
+        "shards": [
+          {
+            "shard_id": "focused-test",
+            "status": "ready",
+            "cost_class": "medium"
+          }
+        ]
+      },
+      "br_readiness_json": {
+        "schema_version": "franken-engine.br-readiness.v1",
+        "ready_count": 1,
+        "open_count": 3,
+        "ready": [
+          {
+            "id": "bd-f7zfw",
+            "priority": 2
+          }
+        ]
+      },
+      "mail_health_json": {
+        "status": "healthy",
+        "health_level": "green"
+      },
+      "expected": {
+        "recommendation": "run_cheap_local_non_cargo_checks",
+        "pressure_level": "degraded",
+        "reason_code": "HCVD2-LOCAL-CARGO-CONTENTION"
+      }
+    },
+    {
+      "case_id": "zero_ready_beads_fixture",
+      "resource_envelope_json": {
+        "schema_version": "franken-engine.swarm-resource-envelope.v1",
+        "decision": "pass",
+        "memory_state": "nominal",
+        "disk_state": "nominal",
+        "rch_state": "nominal"
+      },
+      "rch_jobs_json": {
+        "schema_version": "franken-engine.rch-job-snapshot.v1",
+        "active_count": 0,
+        "max_active": 2,
+        "jobs": []
+      },
+      "process_counts_json": {
+        "schema_version": "franken-engine.process-counts.v1",
+        "cargo_count": 0,
+        "rustc_count": 0,
+        "max_local_compile_count": 2
+      },
+      "proof_shard_plan_json": {
+        "schema_version": "franken-engine.proof-shard-plan.v1",
+        "decision": "ready",
+        "stale": false,
+        "shards": [
+          {
+            "shard_id": "queued-proof",
+            "status": "ready",
+            "cost_class": "heavy"
+          }
+        ]
+      },
+      "br_readiness_json": {
+        "schema_version": "franken-engine.br-readiness.v1",
+        "ready_count": 0,
+        "open_count": 0,
+        "ready": []
+      },
+      "mail_health_json": {
+        "status": "healthy",
+        "health_level": "green"
+      },
+      "expected": {
+        "recommendation": "split_file_blocker_bead",
+        "pressure_level": "blocked",
+        "reason_code": "HCVD2-ZERO-READY-BEADS"
+      }
+    },
+    {
+      "case_id": "degraded_mail_fixture",
+      "resource_envelope_json": {
+        "schema_version": "franken-engine.swarm-resource-envelope.v1",
+        "decision": "pass",
+        "memory_state": "nominal",
+        "disk_state": "nominal",
+        "rch_state": "nominal"
+      },
+      "rch_jobs_json": {
+        "schema_version": "franken-engine.rch-job-snapshot.v1",
+        "active_count": 0,
+        "max_active": 2,
+        "jobs": []
+      },
+      "process_counts_json": {
+        "schema_version": "franken-engine.process-counts.v1",
+        "cargo_count": 0,
+        "rustc_count": 0,
+        "max_local_compile_count": 2
+      },
+      "proof_shard_plan_json": {
+        "schema_version": "franken-engine.proof-shard-plan.v1",
+        "decision": "ready",
+        "stale": false,
+        "shards": [
+          {
+            "shard_id": "script-proof",
+            "status": "ready",
+            "cost_class": "cheap"
+          }
+        ]
+      },
+      "br_readiness_json": {
+        "schema_version": "franken-engine.br-readiness.v1",
+        "ready_count": 2,
+        "open_count": 3,
+        "ready": [
+          {
+            "id": "bd-f7zfw",
+            "priority": 2
+          }
+        ]
+      },
+      "mail_health_json": {
+        "status": "error",
+        "health_level": "red",
+        "recovery": {
+          "mode": "corrupt",
+          "next_action": "Run am doctor repair --yes"
+        }
+      },
+      "expected": {
+        "recommendation": "run_cheap_local_non_cargo_checks",
+        "pressure_level": "degraded",
+        "reason_code": "HCVD2-MAIL-DEGRADED"
+      }
+    }
+  ]
+}

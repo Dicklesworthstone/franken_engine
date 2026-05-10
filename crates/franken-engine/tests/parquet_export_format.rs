@@ -1,9 +1,11 @@
+use fp_io::read_parquet_bytes;
 use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
     AuditExportFormat, AuditExportRequest, EvidenceEntry, export_audit_evidence,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
+
 /// Integration tests for Parquet export format correctness.
 ///
 /// Tests verify that AuditExportFormat::Parquet emits real Parquet binary format
@@ -83,15 +85,17 @@ fn test_parquet_format_produces_binary() {
         "Should start with PAR1 Parquet magic header"
     );
 
-    // Verify it's not just plaintext
-    let as_string = String::from_utf8_lossy(&parquet_bytes);
-    assert!(
-        !as_string.contains('\t'),
-        "Real Parquet should not contain tab separators"
+    let roundtrip =
+        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
+    assert_eq!(
+        roundtrip.index().len(),
+        entries.len(),
+        "Parquet roundtrip should preserve evidence rows"
     );
-    assert!(
-        !as_string.contains('\n'),
-        "Real Parquet should not contain newline separators in readable form"
+    assert_eq!(
+        roundtrip.column_names(),
+        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
+        "Parquet roundtrip should preserve evidence columns"
     );
 }
 
@@ -129,12 +133,12 @@ fn test_parquet_multi_row_preserves_count() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    // The row count verification would require parsing the Parquet file,
-    // which is complex. For now, we verify the export succeeds and produces
-    // valid-looking Parquet binary format.
-    assert!(
-        parquet_bytes.len() > 100,
-        "Multi-row Parquet should be substantial"
+    let roundtrip =
+        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
+    assert_eq!(
+        roundtrip.index().len(),
+        entries.len(),
+        "Parquet roundtrip should preserve evidence row count"
     );
 }
 
@@ -177,11 +181,12 @@ fn test_parquet_schema_preservation() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    // Schema preservation verification would require Parquet parsing.
-    // For now, verify the export produces valid binary format.
-    assert!(
-        parquet_bytes.len() > 50,
-        "Schema should add substantial metadata"
+    let roundtrip =
+        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
+    assert_eq!(
+        roundtrip.column_names(),
+        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
+        "Parquet roundtrip should preserve the evidence schema"
     );
 }
 
@@ -227,15 +232,19 @@ fn test_parquet_vs_old_format_rejection() {
         !as_string.contains("FRANKEN_PARQUET_V1"),
         "Should not contain old fake header"
     );
-    assert!(
-        !as_string.contains("\t"),
-        "Should not contain tab delimiters from old format"
-    );
 
     // Verify it has real Parquet structure
     assert_eq!(
         &parquet_bytes[0..4],
         b"PAR1",
         "Should have real Parquet header"
+    );
+
+    let roundtrip =
+        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
+    assert_eq!(
+        roundtrip.index().len(),
+        entries.len(),
+        "Parquet roundtrip should preserve evidence rows"
     );
 }

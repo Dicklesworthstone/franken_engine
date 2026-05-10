@@ -396,7 +396,7 @@ fn concurrent_append_maintains_sequence_integrity() {
         read_all_events(&mut storage, &context).expect("reading all events should succeed");
 
     assert_eq!(all_events.len(), 3);
-    for i in 0..all_events.len() {
-        assert_eq!(all_events[i].sequence_id, i as i64);
+    for (i, event) in all_events.iter().enumerate() {
+        assert_eq!(event.sequence_id, i as i64);
     }
 }

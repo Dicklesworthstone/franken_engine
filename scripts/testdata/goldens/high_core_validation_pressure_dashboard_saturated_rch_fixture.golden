@@ -1,0 +1,101 @@
+{
+  "artifacts": {
+    "commands": "[SMOKE_ROOT]/out/commands.txt",
+    "dashboard_json": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.json",
+    "dashboard_markdown": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.md",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_id": "bd-f7zfw",
+  "case_id": "saturated_rch_fixture",
+  "input_summary": {
+    "agent_mail": {
+      "decision": "available",
+      "repair_allowed": false,
+      "status": "healthy"
+    },
+    "br_readiness": {
+      "open_count": 4,
+      "ready_count": 2,
+      "ready_items": [
+        {
+          "id": "bd-f7zfw",
+          "priority": 2
+        }
+      ]
+    },
+    "local_processes": {
+      "active_compile_count": 0,
+      "cargo_count": 0,
+      "max_local_compile_count": 2,
+      "rustc_count": 0
+    },
+    "proof_shards": {
+      "decision": "ready",
+      "ready_count": 1,
+      "shards": [
+        {
+          "command": null,
+          "cost_class": "heavy",
+          "shard_id": "check-all-targets",
+          "status": "ready"
+        }
+      ],
+      "stale": false,
+      "total_count": 1
+    },
+    "rch_jobs": {
+      "active_count": 4,
+      "jobs": [
+        {
+          "command": "rch exec -- cargo test",
+          "job_id": "101",
+          "owner": "CreamRobin",
+          "status": "running"
+        },
+        {
+          "command": "rch exec -- cargo check",
+          "job_id": "102",
+          "owner": "RainyBadger",
+          "status": "running"
+        }
+      ],
+      "max_active": 2
+    },
+    "resource_envelope": {
+      "decision": "degraded",
+      "disk_state": "nominal",
+      "memory_state": "nominal",
+      "rch_state": "saturated"
+    }
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_live_queues": false,
+    "queries_live_processes": false,
+    "queries_live_workers": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "pressure_level": "saturated",
+  "pressure_reasons": [
+    {
+      "code": "HCVD2-RESOURCE-ENVELOPE-BLOCKED",
+      "detail": "Host resource envelope is blocked, saturated, brownout, or contaminated"
+    },
+    {
+      "code": "HCVD2-RCH-SATURATED",
+      "detail": "Active RCH jobs meet or exceed the supplied safe active-job budget"
+    }
+  ],
+  "recommendation": "wait",
+  "recommended_commands": [
+    "wait for active RCH jobs to drain or choose source-only review work",
+    "re-run this dashboard from fresh snapshots before admitting heavy proof work"
+  ],
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard.v2",
+  "source_revision": "fixture-saturated_rch_fixture"
+}

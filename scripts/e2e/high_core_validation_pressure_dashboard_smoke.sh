@@ -6,6 +6,7 @@ dashboard_script="${root_dir}/scripts/high_core_validation_pressure_dashboard.sh
 docs_path="${root_dir}/docs/HIGH_CORE_VALIDATION_PRESSURE_DASHBOARD.md"
 contract_path="${root_dir}/docs/high_core_validation_pressure_dashboard_contract_v2.json"
 fixtures_path="${HIGH_CORE_VALIDATION_PRESSURE_FIXTURES:-${root_dir}/scripts/testdata/high_core_validation_pressure_dashboard/cases.json}"
+golden_dir="${HIGH_CORE_VALIDATION_PRESSURE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 failures=0
 
@@ -76,6 +77,51 @@ write_json_field() {
   local field="$2"
   local path="$3"
   jq ".${field}" <<<"$case_json" >"$path"
+}
+
+canonicalize_dashboard() {
+  local dashboard_path="$1"
+  local tmp_root="$2"
+
+  jq -S --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "object" then
+        with_entries(.value |= scrub)
+      elif type == "array" then
+        map(scrub)
+      elif type == "string" then
+        split($tmp_root) | join("[SMOKE_ROOT]")
+      else
+        .
+      end;
+    scrub
+  ' "$dashboard_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local dashboard_path="$2"
+  local tmp_root="$3"
+  local actual_path="${tmp_root}/${case_id}.actual.golden"
+  local golden_path="${golden_dir}/high_core_validation_pressure_dashboard_${case_id}.golden"
+
+  canonicalize_dashboard "$dashboard_path" "$tmp_root" >"$actual_path"
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    cp "$actual_path" "$golden_path"
+    record_pass "updated golden ${case_id}"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing golden ${golden_path}"
+    return
+  fi
+  if ! diff -u "$golden_path" "$actual_path"; then
+    record_failure "golden drift ${case_id}; set UPDATE_GOLDENS=1 only after reviewing the diff"
+    return
+  fi
+  record_pass "golden matches ${case_id}"
 }
 
 run_case() {
@@ -164,6 +210,7 @@ run_case() {
       | all(.[]; contains("cargo check") | not)
     ' "$dashboard" >/dev/null || record_failure "local contention recommended cargo"
   fi
+  assert_case_golden "$case_id" "$dashboard" "$tmpdir"
   record_pass "$case_id"
 }
 

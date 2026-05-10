@@ -1,0 +1,85 @@
+{
+  "artifacts": {
+    "commands": "[SMOKE_ROOT]/out/commands.txt",
+    "dashboard_json": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.json",
+    "dashboard_markdown": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.md",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_id": "bd-f7zfw",
+  "case_id": "degraded_mail_fixture",
+  "input_summary": {
+    "agent_mail": {
+      "decision": "degraded",
+      "repair_allowed": false,
+      "status": "error"
+    },
+    "br_readiness": {
+      "open_count": 3,
+      "ready_count": 2,
+      "ready_items": [
+        {
+          "id": "bd-f7zfw",
+          "priority": 2
+        }
+      ]
+    },
+    "local_processes": {
+      "active_compile_count": 0,
+      "cargo_count": 0,
+      "max_local_compile_count": 2,
+      "rustc_count": 0
+    },
+    "proof_shards": {
+      "decision": "ready",
+      "ready_count": 1,
+      "shards": [
+        {
+          "command": null,
+          "cost_class": "cheap",
+          "shard_id": "script-proof",
+          "status": "ready"
+        }
+      ],
+      "stale": false,
+      "total_count": 1
+    },
+    "rch_jobs": {
+      "active_count": 0,
+      "jobs": [],
+      "max_active": 2
+    },
+    "resource_envelope": {
+      "decision": "pass",
+      "disk_state": "nominal",
+      "memory_state": "nominal",
+      "rch_state": "nominal"
+    }
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_live_queues": false,
+    "queries_live_processes": false,
+    "queries_live_workers": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "pressure_level": "degraded",
+  "pressure_reasons": [
+    {
+      "code": "HCVD2-MAIL-DEGRADED",
+      "detail": "Agent Mail is degraded; use br state as the continuity anchor"
+    }
+  ],
+  "recommendation": "run_cheap_local_non_cargo_checks",
+  "recommended_commands": [
+    "bash -n scripts/<changed-script>.sh scripts/e2e/<changed-smoke>.sh",
+    "jq empty docs/<changed-contract>.json scripts/testdata/<changed-surface>/cases.json",
+    "git diff --check -- <owned paths>"
+  ],
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard.v2",
+  "source_revision": "fixture-degraded_mail_fixture"
+}

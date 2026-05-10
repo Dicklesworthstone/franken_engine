@@ -1,0 +1,79 @@
+{
+  "artifacts": {
+    "commands": "[SMOKE_ROOT]/out/commands.txt",
+    "dashboard_json": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.json",
+    "dashboard_markdown": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.md",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_id": "bd-f7zfw",
+  "case_id": "zero_ready_beads_fixture",
+  "input_summary": {
+    "agent_mail": {
+      "decision": "available",
+      "repair_allowed": false,
+      "status": "healthy"
+    },
+    "br_readiness": {
+      "open_count": 0,
+      "ready_count": 0,
+      "ready_items": []
+    },
+    "local_processes": {
+      "active_compile_count": 0,
+      "cargo_count": 0,
+      "max_local_compile_count": 2,
+      "rustc_count": 0
+    },
+    "proof_shards": {
+      "decision": "ready",
+      "ready_count": 1,
+      "shards": [
+        {
+          "command": null,
+          "cost_class": "heavy",
+          "shard_id": "queued-proof",
+          "status": "ready"
+        }
+      ],
+      "stale": false,
+      "total_count": 1
+    },
+    "rch_jobs": {
+      "active_count": 0,
+      "jobs": [],
+      "max_active": 2
+    },
+    "resource_envelope": {
+      "decision": "pass",
+      "disk_state": "nominal",
+      "memory_state": "nominal",
+      "rch_state": "nominal"
+    }
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_live_queues": false,
+    "queries_live_processes": false,
+    "queries_live_workers": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "pressure_level": "blocked",
+  "pressure_reasons": [
+    {
+      "code": "HCVD2-ZERO-READY-BEADS",
+      "detail": "No ready beads were supplied, so heavy proof admission would be unactionable"
+    }
+  ],
+  "recommendation": "split_file_blocker_bead",
+  "recommended_commands": [
+    "br create --priority=2 --type bug \"Validation pressure blocker: missing ready proof shard or ready bead\"",
+    "refresh br readiness and proof shard snapshots before retrying admission"
+  ],
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard.v2",
+  "source_revision": "fixture-zero_ready_beads_fixture"
+}

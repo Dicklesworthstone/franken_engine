@@ -28,7 +28,7 @@ pub const ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.zero-placeholder-scan.event.v1";
 pub const ZERO_PLACEHOLDER_SCAN_COMPONENT: &str = "zero_placeholder_scan";
 pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placeholder-scan.policy.v1";
-pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 17;
+pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 18;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
@@ -39,6 +39,7 @@ const THROUGHPUT_BASELINES_SCRIPT: &str = "scripts/benchmarks/throughput_baselin
 const RED_TEAM_COMPROMISE_RATE_SCRIPT: &str = "scripts/run_red_team_compromise_rate_metric_gate.sh";
 const JSON_RUNTIME_BEAD_ID: &str = "bd-2muur.1.4";
 const ITERATOR_RUNTIME_BEAD_ID: &str = "bd-1lsy.4.8";
+const ASYNC_GENERATOR_RUNTIME_BEAD_ID: &str = "bd-7eefz";
 
 static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -501,6 +502,25 @@ fn runtime_findings() -> Vec<ZeroPlaceholderFinding> {
                 "Lower iterator protocol ops into dedicated IR3 instructions and execute deterministic next/done/close semantics in the baseline interpreter without placeholder moves or no-op close behavior."
                     .to_string(),
             diagnostic_code: None,
+        },
+        ZeroPlaceholderFinding {
+            finding_id: "runtime::async_generator_next_body_execution".to_string(),
+            subsystem: ZeroPlaceholderSubsystem::Runtime,
+            status: ZeroPlaceholderStatus::FailClosed,
+            severity: ZeroPlaceholderSeverity::Medium,
+            owner: "baseline_interpreter".to_string(),
+            owner_bead_id: ASYNC_GENERATOR_RUNTIME_BEAD_ID.to_string(),
+            subject_area: "async_generator.next.body_execution".to_string(),
+            source_reference:
+                "crates/franken-engine/src/baseline_interpreter.rs::async_generator_next"
+                    .to_string(),
+            observed_behavior:
+                "Suspended async generator .next() calls fail closed with an explicit TypeError instead of returning a synthetic completed promise."
+                    .to_string(),
+            required_behavior:
+                "Keep unsupported async generator body execution fail-closed until real suspension/resumption semantics execute the generator body and produce yielded values."
+                    .to_string(),
+            diagnostic_code: Some("ERR_ASYNC_GENERATOR_NEXT_UNIMPLEMENTED".to_string()),
         },
     ]
 }
@@ -1383,8 +1403,8 @@ mod tests {
 
         assert_eq!(parser_count, 6);
         assert_eq!(lowering_count, 6);
-        assert_eq!(runtime_count, 3);
-        assert_eq!(cli_docs_count, 1);
+        assert_eq!(runtime_count, 4);
+        assert_eq!(cli_docs_count, 2);
     }
 
     #[test]
@@ -1395,13 +1415,20 @@ mod tests {
             .iter()
             .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::Runtime)
             .collect();
-        assert_eq!(runtime_findings.len(), 3);
+        assert_eq!(runtime_findings.len(), 4);
         assert_eq!(
             runtime_findings
                 .iter()
                 .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
                 .count(),
             0
+        );
+        assert_eq!(
+            runtime_findings
+                .iter()
+                .filter(|finding| finding.status == ZeroPlaceholderStatus::FailClosed)
+                .count(),
+            1
         );
         let iterator_finding = runtime_findings
             .iter()
@@ -1413,8 +1440,20 @@ mod tests {
             .iter()
             .find(|finding| finding.finding_id == "runtime::json_parse_compound_placeholder")
             .expect("json parse runtime finding");
-        assert_eq!(parse_finding.status, ZeroPlaceholderStatus::Blocked);
+        assert_eq!(parse_finding.status, ZeroPlaceholderStatus::Resolved);
         assert_eq!(parse_finding.owner_bead_id, JSON_RUNTIME_BEAD_ID);
+        let async_generator_finding = runtime_findings
+            .iter()
+            .find(|finding| finding.finding_id == "runtime::async_generator_next_body_execution")
+            .expect("async generator runtime finding");
+        assert_eq!(
+            async_generator_finding.status,
+            ZeroPlaceholderStatus::FailClosed
+        );
+        assert_eq!(
+            async_generator_finding.owner_bead_id,
+            ASYNC_GENERATOR_RUNTIME_BEAD_ID
+        );
     }
 
     #[test]
@@ -1907,8 +1946,8 @@ mod tests {
     }
 
     #[test]
-    fn finding_count_seventeen() {
-        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 17);
+    fn finding_count_eighteen() {
+        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 18);
     }
 
     // --- Deep enrichment tests (PearlTower 2026-03-18) ---

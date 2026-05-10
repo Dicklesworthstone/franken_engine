@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index.v1",
+  "case_id": "incomplete_rch_artifact_retrieval",
+  "source_revision": "2e04f924",
+  "row_count": 1,
+  "reusable_count": 0,
+  "refused_count": 1,
+  "rows": [
+    {
+      "proof_fingerprint": "spbreq-fixture",
+      "verdict_status": "passed",
+      "index_decision": "reuse_refused",
+      "reuse_eligible": false,
+      "freshness": "invalidated",
+      "invalidation_reasons": [
+        "incomplete_rch_artifact_retrieval",
+        "missing_artifact_members"
+      ],
+      "remediation": "Recover or regenerate the complete RCH artifact bundle before considering reuse.",
+      "source_revision": "fixture-source",
+      "dependency_closure_fingerprint": "dep-a",
+      "rch_version": "rch-1",
+      "toolchain": "rust-2026-05-09",
+      "expires_at_epoch": 1778367600,
+      "artifact_bundle": {
+        "complete": false,
+        "members": [
+          "run_manifest.json",
+          "commands.txt"
+        ]
+      },
+      "artifact_paths": {
+        "run_manifest_json": "fixtures/run_manifest.json",
+        "verdict_receipt_json": "fixtures/verdict_receipt.json"
+      },
+      "receipt_kind": "negative_reuse_refusal_receipt"
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/input.normalized.json",
+    "proof_artifact_index_json": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/proof_artifact_index.json",
+    "proof_artifact_index_jsonl": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/proof_artifact_index.jsonl",
+    "reuse_receipts_jsonl": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/reuse_receipts.jsonl",
+    "reuse_refusal_receipts_jsonl": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/reuse_refusal_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/incomplete_rch_artifact_retrieval/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "index_hash": "e4a7072f01d4c6414d753ec504073b30f5186f99ed7d6b60223722033da6d07b"
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index.v1",
+  "case_id": "local_fallback_contaminated",
+  "source_revision": "2e04f924",
+  "row_count": 1,
+  "reusable_count": 0,
+  "refused_count": 1,
+  "rows": [
+    {
+      "proof_fingerprint": "spbreq-fixture",
+      "verdict_status": "passed",
+      "index_decision": "reuse_refused",
+      "reuse_eligible": false,
+      "freshness": "invalidated",
+      "invalidation_reasons": [
+        "local_fallback_contamination"
+      ],
+      "remediation": "Discard the receipt and rerun through a remote-only RCH path.",
+      "source_revision": "fixture-source",
+      "dependency_closure_fingerprint": "dep-a",
+      "rch_version": "rch-1",
+      "toolchain": "rust-2026-05-09",
+      "expires_at_epoch": 1778367600,
+      "artifact_bundle": {
+        "complete": true,
+        "members": [
+          "run_manifest.json",
+          "events.jsonl",
+          "commands.txt",
+          "proof_transcript.txt",
+          "verdict_receipt.json",
+          "report.md"
+        ]
+      },
+      "artifact_paths": {
+        "run_manifest_json": "fixtures/run_manifest.json",
+        "verdict_receipt_json": "fixtures/verdict_receipt.json"
+      },
+      "receipt_kind": "negative_reuse_refusal_receipt"
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/local_fallback_contaminated/out/input.normalized.json",
+    "proof_artifact_index_json": "[SMOKE_ROOT]/local_fallback_contaminated/out/proof_artifact_index.json",
+    "proof_artifact_index_jsonl": "[SMOKE_ROOT]/local_fallback_contaminated/out/proof_artifact_index.jsonl",
+    "reuse_receipts_jsonl": "[SMOKE_ROOT]/local_fallback_contaminated/out/reuse_receipts.jsonl",
+    "reuse_refusal_receipts_jsonl": "[SMOKE_ROOT]/local_fallback_contaminated/out/reuse_refusal_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/local_fallback_contaminated/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/local_fallback_contaminated/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/local_fallback_contaminated/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "index_hash": "9b1440015d25bc39de36fc4cb503c325bb729592e85e3fb85f5c81643b81319e"
+}

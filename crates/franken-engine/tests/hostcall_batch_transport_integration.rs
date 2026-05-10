@@ -68,8 +68,12 @@ fn make_entry(seq: u64, data: &[u8]) -> BatchEntry {
 }
 
 fn established_protocol() -> SessionProtocolState {
+    established_protocol_for("test-sess")
+}
+
+fn established_protocol_for(session_id: &str) -> SessionProtocolState {
     let mut state =
-        SessionProtocolState::new("test-sess".into(), "ext".into(), "host".into(), 64, 50);
+        SessionProtocolState::new(session_id.into(), "ext".into(), "host".into(), 64, 50);
     state
         .transition(
             SessionPhaseTag::Negotiating,
@@ -846,7 +850,8 @@ fn membrane_rejects_sequence_gap() {
     let entry1 = make_entry(1, b"a");
     let entry2 = make_entry(3, b"c"); // gap at 2
     let entries = vec![entry1, entry2];
-    let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch);
+    let batch_mac = compute_batch_mac(&session_key(), 1, &entries, epoch)
+        .expect("batch MAC should compute for sequence-gap fixture");
     let batch = BatchEnvelope {
         batch_id: 1,
         session_id: "s".into(),
@@ -863,7 +868,7 @@ fn membrane_rejects_sequence_gap() {
     let mut membrane = SafetyMembrane::new("s".into(), epoch, 100);
     let credit_pool = CreditPool::new("s".into(), 256, 1024);
     let regions: BTreeMap<u64, SharedMemoryRegion> = BTreeMap::new();
-    let mut protocol = established_protocol();
+    let mut protocol = established_protocol_for("s");
     let verdict = membrane.validate_batch(
         &batch,
         &mut protocol,

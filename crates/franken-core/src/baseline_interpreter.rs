@@ -970,7 +970,7 @@ impl EvidenceLog {
         // is critical for bd-ldm0f. The extension_id must propagate correctly through
         // the entire receipt pipeline without corruption or loss.
         let mut receipt = DecisionReceipt {
-            extension_id,  // <- CRITICAL: extension_id propagation point for bd-ldm0f
+            extension_id, // <- CRITICAL: extension_id propagation point for bd-ldm0f
             operation_type,
             risk_score,
             action_taken,
@@ -4086,7 +4086,7 @@ impl InterpreterCore {
                         };
                         // Push elements to target array
                         if self.heap.get(arr_id.0 as usize).is_some() {
-                            let mut next_idx = self
+                            let next_idx = self
                                 .heap
                                 .get(arr_id.0 as usize)
                                 .map(|obj| {
@@ -4097,9 +4097,20 @@ impl InterpreterCore {
                                     })
                                 })
                                 .unwrap_or(0);
-                            for elem in elements {
-                                self.set_object_property(arr_id, next_idx.to_string(), elem)?;
-                                next_idx += 1;
+                            for (offset, elem) in elements.into_iter().enumerate() {
+                                let offset = u32::try_from(offset).map_err(|_| {
+                                    InterpreterError::TypeError {
+                                        expected: "array index capacity".into(),
+                                        got: format!("spread element offset {offset}"),
+                                    }
+                                })?;
+                                let idx = next_idx.checked_add(offset).ok_or_else(|| {
+                                    InterpreterError::TypeError {
+                                        expected: "array index capacity".into(),
+                                        got: format!("array index overflow at {next_idx}+{offset}"),
+                                    }
+                                })?;
+                                self.set_object_property(arr_id, idx.to_string(), elem)?;
                             }
                         }
                     }
@@ -6441,6 +6452,13 @@ impl InterpreterCore {
                     // the argument to the result promise as a fulfillment value.
                     let _ = self.fulfill_promise(result_promise, argument, label.clone());
                 }
+                crate::promise_model::Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label: task_label,
+                } => {
+                    let _ = self.reject_promise(result_promise, reason, task_label);
+                }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
                     then_handler: _,
@@ -7007,7 +7025,13 @@ impl InterpreterCore {
                 let json_str = match value {
                     Value::Undefined => "undefined".to_string(),
                     Value::Null => "null".to_string(),
-                    Value::Bool(b) => if b { "true".to_string() } else { "false".to_string() },
+                    Value::Bool(b) => {
+                        if b {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        }
+                    }
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => {
                         let val = f.inner();
@@ -7016,8 +7040,10 @@ impl InterpreterCore {
                         } else {
                             val.to_string()
                         }
-                    },
-                    Value::Str(s) => format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\")),
+                    }
+                    Value::Str(s) => {
+                        format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
+                    }
                     Value::Object(_) => "{}".to_string(), // Basic object stringification
                     Value::Function(_) => "undefined".to_string(),
                     Value::Closure(_) => "undefined".to_string(),
@@ -7041,11 +7067,7 @@ impl InterpreterCore {
         }
     }
 
-    fn optional_arg(
-        &self,
-        args: RegRange,
-        offset: u32,
-    ) -> Result<Option<Value>, InterpreterError> {
+    fn optional_arg(&self, args: RegRange, offset: u32) -> Result<Option<Value>, InterpreterError> {
         if offset >= args.count {
             return Ok(None);
         }
@@ -8147,15 +8169,19 @@ mod tests {
     /// baseline to actually dispatch VM instructions and allocate objects.
     fn test_quickjs_config() -> InterpreterConfig {
         let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities =
-            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
         config
     }
 
     fn test_v8_config() -> InterpreterConfig {
         let mut config = InterpreterConfig::v8_defaults();
-        config.granted_capabilities =
-            BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+        config.granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
         config
     }
 
@@ -9109,10 +9135,7 @@ mod tests {
         );
 
         let popped = core
-            .dispatch_builtin_hostcall(
-                "builtin:ArrayPrototypePop",
-                RegRange { start: 0, count: 1 },
-            )
+            .dispatch_builtin_hostcall("builtin:ArrayPrototypePop", RegRange { start: 0, count: 1 })
             .unwrap();
         assert_eq!(popped, Value::Str("x".to_string()));
         assert_eq!(
@@ -11605,6 +11628,9 @@ mod tests {
         #[test]
         fn async_generator_next_returns_promise() {
             let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::HeapAllocate);
 
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {

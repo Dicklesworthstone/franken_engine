@@ -571,7 +571,7 @@ impl FlowEnvelope {
         let flow_in_scope = self.producible_labels.contains(source)
             && self.accessible_clearances.contains(sink_clearance);
         let mut envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
-        let mut advisories = Vec::new();
+        let advisories = Vec::new();
         let mut declassification_obligation = None;
 
         // Enforced authorization for Secret/TopSecret -> SealedSink flows

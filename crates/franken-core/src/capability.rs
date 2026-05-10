@@ -283,6 +283,11 @@ impl CapabilityProfile {
     pub fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
     }
+
+    /// Get the capabilities in this profile.
+    pub fn capabilities(&self) -> &BTreeSet<RuntimeCapability> {
+        &self.capabilities
+    }
 }
 
 impl fmt::Display for CapabilityProfile {

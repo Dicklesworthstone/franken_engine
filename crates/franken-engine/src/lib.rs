@@ -2557,6 +2557,33 @@ mod tests {
     }
 
     #[test]
+    fn quickjs_eval_array_literal_exposes_length() {
+        let mut engine = QuickJsInspiredNativeEngine;
+        let out = engine
+            .eval("[1, 2, 3].length")
+            .expect("array literal eval should expose length");
+
+        assert_eq!(out.value, "3");
+        assert_eq!(out.engine, EngineKind::QuickJsInspiredNative);
+    }
+
+    #[test]
+    fn quickjs_eval_array_some_invokes_callback() {
+        let mut engine = QuickJsInspiredNativeEngine;
+        let positive = engine
+            .eval("[1, 2, 3].some(x => x > 2)")
+            .expect("Array.some eval should execute matching callback");
+        let negative = engine
+            .eval("[1, 2, 3].some(x => x > 5)")
+            .expect("Array.some eval should execute non-matching callback");
+
+        assert_eq!(positive.value, "true");
+        assert_eq!(positive.engine, EngineKind::QuickJsInspiredNative);
+        assert_eq!(negative.value, "false");
+        assert_eq!(negative.engine, EngineKind::QuickJsInspiredNative);
+    }
+
+    #[test]
     fn v8_engine_executes_expression_instead_of_echoing_source() {
         let mut engine = V8InspiredNativeEngine;
         let out = engine

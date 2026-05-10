@@ -6,6 +6,43 @@
 
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${STDLIB_GAP_VERIFICATION_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_stdlib_gap_$(date +%s)_$$}"
+ARTIFACT_DIR="${STDLIB_GAP_VERIFICATION_ARTIFACT_DIR:-artifacts/stdlib_gap_verification}"
+mkdir -p "$ARTIFACT_DIR"
+
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "Required rch binary not found: $RCH_BIN" >&2
+    exit 2
+fi
+
+run_frankenctl() {
+    local timeout_seconds="$1"
+    local step_name="$2"
+    shift 2
+
+    local output_file="${ARTIFACT_DIR}/${step_name}.rch.log"
+
+    timeout "$timeout_seconds" "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        cargo run --bin frankenctl -- "$@" >"$output_file" 2>&1
+    local status=$?
+
+    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$output_file"; then
+        echo "rch reported local fallback for $step_name; refusing local execution" >&2
+        return 125
+    fi
+
+    return "$status"
+}
+
 echo "=== Standard Library Gap Verification ==="
 echo "Task: RC-1.6 Standard Library Completeness"
 echo "Date: $(date -Iseconds)"
@@ -81,11 +118,11 @@ EOF
 
 echo "Test code: console.log('Stdlib test')"
 
-if timeout 10 cargo run --bin frankenctl -- --help >/dev/null 2>&1; then
+if run_frankenctl 10 help --help; then
     echo "✓ frankenctl binary available"
 
     # Try to run the test (expect failure due to execution gap)
-    if timeout 30 cargo run --bin frankenctl -- run --input /tmp/stdlib_gap_test.js >/dev/null 2>&1; then
+    if run_frankenctl 30 basic_run run --input /tmp/stdlib_gap_test.js; then
         echo "✓ Basic execution works"
     else
         echo "❌ Execution fails (likely due to missing builtin dispatch)"

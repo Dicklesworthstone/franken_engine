@@ -14,6 +14,7 @@ case_ids=(
   stale_owner_dirty_overlap
   expired_reservation
   mail_unavailable
+  agent_mail_schema_corrupt
   recently_active_old_bead
   missing_br_snapshot
   contradictory_ownership
@@ -39,6 +40,7 @@ fixtures_shape_ok() {
     .schema_version == "franken-engine.stalled-ownership-reopen.fixtures.v1"
     and ([.cases[].case_id] | sort) == ([
       "active_owner",
+      "agent_mail_schema_corrupt",
       "contradictory_ownership",
       "expired_reservation",
       "mail_unavailable",
@@ -52,6 +54,7 @@ fixtures_shape_ok() {
     and any(.cases[]; .case_id == "stale_owner_dirty_overlap" and .expected.reason_code == "dirty_overlap")
     and any(.cases[]; .case_id == "expired_reservation" and .expected.reason_code == "expired_reservation")
     and any(.cases[]; .case_id == "mail_unavailable" and .expected.reason_code == "mail_unavailable")
+    and any(.cases[]; .case_id == "agent_mail_schema_corrupt" and .expected.reason_code == "degraded_agent_mail_sla")
     and any(.cases[]; .case_id == "recently_active_old_bead" and .expected.recommendation == "keep_assigned")
     and any(.cases[]; .case_id == "missing_br_snapshot" and .expected.fail_closed_reason == "missing_br_snapshot")
     and any(.cases[]; .case_id == "contradictory_ownership" and .expected.fail_closed_reason == "contradictory_ownership_evidence")
@@ -137,6 +140,13 @@ run_case() {
       'any(.recommendations[]?; .reason_code == $reason_code)' \
       "${case_dir}/out/stalled_ownership_reopen_recommendations.json" >/dev/null || {
       record_failure "${case_id} missing reason ${expected_reason}"
+      return
+    }
+  fi
+  if [[ "$expected_reason" == "degraded_agent_mail_sla" ]]; then
+    jq -e 'all(.recommendations[]?; .recommendation != "recommend_reopen" and .manual_br_command == null)' \
+      "${case_dir}/out/stalled_ownership_reopen_recommendations.json" >/dev/null || {
+      record_failure "${case_id} emitted automatic reopen guidance under degraded Agent Mail"
       return
     }
   fi

@@ -224,6 +224,54 @@
       }
     },
     {
+      "case_id": "agent_mail_schema_corrupt",
+      "input": {
+        "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",
+        "now_ts": "2026-05-09T15:00:00Z",
+        "now_epoch": 1778338800,
+        "inactivity_threshold_seconds": 3600,
+        "br_in_progress": {
+          "present": true,
+          "issues": [
+            {
+              "id": "bd-mail-corrupt",
+              "title": "Mail schema corrupt bead",
+              "assignee": "SchemaCorruptAgent",
+              "updated_at": "2026-05-09T11:00:00Z"
+            }
+          ]
+        },
+        "agent_mail_sla_report": {
+          "decision": "degraded",
+          "agents": [
+            {
+              "name": "SchemaCorruptAgent",
+              "last_active_ts": "2026-05-09T11:00:00Z"
+            }
+          ],
+          "diagnostics": [
+            {
+              "code": "schema_corrupt",
+              "detail": "Agent Mail database schema is missing required tables"
+            }
+          ]
+        },
+        "git_activity": [],
+        "dirty_overlap": [],
+        "file_reservations": [],
+        "live_snapshot_bundle": {
+          "present": true,
+          "freshness": "fresh",
+          "contradictory_ownership": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "recommendation": "manual_review",
+        "reason_code": "degraded_agent_mail_sla"
+      }
+    },
+    {
       "case_id": "recently_active_old_bead",
       "input": {
         "schema_version": "franken-engine.stalled-ownership-reopen.input.v1",

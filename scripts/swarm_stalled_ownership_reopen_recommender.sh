@@ -209,6 +209,13 @@ jq -n \
           reason_not_to_act:"Expired reservation evidence requires manual release/ownership review first.",
           manual_br_command:null
         }
+      elif mail_decision != "pass" then
+        {
+          recommendation:"manual_review",
+          reason_code:"degraded_agent_mail_sla",
+          reason_not_to_act:"Agent Mail SLA evidence is degraded or blocked; do not reopen automatically.",
+          manual_br_command:null
+        }
       elif $age == null then
         {
           recommendation:"manual_review",
@@ -276,9 +283,9 @@ jq -n \
           "live read-only snapshot bundle is stale";
           "Refresh snapshot evidence before acting.")
       ] else [] end)
-    + (if mail_decision == "degraded" then [
+    + (if mail_decision != "pass" and mail_decision != "missing" then [
         reason("degraded_agent_mail_sla"; "agent_mail_sla_report";
-          "Agent Mail SLA report is degraded";
+          "Agent Mail SLA report is degraded or blocked";
           "Treat reopen recommendations as manual-review guidance.")
       ] else [] end)
   ) as $degraded_reasons

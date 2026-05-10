@@ -1,0 +1,108 @@
+{
+  "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+  "source_schema_version": "franken-engine.swarm-topology-queue-signal-sources.v1",
+  "source_revision": "fixture-rev",
+  "truth_state": "contaminated",
+  "decision": "fail_closed",
+  "queue_context": {
+    "task_count": 1,
+    "proof_transport_state": "local_fallback_contaminated"
+  },
+  "locality_context": {
+    "recommended_topology_class": "numa_local_hot_cache",
+    "warm_cache_residency_state": "hot",
+    "preferred_numa_nodes": [
+      0
+    ],
+    "preferred_worker_ids": [
+      "rch-d"
+    ]
+  },
+  "rehabilitation_context": {
+    "excluded_worker_ids": [],
+    "watch_worker_ids": [],
+    "rehab_candidate_worker_ids": [],
+    "exclusion_count": 0
+  },
+  "queue_signal_hints": {
+    "rank_bias_mode": "fail_closed",
+    "hot_cache_reuse_confidence_millionths": 0,
+    "locality_confidence_millionths": 0,
+    "usable_preferred_worker_ids": [
+      "rch-d"
+    ]
+  },
+  "degraded_reasons": [],
+  "blocked_reasons": [],
+  "fail_closed_reasons": [
+    {
+      "code": "local_fallback_contaminated",
+      "source_id": "execution_queue_input_json",
+      "detail": "queue proof transport detected local fallback contamination"
+    }
+  ],
+  "source_artifacts": [
+    {
+      "source_id": "execution_queue_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/contaminated_local_fallback/out/execution_queue_input.normalized.json",
+      "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+      "trust_state": "local_fallback_contaminated"
+    },
+    {
+      "source_id": "topology_placement_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/contaminated_local_fallback/out/topology_placement_input.normalized.json",
+      "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+      "trust_state": "confirmed"
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/contaminated_local_fallback/out/rehabilitation_ledger.normalized.json",
+      "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+      "trust_state": "pass"
+    },
+    {
+      "source_id": "placement_adoption_history_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/contaminated_local_fallback/out/placement_adoption_history.normalized.json",
+      "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+      "trust_state": "provided"
+    },
+    {
+      "source_id": "operator_status_snapshot_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/contaminated_local_fallback/out/operator_status_snapshot.normalized.json",
+      "schema_version": "franken-engine.swarm-operator-status.v1",
+      "trust_state": "provided"
+    }
+  ],
+  "artifact_paths": {
+    "input_json": "[SMOKE_ROOT]/contaminated_local_fallback/out/swarm_topology_queue_signal_input.json",
+    "sources_json": "[SMOKE_ROOT]/contaminated_local_fallback/out/swarm_topology_queue_signal_sources.json",
+    "events_jsonl": "[SMOKE_ROOT]/contaminated_local_fallback/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/contaminated_local_fallback/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/contaminated_local_fallback/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false
+  },
+  "queue_signal_input_id": "[QUEUE_SIGNAL_INPUT_ID]"
+}

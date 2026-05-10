@@ -1,0 +1,121 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "duplicate_storm_coalesced",
+  "source_revision": "82884d67",
+  "decision": "pass",
+  "overall_status": "advisory",
+  "fail_closed_reasons": [],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 2,
+    "reusable_verdict_count": 0,
+    "reuse_refusal_count": 0,
+    "stale_proof_count": 0,
+    "contaminated_proof_count": 0,
+    "fairness_debt_total": 0,
+    "coalesced_count": 2
+  },
+  "rows": [
+    {
+      "row_id": "pending-req-dup-a",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-dup-a",
+      "proof_fingerprint": "fp-dup",
+      "agent": "MossySpire",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/duplicate/proof_request_a.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "pending-req-dup-b",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-dup-b",
+      "proof_fingerprint": "fp-dup",
+      "agent": "FrostyPine",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/duplicate/proof_request_b.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "coalesced-rec-dup-a",
+      "kind": "duplicate_storm_coalesced",
+      "status": "coalesced",
+      "request_id": "req-dup-a",
+      "proof_fingerprint": "fp-dup",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "batch-recommendation",
+        "fixtures/duplicate/batch_plan.json"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Coalesce duplicate requests behind one proof, then show every coalesced request id."
+    },
+    {
+      "row_id": "coalesced-rec-dup-b",
+      "kind": "duplicate_storm_coalesced",
+      "status": "coalesced",
+      "request_id": "req-dup-b",
+      "proof_fingerprint": "fp-dup",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "batch-recommendation",
+        "fixtures/duplicate/batch_plan.json"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Coalesce duplicate requests behind one proof, then show every coalesced request id."
+    }
+  ],
+  "recommended_next_actions": [
+    {
+      "row_id": "pending-req-dup-a",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "pending-req-dup-b",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "coalesced-rec-dup-a",
+      "action": "Coalesce duplicate requests behind one proof, then show every coalesced request id."
+    },
+    {
+      "row_id": "coalesced-rec-dup-b",
+      "action": "Coalesce duplicate requests behind one proof, then show every coalesced request id."
+    }
+  ],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/duplicate_storm_coalesced/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "7a07c5013ae0532d2e80b3ed595ba3e357cf05888ede74cc6fa22f3c90931ec2"
+}

@@ -6,6 +6,7 @@ script_path="${root_dir}/scripts/swarm_proof_broker_operator_status.sh"
 contract_path="${root_dir}/docs/swarm_proof_broker_operator_status_contract_v1.json"
 docs_path="${root_dir}/docs/SWARM_PROOF_BROKER_OPERATOR_STATUS.md"
 cases_path="${root_dir}/scripts/testdata/swarm_proof_broker_operator_status/cases.json"
+golden_dir="${SWARM_PROOF_BROKER_OPERATOR_STATUS_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 output_root="${2:-${SWARM_PROOF_BROKER_OPERATOR_STATUS_SMOKE_DIR:-${TMPDIR:-/tmp}/franken-engine-proof-broker-operator-status-smoke-$$}}"
 failures=0
@@ -104,6 +105,47 @@ expand_case() {
       ($fixtures[0].base_input * ($case | del(.expected)))
       + {expected: $case.expected}
     '
+}
+
+canonicalize_bundle() {
+  local bundle_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$bundle_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local bundle_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/swarm_proof_broker_operator_status_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_bundle "$bundle_path" "$tmp_root" >"$golden_path"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+    return
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_bundle "$bundle_path" "$tmp_root"); then
+    record_failure "${case_id} golden drift"
+  fi
 }
 
 assert_case_output() {
@@ -218,7 +260,19 @@ run_case() {
     return
   fi
   assert_case_output "$case_json" "${case_dir}/out"
+  assert_case_golden "$case_id" "${case_dir}/out/operator_status_bundle.json" "$tmp_root"
   record_pass "$case_id"
+}
+
+goldens_shape_ok() {
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+  while IFS= read -r case_id; do
+    local golden_path="${golden_dir}/swarm_proof_broker_operator_status_${case_id}.golden"
+    [[ -f "$golden_path" ]] || { record_failure "${case_id} missing checked-in golden"; continue; }
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done < <(jq -r '.cases[].case_id' "$cases_path")
 }
 
 run_check() {
@@ -227,6 +281,7 @@ run_check() {
   contract_shape_ok || record_failure "contract shape"
   docs_shape_ok || record_failure "docs shape"
   fixtures_shape_ok || record_failure "fixture shape"
+  goldens_shape_ok
   if [[ "$failures" -eq 0 ]]; then
     record_pass "check"
   fi

@@ -1,0 +1,84 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "healthy_reusable_proof",
+  "source_revision": "82884d67",
+  "decision": "pass",
+  "overall_status": "advisory",
+  "fail_closed_reasons": [],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 1,
+    "reusable_verdict_count": 1,
+    "reuse_refusal_count": 0,
+    "stale_proof_count": 0,
+    "contaminated_proof_count": 0,
+    "fairness_debt_total": 0,
+    "coalesced_count": 0
+  },
+  "rows": [
+    {
+      "row_id": "pending-req-healthy",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-healthy",
+      "proof_fingerprint": "fp-healthy",
+      "agent": "MossySpire",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/healthy/proof_request.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "reuse-fp-healthy",
+      "kind": "reusable_verdict",
+      "status": "reuse_allowed",
+      "proof_fingerprint": "fp-healthy",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "artifact-index-snapshot",
+        "fixtures/healthy/proof_artifact_index.json",
+        "fixtures/healthy/reuse_receipt.json"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Reuse this proof only while freshness, exact command text, and artifact retrieval remain visible."
+    }
+  ],
+  "recommended_next_actions": [
+    {
+      "row_id": "pending-req-healthy",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "reuse-fp-healthy",
+      "action": "Reuse this proof only while freshness, exact command text, and artifact retrieval remain visible."
+    }
+  ],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/healthy_reusable_proof/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/healthy_reusable_proof/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/healthy_reusable_proof/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/healthy_reusable_proof/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/healthy_reusable_proof/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/healthy_reusable_proof/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/healthy_reusable_proof/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "bf09b2a0841e8532112a35f86f8acf4178942a83f6192e69fd98fa515763bb89"
+}

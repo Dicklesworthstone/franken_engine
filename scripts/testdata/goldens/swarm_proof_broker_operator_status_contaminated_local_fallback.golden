@@ -1,0 +1,86 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "contaminated_local_fallback",
+  "source_revision": "82884d67",
+  "decision": "pass",
+  "overall_status": "advisory",
+  "fail_closed_reasons": [],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 1,
+    "reusable_verdict_count": 0,
+    "reuse_refusal_count": 1,
+    "stale_proof_count": 0,
+    "contaminated_proof_count": 1,
+    "fairness_debt_total": 0,
+    "coalesced_count": 0
+  },
+  "rows": [
+    {
+      "row_id": "pending-req-contaminated",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-contaminated",
+      "proof_fingerprint": "fp-contaminated",
+      "agent": "MossySpire",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/contaminated/proof_request.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-contaminated",
+      "kind": "reuse_refusal",
+      "status": "contaminated_refused",
+      "proof_fingerprint": "fp-contaminated",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "artifact-index-snapshot",
+        "fixtures/contaminated/proof_artifact_index.json",
+        "fixtures/contaminated/reuse_refusal_receipt.json"
+      ],
+      "refusal_reasons": [
+        "local_fallback_contamination"
+      ],
+      "recommended_next_action": "Discard this proof and rerun through direct remote RCH before showing any green status."
+    }
+  ],
+  "recommended_next_actions": [
+    {
+      "row_id": "pending-req-contaminated",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-contaminated",
+      "action": "Discard this proof and rerun through direct remote RCH before showing any green status."
+    }
+  ],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/contaminated_local_fallback/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/contaminated_local_fallback/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/contaminated_local_fallback/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/contaminated_local_fallback/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/contaminated_local_fallback/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/contaminated_local_fallback/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/contaminated_local_fallback/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "bc4be7c36deb84bb3a3f97744369fdbea9dbc3b665dc46aa778301c6744ec333"
+}

@@ -15,6 +15,10 @@ DEFAULT_OUT_DIR="$PROJECT_ROOT/artifacts/reality_check_acceptance/$DEFAULT_TIMES
 # Parse arguments
 TIMESTAMP="${RC_ACCEPTANCE_TIMESTAMP:-$DEFAULT_TIMESTAMP}"
 OUT_DIR="${RC_ACCEPTANCE_OUT_DIR:-$DEFAULT_OUT_DIR}"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${RC_ACCEPTANCE_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_reality_acceptance_${TIMESTAMP}_$$}"
 
 mkdir -p "$OUT_DIR"
 mkdir -p "$OUT_DIR/execution_evidence"
@@ -99,6 +103,32 @@ run_acceptance_command() {
 
     if "$@" > "$artifact_path" 2>&1; then
         log_test_result "$goal" "PASS" "$evidence_path" "$pass_description"
+    else
+        log_test_result "$goal" "FAIL" "$evidence_path" "$fail_description"
+    fi
+}
+
+run_rch_acceptance_command() {
+    local goal="$1"
+    local evidence_path="$2"
+    local pass_description="$3"
+    local fail_description="$4"
+    shift 4
+
+    local artifact_path="$OUT_DIR/$evidence_path"
+    mkdir -p "$(dirname "$artifact_path")"
+    echo "Command: $RCH_BIN exec -- env RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS CARGO_TARGET_DIR=$CARGO_TARGET_DIR $*" | tee -a "$COMMANDS_LOG"
+
+    if "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        "$@" > "$artifact_path" 2>&1; then
+        if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$artifact_path"; then
+            log_test_result "$goal" "FAIL" "$evidence_path" "rch local fallback detected; refusing local execution"
+        else
+            log_test_result "$goal" "PASS" "$evidence_path" "$pass_description"
+        fi
     else
         log_test_result "$goal" "FAIL" "$evidence_path" "$fail_description"
     fi
@@ -586,8 +616,8 @@ fi
 echo ""
 echo "=== Vision Goal 4: Fleet Quarantine ===" | tee -a "$COMMANDS_LOG"
 
-if [ -f "$PROJECT_ROOT/crates/franken-engine/tests/fleet_quarantine_integration.rs" ]; then
-    run_acceptance_command \
+if [ -f "$PROJECT_ROOT/crates/franken-engine/tests/fleet_quarantine_integration.rs" ] && command -v "$RCH_BIN" >/dev/null 2>&1; then
+    run_rch_acceptance_command \
         "fleet_quarantine" \
         "fleet_evidence/fleet_quarantine_integration.log" \
         "Fleet quarantine integration test executed successfully" \
@@ -632,10 +662,18 @@ echo "=== Vision Goal 6: Standalone Build ===" | tee -a "$COMMANDS_LOG"
 echo "Testing standalone build with no default features..." | tee -a "$COMMANDS_LOG"
 cd "$PROJECT_ROOT"
 
-if cargo check --no-default-features > "$OUT_DIR/build_evidence/standalone_build.log" 2>&1; then
-    log_test_result "standalone_build" "PASS" "build_evidence/standalone_build.log" "cargo check --no-default-features passed"
+if command -v "$RCH_BIN" >/dev/null 2>&1; then
+    run_rch_acceptance_command \
+        "standalone_build" \
+        "build_evidence/standalone_build.log" \
+        "rch-backed cargo check --no-default-features passed" \
+        "Standalone build failed" \
+        cargo check --no-default-features
 else
-    log_test_result "standalone_build" "FAIL" "build_evidence/standalone_build.log" "Standalone build failed"
+    log_fail_closed_artifact \
+        "standalone_build" \
+        "build_evidence/standalone_build_unavailable.json" \
+        "Standalone build acceptance requires rch; local Cargo execution is not accepted"
 fi
 
 # ============================================================================

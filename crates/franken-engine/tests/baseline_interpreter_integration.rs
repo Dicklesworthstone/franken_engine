@@ -10965,34 +10965,27 @@ fn test_array_prototype_some_non_array_thisarg() {
 }
 
 #[test]
-fn test_array_prototype_some_callback_parameter_ignored() {
-    // Document current behavior: callback parameters are read but ignored
-    // When proper callback support is implemented, this test should be updated
+fn test_array_prototype_some_callback_parameter_invoked() {
     let mut interpreter = make_default_interpreter();
 
-    // Callback function provided but ignored in current implementation
-    let result = interpreter.evaluate_expression("[1, 2, 3].some(function(x) { return x > 2; })");
-    if result.is_ok() {
-        // Current simplified implementation returns true because array has truthy values
-        // regardless of the callback logic
-        assert_eq!(
-            result.unwrap(),
-            Value::Bool(true),
-            "Current implementation ignores callback"
-        );
-    }
-
-    // This documents that callbacks are currently not executed
-    // TODO: When callback invocation is implemented, update this test to verify:
-    // - [1, 2, 3].some(x => x > 2) should return true (3 > 2)
-    // - [1, 2, 3].some(x => x > 5) should return false (no element > 5)
+    assert_eq!(
+        interpreter
+            .evaluate_expression("[1, 2, 3].some(function(x) { return x > 2; })")
+            .unwrap(),
+        Value::Bool(true),
+        "Array.some should return true when a function callback matches"
+    );
+    assert_eq!(
+        interpreter
+            .evaluate_expression("[1, 2, 3].some(function(x) { return x > 5; })")
+            .unwrap(),
+        Value::Bool(false),
+        "Array.some should return false when a function callback does not match"
+    );
 }
 
 #[test]
-#[ignore = "callback invocation not implemented - bd-6vwi8"]
 fn test_array_some_callback_invocation_integration() {
-    // Integration test for proper Array.some() callback execution
-    // This test will pass when callback invocation is properly implemented
     let mut interpreter = make_default_interpreter();
 
     // Test case 1: callback should find matching element
@@ -11013,14 +11006,14 @@ fn test_array_some_callback_invocation_integration() {
         "Array.some should return false when no element > 5"
     );
 
-    // Test case 3: more complex callback with index parameter
-    let result3 = interpreter
-        .evaluate_expression("[10, 20, 30].some((value, index) => value === index * 10)");
+    // Test case 3: callback receives the zero-based index parameter
+    let result3 =
+        interpreter.evaluate_expression("[10, 20, 30].some((value, index) => index === 1)");
     assert!(result3.is_ok(), "Expression should evaluate successfully");
     assert_eq!(
         result3.unwrap(),
         Value::Bool(true),
-        "Array.some should return true when callback logic matches pattern"
+        "Array.some should return true when callback logic matches index"
     );
 
     // Test case 4: early termination behavior

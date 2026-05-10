@@ -136,6 +136,55 @@ fn quickjs_eval_counter_closure_persists_captured_mutation() {
 }
 
 #[test]
+fn quickjs_eval_passes_arguments_to_function_expression() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let outcome = engine
+        .eval("const gt2 = function(x) { return x > 2; }; gt2(3);")
+        .expect("function expression should receive call argument");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.value, "true");
+}
+
+#[test]
+fn quickjs_eval_passes_arguments_to_arrow_function() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let outcome = engine
+        .eval("const gt2 = x => x > 2; gt2(3);")
+        .expect("arrow function should receive call argument");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.value, "true");
+}
+
+#[test]
+fn quickjs_eval_array_literal_exposes_length() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let outcome = engine
+        .eval("[1, 2, 3].length")
+        .expect("array literal should expose its lowered length property");
+
+    assert_eq!(outcome.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(outcome.value, "3");
+}
+
+#[test]
+fn quickjs_eval_array_some_invokes_source_callback() {
+    let mut engine = QuickJsInspiredNativeEngine;
+    let positive = engine
+        .eval("[1, 2, 3].some(x => x > 2)")
+        .expect("Array.some should execute source callback");
+    let negative = engine
+        .eval("[1, 2, 3].some(x => x > 5)")
+        .expect("Array.some should execute source callback");
+
+    assert_eq!(positive.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(positive.value, "true");
+    assert_eq!(negative.engine, EngineKind::QuickJsInspiredNative);
+    assert_eq!(negative.value, "false");
+}
+
+#[test]
 fn quickjs_eval_normalizes_typescript_and_reports_source_ingestion() {
     let mut engine = QuickJsInspiredNativeEngine;
     let outcome = engine

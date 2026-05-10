@@ -3107,11 +3107,11 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::LoadLiteral { value } => {
                     let literal_reg = alloc_register(&mut register_cursor);
-                    lower_literal_to_ir3(
+                    lower_literal_to_ir3_optimized(
                         value,
                         literal_reg,
                         &mut ir3.instructions,
-                        &mut ir3.constant_pool,
+                        &mut constant_pool,
                     );
                     let start = alloc_register(&mut register_cursor);
                     ir3.instructions.push(Ir3Instruction::Move {
@@ -3728,7 +3728,7 @@ pub fn lower_ir2_to_ir3(
                 }
                 emit_array_length_store(
                     &mut ir3.instructions,
-                    &mut ir3.constant_pool,
+                    &mut constant_pool,
                     &mut register_cursor,
                     dst,
                     *count,
@@ -4040,11 +4040,11 @@ pub fn lower_ir2_to_ir3(
                 let dst = alloc_register(&mut register_cursor);
                 if part_regs.is_empty() {
                     // Empty template literal => empty string.
-                    lower_literal_to_ir3(
+                    lower_literal_to_ir3_optimized(
                         &Ir1Literal::String(String::new()),
                         dst,
                         &mut ir3.instructions,
-                        &mut ir3.constant_pool,
+                        &mut constant_pool,
                     );
                 } else {
                     // Copy parts into contiguous registers so RegRange is valid.
@@ -4743,7 +4743,7 @@ pub fn lower_ir2_to_ir3(
                     }
                     emit_array_length_store(
                         &mut ir3.instructions,
-                        &mut ir3.constant_pool,
+                        &mut constant_pool,
                         &mut fn_reg,
                         dst,
                         *count,
@@ -4965,11 +4965,11 @@ pub fn lower_ir2_to_ir3(
 
                     let dst = alloc_register(&mut fn_reg);
                     if part_regs.is_empty() {
-                        lower_literal_to_ir3(
+                        lower_literal_to_ir3_optimized(
                             &Ir1Literal::String(String::new()),
                             dst,
                             &mut ir3.instructions,
-                            &mut ir3.constant_pool,
+                            &mut constant_pool,
                         );
                     } else {
                         let start_reg = fn_reg;
@@ -7776,13 +7776,13 @@ fn extract_hostcall_capability(raw: &str) -> Option<String> {
 
 fn emit_array_length_store(
     instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut Vec<String>,
+    constant_pool: &mut ConstantPool,
     register_cursor: &mut Reg,
     array_reg: Reg,
     length: u32,
 ) {
     let key_reg = alloc_register(register_cursor);
-    let key_pool_index = push_constant(constant_pool, "length");
+    let key_pool_index = push_constant_optimized(constant_pool, "length");
     instructions.push(Ir3Instruction::LoadStr {
         dst: key_reg,
         pool_index: key_pool_index,
@@ -7797,31 +7797,6 @@ fn emit_array_length_store(
         key: key_reg,
         val: length_reg,
     });
-}
-
-fn lower_literal_to_ir3(
-    value: &Ir1Literal,
-    dst: Reg,
-    instructions: &mut Vec<Ir3Instruction>,
-    constant_pool: &mut Vec<String>,
-) {
-    match value {
-        Ir1Literal::String(text) => {
-            let pool_index = push_constant(constant_pool, text);
-            instructions.push(Ir3Instruction::LoadStr { dst, pool_index });
-        }
-        Ir1Literal::Integer(value) => {
-            instructions.push(Ir3Instruction::LoadInt { dst, value: *value })
-        }
-        Ir1Literal::Float(bits) => {
-            instructions.push(Ir3Instruction::LoadFloat { dst, bits: *bits })
-        }
-        Ir1Literal::Boolean(value) => {
-            instructions.push(Ir3Instruction::LoadBool { dst, value: *value })
-        }
-        Ir1Literal::Null => instructions.push(Ir3Instruction::LoadNull { dst }),
-        Ir1Literal::Undefined => instructions.push(Ir3Instruction::LoadUndefined { dst }),
-    }
 }
 
 fn lower_literal_to_ir3_optimized(
@@ -7851,20 +7826,6 @@ fn lower_literal_to_ir3_optimized(
 
 fn push_constant_optimized(constant_pool: &mut ConstantPool, value: &str) -> u32 {
     constant_pool.push(value)
-}
-
-/// 2-parameter dedup-and-append constant pool helper.
-///
-/// Linear scan is intentional: pools are per-lowering and small in practice;
-/// callers that need O(1) dedup should migrate to `push_constant_optimized`
-/// with `ConstantPool` (which keeps an internal index alongside the Vec).
-fn push_constant(pool: &mut Vec<String>, value: &str) -> u32 {
-    if let Some(index) = pool.iter().position(|entry| entry == value) {
-        return u32::try_from(index).unwrap_or(u32::MAX);
-    }
-
-    pool.push(value.to_string());
-    u32::try_from(pool.len() - 1).unwrap_or(u32::MAX)
 }
 
 fn alloc_register(cursor: &mut Reg) -> Reg {
@@ -9022,27 +8983,27 @@ mod tests {
         assert!(flow.is_none());
     }
 
-    // -- push_constant dedup --
+    // -- push_constant_optimized dedup --
 
     #[test]
-    fn push_constant_deduplicates() {
-        let mut pool = Vec::new();
-        let idx1 = push_constant(&mut pool, "hello");
-        let idx2 = push_constant(&mut pool, "world");
-        let idx3 = push_constant(&mut pool, "hello");
+    fn push_constant_optimized_deduplicates() {
+        let mut pool = ConstantPool::new();
+        let idx1 = push_constant_optimized(&mut pool, "hello");
+        let idx2 = push_constant_optimized(&mut pool, "world");
+        let idx3 = push_constant_optimized(&mut pool, "hello");
         assert_eq!(idx1, 0);
         assert_eq!(idx2, 1);
         assert_eq!(idx3, 0); // dedup
-        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.into_vec().len(), 2);
     }
 
-    // -- lower_literal_to_ir3 --
+    // -- lower_literal_to_ir3_optimized --
 
     #[test]
     fn lower_literal_string_to_ir3() {
         let mut instructions = Vec::new();
-        let mut pool = Vec::new();
-        lower_literal_to_ir3(
+        let mut pool = ConstantPool::new();
+        lower_literal_to_ir3_optimized(
             &Ir1Literal::String("hello".to_string()),
             0,
             &mut instructions,
@@ -9056,27 +9017,27 @@ mod tests {
                 pool_index: 0
             }
         ));
-        assert_eq!(pool, vec!["hello"]);
+        assert_eq!(pool.into_vec(), vec!["hello"]);
     }
 
     #[test]
     fn lower_literal_integer_to_ir3() {
         let mut instructions = Vec::new();
-        let mut pool = Vec::new();
-        lower_literal_to_ir3(&Ir1Literal::Integer(99), 1, &mut instructions, &mut pool);
+        let mut pool = ConstantPool::new();
+        lower_literal_to_ir3_optimized(&Ir1Literal::Integer(99), 1, &mut instructions, &mut pool);
         assert_eq!(instructions.len(), 1);
         assert!(matches!(
             instructions[0],
             Ir3Instruction::LoadInt { dst: 1, value: 99 }
         ));
-        assert!(pool.is_empty());
+        assert!(pool.into_vec().is_empty());
     }
 
     #[test]
     fn lower_literal_boolean_to_ir3() {
         let mut instructions = Vec::new();
-        let mut pool = Vec::new();
-        lower_literal_to_ir3(&Ir1Literal::Boolean(true), 2, &mut instructions, &mut pool);
+        let mut pool = ConstantPool::new();
+        lower_literal_to_ir3_optimized(&Ir1Literal::Boolean(true), 2, &mut instructions, &mut pool);
         assert_eq!(instructions.len(), 1);
         assert!(matches!(
             instructions[0],
@@ -9090,8 +9051,8 @@ mod tests {
     #[test]
     fn lower_literal_null_to_ir3() {
         let mut instructions = Vec::new();
-        let mut pool = Vec::new();
-        lower_literal_to_ir3(&Ir1Literal::Null, 3, &mut instructions, &mut pool);
+        let mut pool = ConstantPool::new();
+        lower_literal_to_ir3_optimized(&Ir1Literal::Null, 3, &mut instructions, &mut pool);
         assert_eq!(instructions.len(), 1);
         assert!(matches!(
             instructions[0],
@@ -9102,8 +9063,8 @@ mod tests {
     #[test]
     fn lower_literal_undefined_to_ir3() {
         let mut instructions = Vec::new();
-        let mut pool = Vec::new();
-        lower_literal_to_ir3(&Ir1Literal::Undefined, 4, &mut instructions, &mut pool);
+        let mut pool = ConstantPool::new();
+        lower_literal_to_ir3_optimized(&Ir1Literal::Undefined, 4, &mut instructions, &mut pool);
         assert_eq!(instructions.len(), 1);
         assert!(matches!(
             instructions[0],

@@ -1,0 +1,131 @@
+{
+  "schema_version": "franken-engine.agent-mail-outage-continuity-bridge-contract.v1",
+  "bead_id": "bd-dl3q2",
+  "parent_bead_id": "bd-hx1cw",
+  "track": "IDEA-WIZARD-III",
+  "component": "swarm_agent_mail_outage_continuity_bridge",
+  "purpose": "Preserve coordination continuity when Agent Mail is red or corrupt while br, git, and RCH evidence still work.",
+  "docs": {
+    "runbook": "docs/SWARM_AGENT_MAIL_OUTAGE_CONTINUITY_BRIDGE.md",
+    "contract": "docs/agent_mail_outage_continuity_bridge_contract_v1.json"
+  },
+  "implementation_script": "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+  "smoke_script": "scripts/e2e/swarm_agent_mail_outage_continuity_bridge_smoke.sh",
+  "fixtures": "scripts/testdata/swarm_agent_mail_outage_continuity_bridge/cases.json",
+  "required_sources": [
+    {
+      "source_id": "br_in_progress_json",
+      "command_shape": "br list --status=in_progress --json",
+      "required": true,
+      "missing_decision": "blocked"
+    }
+  ],
+  "optional_sources": [
+    {
+      "source_id": "mail_health_json",
+      "command_shape": "Agent Mail health_check output captured by operator",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "mail_bootstrap_json",
+      "command_shape": "macro_start_session or registration result captured by operator",
+      "required": false,
+      "missing_decision": "healthy_if_mail_health_is_healthy"
+    },
+    {
+      "source_id": "agent_profiles_json",
+      "command_shape": "Agent Mail list_agents output when available",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "git_status_json",
+      "command_shape": "git status dirty-path snapshot",
+      "required": false,
+      "missing_decision": "degraded"
+    },
+    {
+      "source_id": "file_reservations_json",
+      "command_shape": "Agent Mail file reservation snapshot when available",
+      "required": false,
+      "missing_decision": "degraded"
+    }
+  ],
+  "decisions": [
+    "healthy",
+    "degraded",
+    "blocked"
+  ],
+  "failure_reason_codes": [
+    "FE-IW3-MAIL-DB-CORRUPT",
+    "FE-IW3-MAIL-SNAPSHOT-MISSING",
+    "FE-IW3-MAIL-DEGRADED",
+    "FE-IW3-MAIL-BOOTSTRAP-FAILED",
+    "FE-IW3-MAIL-BOOTSTRAP-DEGRADED",
+    "FE-IW3-BR-SOFT-LOCK-MISSING"
+  ],
+  "required_outputs": [
+    "mail_outage_continuity_bridge.json",
+    "soft_lock_receipts.jsonl",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "report_required_fields": [
+    "schema_version",
+    "source_revision",
+    "generated_epoch_seconds",
+    "decision",
+    "mail_health_state",
+    "mail_bootstrap_state",
+    "degraded_reasons",
+    "blocked_reasons",
+    "summary",
+    "soft_lock_receipts",
+    "recommended_actions",
+    "mutation_policy",
+    "artifact_paths",
+    "source_paths"
+  ],
+  "soft_lock_receipt_required_fields": [
+    "issue_id",
+    "title",
+    "status",
+    "assignee",
+    "soft_lock_state",
+    "reservation_authority",
+    "recommended_manual_action"
+  ],
+  "required_fixture_cases": [
+    "missing_table_health_json",
+    "transient_macro_start_failure",
+    "healthy_mail_snapshot",
+    "br_only_soft_lock_fallback"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_first": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "closes_beads": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "queries_live_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/agent_mail_outage_continuity_bridge_contract_v1.json scripts/testdata/swarm_agent_mail_outage_continuity_bridge/cases.json",
+    "bash -n scripts/swarm_agent_mail_outage_continuity_bridge.sh scripts/e2e/swarm_agent_mail_outage_continuity_bridge_smoke.sh",
+    "bash scripts/e2e/swarm_agent_mail_outage_continuity_bridge_smoke.sh check",
+    "bash scripts/e2e/swarm_agent_mail_outage_continuity_bridge_smoke.sh selftest",
+    "git diff --check -- docs/SWARM_AGENT_MAIL_OUTAGE_CONTINUITY_BRIDGE.md docs/agent_mail_outage_continuity_bridge_contract_v1.json scripts/swarm_agent_mail_outage_continuity_bridge.sh scripts/e2e/swarm_agent_mail_outage_continuity_bridge_smoke.sh scripts/testdata/swarm_agent_mail_outage_continuity_bridge/cases.json"
+  ]
+}

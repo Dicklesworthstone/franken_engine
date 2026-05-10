@@ -89,6 +89,70 @@ fn simulate_replay(automaton: &SchedulerAutomaton, actions: &[TransitionLabel]) 
     state_sequence
 }
 
+fn check_identity_replay(lhs: &[StateId], rhs: &[StateId]) -> Result<(), String> {
+    if lhs == rhs {
+        Ok(())
+    } else {
+        Err(format!(
+            "identity replay diverged: left={lhs:?}, right={rhs:?}"
+        ))
+    }
+}
+
+fn check_prefix_relation(prefix_result: &[StateId], full_result: &[StateId]) -> Result<(), String> {
+    if prefix_result.len() > full_result.len() {
+        return Err(format!(
+            "prefix replay produced longer sequence: prefix_len={}, full_len={}",
+            prefix_result.len(),
+            full_result.len()
+        ));
+    }
+
+    if prefix_result != &full_result[..prefix_result.len()] {
+        return Err(format!(
+            "prefix replay diverged: prefix={prefix_result:?}, full_prefix={:?}",
+            &full_result[..prefix_result.len()]
+        ));
+    }
+
+    Ok(())
+}
+
+fn check_composition_relation(
+    combined_result: &[StateId],
+    first_result: &[StateId],
+    continuation_from_join: &[StateId],
+) -> Result<(), String> {
+    if combined_result.len() < first_result.len() {
+        return Err(format!(
+            "combined replay shorter than first segment: combined_len={}, first_len={}",
+            combined_result.len(),
+            first_result.len()
+        ));
+    }
+
+    if &combined_result[..first_result.len()] != first_result {
+        return Err(format!(
+            "combined replay diverged in first segment: combined_prefix={:?}, first={first_result:?}",
+            &combined_result[..first_result.len()]
+        ));
+    }
+
+    let join = first_result
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| "first segment produced no join state".to_string())?;
+
+    if &combined_result[join..] != continuation_from_join {
+        return Err(format!(
+            "combined replay diverged in second segment: combined_tail={:?}, expected_tail={continuation_from_join:?}",
+            &combined_result[join..]
+        ));
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Metamorphic Relations (Score ≥ 2.0)
 // ---------------------------------------------------------------------------
@@ -110,7 +174,7 @@ fn mr_identity_replay_determinism() {
         let sequence1 = simulate_replay(&automaton, &actions);
         let sequence2 = simulate_replay(&automaton, &actions);
 
-        prop_assert_eq!(sequence1, sequence2,
+        prop_assert!(check_identity_replay(&sequence1, &sequence2).is_ok(),
             "Identity replay failed: same actions produced different sequences");
     });
 }
@@ -133,11 +197,8 @@ fn mr_subsequence_monotonic() {
             let full_result = simulate_replay(&automaton, &full_actions);
             let prefix_result = simulate_replay(&automaton, prefix_actions);
 
-            // Prefix result must be a prefix of full result
-            prop_assert!(prefix_result.len() <= full_result.len(),
-                "Prefix replay produced longer sequence than full replay");
-            prop_assert_eq!(&prefix_result[..], &full_result[..prefix_result.len()],
-                "Prefix replay diverged from full sequence at some point");
+            prop_assert!(check_prefix_relation(&prefix_result, &full_result).is_ok(),
+                "Prefix replay diverged from full sequence");
         }
     });
 }
@@ -202,30 +263,8 @@ fn mr_replay_composition() {
     );
     let combined_result = simulate_replay(&automaton, &combined);
 
-    // Combined result should contain states from both parts
-    assert!(
-        combined_result.len() >= result1.len(),
-        "Combined replay shorter than first part"
-    );
-
-    // First part should match
-    assert_eq!(
-        &combined_result[..result1.len()],
-        &result1[..],
-        "Combined replay diverged in first segment"
-    );
-
-    // Second part should match the stateful continuation from the join state.
-    // simulate_replay prefixes the start state, so combined_result[join..] (the
-    // tail beginning at the join state) must equal result2_from_active in full.
-    // Open-ended slice keeps a length mismatch as a clean assert_eq failure
-    // rather than an out-of-bounds panic.
-    let join = result1.len() - 1;
-    assert_eq!(
-        &combined_result[join..],
-        &result2_from_active[..],
-        "Combined replay diverged in second segment"
-    );
+    check_composition_relation(&combined_result, &result1, &result2_from_active)
+        .expect("Combined replay diverged from composed segments");
 }
 
 /// Helper function for stateful replay composition
@@ -304,17 +343,17 @@ fn mr_composite_identity_subsequence() {
             // is still owned for the MR2 check below)
             let prefix_result1 = simulate_replay(&automaton, prefix);
             let prefix_result2 = simulate_replay(&automaton, prefix);
-            prop_assert_eq!(&prefix_result1, &prefix_result2,
+            prop_assert!(check_identity_replay(&prefix_result1, &prefix_result2).is_ok(),
                 "Identity property failed for prefix");
 
             // MR2: Subsequence property
             let full_result = simulate_replay(&automaton, &full_actions);
-            prop_assert_eq!(&prefix_result1[..], &full_result[..prefix_result1.len()],
+            prop_assert!(check_prefix_relation(&prefix_result1, &full_result).is_ok(),
                 "Subsequence property failed");
 
             // MR1∘MR2: Combined property - multiple prefix replays within full sequence
             let prefix_result3 = simulate_replay(&automaton, prefix);
-            prop_assert_eq!(&prefix_result3[..], &full_result[..prefix_result3.len()],
+            prop_assert!(check_prefix_relation(&prefix_result3, &full_result).is_ok(),
                 "Composite identity-subsequence property failed");
         }
     });
@@ -333,19 +372,49 @@ fn validate_mr_suite_catches_planted_bugs() {
         TransitionLabel::new("resume"),
     ];
 
-    // Mutation 1: Non-deterministic behavior (random state injection)
-    // This would be caught by mr_identity_replay_determinism
+    let baseline = simulate_replay(&automaton, &test_actions);
+    let repeated = simulate_replay(&automaton, &test_actions);
+    check_identity_replay(&baseline, &repeated).expect("Baseline determinism check failed");
 
-    // Mutation 2: Prefix truncation bug
-    // This would be caught by mr_subsequence_monotonic
+    // Mutation 1: non-deterministic/spurious state injection.
+    let mut spurious_state_result = baseline.clone();
+    spurious_state_result.insert(2, StateId::new("spurious"));
+    assert!(
+        check_identity_replay(&baseline, &spurious_state_result).is_err(),
+        "Identity MR failed to reject a spurious-state mutation"
+    );
 
-    // Mutation 3: Invalid state progression
-    // This would be caught by mr_replay_composition
+    // Mutation 2: prefix replay diverges from the full replay prefix.
+    let prefix_actions = &test_actions[..2];
+    let mut corrupted_prefix = simulate_replay(&automaton, prefix_actions);
+    corrupted_prefix[1] = StateId::new("corrupted-active");
+    assert!(
+        check_prefix_relation(&corrupted_prefix, &baseline).is_err(),
+        "Subsequence MR failed to reject a corrupted-prefix mutation"
+    );
 
-    // For now, test that normal replay is deterministic (baseline)
-    let result1 = simulate_replay(&automaton, &test_actions);
-    let result2 = simulate_replay(&automaton, &test_actions);
-    assert_eq!(result1, result2, "Baseline determinism check failed");
+    // Mutation 3: composition emits an invalid continuation state.
+    let first_actions = vec![TransitionLabel::new("start")];
+    let continuation_actions = vec![
+        TransitionLabel::new("yield"),
+        TransitionLabel::new("resume"),
+    ];
+    let mut combined_actions = first_actions.clone();
+    combined_actions.extend(continuation_actions.clone());
+
+    let first_result = simulate_replay(&automaton, &first_actions);
+    let expected_continuation =
+        simulate_replay_from_state(&automaton, &continuation_actions, &StateId::new("active"));
+    let mut corrupted_combined = simulate_replay(&automaton, &combined_actions);
+    *corrupted_combined
+        .last_mut()
+        .expect("combined replay should include at least the initial state") =
+        StateId::new("wrong-final-state");
+    assert!(
+        check_composition_relation(&corrupted_combined, &first_result, &expected_continuation)
+            .is_err(),
+        "Composition MR failed to reject an invalid-continuation mutation"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +443,8 @@ proptest! {
 
         // Identity property (MR1) — compare by reference so result1 is still owned
         // for the subsequence check below.
-        prop_assert_eq!(&result1, &result2, "Random input failed identity replay");
+        prop_assert!(check_identity_replay(&result1, &result2).is_ok(),
+            "Random input failed identity replay");
 
         // Subsequence property (MR2) - test random prefix
         if actions.len() > 1 {
@@ -382,8 +452,7 @@ proptest! {
             let prefix = &actions[..prefix_len];
             let prefix_result = simulate_replay(&automaton, prefix);
 
-            prop_assert!(prefix_result.len() <= result1.len());
-            prop_assert_eq!(&prefix_result[..], &result1[..prefix_result.len()]);
+            prop_assert!(check_prefix_relation(&prefix_result, &result1).is_ok());
         }
     }
 }

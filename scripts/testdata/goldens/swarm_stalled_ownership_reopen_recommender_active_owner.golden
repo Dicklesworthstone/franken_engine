@@ -1,0 +1,51 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/active_owner/input.json",
+  "normalized_input": "[SMOKE_ROOT]/active_owner/out/input.normalized.json",
+  "evidence_hash": "d4add50e8f68cd4b96cc984051eff1b0ac7a7d0b157ea602ff92fa3dcab40a47",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "pass",
+  "fail_closed_reasons": [],
+  "degraded_reasons": [],
+  "recommendations": [
+    {
+      "bead_id": "bd-active",
+      "title": "Active owner bead",
+      "assignee": "ActiveAgent",
+      "latest_activity_ts": "2026-05-09T14:55:00Z",
+      "inactivity_seconds": 300,
+      "inactivity_threshold_seconds": 3600,
+      "evidence_hash": "d4add50e8f68cd4b96cc984051eff1b0ac7a7d0b157ea602ff92fa3dcab40a47",
+      "evidence_sources": {
+        "br_snapshot": null,
+        "agent_mail_sla_report": null,
+        "file_reservations": null,
+        "git_activity": null,
+        "live_snapshot_bundle": null
+      },
+      "recommendation": "keep_assigned",
+      "reason_code": "active_owner",
+      "reason_not_to_act": "Owner has recent br, Agent Mail, or git activity within threshold.",
+      "manual_br_command": null
+    }
+  ],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/active_owner/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/active_owner/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/active_owner/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/active_owner/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/active_owner/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

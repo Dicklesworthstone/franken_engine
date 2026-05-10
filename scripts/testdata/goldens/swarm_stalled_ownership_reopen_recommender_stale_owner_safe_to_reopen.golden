@@ -1,0 +1,51 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/input.json",
+  "normalized_input": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/input.normalized.json",
+  "evidence_hash": "2e0b06f7fc71d0745cd1c1f212ac8f45ee62ffab2c878747b67f39d1724035f0",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "pass",
+  "fail_closed_reasons": [],
+  "degraded_reasons": [],
+  "recommendations": [
+    {
+      "bead_id": "bd-stale-safe",
+      "title": "Stale safe bead",
+      "assignee": "StaleAgent",
+      "latest_activity_ts": "2026-05-09T12:05:00Z",
+      "inactivity_seconds": 10500,
+      "inactivity_threshold_seconds": 3600,
+      "evidence_hash": "2e0b06f7fc71d0745cd1c1f212ac8f45ee62ffab2c878747b67f39d1724035f0",
+      "evidence_sources": {
+        "br_snapshot": null,
+        "agent_mail_sla_report": null,
+        "file_reservations": null,
+        "git_activity": null,
+        "live_snapshot_bundle": null
+      },
+      "recommendation": "recommend_reopen",
+      "reason_code": "stale_owner_safe_to_reopen",
+      "reason_not_to_act": null,
+      "manual_br_command": "br reopen bd-stale-safe --reason \"stalled ownership evidence: assignee inactive beyond threshold\""
+    }
+  ],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_owner_safe_to_reopen/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

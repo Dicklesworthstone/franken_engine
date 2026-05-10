@@ -1,0 +1,60 @@
+{
+  "schema_version": "franken-engine.objective-artifact-completion-audit-gate-contract.v1",
+  "bead_id": "bd-w8jfe",
+  "parent_bead_id": "bd-hx1cw",
+  "track": "IDEA-WIZARD-III",
+  "component": "objective_artifact_completion_audit_gate",
+  "purpose": "Reject proxy-only completion claims by mapping each objective deliverable to concrete artifact, command, bead, and proof evidence.",
+  "docs": {
+    "runbook": "docs/OBJECTIVE_ARTIFACT_COMPLETION_AUDIT_GATE.md",
+    "contract": "docs/objective_artifact_completion_audit_gate_contract_v1.json"
+  },
+  "implementation_script": "scripts/objective_artifact_completion_audit_gate.sh",
+  "smoke_script": "scripts/e2e/objective_artifact_completion_audit_gate_smoke.sh",
+  "fixtures": "scripts/testdata/objective_artifact_completion_audit_gate/cases.json",
+  "decisions": [
+    "complete",
+    "blocked"
+  ],
+  "required_outputs": [
+    "completion_audit_report.json",
+    "missing_evidence.jsonl",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_sections": [
+    "satisfied",
+    "missing",
+    "weakly_verified",
+    "deferred"
+  ],
+  "failure_reason_codes": [
+    "FE-IW3-COMPLETION-MANIFEST-PROXY",
+    "FE-IW3-COMPLETION-MEMORY-ONLY"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "closes_beads": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "required_fixture_cases": [
+    "objective_fully_covered",
+    "test_passing_requirement_missing",
+    "manifest_present_not_covering_objective",
+    "stale_memory_only_evidence"
+  ],
+  "validation_commands": [
+    "jq empty docs/objective_artifact_completion_audit_gate_contract_v1.json scripts/testdata/objective_artifact_completion_audit_gate/cases.json",
+    "bash -n scripts/objective_artifact_completion_audit_gate.sh scripts/e2e/objective_artifact_completion_audit_gate_smoke.sh",
+    "bash scripts/e2e/objective_artifact_completion_audit_gate_smoke.sh check",
+    "bash scripts/e2e/objective_artifact_completion_audit_gate_smoke.sh selftest",
+    "git diff --check -- docs/OBJECTIVE_ARTIFACT_COMPLETION_AUDIT_GATE.md docs/objective_artifact_completion_audit_gate_contract_v1.json scripts/objective_artifact_completion_audit_gate.sh scripts/e2e/objective_artifact_completion_audit_gate_smoke.sh scripts/testdata/objective_artifact_completion_audit_gate/cases.json"
+  ]
+}

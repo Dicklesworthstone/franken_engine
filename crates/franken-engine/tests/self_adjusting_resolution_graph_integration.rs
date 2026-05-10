@@ -102,14 +102,24 @@ fn test_edge_kind_serde_roundtrip() {
 fn test_module_node_compute_hash_deterministic() {
     let a = make_node("app");
     let b = make_node("app");
-    assert_eq!(a.compute_hash(), b.compute_hash());
+    assert_eq!(
+        a.compute_hash()
+            .expect("module node hash computation should succeed"),
+        b.compute_hash()
+            .expect("module node hash computation should succeed")
+    );
 }
 
 #[test]
 fn test_module_node_compute_hash_differs() {
     let a = make_node("app");
     let b = make_node("utils");
-    assert_ne!(a.compute_hash(), b.compute_hash());
+    assert_ne!(
+        a.compute_hash()
+            .expect("module node hash computation should succeed"),
+        b.compute_hash()
+            .expect("module node hash computation should succeed")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +129,9 @@ fn test_module_node_compute_hash_differs() {
 #[test]
 fn test_dependency_edge_compute_hash() {
     let e = make_edge("a", "b", EdgeKind::StaticImport);
-    let h = e.compute_hash();
+    let h = e
+        .compute_hash()
+        .expect("dependency edge hash computation should succeed");
     assert_ne!(h, ContentHash::compute(b""));
 }
 
@@ -127,7 +139,12 @@ fn test_dependency_edge_compute_hash() {
 fn test_dependency_edge_hash_deterministic() {
     let e1 = make_edge("a", "b", EdgeKind::StaticImport);
     let e2 = make_edge("a", "b", EdgeKind::StaticImport);
-    assert_eq!(e1.compute_hash(), e2.compute_hash());
+    assert_eq!(
+        e1.compute_hash()
+            .expect("dependency edge hash computation should succeed"),
+        e2.compute_hash()
+            .expect("dependency edge hash computation should succeed")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -582,7 +599,12 @@ fn test_dependency_edge_conditions_change_hash() {
     let e1 = make_edge("a", "b", EdgeKind::Conditional);
     let mut e2 = make_edge("a", "b", EdgeKind::Conditional);
     e2.conditions = vec!["import".to_string()];
-    assert_ne!(e1.compute_hash(), e2.compute_hash());
+    assert_ne!(
+        e1.compute_hash()
+            .expect("dependency edge hash computation should succeed"),
+        e2.compute_hash()
+            .expect("dependency edge hash computation should succeed")
+    );
 }
 
 // ---------------------------------------------------------------------------

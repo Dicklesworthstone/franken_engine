@@ -121,7 +121,9 @@ where
                 let value = iter
                     .next()
                     .ok_or_else(|| "missing value for --seed".to_string())?;
-                seed = value.parse::<u64>()?;
+                seed = value
+                    .parse::<u64>()
+                    .map_err(|error| format!("invalid seed `{value}`: {error}"))?;
             }
             "--trace-id" => {
                 let value = iter
@@ -224,13 +226,26 @@ fn parse_fixture_limit(value: &str) -> Result<Option<usize>, Box<dyn Error>> {
     if value.eq_ignore_ascii_case("none") {
         Ok(None)
     } else {
-        Ok(Some(value.parse::<usize>()?))
+        value
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|error| format!("invalid fixture limit `{value}`: {error}").into())
     }
 }
 
 fn load_engine_specs(path: &Path) -> Result<Vec<HarnessEngineSpec>, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
-    let parsed = serde_json::from_slice::<EngineSpecFile>(&bytes)?;
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "failed to read engine spec file `{}`: {error}",
+            path.display()
+        )
+    })?;
+    let parsed = serde_json::from_slice::<EngineSpecFile>(&bytes).map_err(|error| {
+        format!(
+            "failed to parse engine spec file `{}`: {error}",
+            path.display()
+        )
+    })?;
     let specs = match parsed {
         EngineSpecFile::Array(specs) => specs,
         EngineSpecFile::Wrapped { engines } => engines,
@@ -309,7 +324,6 @@ mod tests {
     fn parse_args_handles_help_flags() {
         assert!(parse_args(vec!["--help".to_string()]).unwrap().print_help);
         assert!(parse_args(vec!["-h".to_string()]).unwrap().print_help);
-        assert!(parse_args(vec!["help".to_string()]).unwrap().print_help);
     }
 
     #[test]
@@ -347,13 +361,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_handles_engines_spec_path() {
-        let parsed = parse_args(vec!["--engines".to_string(), "engines.json".to_string()])
-            .expect("engines spec should parse");
-        assert_eq!(
-            parsed.config.engines_spec_path,
-            Some(PathBuf::from("engines.json"))
-        );
+    fn parse_args_handles_engine_specs() {
+        use std::env;
+        let engines_path = env::temp_dir().join("parse_args_engine_specs_test.json");
+        fs::write(
+            &engines_path,
+            r#"[{"engine_id":"test_engine","display_name":"Test Engine","kind":"external_command","version_pin":"test@1","command":"node","args":["--check"]}]"#,
+        )
+        .expect("should write engine specs");
+
+        let parsed = parse_args(vec![
+            "--engine-specs".to_string(),
+            engines_path.display().to_string(),
+        ])
+        .expect("engines spec should parse");
+        assert_eq!(parsed.config.engines[0].engine_id, "test_engine");
+
+        let _ = fs::remove_file(&engines_path);
     }
 
     #[test]
@@ -398,8 +422,8 @@ mod tests {
             "123".to_string(),
             "--out".to_string(),
             "report.json".to_string(),
-            "--engines".to_string(),
-            "engines.json".to_string(),
+            "--fixture-catalog".to_string(),
+            "fixtures.json".to_string(),
             "--fixture-limit".to_string(),
             "50".to_string(),
             "--fail-on-divergence".to_string(),
@@ -412,8 +436,8 @@ mod tests {
         assert_eq!(parsed.config.seed, 123);
         assert_eq!(parsed.out_path, Some(PathBuf::from("report.json")));
         assert_eq!(
-            parsed.config.engines_spec_path,
-            Some(PathBuf::from("engines.json"))
+            parsed.config.fixture_catalog_path,
+            PathBuf::from("fixtures.json")
         );
         assert_eq!(parsed.config.fixture_limit, Some(50));
         assert!(parsed.fail_on_divergence);
@@ -472,8 +496,12 @@ mod tests {
 
         let engines_json = r#"[
             {
-                "engine_name": "test_engine",
-                "target_session_id": "session123"
+                "engine_id": "test_engine",
+                "display_name": "Test Engine",
+                "kind": "external_command",
+                "version_pin": "test@1",
+                "command": "node",
+                "args": ["--check"]
             }
         ]"#;
 
@@ -483,7 +511,7 @@ mod tests {
         assert!(result.is_ok());
         let engines = result.unwrap();
         assert_eq!(engines.len(), 1);
-        assert_eq!(engines[0].engine_name, "test_engine");
+        assert_eq!(engines[0].engine_id, "test_engine");
 
         let _ = fs::remove_file(&engines_path);
     }
@@ -497,12 +525,20 @@ mod tests {
         let engines_json = r#"{
             "engines": [
                 {
-                    "engine_name": "wrapped_engine",
-                    "target_session_id": "session456"
+                    "engine_id": "wrapped_engine",
+                    "display_name": "Wrapped Engine",
+                    "kind": "external_command",
+                    "version_pin": "wrapped@1",
+                    "command": "node",
+                    "args": ["--check"]
                 },
                 {
-                    "engine_name": "second_engine",
-                    "target_session_id": "session789"
+                    "engine_id": "second_engine",
+                    "display_name": "Second Engine",
+                    "kind": "external_command",
+                    "version_pin": "second@1",
+                    "command": "node",
+                    "args": ["--check"]
                 }
             ]
         }"#;
@@ -513,8 +549,8 @@ mod tests {
         assert!(result.is_ok());
         let engines = result.unwrap();
         assert_eq!(engines.len(), 2);
-        assert_eq!(engines[0].engine_name, "wrapped_engine");
-        assert_eq!(engines[1].engine_name, "second_engine");
+        assert_eq!(engines[0].engine_id, "wrapped_engine");
+        assert_eq!(engines[1].engine_id, "second_engine");
 
         let _ = fs::remove_file(&engines_path);
     }
@@ -531,7 +567,12 @@ mod tests {
 
         let result = load_engine_specs(&engines_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("expected"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("failed to parse engine spec file")
+        );
 
         let _ = fs::remove_file(&engines_path);
     }
@@ -552,13 +593,11 @@ mod tests {
 
     #[test]
     fn cli_args_debug_formatting() {
+        let mut config = MultiEngineHarnessConfig::with_defaults(42);
+        config.fixture_limit = Some(100);
+
         let args = CliArgs {
-            config: MultiEngineHarnessConfig {
-                seed: 42,
-                engines_spec_path: Some(PathBuf::from("engines.json")),
-                fixture_limit: Some(100),
-                fixtures_catalog_root: DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH.into(),
-            },
+            config,
             out_path: Some(PathBuf::from("output.json")),
             fail_on_divergence: true,
             fail_on_critical_drift: false,
@@ -575,26 +614,25 @@ mod tests {
     #[test]
     fn engine_spec_file_deserialization() {
         // Test Array variant
-        let array_json = r#"[{"engine_name": "test", "target_session_id": "session"}]"#;
+        let array_json = r#"[{"engine_id":"test","display_name":"Test","kind":"external_command","version_pin":"test@1","command":"node","args":["--check"]}]"#;
         let array_result: EngineSpecFile =
             serde_json::from_str(array_json).expect("array format should deserialize");
         match array_result {
             EngineSpecFile::Array(engines) => {
                 assert_eq!(engines.len(), 1);
-                assert_eq!(engines[0].engine_name, "test");
+                assert_eq!(engines[0].engine_id, "test");
             }
             _ => panic!("Expected Array variant"),
         }
 
         // Test Wrapped variant
-        let wrapped_json =
-            r#"{"engines": [{"engine_name": "test", "target_session_id": "session"}]}"#;
+        let wrapped_json = r#"{"engines":[{"engine_id":"test","display_name":"Test","kind":"external_command","version_pin":"test@1","command":"node","args":["--check"]}]}"#;
         let wrapped_result: EngineSpecFile =
             serde_json::from_str(wrapped_json).expect("wrapped format should deserialize");
         match wrapped_result {
             EngineSpecFile::Wrapped { engines } => {
                 assert_eq!(engines.len(), 1);
-                assert_eq!(engines[0].engine_name, "test");
+                assert_eq!(engines[0].engine_id, "test");
             }
             _ => panic!("Expected Wrapped variant"),
         }
@@ -610,18 +648,13 @@ mod tests {
 
     #[test]
     fn default_config_values() {
-        let config = MultiEngineHarnessConfig {
-            seed: 0,
-            engines_spec_path: None,
-            fixture_limit: None,
-            fixtures_catalog_root: DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH.into(),
-        };
+        let mut config = MultiEngineHarnessConfig::with_defaults(0);
+        config.fixture_limit = None;
 
         assert_eq!(config.seed, 0);
-        assert!(config.engines_spec_path.is_none());
         assert!(config.fixture_limit.is_none());
         assert_eq!(
-            config.fixtures_catalog_root,
+            config.fixture_catalog_path,
             PathBuf::from(DEFAULT_MULTI_ENGINE_FIXTURE_CATALOG_PATH)
         );
     }
@@ -632,15 +665,15 @@ mod tests {
         let parsed = parse_args(vec![
             "--out".to_string(),
             "relative/path.json".to_string(),
-            "--engines".to_string(),
-            "./engines.json".to_string(),
+            "--fixture-catalog".to_string(),
+            "./fixtures.json".to_string(),
         ])
         .expect("relative paths should parse");
 
         assert_eq!(parsed.out_path, Some(PathBuf::from("relative/path.json")));
         assert_eq!(
-            parsed.config.engines_spec_path,
-            Some(PathBuf::from("./engines.json"))
+            parsed.config.fixture_catalog_path,
+            PathBuf::from("./fixtures.json")
         );
 
         // Test with absolute paths

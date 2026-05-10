@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="${root_dir}/scripts/artifact_retrieval_budget_manifest_gate.sh"
 docs_path="${root_dir}/docs/ARTIFACT_RETRIEVAL_BUDGET_MANIFEST_GATE.md"
+golden_dir="${ARTIFACT_RETRIEVAL_BUDGET_MANIFEST_GATE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS artifact-retrieval-budget %s\n' "$1"
@@ -11,6 +12,16 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL artifact-retrieval-budget %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+minimal-successful-retrieval
+over-broad-target-dir-retrieval
+missing-replay-critical-artifact
+deterministic-budget-a
+deterministic-budget-b
+EOF
 }
 
 write_suite_manifest() {
@@ -51,10 +62,79 @@ write_minimal_retrieval_manifest() {
   ' >"$path"
 }
 
+canonicalize_verdict() {
+  local verdict_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$verdict_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local verdict_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/artifact_retrieval_budget_manifest_gate_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_verdict "$verdict_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_verdict "$verdict_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/artifact_retrieval_budget_manifest_gate_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
+}
+
 run_check() {
   bash -n "$gate"
   bash -n "${BASH_SOURCE[0]}"
   grep -q 'franken-engine.artifact-retrieval-budget-manifest-gate.v1' "$docs_path"
+  goldens_shape_ok
   record_pass "bash syntax and docs contract"
 }
 
@@ -62,7 +142,8 @@ run_case() {
   local case_name="$1"
   local expected_exit="$2"
   local output_dir="$3"
-  shift 3
+  local tmp_root="$4"
+  shift 4
 
   local output actual_exit
   set +e
@@ -80,6 +161,7 @@ run_case() {
   test -s "${output_dir}/artifact_retrieval_budget_summary.md"
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/events.jsonl"
+  assert_case_golden "$case_name" "${output_dir}/artifact_retrieval_budget_verdict.json" "$tmp_root"
   record_pass "$case_name"
 }
 
@@ -104,6 +186,7 @@ run_selftest() {
     ]
   ' >"${fixture_dir}/retrieved-minimal.json"
   run_case "minimal-successful-retrieval" 0 "${tmp_root}/minimal" \
+    "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --retrieval-manifest-json "${fixture_dir}/retrieval_manifest.json" \
     --retrieved-files-json "${fixture_dir}/retrieved-minimal.json"
@@ -137,6 +220,7 @@ run_selftest() {
     ]
   ' >"${fixture_dir}/retrieved-overbroad.json"
   run_case "over-broad-target-dir-retrieval" 42 "${tmp_root}/overbroad" \
+    "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --retrieval-manifest-json "${fixture_dir}/retrieval-overbroad.json" \
     --retrieved-files-json "${fixture_dir}/retrieved-overbroad.json"
@@ -153,6 +237,7 @@ run_selftest() {
     ]
   ' >"${fixture_dir}/retrieved-missing-critical.json"
   run_case "missing-replay-critical-artifact" 42 "${tmp_root}/missing-critical" \
+    "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --retrieval-manifest-json "${fixture_dir}/retrieval_manifest.json" \
     --retrieved-files-json "${fixture_dir}/retrieved-missing-critical.json"
@@ -170,10 +255,12 @@ run_selftest() {
     ]
   ' >"${fixture_dir}/retrieved-reordered.json"
   run_case "deterministic-budget-a" 0 "${tmp_root}/deterministic-a" \
+    "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --retrieval-manifest-json "${fixture_dir}/retrieval_manifest.json" \
     --retrieved-files-json "${fixture_dir}/retrieved-minimal.json"
   run_case "deterministic-budget-b" 0 "${tmp_root}/deterministic-b" \
+    "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --retrieval-manifest-json "${fixture_dir}/retrieval_manifest.json" \
     --retrieved-files-json "${fixture_dir}/retrieved-reordered.json"

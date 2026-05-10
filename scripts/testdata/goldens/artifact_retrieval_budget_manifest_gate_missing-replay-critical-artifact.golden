@@ -1,0 +1,44 @@
+{
+  "schema_version": "franken-engine.artifact-retrieval-budget-manifest-gate.v1",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "suite_manifest_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/summary.md"
+  ],
+  "declared_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "replay_critical_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "retrieved_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "undeclared_by_suite": [],
+  "over_budget_retrievals": [],
+  "missing_replay_critical_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl"
+  ],
+  "broad_declared_artifacts": [],
+  "broad_retrieved_artifacts": [],
+  "budget_verdict": "fail_closed",
+  "reason": "replay-critical artifact is missing from the retrieved file set",
+  "exit_code": 42,
+  "hash_basis": {
+    "input_hash": "abfec4cf1d510f019ec884b701c815e56ad4816c1f596c7e1c47b6186a241adc",
+    "verdict_hash": "388120cb51f4919bcd4107987452e23744080f2d6d7d8d9041067bd42be9c7d1"
+  },
+  "artifact_paths": {
+    "artifact_retrieval_budget_verdict_json": "[SMOKE_ROOT]/missing-critical/artifact_retrieval_budget_verdict.json",
+    "artifact_retrieval_budget_summary_md": "[SMOKE_ROOT]/missing-critical/artifact_retrieval_budget_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/missing-critical/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/missing-critical/events.jsonl"
+  }
+}

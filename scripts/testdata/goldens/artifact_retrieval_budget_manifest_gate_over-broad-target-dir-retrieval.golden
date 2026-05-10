@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.artifact-retrieval-budget-manifest-gate.v1",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "suite_manifest_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/summary.md"
+  ],
+  "declared_artifacts": [
+    "[RCH_TARGET]/franken_engine_semantic_dark_matter_pipeline_20260505/**",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt"
+  ],
+  "replay_critical_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt"
+  ],
+  "retrieved_artifacts": [
+    "[RCH_TARGET]/franken_engine_semantic_dark_matter_pipeline_20260505/**",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt"
+  ],
+  "undeclared_by_suite": [
+    "[RCH_TARGET]/franken_engine_semantic_dark_matter_pipeline_20260505/**"
+  ],
+  "over_budget_retrievals": [],
+  "missing_replay_critical_artifacts": [],
+  "broad_declared_artifacts": [
+    "[RCH_TARGET]/franken_engine_semantic_dark_matter_pipeline_20260505/**"
+  ],
+  "broad_retrieved_artifacts": [
+    "[RCH_TARGET]/franken_engine_semantic_dark_matter_pipeline_20260505/**"
+  ],
+  "budget_verdict": "fail_closed",
+  "reason": "target-dir or wildcard retrieval exceeds the declared artifact budget",
+  "exit_code": 42,
+  "hash_basis": {
+    "input_hash": "582dc09a967d8a6875a0dbb2530bb242822e952f4547d7e387339ded632c8fa8",
+    "verdict_hash": "0bbce10d5c62f2edc1af03c226d10ca4eef44eb27d50924dc35ab11c988c27b0"
+  },
+  "artifact_paths": {
+    "artifact_retrieval_budget_verdict_json": "[SMOKE_ROOT]/overbroad/artifact_retrieval_budget_verdict.json",
+    "artifact_retrieval_budget_summary_md": "[SMOKE_ROOT]/overbroad/artifact_retrieval_budget_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/overbroad/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/overbroad/events.jsonl"
+  }
+}

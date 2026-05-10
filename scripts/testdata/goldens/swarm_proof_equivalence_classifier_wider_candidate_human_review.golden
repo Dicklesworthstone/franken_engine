@@ -1,0 +1,113 @@
+{
+  "schema_version": "franken-engine.swarm-proof-equivalence-report.v1",
+  "case_id": "wider_candidate_human_review",
+  "source_revision": "a8f32e40",
+  "verdict": "human_review",
+  "reason_codes": [
+    "candidate_wider_than_requested"
+  ],
+  "remediation": "Ask for human review or rerun the exact requested proof before treating a wider candidate as equivalent.",
+  "candidate": {
+    "accepted_env_allowlist": [
+      "CARGO_TARGET_DIR",
+      "CARGO_INCREMENTAL",
+      "CARGO_BUILD_JOBS"
+    ],
+    "command_kind": "cargo_test",
+    "dependency_closure_roots": [
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "dirty_paths": [
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "feature_flags": [],
+    "git_commit": "fixture-source-revision",
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "cargo",
+      "test",
+      "--all-targets"
+    ],
+    "package": "frankenengine-engine",
+    "rch_posture": "remote",
+    "source_revision": "fixture-source-revision",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "target_kind": "workspace_all_targets",
+    "target_name": "lib",
+    "test_filter": null
+  },
+  "requested": {
+    "accepted_env_allowlist": [
+      "CARGO_TARGET_DIR",
+      "CARGO_INCREMENTAL",
+      "CARGO_BUILD_JOBS"
+    ],
+    "command_kind": "cargo_test",
+    "dependency_closure_roots": [
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "dirty_paths": [
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "feature_flags": [],
+    "git_commit": "fixture-source-revision",
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "cargo",
+      "test",
+      "-p",
+      "frankenengine-engine",
+      "proof_request_capture",
+      "--lib",
+      "--",
+      "--nocapture"
+    ],
+    "package": "frankenengine-engine",
+    "rch_posture": "remote",
+    "source_revision": "fixture-source-revision",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "target_kind": "lib_test_filter",
+    "target_name": "lib",
+    "test_filter": "proof_request_capture"
+  },
+  "partial_overlap": {
+    "relation": "candidate_wider",
+    "candidate_target_rank": 3,
+    "requested_target_rank": 1,
+    "candidate_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+    "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_request_capture --lib -- --nocapture"
+  },
+  "artifact_paths": {
+    "equivalence_report_json": "[SMOKE_ROOT]/wider_candidate_human_review/out/equivalence_report.json",
+    "reuse_refusal_receipt_json": "[SMOKE_ROOT]/wider_candidate_human_review/out/reuse_refusal_receipt.json",
+    "run_manifest_json": "[SMOKE_ROOT]/wider_candidate_human_review/out/run_manifest.json",
+    "events_jsonl": "[SMOKE_ROOT]/wider_candidate_human_review/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/wider_candidate_human_review/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/wider_candidate_human_review/out/report.md",
+    "candidate_request_json": "[SMOKE_ROOT]/wider_candidate_human_review/out/candidate_request.json",
+    "requested_request_json": "[SMOKE_ROOT]/wider_candidate_human_review/out/requested_request.json"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "classifier_hash": "5880d9e1904fbb186a764d4da299fabea59e57f34f05821c544b0230bccc3c52"
+}

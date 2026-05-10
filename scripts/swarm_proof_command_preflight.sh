@@ -280,8 +280,16 @@ if [[ "$transport" == "rch_direct_env" && "$normalized_command" == *" cargo "* ]
 fi
 
 has_target_dir="false"
+target_dir_value=""
+target_dir_correlates_with_bead="false"
 if [[ "$normalized_command" == *"CARGO_TARGET_DIR="* ]]; then
   has_target_dir="true"
+  if [[ "$normalized_command" =~ CARGO_TARGET_DIR=([^[:space:]]+) ]]; then
+    target_dir_value="${BASH_REMATCH[1]}"
+    if [[ "$(safe_token "$target_dir_value")" == *"$safe_bead"* ]]; then
+      target_dir_correlates_with_bead="true"
+    fi
+  fi
 fi
 has_visibility="false"
 if [[ "$normalized_command" == *"RCH_VISIBILITY="* ]]; then
@@ -315,6 +323,10 @@ elif [[ "$heavy_cargo" == "true" && ( "$transport" == "rch_direct_env" || "$tran
     decision="proof_unsafe"
     reason_code="missing_target_dir_policy"
     remediation="Add an isolated target dir before scheduling proof: ${pasteable_command}"
+  elif [[ "$target_dir_correlates_with_bead" != "true" ]]; then
+    decision="proof_unsafe"
+    reason_code="target_dir_bead_mismatch"
+    remediation="Use a target dir correlated with bead ${bead_id}: ${pasteable_command}"
   elif [[ "${#unsupported_env[@]}" -gt 0 ]]; then
     decision="proof_unsafe"
     reason_code="unsupported_env_leakage"
@@ -355,6 +367,8 @@ jq -n \
   --arg remediation "$remediation" \
   --arg pasteable_command "$pasteable_command" \
   --arg safe_target_dir "$safe_target_dir" \
+  --arg target_dir_value "$target_dir_value" \
+  --arg target_dir_correlates_with_bead "$target_dir_correlates_with_bead" \
   --argjson env_assignments "$env_assignments_json" \
   --argjson unsupported_env "$unsupported_env_json" \
   --arg evidence_requires_visibility "$evidence_requires_visibility" \
@@ -382,6 +396,8 @@ jq -n \
       env_assignments: $env_assignments,
       unsupported_env: $unsupported_env,
       has_target_dir: ($has_target_dir == "true"),
+      target_dir: (if $target_dir_value == "" then null else $target_dir_value end),
+      target_dir_correlates_with_bead: ($target_dir_correlates_with_bead == "true"),
       evidence_requires_visibility: ($evidence_requires_visibility == "true"),
       has_visibility: ($has_visibility == "true")
     },

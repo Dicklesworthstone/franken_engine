@@ -38,7 +38,14 @@ contract_shape_ok() {
     and (.accepted_env_allowlist | index("CARGO_TARGET_DIR") != null)
     and (.accepted_env_allowlist | index("RCH_VISIBILITY") != null)
     and (.valid_decisions | sort) == ["needs_human_review", "non_heavy_read_only", "proof_safe", "proof_unsafe"]
-    and (.fixture_cases | length) == 8
+    and (.fixture_cases | length) == 9
+    and (.valid_reason_codes | index("target_dir_bead_mismatch") != null)
+    and (.warm_target_command_matrix | length) == 6
+    and all(.warm_target_command_matrix[]; has("class") and has("canonical_command_shape") and has("required_env") and has("target_dir_template") and has("reuse_safety_constraints") and has("stale_cache_invalidation_inputs") and has("prefer_narrower_proof_when") and has("examples"))
+    and all(.warm_target_command_matrix[]; .class == "source_only" or (.canonical_command_shape | startswith("rch exec -- env")))
+    and all(.warm_target_command_matrix[] | select(.class != "source_only"); (.target_dir_template | contains("<safe_bead_id>")))
+    and any(.warm_target_command_matrix[]; .class == "focused_lib_test" and any(.examples[]; .bead_id == "bd-7eefz"))
+    and any(.warm_target_command_matrix[]; .class == "package_all_targets" and any(.examples[]; .bead_id == "bd-zy517"))
     and .mutation_policy.runs_cargo == false
     and .mutation_policy.runs_rch == false
     and .mutation_policy.mutates_br == false
@@ -58,7 +65,7 @@ fixtures_shape_ok() {
   jq -e '
     .schema_version == "franken-engine.swarm-proof-command-preflight-fixtures.v1"
     and .contract_schema_version == "franken-engine.swarm-proof-command-preflight-contract.v1"
-    and (.cases | length) == 8
+    and (.cases | length) == 9
     and all(.cases[]; has("case_id") and has("command") and has("context") and has("expected"))
     and ([.cases[].expected.decision] | unique | sort) == ["needs_human_review", "non_heavy_read_only", "proof_safe", "proof_unsafe"]
     and ([.cases[].expected.reason_code] | unique | sort) == [
@@ -68,6 +75,7 @@ fixtures_shape_ok() {
       "missing_target_dir_policy",
       "non_heavy_read_only",
       "shell_wrapper_fallback_risk",
+      "target_dir_bead_mismatch",
       "unknown_command_shape",
       "unsupported_env_leakage"
     ]
@@ -105,6 +113,8 @@ assert_case_output() {
       and .reason_code == $expected.reason_code
       and .command.command_kind == $expected.command_kind
       and .command.transport == $expected.transport
+      and (if $expected.reason_code == "target_dir_bead_mismatch" then .command.target_dir_correlates_with_bead == false else true end)
+      and (if $expected.reason_code == "direct_rch_cargo_proof" then .command.target_dir_correlates_with_bead == true else true end)
       and .remediation == $expected.remediation
       and .pasteable_command == $expected.pasteable_command
       and .non_mutation_attestation.runs_cargo == false

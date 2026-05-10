@@ -88,8 +88,25 @@
       }
     },
     {
+      "case_id": "rejected_target_dir_bead_mismatch",
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_shared CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+      "context": {
+        "bead_id": "bd-ua5n2.9",
+        "evidence_requires_visibility": false
+      },
+      "expected": {
+        "exit_code": 42,
+        "decision": "proof_unsafe",
+        "reason_code": "target_dir_bead_mismatch",
+        "command_kind": "cargo_test",
+        "transport": "rch_direct_env",
+        "pasteable_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib",
+        "remediation": "Use a target dir correlated with bead bd-ua5n2.9: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib"
+      }
+    },
+    {
       "case_id": "rejected_env_mismatch",
-      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bad SECRET_TOKEN=abc cargo check -p frankenengine-engine --tests",
+      "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_ua5n2_9 SECRET_TOKEN=abc cargo check -p frankenengine-engine --tests",
       "context": {
         "bead_id": "bd-ua5n2.9",
         "evidence_requires_visibility": false

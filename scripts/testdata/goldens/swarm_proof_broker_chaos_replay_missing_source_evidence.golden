@@ -1,0 +1,214 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-chaos-replay.v1",
+  "case_id": "missing_source_evidence",
+  "source_revision": "92ee8196",
+  "decision": "fail_closed",
+  "fail_closed_reasons": [
+    "insufficient_source_evidence"
+  ],
+  "scenario": {
+    "scenario_id": "chaos-missing_source_evidence",
+    "scenario_kind": "missing_source_evidence",
+    "replayable": false,
+    "reason_codes": [
+      "insufficient_source_evidence"
+    ],
+    "original_evidence": {
+      "agent_mail": {
+        "messages": [],
+        "reservations": [],
+        "status": "missing"
+      },
+      "bundle_path": "fixtures/chaos/base/proof_bundle.json",
+      "proof_requests": [],
+      "rch": {
+        "status": "missing",
+        "summary_path": "fixtures/chaos/base/rch_summary.json",
+        "worker_posture": "unknown"
+      }
+    },
+    "deterministic_deltas": {
+      "artifact_freshness": "fresh",
+      "changed_dependency_roots": [],
+      "changed_dirty_paths": [],
+      "duplicate_request_count": 1,
+      "rch_worker_posture": "remote",
+      "request_timing_offsets_ms": [
+        0
+      ]
+    },
+    "perturbed_requests": [
+      {
+        "request_id": "req-chaos-0",
+        "proof_fingerprint": "fp-missing_source_evidence",
+        "requested_at_offset_ms": 0,
+        "dirty_paths": [],
+        "dependency_closure_roots": [],
+        "rch_posture": "remote"
+      }
+    ],
+    "expected_invariants": {
+      "classifier_verdict": "fail_closed",
+      "artifact_index_decision": "reuse_allowed",
+      "batch_planner_action": "human_review",
+      "operator_status_projection": "fail_closed",
+      "agent_mail_status": "missing",
+      "exact_replay_commands_present": true
+    },
+    "invariant_agreement": false,
+    "replay_commands": [
+      "./scripts/swarm_proof_equivalence_classifier.sh --fixture-json classifier_input.json --output-dir replay/classifier",
+      "./scripts/swarm_proof_artifact_index.sh --fixture-json artifact_index_input.json --output-dir replay/artifact_index",
+      "./scripts/swarm_proof_batch_planner.sh --fixture-json batch_planner_input.json --output-dir replay/batch_planner",
+      "./scripts/swarm_proof_broker_operator_status.sh --fixture-json operator_status_input.json --output-dir replay/operator_status"
+    ],
+    "component_inputs": {
+      "classifier": {
+        "candidate": {},
+        "requested": {
+          "dirty_paths": [],
+          "dependency_closure_roots": [],
+          "rch_posture": "remote",
+          "local_fallback_observed": false
+        }
+      },
+      "artifact_index": {
+        "case_id": "missing_source_evidence",
+        "proofs": [
+          {
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "verdict_status": "passed",
+            "now_epoch": 2000,
+            "expires_at_epoch": 3000,
+            "source_revision": "fixture-source",
+            "expected_source_revision": "fixture-source",
+            "dependency_closure_fingerprint": "base",
+            "expected_dependency_closure_fingerprint": "base",
+            "rch_posture": "remote",
+            "local_fallback_observed": false,
+            "retrieval_complete": true,
+            "artifact_bundle": {
+              "complete": true,
+              "artifacts": [
+                "proof.log",
+                "metadata.json"
+              ]
+            },
+            "artifact_paths": {
+              "preserved_evidence": "fixtures/chaos/base/proof_bundle.json"
+            }
+          }
+        ]
+      },
+      "batch_planner": {
+        "case_id": "missing_source_evidence",
+        "requests": [
+          {
+            "request_id": "req-chaos-0",
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "requested_at_offset_ms": 0,
+            "dirty_paths": [],
+            "dependency_closure_roots": [],
+            "rch_posture": "remote"
+          }
+        ],
+        "artifact_index": [
+          {
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "reuse_eligible": true,
+            "freshness": "fresh",
+            "invalidation_reasons": []
+          }
+        ],
+        "workers": [
+          {
+            "worker_id": "worker-chaos-a",
+            "target_isolation": "compatible",
+            "warm_cache_fingerprints": [
+              "fp-missing_source_evidence"
+            ]
+          }
+        ],
+        "fairness_debt": [],
+        "operator_policy": {
+          "conflict": false
+        }
+      },
+      "operator_status": {
+        "case_id": "missing_source_evidence",
+        "proof_requests": [
+          {
+            "request_id": "req-chaos-0",
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "requested_at_offset_ms": 0,
+            "dirty_paths": [],
+            "dependency_closure_roots": [],
+            "rch_posture": "remote"
+          }
+        ],
+        "artifact_index": [
+          {
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "reuse_eligible": true,
+            "freshness": "fresh",
+            "invalidation_reasons": []
+          }
+        ],
+        "batch_recommendations": [
+          {
+            "recommendation_id": "rec-missing_source_evidence",
+            "request_id": "req-chaos-0",
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "action": "human_review",
+            "evidence_paths": [
+              "fixtures/missing_source_evidence/batch_plan.json"
+            ]
+          }
+        ],
+        "equivalence_receipts": [
+          {
+            "classifier_hash": "classifier-missing_source_evidence",
+            "proof_fingerprint": "fp-missing_source_evidence",
+            "verdict": "fail_closed",
+            "reuse_eligible": false,
+            "reason_codes": [
+              "insufficient_source_evidence"
+            ],
+            "requested": {},
+            "artifact_paths": {
+              "classifier_report": "fixtures/missing_source_evidence/equivalence_report.json"
+            }
+          }
+        ],
+        "fairness_debt": [],
+        "operator_policy": {
+          "panel_claims_mutation_authority": false,
+          "hide_stale_evidence": false,
+          "omit_refusal_reasons": false
+        }
+      }
+    },
+    "scenario_hash": "1b10475bab4d5e875f3d9c4a415adb1242ed6490c3154a10a6c7d7005e226267"
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/input.normalized.json",
+    "chaos_replay_bundle_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/chaos_replay_bundle.json",
+    "scenarios_jsonl": "[SMOKE_ROOT]/missing_source_evidence-a/out/scenarios.jsonl",
+    "replay_commands_sh": "[SMOKE_ROOT]/missing_source_evidence-a/out/replay_commands.sh",
+    "classifier_input_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/classifier_input.json",
+    "artifact_index_input_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/artifact_index_input.json",
+    "batch_planner_input_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/batch_planner_input.json",
+    "operator_status_input_json": "[SMOKE_ROOT]/missing_source_evidence-a/out/operator_status_input.json",
+    "events_jsonl": "[SMOKE_ROOT]/missing_source_evidence-a/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/missing_source_evidence-a/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/missing_source_evidence-a/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

@@ -223,11 +223,23 @@ pub struct RoleKeyEntry {
 }
 
 impl RoleKeyEntry {
-    /// Unique identity bytes for this key entry (role + verification key).
+    /// Unique identity bytes for this key entry.
     pub fn identity_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(self.role.derivation_domain());
-        out.extend_from_slice(self.verification_key.as_bytes());
+        match self.role {
+            KeyRole::Encryption => {
+                if let Some(encryption_public_key) = &self.encryption_public_key {
+                    out.extend_from_slice(encryption_public_key.as_bytes());
+                } else {
+                    out.extend_from_slice(b"missing-encryption-public-key:");
+                    out.extend_from_slice(self.verification_key.as_bytes());
+                }
+            }
+            KeyRole::Signing | KeyRole::Issuance => {
+                out.extend_from_slice(self.verification_key.as_bytes());
+            }
+        }
         out
     }
 }
@@ -799,7 +811,7 @@ mod tests {
                 SigningKey::from_bytes([0x01; 32])
                     // SAFETY: Test helper with fixed 32-byte array should create valid SigningKey
                     .expect("serde deserialization should succeed")
-                    .verification_key(), // placeholder for encryption role
+                    .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
@@ -1324,6 +1336,45 @@ mod tests {
             signing_entry.identity_bytes(),
             issuance_entry.identity_bytes(),
             "same vk but different roles produce different identity bytes"
+        );
+    }
+
+    #[test]
+    fn encryption_role_identity_bytes_include_encryption_public_key() {
+        let seed = test_seed();
+        let epoch = SecurityEpoch::from_raw(1);
+        let verification_key = SigningKey::from_bytes([0x01; 32])
+            .expect("serde deserialization should succeed")
+            .verification_key();
+        let encryption_a = make_encryption_private(&seed, epoch).public_key();
+        let encryption_b = make_encryption_private(&[0x44; 32], epoch).public_key();
+
+        let entry_a = make_role_entry(
+            KeyRole::Encryption,
+            verification_key.clone(),
+            Some(encryption_a.clone()),
+            KeyStatus::Active,
+            epoch,
+            0,
+        );
+        let entry_b = make_role_entry(
+            KeyRole::Encryption,
+            verification_key,
+            Some(encryption_b),
+            KeyStatus::Active,
+            epoch,
+            0,
+        );
+
+        assert_ne!(
+            entry_a.identity_bytes(),
+            entry_b.identity_bytes(),
+            "encryption identities must vary with encryption public key material"
+        );
+        let identity = entry_a.identity_bytes();
+        assert_eq!(
+            &identity[identity.len() - ENCRYPTION_KEY_LEN..],
+            encryption_a.as_bytes()
         );
     }
 

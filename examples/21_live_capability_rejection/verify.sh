@@ -6,9 +6,13 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
-target_dir="${CARGO_TARGET_DIR:-target}"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+target_dir="${CARGO_TARGET_DIR:-${CAPABILITY_REJECTION_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_capability_rejection_$(date +%s)_$$}}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${repo_root}/artifacts/capability_rejection_example/${timestamp}"
+cargo_stderr="${artifact_dir}/cargo_build_stderr.log"
 
 example_id="bd-1bao8-capability-rejection"
 component="live_capability_rejection_example"
@@ -18,8 +22,35 @@ mkdir -p "${artifact_dir}"
 
 cd "${repo_root}"
 
+if ! command -v "${RCH_BIN}" >/dev/null 2>&1; then
+  echo "Required rch binary not found: ${RCH_BIN}" >&2
+  exit 2
+fi
+
+run_rch_cargo_build() {
+  set +e
+  "${RCH_BIN}" exec -- env \
+    "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
+    "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+    "CARGO_TARGET_DIR=${target_dir}" \
+    cargo build -p frankenengine-engine --bin frankenctl > /dev/null 2> "${cargo_stderr}"
+  local status=$?
+  set -e
+
+  if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${cargo_stderr}"; then
+    cat "${cargo_stderr}" >&2
+    echo "rch reported local fallback; refusing local execution" >&2
+    return 125
+  fi
+
+  if [[ "${status}" -ne 0 ]]; then
+    cat "${cargo_stderr}" >&2
+    return "${status}"
+  fi
+}
+
 echo "Building frankenctl binary..."
-cargo build -p frankenengine-engine --bin frankenctl > /dev/null
+run_rch_cargo_build
 frankenctl_bin="${target_dir}/debug/frankenctl"
 
 echo "Testing ambient authority rejection..."
@@ -178,7 +209,8 @@ cat > "${verifier_report}" <<EOF
     "${capability_policy_input}",
     "${capability_evidence}",
     "${denial_receipt}",
-    "${event_trace}"
+    "${event_trace}",
+    "${cargo_stderr}"
   ],
   "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -192,7 +224,7 @@ cat > "${command_transcript}" <<EOF
 
 ## Build Command
 cd ${repo_root}
-cargo build -p frankenengine-engine --bin frankenctl
+${RCH_BIN} exec -- env RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN} CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} CARGO_TARGET_DIR=${target_dir} cargo build -p frankenengine-engine --bin frankenctl
 # Exit code: 0
 
 ## Ambient Authority Attempt (Expected: Denied)

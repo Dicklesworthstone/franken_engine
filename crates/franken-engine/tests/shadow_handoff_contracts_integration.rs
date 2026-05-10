@@ -3,11 +3,20 @@
 //! Validates panel bundle schema, missing-source rendering state, and
 //! no-mutation command surfaces as required by bd-djejh.7.
 
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::shadow_handoff_contracts::*;
 use frankenengine_engine::shadow_service_interface::*;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime};
+
+fn test_epoch(value: u64) -> SecurityEpoch {
+    SecurityEpoch::from_raw(value)
+}
+
+fn drift_detected_at() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)
+}
 
 /// Test panel bundle schema validation
 #[test]
@@ -18,7 +27,7 @@ fn test_panel_bundle_schema_validation() {
         .with_daemon_health(DaemonHealth::Healthy)
         .with_active_journals(5)
         .with_uptime(3600)
-        .with_last_decision(SystemTime::now())
+        .with_last_decision(test_epoch(42))
         .build();
 
     // Validate schema structure
@@ -142,8 +151,7 @@ fn test_panel_bundle_schema_validation() {
 fn test_missing_source_rendering_state() {
     println!("🔍 Testing missing source rendering state...");
 
-    let now = SystemTime::now();
-    let one_hour_ago = now - Duration::from_secs(3600);
+    let one_hour_ago = test_epoch(3);
 
     // Test missing source panel creation
     let missing_panel = create_missing_source_panel(
@@ -196,37 +204,22 @@ fn test_no_mutation_command_surfaces() {
     let config = ShadowServiceConfig::default();
     let service = DefaultShadowService::new(config);
 
-    // Test action preview is advisory-only
+    // The default service is unavailable until real daemon evidence is attached,
+    // so it must not expose a previewable action that could be mistaken for an
+    // executable command surface.
     let preview_request = ActionPreviewRequest {
         action_id: "refresh-stale-sources".to_string(),
     };
 
-    let preview_response = service
+    let preview_error = service
         .preview_action(preview_request)
-        .expect("Should preview action");
+        .expect_err("Unavailable service should not preview actions");
 
-    // Verify advisory-only semantics
-    assert_eq!(preview_response.safety_check, "advisory_only");
-    assert!(preview_response.advisory_notice.contains("preview only"));
-    assert!(
-        preview_response
-            .advisory_notice
-            .contains("Copy and execute manually")
-    );
-    assert!(
-        preview_response
-            .execution_context
-            .contains("appropriate permissions")
-    );
-
-    // Test that command preview doesn't execute anything
-    assert!(
-        preview_response
-            .command_preview
-            .starts_with("shadow-daemon")
-    );
-    assert!(!preview_response.command_preview.contains("--execute"));
-    assert!(!preview_response.command_preview.contains("--force"));
+    if let ServiceError::ActionNotFound { action_id } = preview_error {
+        assert_eq!(action_id, "refresh-stale-sources");
+    } else {
+        panic!("Expected ActionNotFound for unavailable service");
+    }
 
     // Test recommended actions contain command previews but no direct execution
     let bundle = service.get_panel_bundle().expect("Should get panel bundle");
@@ -264,7 +257,7 @@ fn test_no_mutation_command_surfaces() {
 fn test_panel_bundle_serialization_roundtrip() {
     println!("🔍 Testing panel bundle serialization round-trip...");
 
-    let now = SystemTime::now();
+    let now = test_epoch(10);
     let original_bundle = PanelBundleBuilder::new()
         .with_daemon_health(DaemonHealth::Degraded {
             reason: "High memory usage detected".to_string(),
@@ -288,7 +281,7 @@ fn test_panel_bundle_serialization_roundtrip() {
         .add_replay_drift(ReplayDriftEntry {
             journal_id: "drift-journal".to_string(),
             drift_type: "payload_hash_mismatch".to_string(),
-            detected_at: now,
+            detected_at: drift_detected_at(),
             severity: DriftSeverity::Major,
             expected_migration: false,
         })
@@ -404,8 +397,10 @@ fn test_service_interface_contract_compliance() {
 
     // Test health endpoint
     let health = service.get_health().expect("Should provide health status");
-    assert_eq!(health.status, "healthy");
-    assert!(health.uptime_seconds > 0 || health.uptime_seconds == 0); // Allow for very fast tests
+    assert_eq!(health.status, "unavailable");
+    assert_eq!(health.uptime_seconds, 0);
+    assert!(!health.shadow_daemon_connected);
+    assert!(health.last_panel_update.is_none());
     assert!(!health.version.is_empty(), "Version should not be empty");
 
     // Test error handling
@@ -436,7 +431,7 @@ fn test_accessibility_and_scannability() {
         .with_daemon_health(DaemonHealth::Healthy)
         .add_source_freshness(SourceFreshnessEntry {
             source_id: "accessible-source".to_string(),
-            last_update: SystemTime::now(),
+            last_update: test_epoch(11),
             staleness_seconds: 60,
             threshold_seconds: 300,
             is_stale: false,
@@ -479,14 +474,14 @@ fn test_accessibility_and_scannability() {
     let degraded_entry = DegradedGateEntry {
         gate_id: "test-gate".to_string(),
         degradation_reason: "Test".to_string(),
-        degraded_since: SystemTime::now(),
+        degraded_since: test_epoch(12),
         severity: GateDegradationSeverity::Critical,
     };
 
     let drift_entry = ReplayDriftEntry {
         journal_id: "test-journal".to_string(),
         drift_type: "test_drift".to_string(),
-        detected_at: SystemTime::now(),
+        detected_at: drift_detected_at(),
         severity: DriftSeverity::Major,
         expected_migration: false,
     };

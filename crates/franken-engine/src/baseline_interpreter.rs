@@ -4556,34 +4556,10 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        // For now, return a placeholder promise that resolves to {value: undefined, done: true}
-        // Full implementation would execute the async generator body with suspension/resumption
-        let result_promise = self.promise_store.create().0;
-        let result_id = self.alloc_object_with_prototype(None)?;
-        {
-            self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-            self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-        }
-        let js_val =
-            crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id.0));
-        let label = crate::ifc_artifacts::Label::Public;
-        self.promise_store
-            .fulfill(
-                crate::promise_model::PromiseHandle(result_promise),
-                js_val,
-                label,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "promise fulfillment".into(),
-                got: format!("failed to fulfill promise: {e:?}"),
-            })?;
-
-        // Mark as completed for simplicity
-        let async_gen = &mut self.async_generators[gen_id as usize];
-        async_gen.phase = AsyncGeneratorPhase::Completed;
-
-        Ok(Value::Promise(result_promise))
+        Err(InterpreterError::TypeError {
+            expected: "implemented async generator body execution".into(),
+            got: "async generator .next() body execution is not implemented".into(),
+        })
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -28048,6 +28024,35 @@ mod tests {
                 Value::Promise(_) => {}
                 _ => panic!("Expected Promise value, got {:?}", result),
             }
+        }
+
+        #[test]
+        fn async_generator_next_fails_closed_for_suspended_body() {
+            let mut core = test_interpreter();
+            core.async_generators.push(AsyncGeneratorObject {
+                function_index: 0,
+                closure_index: None,
+                saved_ip: 0,
+                saved_registers: Vec::new(),
+                saved_register_base: 0,
+                phase: AsyncGeneratorPhase::SuspendedStart,
+            });
+
+            let err = core
+                .async_generator_next(&test_module(vec![]), 0, Value::Undefined)
+                .expect_err("suspended async generator body execution is unsupported");
+
+            assert_eq!(
+                err,
+                InterpreterError::TypeError {
+                    expected: "implemented async generator body execution".into(),
+                    got: "async generator .next() body execution is not implemented".into(),
+                }
+            );
+            assert!(matches!(
+                core.async_generators[0].phase,
+                AsyncGeneratorPhase::SuspendedStart
+            ));
         }
 
         #[test]

@@ -1,0 +1,147 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-warm_target_prefetch_routes_advisory",
+  "decision": "pass",
+  "catalog_json": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "swarm_warm_target_prefetch_roi_advisory",
+      "score": 45,
+      "matched_intent_tags": [
+        "warm-target",
+        "prefetch",
+        "roi",
+        "operator-advisory"
+      ],
+      "matched_symptom_tags": [
+        "prefetch-cost-unknown"
+      ],
+      "purpose": "warm target prefetch ROI",
+      "implementation_script": "scripts/swarm_warm_target_prefetch_roi_advisory.sh",
+      "smoke_script": "scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh",
+      "contract_json": "docs/swarm_warm_target_prefetch_roi_advisory_contract_v1.json",
+      "runbook_doc": "docs/SWARM_WARM_TARGET_PREFETCH_ROI_ADVISORY.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "swarm_warm_target_prefetch_roi_advisory_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "swarm_warm_target_prefetch_roi_advisory.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "warm_target"
+    },
+    {
+      "surface_id": "locality_aware_remote_proof_batch_packer",
+      "score": 20,
+      "matched_intent_tags": [
+        "locality",
+        "warm-target"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "locality aware remote proof batch",
+      "implementation_script": "scripts/locality_aware_remote_proof_batch_packer.sh",
+      "smoke_script": "scripts/e2e/locality_aware_remote_proof_batch_packer_smoke.sh",
+      "contract_json": "docs/locality_aware_remote_proof_batch_contract_v1.json",
+      "runbook_doc": "docs/LOCALITY_AWARE_REMOTE_PROOF_BATCH_PACKER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "locality_aware_remote_proof_batch_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "locality_aware_remote_proof_batch.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/locality_aware_remote_proof_batch_packer_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "remote_proof"
+    },
+    {
+      "surface_id": "sticky_worker_warm_target_lease_planner",
+      "score": 20,
+      "matched_intent_tags": [
+        "warm-target",
+        "locality"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "sticky worker warm-target lease",
+      "implementation_script": "scripts/sticky_worker_warm_target_lease_planner.sh",
+      "smoke_script": "scripts/e2e/sticky_worker_warm_target_lease_planner_smoke.sh",
+      "contract_json": "docs/STICKY_WORKER_WARM_TARGET_LEASE_PLANNER.md",
+      "runbook_doc": "docs/STICKY_WORKER_WARM_TARGET_LEASE_PLANNER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "suite_manifest_json",
+        "rch_workers_json"
+      ],
+      "emitted_artifacts": [
+        "sticky_worker_warm_target_plan.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/sticky_worker_warm_target_lease_planner_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "sticky_worker_warm_target"
+    }
+  ],
+  "advisory_commands": [
+    "bash scripts/e2e/locality_aware_remote_proof_batch_packer_smoke.sh check",
+    "bash scripts/e2e/sticky_worker_warm_target_lease_planner_smoke.sh check",
+    "bash scripts/e2e/swarm_warm_target_prefetch_roi_advisory_smoke.sh check"
+  ],
+  "artifacts_to_preserve": [
+    "locality_aware_remote_proof_batch.json",
+    "sticky_worker_warm_target_plan.json",
+    "swarm_warm_target_prefetch_roi_advisory.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [],
+  "fail_closed_count": 0,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/warm_target_prefetch_routes_advisory/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

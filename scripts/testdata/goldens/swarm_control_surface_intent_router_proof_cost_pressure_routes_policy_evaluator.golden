@@ -1,0 +1,147 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-proof_cost_pressure_routes_policy_evaluator",
+  "decision": "pass",
+  "catalog_json": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "proof_economy_policy_evaluator",
+      "score": 45,
+      "matched_intent_tags": [
+        "proof-economy",
+        "policy",
+        "cost",
+        "admission"
+      ],
+      "matched_symptom_tags": [
+        "proof-cost-unknown"
+      ],
+      "purpose": "proof economy policy",
+      "implementation_script": "scripts/proof_economy_policy_evaluator.sh",
+      "smoke_script": "scripts/e2e/proof_economy_policy_evaluator_smoke.sh",
+      "contract_json": "docs/proof_economy_policy_evaluator_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_POLICY_EVALUATOR.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_policy_evaluator_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_policy_decision.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_policy_evaluator_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    },
+    {
+      "surface_id": "build_storm_qos_batch_planner",
+      "score": 10,
+      "matched_intent_tags": [
+        "admission"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "build storm QoS batching",
+      "implementation_script": "scripts/build_storm_qos_batch_planner.sh",
+      "smoke_script": "scripts/e2e/build_storm_qos_batch_planner_smoke.sh",
+      "contract_json": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "runbook_doc": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "pending_requests_json",
+        "resource_lease_plans_json",
+        "proof_cost_history_json",
+        "rch_workers_json"
+      ],
+      "emitted_artifacts": [
+        "build_storm_batch_plan.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "build_storm_qos"
+    },
+    {
+      "surface_id": "proof_economy_counterfactual_replay_runner",
+      "score": 10,
+      "matched_intent_tags": [
+        "proof-economy"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "proof economy counterfactual replay",
+      "implementation_script": "scripts/proof_economy_counterfactual_replay_runner.sh",
+      "smoke_script": "scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh",
+      "contract_json": "docs/proof_economy_counterfactual_replay_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_COUNTERFACTUAL_REPLAY_RUNNER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_counterfactual_replay_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_counterfactual_replay.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    }
+  ],
+  "advisory_commands": [
+    "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check",
+    "bash scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh check",
+    "bash scripts/e2e/proof_economy_policy_evaluator_smoke.sh check"
+  ],
+  "artifacts_to_preserve": [
+    "build_storm_batch_plan.json",
+    "proof_economy_counterfactual_replay.json",
+    "proof_economy_policy_decision.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [],
+  "fail_closed_count": 0,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/proof_cost_pressure_routes_policy_evaluator/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

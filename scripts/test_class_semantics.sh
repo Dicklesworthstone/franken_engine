@@ -1,10 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
 echo "=== Class Semantics E2E Test Suite ==="
 
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${CLASS_SEMANTICS_E2E_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_class_semantics_$(date +%s)_$$}"
 LOG="artifacts/test_classes_$(date +%s).jsonl"
 mkdir -p artifacts
+
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "Required rch binary not found: $RCH_BIN" >&2
+    exit 2
+fi
+
+run_frankenctl() {
+    local step_name="$1"
+    shift
+
+    local output_file="artifacts/test_classes_${step_name}.rch.log"
+
+    "$RCH_BIN" exec -- env \
+        "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+        "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+        "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+        cargo run --bin frankenctl -- "$@" 2>&1 | tee "$output_file"
+    local status=${PIPESTATUS[0]}
+
+    if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$output_file"; then
+        echo "rch reported local fallback for $step_name; refusing local execution" >&2
+        return 125
+    fi
+
+    return "$status"
+}
 
 function run_test() {
     local test_name="$1"
@@ -12,11 +45,13 @@ function run_test() {
     local expected_output="$3"
 
     echo "Running test: $test_name"
-    local start_time=$(date +%s.%N)
+    local start_time
+    start_time=$(date +%s.%N)
 
-    if cargo run --bin frankenctl -- run --input "$test_file" --out /tmp/fe_result.json; then
+    if run_frankenctl "$test_name" run --input "$test_file" --out /tmp/fe_result.json; then
         local exit_code=0
-        local result=$(cat /tmp/fe_result.json | jq -r .execution_value 2>/dev/null || echo "parse_error")
+        local result
+        result=$(jq -r .execution_value /tmp/fe_result.json 2>/dev/null || echo "parse_error")
         if [[ "$result" == "$expected_output" ]]; then
             echo "✓ $test_name PASSED"
             local status="pass"
@@ -31,8 +66,10 @@ function run_test() {
         local result="execution_error"
     fi
 
-    local end_time=$(date +%s.%N)
-    local duration=$(echo "$end_time - $start_time" | bc -l)
+    local end_time
+    end_time=$(date +%s.%N)
+    local duration
+    duration=$(echo "$end_time - $start_time" | bc -l)
 
     # Log to JSONL
     echo "{\"test\":\"$test_name\",\"exit\":$exit_code,\"time\":$duration,\"status\":\"$status\",\"result\":\"$result\",\"expected\":\"$expected_output\"}" >> "$LOG"
@@ -235,9 +272,9 @@ EOF
 run_test "three_level_inheritance" "/tmp/fe_class_test13.js" "true"
 
 echo "=== Test Summary ==="
-total_tests=$(cat "$LOG" | wc -l)
-passed_tests=$(cat "$LOG" | jq -r 'select(.status == "pass")' | wc -l)
-failed_tests=$(expr $total_tests - $passed_tests)
+total_tests=$(wc -l < "$LOG")
+passed_tests=$(jq -r 'select(.status == "pass")' "$LOG" | wc -l)
+failed_tests=$((total_tests - passed_tests))
 
 echo "Total tests: $total_tests"
 echo "Passed: $passed_tests"

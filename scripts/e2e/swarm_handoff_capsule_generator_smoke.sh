@@ -6,6 +6,7 @@ generator_script="${root_dir}/scripts/swarm_handoff_capsule_generator.sh"
 docs_path="${root_dir}/docs/SWARM_HANDOFF_CAPSULE_GENERATOR.md"
 contract_path="${root_dir}/docs/swarm_handoff_capsule_generator_contract_v1.json"
 fixtures_path="${SWARM_HANDOFF_CAPSULE_FIXTURES:-${root_dir}/scripts/testdata/swarm_handoff_capsule_generator/cases.json}"
+golden_dir="${SWARM_HANDOFF_CAPSULE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 failures=0
 
@@ -66,6 +67,47 @@ write_json_field() {
   local field="$2"
   local path="$3"
   jq ".${field}" <<<"$case_json" >"$path"
+}
+
+canonicalize_capsule() {
+  local capsule_path="$1"
+  local tmpdir="$2"
+  jq --arg tmpdir "$tmpdir" '
+    def scrub:
+      if type == "string" then
+        gsub($tmpdir; "[SMOKE_ROOT]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$capsule_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local capsule_path="$2"
+  local tmpdir="$3"
+  local golden_path
+
+  golden_path="${golden_dir}/swarm_handoff_capsule_generator_${case_id}.golden"
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_capsule "$capsule_path" "$tmpdir" >"$golden_path"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing golden ${case_id}"
+    return
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_capsule "$capsule_path" "$tmpdir"); then
+    record_failure "golden mismatch ${case_id}"
+  fi
 }
 
 run_case() {
@@ -164,6 +206,7 @@ run_case() {
     jq -e '.operator_notes.notes[0] | has("body") | not' "$capsule" >/dev/null \
       || record_failure "note body leaked in clean fixture"
   fi
+  assert_case_golden "$case_id" "$capsule" "$tmpdir"
   record_pass "$case_id"
 }
 

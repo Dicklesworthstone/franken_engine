@@ -3,13 +3,54 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${RESOURCE_BUDGET_DEMO_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_resource_budget_demo_$(date +%s)_$$}"
 
 echo "Running escalation demo and verifying output..."
 
+if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+  echo "Required rch binary not found: $RCH_BIN" >&2
+  exit 2
+fi
+
+run_resource_budget_demo() {
+  local stdout_path stderr_path
+  stdout_path="$(mktemp "${TMPDIR:-/tmp}/resource-budget-demo.XXXXXX.stdout")"
+  stderr_path="$(mktemp "${TMPDIR:-/tmp}/resource-budget-demo.XXXXXX.stderr")"
+
+  set +e
+  (
+    cd "${repo_root}"
+    "$RCH_BIN" exec -- env \
+      "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+      "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+      "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+      cargo run --quiet --bin franken_resource_budget_demo -- "demo:budget-exhaustion"
+  ) >"${stdout_path}" 2>"${stderr_path}"
+  local status=$?
+  set -e
+
+  if [[ "${status}" -ne 0 ]]; then
+    cat "${stderr_path}" >&2
+    rm -f "${stdout_path}" "${stderr_path}"
+    return "${status}"
+  fi
+
+  if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${stdout_path}" "${stderr_path}"; then
+    cat "${stderr_path}" >&2
+    echo "rch reported local fallback; refusing local execution" >&2
+    rm -f "${stdout_path}" "${stderr_path}"
+    return 125
+  fi
+
+  cat "${stdout_path}"
+  rm -f "${stdout_path}" "${stderr_path}"
+}
+
 # Generate the log
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${repo_root}/target_resource_demo}"
-cd "${repo_root}"
-log_json="$(cargo run --quiet --bin franken_resource_budget_demo -- "demo:budget-exhaustion")"
+log_json="$(run_resource_budget_demo)"
 
 # Parse and verify the log
 expected="$(printf '%s\n' "${log_json}" | jq -r '.expected_sequence | join(",")')"

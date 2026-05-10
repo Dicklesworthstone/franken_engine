@@ -1,8 +1,8 @@
 # Objective Artifact Completion Audit Gate
 
-`bd-w8jfe` adds a fixture-fed audit gate for broad operator objectives. It maps
-each deliverable to concrete artifacts, command receipts, closed beads, and
-proof receipts before completion can be claimed.
+`bd-w8jfe` adds a fixture-fed audit gate for broad operator objectives. It
+maps each deliverable to concrete artifacts, command receipts, closed beads,
+and proof receipts before completion can be claimed.
 
 Machine-readable contract:
 [`docs/objective_artifact_completion_audit_gate_contract_v1.json`](./objective_artifact_completion_audit_gate_contract_v1.json).

@@ -177,10 +177,10 @@ jq -n \
       ]) as $missing
     | ([
         if (($missing | length) > 0 and manifest_covers($id)) then
-          {code:"FE-IW3-COMPLETION-MANIFEST-PROXY"; detail:"manifest mentions deliverable but concrete required evidence is missing"}
+          {code:"FE-IW3-COMPLETION-MANIFEST-PROXY", detail:"manifest mentions deliverable but concrete required evidence is missing"}
         else empty end,
         if (memory_only($id)) then
-          {code:"FE-IW3-COMPLETION-MEMORY-ONLY"; detail:"deliverable is supported only by memory or narrative evidence"}
+          {code:"FE-IW3-COMPLETION-MEMORY-ONLY", detail:"deliverable is supported only by memory or narrative evidence"}
         else empty end
       ]) as $weak
     | {

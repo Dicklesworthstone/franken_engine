@@ -1,0 +1,944 @@
+{
+  "schema_version": "franken-engine.rch-sync-closure-hotspot-ledger.v1",
+  "analysis_status": "ok",
+  "degradation_reason": null,
+  "suite_manifest_status": "provided",
+  "transfer_log_status": "provided",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "manifest_command_count": 3,
+  "logged_command_count": 2,
+  "total_unique_roots": 47,
+  "repeated_hotspot_count": 47,
+  "total_full_sync_commands": 2,
+  "total_narrow_sync_commands": 0,
+  "unobserved_command_ids": [
+    "cmd-narrow-1"
+  ],
+  "command_summaries": [
+    {
+      "command_id": "cmd-full-1",
+      "suite_id": "semantic-dark-matter-pipeline",
+      "worker_id": "vmi1156319",
+      "closure_class": "full",
+      "root_count": 47,
+      "transfer_bytes": 470000,
+      "closure_roots": [
+        "closure/root-01",
+        "closure/root-02",
+        "closure/root-03",
+        "closure/root-04",
+        "closure/root-05",
+        "closure/root-06",
+        "closure/root-07",
+        "closure/root-08",
+        "closure/root-09",
+        "closure/root-10",
+        "closure/root-11",
+        "closure/root-12",
+        "closure/root-13",
+        "closure/root-14",
+        "closure/root-15",
+        "closure/root-16",
+        "closure/root-17",
+        "closure/root-18",
+        "closure/root-19",
+        "closure/root-20",
+        "closure/root-21",
+        "closure/root-22",
+        "closure/root-23",
+        "closure/root-24",
+        "closure/root-25",
+        "closure/root-26",
+        "closure/root-27",
+        "closure/root-28",
+        "closure/root-29",
+        "closure/root-30",
+        "closure/root-31",
+        "closure/root-32",
+        "closure/root-33",
+        "closure/root-34",
+        "closure/root-35",
+        "closure/root-36",
+        "closure/root-37",
+        "closure/root-38",
+        "closure/root-39",
+        "closure/root-40",
+        "closure/root-41",
+        "closure/root-42",
+        "closure/root-43",
+        "closure/root-44",
+        "closure/root-45",
+        "closure/root-46",
+        "closure/root-47"
+      ]
+    },
+    {
+      "command_id": "cmd-full-2",
+      "suite_id": "semantic-dark-matter-pipeline",
+      "worker_id": "vmi1167313",
+      "closure_class": "full",
+      "root_count": 47,
+      "transfer_bytes": 470000,
+      "closure_roots": [
+        "closure/root-01",
+        "closure/root-02",
+        "closure/root-03",
+        "closure/root-04",
+        "closure/root-05",
+        "closure/root-06",
+        "closure/root-07",
+        "closure/root-08",
+        "closure/root-09",
+        "closure/root-10",
+        "closure/root-11",
+        "closure/root-12",
+        "closure/root-13",
+        "closure/root-14",
+        "closure/root-15",
+        "closure/root-16",
+        "closure/root-17",
+        "closure/root-18",
+        "closure/root-19",
+        "closure/root-20",
+        "closure/root-21",
+        "closure/root-22",
+        "closure/root-23",
+        "closure/root-24",
+        "closure/root-25",
+        "closure/root-26",
+        "closure/root-27",
+        "closure/root-28",
+        "closure/root-29",
+        "closure/root-30",
+        "closure/root-31",
+        "closure/root-32",
+        "closure/root-33",
+        "closure/root-34",
+        "closure/root-35",
+        "closure/root-36",
+        "closure/root-37",
+        "closure/root-38",
+        "closure/root-39",
+        "closure/root-40",
+        "closure/root-41",
+        "closure/root-42",
+        "closure/root-43",
+        "closure/root-44",
+        "closure/root-45",
+        "closure/root-46",
+        "closure/root-47"
+      ]
+    }
+  ],
+  "hotspots": [
+    {
+      "root": "closure/root-01",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-02",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-03",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-04",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-05",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-06",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-07",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-08",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-09",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-10",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-11",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-12",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-13",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-14",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-15",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-16",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-17",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-18",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-19",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-20",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-21",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-22",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-23",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-24",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-25",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-26",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-27",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-28",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-29",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-30",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-31",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-32",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-33",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-34",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-35",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-36",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-37",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-38",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-39",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-40",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-41",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-42",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-43",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-44",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-45",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-46",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    },
+    {
+      "root": "closure/root-47",
+      "occurrence_count": 2,
+      "full_sync_hits": 2,
+      "narrow_sync_hits": 0,
+      "commands": [
+        "cmd-full-1",
+        "cmd-full-2"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "vmi1156319",
+        "vmi1167313"
+      ]
+    }
+  ],
+  "hash_basis": {
+    "input_hash": "3585eae8ec50104c7d07e8c20babe941c91cc3a9501d0cf8833de0793dbbe990",
+    "ledger_hash": "cb397ff8a52aa9566a12b30b8c3a764e0d845763fde3d20421116f86c19f505e"
+  },
+  "artifact_paths": {
+    "sync_closure_hotspots_json": "[SMOKE_ROOT]/stable-hash-b/sync_closure_hotspots.json",
+    "sync_closure_summary_md": "[SMOKE_ROOT]/stable-hash-b/sync_closure_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/stable-hash-b/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/stable-hash-b/events.jsonl"
+  }
+}

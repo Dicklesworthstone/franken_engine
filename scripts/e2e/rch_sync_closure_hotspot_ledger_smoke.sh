@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ledger_script="${root_dir}/scripts/rch_sync_closure_hotspot_ledger.sh"
 docs_path="${root_dir}/docs/RCH_SYNC_CLOSURE_HOTSPOT_LEDGER.md"
+golden_dir="${RCH_SYNC_CLOSURE_HOTSPOT_LEDGER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS rch-sync-closure-hotspot-ledger %s\n' "$1"
@@ -11,6 +12,16 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL rch-sync-closure-hotspot-ledger %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+repeated-full-sync
+narrow-single-crate
+missing-transfer-log
+stable-hash-baseline
+stable-hash-reordered
+EOF
 }
 
 write_manifest() {
@@ -158,19 +169,91 @@ run_check() {
   bash -n "$ledger_script"
   bash -n "${BASH_SOURCE[0]}"
   test -f "$docs_path"
+  goldens_shape_ok
   record_pass "bash syntax and docs exist"
+}
+
+canonicalize_ledger() {
+  local ledger_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$ledger_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local ledger_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/rch_sync_closure_hotspot_ledger_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_ledger "$ledger_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_ledger "$ledger_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/rch_sync_closure_hotspot_ledger_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
 }
 
 run_case() {
   local case_name="$1"
   local output_dir="$2"
-  shift 2
+  local tmp_root="$3"
+  shift 3
 
   "$ledger_script" --output-dir "$output_dir" "$@" >/dev/null
   test -s "${output_dir}/sync_closure_hotspots.json"
   test -s "${output_dir}/sync_closure_summary.md"
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/events.jsonl"
+  assert_case_golden "$case_name" "${output_dir}/sync_closure_hotspots.json" "$tmp_root"
   record_pass "$case_name"
 }
 
@@ -190,7 +273,7 @@ run_selftest() {
   write_narrow_log "${fixture_dir}/narrow.jsonl"
 
   case_dir="${tmp_root}/repeated-full-sync"
-  run_case "repeated-full-sync" "$case_dir" \
+  run_case "repeated-full-sync" "$case_dir" "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --transfer-log-jsonl "${fixture_dir}/full_sync.jsonl"
   jq -e '
@@ -209,7 +292,7 @@ run_selftest() {
   record_pass "repeated full-sync assertions"
 
   case_dir="${tmp_root}/narrow-single-crate"
-  run_case "narrow-single-crate" "$case_dir" \
+  run_case "narrow-single-crate" "$case_dir" "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --transfer-log-jsonl "${fixture_dir}/narrow.jsonl"
   jq -e '
@@ -225,7 +308,7 @@ run_selftest() {
   record_pass "narrow single-crate assertions"
 
   case_dir="${tmp_root}/missing-transfer-log"
-  run_case "missing-transfer-log" "$case_dir" \
+  run_case "missing-transfer-log" "$case_dir" "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json"
   jq -e '
     .analysis_status == "degraded"
@@ -237,10 +320,10 @@ run_selftest() {
   ' "${case_dir}/sync_closure_hotspots.json" >/dev/null
   record_pass "missing transfer-log degraded assertions"
 
-  run_case "stable-hash-baseline" "${tmp_root}/stable-hash-a" \
+  run_case "stable-hash-baseline" "${tmp_root}/stable-hash-a" "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --transfer-log-jsonl "${fixture_dir}/full_sync.jsonl"
-  run_case "stable-hash-reordered" "${tmp_root}/stable-hash-b" \
+  run_case "stable-hash-reordered" "${tmp_root}/stable-hash-b" "$tmp_root" \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
     --transfer-log-jsonl "${fixture_dir}/full_sync_reordered.jsonl"
   test "$(jq -r '.hash_basis.input_hash' "${tmp_root}/stable-hash-a/sync_closure_hotspots.json")" = \

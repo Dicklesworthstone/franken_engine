@@ -1,0 +1,66 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "duplicate_proof_coalescing",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 2,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-dup-a",
+      "request_id": "req-dup-a",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-dup",
+      "action": "coalesce",
+      "reason": "duplicate_proof_request",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Split the duplicate requests and rerun each proof independently.",
+      "remediation": "Split the duplicate requests and rerun each proof independently."
+    },
+    {
+      "recommendation_id": "proof-batch-req-dup-b",
+      "request_id": "req-dup-b",
+      "agent": "FrostyPine",
+      "proof_fingerprint": "fp-dup",
+      "action": "coalesce",
+      "reason": "duplicate_proof_request",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Split the duplicate requests and rerun each proof independently.",
+      "remediation": "Split the duplicate requests and rerun each proof independently."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "coalesce",
+      "count": 2
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/duplicate_proof_coalescing/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "d164f36532f6a3982c4ae19f87bb23bb8ca342a5f2592755b7ab7de7af593f5e"
+}

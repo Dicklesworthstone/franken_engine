@@ -1,7 +1,7 @@
 {
   "schema_version": "franken-engine.swarm-proof-artifact-index.v1",
   "case_id": "incomplete_rch_artifact_retrieval",
-  "source_revision": "2e04f924",
+  "source_revision": "[SOURCE_REVISION]",
   "row_count": 1,
   "reusable_count": 0,
   "refused_count": 1,

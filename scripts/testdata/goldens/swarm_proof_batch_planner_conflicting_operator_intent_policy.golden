@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "conflicting_operator_intent_policy",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-alpha",
+      "request_id": "req-alpha",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-alpha",
+      "action": "human_review",
+      "reason": "conflicting_operator_intent_policy",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Escalate to operator review before scheduling any proof.",
+      "remediation": "Escalate to operator review before scheduling any proof."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "human_review",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/conflicting_operator_intent_policy/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "b52f8efd8fc7d017c3aee4da15b42b881e78dbcb9fa600ca4db18e903b932d7d"
+}

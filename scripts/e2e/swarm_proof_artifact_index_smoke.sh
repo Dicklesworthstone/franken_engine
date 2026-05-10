@@ -104,7 +104,7 @@ canonicalize_report() {
       else
         .
       end;
-    scrub
+    scrub | .source_revision = "[SOURCE_REVISION]"
   ' "$report_path"
 }
 

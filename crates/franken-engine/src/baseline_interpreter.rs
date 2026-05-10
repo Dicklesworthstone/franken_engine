@@ -6504,6 +6504,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
                     let awaited_value = self.read_reg(promise_reg)?;
+                    let awaited_label = self.get_register_label(promise_reg)?.clone();
 
                     // Convert the awaited value to a Promise if it's not already one
                     let promise_handle = match awaited_value {
@@ -6512,8 +6513,7 @@ impl InterpreterCore {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
                             let handle = self.promise_store.create();
-                            let label = crate::ifc_artifacts::Label::Public; // TODO: proper label propagation
-                            self.fulfill_promise(handle, js_val, label)?;
+                            self.fulfill_promise(handle, js_val, awaited_label)?;
                             handle
                         }
                     };
@@ -6525,17 +6525,20 @@ impl InterpreterCore {
                             got: e.to_string(),
                         }
                     })?;
+                    let promise_state = promise_record.state.clone();
+                    let promise_label = promise_record.label.clone();
 
-                    if promise_record.state.is_settled() {
+                    if promise_state.is_settled() {
                         // Promise already settled - continue execution synchronously
-                        match &promise_record.state {
+                        match promise_state {
                             crate::promise_model::PromiseState::Fulfilled(js_val) => {
-                                let result_value = Self::js_value_to_value(js_val);
+                                let result_value = Self::js_value_to_value(&js_val);
                                 self.write_reg(promise_reg, result_value)?;
+                                self.set_register_label(promise_reg, promise_label)?;
                                 self.ip += 1;
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
-                                let error_value = Self::js_value_to_value(js_reason);
+                                let error_value = Self::js_value_to_value(&js_reason);
                                 self.suspend_current_abrupt_completion();
                                 self.pending_return = None;
                                 self.pending_exception = Some(error_value.clone());
@@ -21846,6 +21849,37 @@ mod async_runtime_tests_current {
             promise.state,
             crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(99))
         );
+    }
+
+    #[test]
+    fn await_non_promise_preserves_register_label() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.registers[0] = Value::Int(7);
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("test register label should be settable");
+
+        core.execute(&module)
+            .expect("awaiting a non-promise should complete synchronously");
+
+        assert_eq!(core.registers[0], Value::Int(7));
+        assert_eq!(
+            core.get_register_label(0)
+                .expect("result register label should exist"),
+            &crate::ifc_artifacts::Label::Secret
+        );
+        let promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(0))
+            .expect("synthetic await promise should exist");
+        assert_eq!(promise.label, crate::ifc_artifacts::Label::Secret);
     }
 
     #[test]

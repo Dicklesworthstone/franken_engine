@@ -1,0 +1,50 @@
+{
+  "schema_version": "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+  "agent_id": "CyanOak",
+  "bead_id": "bd-lviqm",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "input_status": {
+    "suite_manifest": "provided",
+    "sticky_worker_state": "provided",
+    "reservation_snapshot": "missing",
+    "local_fallback_markers": "provided"
+  },
+  "sticky_worker_requested": {
+    "preferred_worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+    "sticky_worker_available": true
+  },
+  "fallback_worker_candidate": {
+    "worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/semantic_dark_matter_pipeline_vmi1156319"
+  },
+  "local_fallback_marker_count": 1,
+  "local_fallback_markers": [
+    {
+      "command_id": "test-1",
+      "detected": true,
+      "marker": "[RCH] local",
+      "suite_id": "semantic-dark-matter-pipeline"
+    }
+  ],
+  "manifest_phase_count": 3,
+  "plan_decision": "fail_closed",
+  "reason": "local fallback markers detected for suite",
+  "assigned_worker_id": null,
+  "assigned_target_dir": null,
+  "phase_plans": [],
+  "safe_alternatives": [
+    "clear local-fallback evidence before reusing worker or target-dir"
+  ],
+  "exit_code": 42,
+  "hash_basis": {
+    "input_hash": "b681299a64616c4fb767ce63ac3746bb66f8eebb60d9d8ddcedc0f745559fe9a",
+    "plan_hash": "ecea05743fc02fff657593eca6c6c4a5da1eebb356df5fe49e4685f7a943a270"
+  },
+  "artifact_paths": {
+    "sticky_worker_warm_target_plan_json": "[SMOKE_ROOT]/fail-closed/sticky_worker_warm_target_plan.json",
+    "sticky_worker_warm_target_summary_md": "[SMOKE_ROOT]/fail-closed/sticky_worker_warm_target_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/fail-closed/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/fail-closed/events.jsonl"
+  }
+}

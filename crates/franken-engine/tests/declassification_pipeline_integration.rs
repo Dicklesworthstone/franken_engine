@@ -1378,7 +1378,6 @@ fn later_pipeline_activity_expires_default_emergency_grant_stats() {
 }
 
 #[test]
-#[ignore = "API drift - needs rewrite: zero-byte SigningKey is now rejected at construction, so this test can no longer build the malformed key used to force a downstream SigningError path"]
 fn failed_signing_does_not_advance_default_emergency_stats_time() {
     let mut pipeline = DeclassificationPipeline::default();
     let policy = make_policy();
@@ -1391,14 +1390,14 @@ fn failed_signing_does_not_advance_default_emergency_stats_time() {
         .process(&emergency, &policy, &low_loss(), &key)
         .unwrap();
 
-    let zero_key = SigningKey::from_bytes([0u8; 32]).unwrap();
     let mut later = make_request("declass-secret-internal", Label::Secret, Label::Internal);
     later.request_id = "req-later-signing-fail".to_string();
+    later.decision_contract_id.clear();
     later.timestamp_ms =
         emergency.timestamp_ms + PipelineConfig::default().emergency_max_duration_ms + 1;
 
     let err = pipeline
-        .process(&later, &policy, &low_loss(), &zero_key)
+        .process(&later, &policy, &low_loss(), &key)
         .unwrap_err();
     assert!(matches!(err, PipelineError::SigningError { .. }));
     assert_eq!(pipeline.stats().decision_count, 1);
@@ -1408,17 +1407,17 @@ fn failed_signing_does_not_advance_default_emergency_stats_time() {
 }
 
 #[test]
-#[ignore = "API drift - needs rewrite: zero-byte SigningKey is now rejected at construction, so this test can no longer build the malformed key used to force a downstream SigningError path"]
 fn emergency_signing_failure_does_not_persist_grant_or_counts() {
     let mut pipeline = DeclassificationPipeline::default();
     let policy = make_policy();
-    let zero_key = SigningKey::from_bytes([0u8; 32]).unwrap();
+    let key = test_key();
     let mut request = make_request("bad-route", Label::Secret, Label::Public);
     request.is_emergency = true;
+    request.decision_contract_id.clear();
     request.timestamp_ms = 1_000_000;
 
     let err = pipeline
-        .process(&request, &policy, &low_loss(), &zero_key)
+        .process(&request, &policy, &low_loss(), &key)
         .unwrap_err();
     assert!(matches!(err, PipelineError::SigningError { .. }));
     assert!(pipeline.receipts().is_empty());

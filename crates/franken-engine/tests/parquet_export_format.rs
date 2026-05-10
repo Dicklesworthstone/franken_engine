@@ -1,9 +1,11 @@
+use fp_io::read_parquet_bytes;
 use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
     AuditExportFormat, AuditExportRequest, EvidenceEntry, export_audit_evidence,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
+
 /// Integration tests for Parquet export format correctness.
 ///
 /// Tests verify that AuditExportFormat::Parquet emits real Parquet binary format
@@ -26,6 +28,31 @@ fn export_to_parquet(entries: &[EvidenceEntry]) -> Result<Vec<u8>, Box<dyn std::
     let now = DeterministicTimestamp(2000000);
     let result = export_audit_evidence(request, entries.to_vec(), now)?;
     Ok(result.payload_bytes)
+}
+
+fn assert_decoded_audit_schema(
+    parquet_bytes: &[u8],
+    expected_rows: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let decoded = read_parquet_bytes(parquet_bytes)?;
+    let column_names: Vec<&str> = decoded
+        .column_names()
+        .iter()
+        .map(|name| name.as_str())
+        .collect();
+
+    assert_eq!(
+        decoded.shape(),
+        (expected_rows, 5),
+        "decoded Parquet should preserve audit row and column counts"
+    );
+    assert_eq!(
+        column_names,
+        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
+        "decoded Parquet should preserve audit export schema"
+    );
+
+    Ok(())
 }
 
 /// Create a test evidence entry for testing.
@@ -83,16 +110,8 @@ fn test_parquet_format_produces_binary() {
         "Should start with PAR1 Parquet magic header"
     );
 
-    // Verify it's not just plaintext
-    let as_string = String::from_utf8_lossy(&parquet_bytes);
-    assert!(
-        !as_string.contains('\t'),
-        "Real Parquet should not contain tab separators"
-    );
-    assert!(
-        !as_string.contains('\n'),
-        "Real Parquet should not contain newline separators in readable form"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should decode the audit export schema");
 }
 
 #[test]
@@ -129,13 +148,8 @@ fn test_parquet_multi_row_preserves_count() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    // The row count verification would require parsing the Parquet file,
-    // which is complex. For now, we verify the export succeeds and produces
-    // valid-looking Parquet binary format.
-    assert!(
-        parquet_bytes.len() > 100,
-        "Multi-row Parquet should be substantial"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should recover all audit rows");
 }
 
 #[test]
@@ -177,12 +191,8 @@ fn test_parquet_schema_preservation() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    // Schema preservation verification would require Parquet parsing.
-    // For now, verify the export produces valid binary format.
-    assert!(
-        parquet_bytes.len() > 50,
-        "Schema should add substantial metadata"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should preserve audit export schema");
 }
 
 #[test]
@@ -226,10 +236,6 @@ fn test_parquet_vs_old_format_rejection() {
     assert!(
         !as_string.contains("FRANKEN_PARQUET_V1"),
         "Should not contain old fake header"
-    );
-    assert!(
-        !as_string.contains("\t"),
-        "Should not contain tab delimiters from old format"
     );
 
     // Verify it has real Parquet structure

@@ -1,0 +1,71 @@
+{
+  "schema_version": "franken-engine.build-storm-batch-plan.v1",
+  "batch_id": "batch-50287a1a153d0376",
+  "stable_output_hash": "cd75c03f6182bc1a0b6b7ac7a397df251622ad38af6a67f03af8cd5e3a2d3151",
+  "batch_decision": "planned",
+  "fairness_reason": "admitted highest-ranked requests while deferring lower-ranked or over-budget work",
+  "max_parallel_heavy": 1,
+  "configured_max_parallel_heavy": 1,
+  "max_per_agent_heavy": 1,
+  "retry_after_seconds": 45,
+  "admitted_commands": [
+    {
+      "request_id": "p0-refresh",
+      "agent_id": "ScarletOwl",
+      "bead_id": "bd-p0",
+      "bead_priority": 0,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/p0 cargo test -p frankenengine-engine --test p0_refresh",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": true,
+      "stale_proof_refresh": false,
+      "wait_seconds": 0,
+      "submitted_order": 1,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P0",
+      "batch_decision": "admit",
+      "fairness_reason": "admitted within heavy capacity and per-agent fairness budget",
+      "retry_after_seconds": 0
+    }
+  ],
+  "deferred_commands": [
+    {
+      "request_id": "stale-refresh",
+      "agent_id": "CyanOak",
+      "bead_id": "bd-stale",
+      "bead_priority": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/stale cargo test -p frankenengine-engine --test stale_refresh",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": false,
+      "stale_proof_refresh": true,
+      "wait_seconds": 0,
+      "submitted_order": 2,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P1",
+      "batch_decision": "defer",
+      "fairness_reason": "batch heavy capacity reached after higher-ranked validation requests",
+      "retry_after_seconds": 45
+    }
+  ],
+  "rch_worker_snapshot": {
+    "total_workers": 1,
+    "idle_workers": 1
+  },
+  "artifact_paths": {
+    "build_storm_batch_plan_json": "[SMOKE_ROOT]/stale-retry/build_storm_batch_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale-retry/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale-retry/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale-retry/report.md"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.rch-validation-control-plane-no-mock-fixtures.v1",
+  "transcript_fixtures": [
+    {
+      "fixture_id": "timeout_no_diagnostic_reached_crate",
+      "bead_id": "bd-7eefz",
+      "command_class": "focused_lib_test",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_7eefz_async_gen CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib async_generator_next_fails_closed_for_suspended_body -- --nocapture",
+      "transcript": "[RCH] selected worker vmi1153651\n   Compiling frankenengine-engine v0.1.0 (/work/crates/franken-engine)\n[RCH] remote vmi1153651 failed [RCH-E104] SSH command timed out (no local fallback)\n",
+      "expected_result": {
+        "status": "infrastructure_timeout",
+        "compile_stage_reached": "compiling_target_crate",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": "RCH-E104"
+      }
+    },
+    {
+      "fixture_id": "compiler_diagnostic_surface",
+      "bead_id": "bd-diagnostic",
+      "command_class": "package_all_targets",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_diagnostic_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo check --all-targets",
+      "transcript": "error[E0308]: mismatched types\n  --> crates/franken-engine/src/lib.rs:10:5\nerror: could not compile `frankenengine-engine` due to previous error\n",
+      "expected_result": {
+        "status": "compiler_diagnostic",
+        "compile_stage_reached": "unknown",
+        "compiler_diagnostic_surfaced": true,
+        "rch_error_code": null
+      }
+    },
+    {
+      "fixture_id": "worker_disk_full",
+      "bead_id": "bd-disk",
+      "command_class": "clippy_all_targets",
+      "command": "rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_disk_clippy_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo clippy --all-targets -- -D warnings",
+      "transcript": "failed to write target object: No space left on device (os error 28)\n",
+      "expected_result": {
+        "status": "worker_disk_full",
+        "compile_stage_reached": "unknown",
+        "compiler_diagnostic_surfaced": false,
+        "rch_error_code": null
+      }
+    }
+  ],
+  "active_process_snapshot": "1803252 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_zy517_all_targets CARGO_INCREMENTAL=0 RUSTFLAGS=-C linker=cc CARGO_BUILD_JOBS=1 cargo check --all-targets\n",
+  "expected_admission": {
+    "recommendation": "wait_existing_all_targets",
+    "reason_code": "active_all_targets_in_progress"
+  }
+}

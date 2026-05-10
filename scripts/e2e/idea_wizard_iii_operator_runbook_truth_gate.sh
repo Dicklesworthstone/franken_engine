@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 default_runbook="${root_dir}/docs/IDEA_WIZARD_III_OPERATOR_WORKFLOW.md"
 default_contract="${root_dir}/docs/idea_wizard_iii_operator_runbook_truth_contract_v1.json"
+golden_dir="${IDEA_WIZARD_III_TRUTH_GATE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 artifact_root="${IDEA_WIZARD_III_TRUTH_GATE_ROOT:-${TMPDIR:-/tmp}/franken-engine-idea-wizard-iii-truth-gate}"
 run_id="${IDEA_WIZARD_III_TRUTH_GATE_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 run_dir="${IDEA_WIZARD_III_TRUTH_GATE_RUN_DIR:-${artifact_root}/${run_id}}"
@@ -107,6 +108,51 @@ write_report() {
     printf -- "- decision: \`%s\`\n" "$decision"
     printf -- "- reason: \`%s\`\n" "$reason"
   } >"${run_dir}/report.md"
+}
+
+canonicalize_report() {
+  local report_path="$1"
+  local scrub_root="$2"
+
+  jq -S --arg repo_root "$root_dir" --arg scrub_root "$scrub_root" '
+    def scrub:
+      if type == "object" then
+        with_entries(.value |= scrub)
+      elif type == "array" then
+        map(scrub)
+      elif type == "string" then
+        split($repo_root) | join("[REPO_ROOT]")
+        | split($scrub_root) | join("[SMOKE_ROOT]")
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_report_golden() {
+  local golden_name="$1"
+  local report_path="$2"
+  local scrub_root="$3"
+  local actual_path="${scrub_root}/${golden_name}.actual.golden"
+  local golden_path="${golden_dir}/idea_wizard_iii_operator_truth_${golden_name}.golden"
+
+  canonicalize_report "$report_path" "$scrub_root" >"$actual_path"
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    cp "$actual_path" "$golden_path"
+    record_pass "updated golden ${golden_name}"
+    return
+  fi
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing golden ${golden_path}"
+    return 1
+  fi
+  if ! diff -u "$golden_path" "$actual_path"; then
+    record_failure "golden drift ${golden_name}; set UPDATE_GOLDENS=1 only after reviewing the diff"
+    return 1
+  fi
+  record_pass "golden matches ${golden_name}"
 }
 
 assert_no_forbidden_live_claims() {
@@ -227,6 +273,9 @@ run_check() {
   fi
   write_report "pass" "runbook docs and help examples are bounded and RCH-wrapped"
   jq empty "${run_dir}/runbook_truth_report.json"
+  if [[ "$runbook_md" == "$default_runbook" && "$contract_json" == "$default_contract" ]]; then
+    assert_report_golden "pass" "${run_dir}/runbook_truth_report.json" "$run_dir"
+  fi
   record_pass "check"
   printf 'idea_wizard_iii_operator_truth_report=%s\n' "${run_dir}/runbook_truth_report.json"
 }
@@ -249,6 +298,7 @@ run_selftest() {
     record_failure "selftest accepted forbidden live mutation and local Cargo claims"
     return 1
   fi
+  assert_report_golden "fail_closed_bad_live" "${tmp_root}/bad-live-out/runbook_truth_report.json" "$tmp_root"
   record_pass "forbidden live mutation rejection"
 
   missing_preserved_doc="${tmp_root}/missing-preserved.md"

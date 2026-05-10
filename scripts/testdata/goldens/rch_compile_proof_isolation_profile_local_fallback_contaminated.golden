@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+  "case_id": "local_fallback_contaminated",
+  "source_revision": "fixture-revision",
+  "decision": "fail_closed",
+  "command": {
+    "text": "rch exec -- cargo test -p frankenengine-engine --lib",
+    "class": "cargo_test",
+    "package": "frankenengine-engine",
+    "target": "lib"
+  },
+  "classification": {
+    "compile_surface": "package_lib_test",
+    "broadness": "broad",
+    "target_relevance": "target_ambiguous",
+    "proof_strength": "none",
+    "allowed_fallback": "none"
+  },
+  "target_context": {
+    "changed_paths": [
+      "crates/franken-engine/src/lib.rs"
+    ],
+    "target_hints": []
+  },
+  "validation_recommendation": {
+    "kind": "blocked_no_safe_proof",
+    "command_text": null,
+    "rationale": "no safe narrow validation profile is available from the provided command metadata",
+    "desired_tests": [],
+    "blocking_diagnostics": [],
+    "rust_validation_uses_rch": false
+  },
+  "evidence_health": {
+    "local_fallback_observed": true,
+    "transcript_truncated": false,
+    "missing_command_metadata": false,
+    "fail_closed_reasons": [
+      "local_rch_fallback_observed"
+    ]
+  },
+  "recommendations": [
+    "do_not_use_as_proof",
+    "rerun_with_remote_rch_metadata_before_filing_source_fix"
+  ],
+  "artifact_paths": {
+    "compile_proof_isolation_profile_json": "[CASE_ROOT]/out/compile_proof_isolation_profile.json",
+    "run_manifest_json": "[CASE_ROOT]/out/run_manifest.json",
+    "events_jsonl": "[CASE_ROOT]/out/events.jsonl",
+    "commands_txt": "[CASE_ROOT]/out/commands.txt",
+    "report_md": "[CASE_ROOT]/out/report.md"
+  },
+  "input_artifacts": {
+    "metadata_json": "[CASE_ROOT]/input/metadata.json",
+    "changed_paths_json": "[CASE_ROOT]/input/changed_paths.json"
+  },
+  "contract_paths": {
+    "profile_contract_json": "docs/rch_compile_proof_isolation_profile_contract_v1.json",
+    "operator_doc": "docs/RCH_COMPILE_PROOF_ISOLATION_PROFILE.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "creates_beads": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_workers": false
+  }
+}

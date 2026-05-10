@@ -7,6 +7,7 @@ contract_json="${root_dir}/docs/rch_compile_proof_isolation_profile_contract_v1.
 operator_doc="${root_dir}/docs/RCH_COMPILE_PROOF_ISOLATION_PROFILE.md"
 fixture_root="${RCH_COMPILE_PROOF_ISOLATION_PROFILE_FIXTURES:-${root_dir}/scripts/testdata/rch_compile_proof_isolation_profile}"
 cases_json="${fixture_root}/cases.json"
+golden_dir="${RCH_COMPILE_PROOF_ISOLATION_PROFILE_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 failures=0
 
 record_pass() {
@@ -31,6 +32,10 @@ write_case_inputs() {
   mkdir -p "$case_dir"
   jq '.metadata' <<<"$case_json" >"${case_dir}/metadata.json"
   jq '.changed_paths' <<<"$case_json" >"${case_dir}/changed_paths.json"
+}
+
+golden_case_names() {
+  jq -r '.cases[].case_id' "$cases_json"
 }
 
 run_check() {
@@ -65,6 +70,7 @@ run_check() {
   grep -Fq 'advisory-only' "$operator_doc"
   grep -Fq 'runs_cargo: false' "$profile_script"
   grep -Fq 'runs_rch: false' "$profile_script"
+  goldens_shape_ok
   record_pass "shell syntax and contract shape"
 }
 
@@ -76,6 +82,68 @@ assert_artifacts_exist() {
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/events.jsonl"
   test -s "${output_dir}/report.md"
+}
+
+canonicalize_profile() {
+  local profile_path="$1"
+  local case_root="$2"
+
+  jq --arg case_root "$case_root" '
+    def scrub:
+      if type == "string" then
+        gsub($case_root; "[CASE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$profile_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local profile_path="$2"
+  local case_root="$3"
+  local golden_path="${golden_dir}/rch_compile_proof_isolation_profile_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_profile "$profile_path" "$case_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_profile "$profile_path" "$case_root"); then
+    record_failure "${case_id} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_id golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_id; do
+    golden_path="${golden_dir}/rch_compile_proof_isolation_profile_${case_id}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_id} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done < <(golden_case_names)
 }
 
 run_case() {
@@ -139,6 +207,7 @@ run_case() {
     record_failure "${case_id} event log mismatch"
     return
   fi
+  assert_case_golden "$case_id" "${output_dir}/compile_proof_isolation_profile.json" "${tmp_root}/${case_id}" || return
 
   record_pass "$case_id"
 }

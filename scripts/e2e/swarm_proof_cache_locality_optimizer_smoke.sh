@@ -5,6 +5,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 optimizer="${root_dir}/scripts/swarm_proof_cache_locality_optimizer.sh"
 fixtures_path="${SWARM_PROOF_CACHE_LOCALITY_OPTIMIZER_FIXTURES:-${root_dir}/scripts/testdata/swarm_proof_cache_locality_optimizer/cases.json}"
 contract_path="${root_dir}/docs/swarm_proof_cache_locality_optimizer_contract_v1.json"
+golden_dir="${SWARM_PROOF_CACHE_LOCALITY_OPTIMIZER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 output_dir="${2:-${SWARM_PROOF_CACHE_LOCALITY_OPTIMIZER_OUTPUT_DIR:-}}"
 failures=0
@@ -183,8 +184,75 @@ run_case() {
   ' "${case_dir}/out/events.jsonl" >/dev/null || record_failure "${case_id} events missing plan emission"
   test -s "${case_dir}/out/commands.txt" || record_failure "${case_id} commands receipt missing"
   test -s "${case_dir}/out/report.md" || record_failure "${case_id} report missing"
+  assert_case_golden "$case_id" "$plan" "$root"
 
   record_pass "${case_id} locality plan"
+}
+
+golden_case_names() {
+  jq -r '.cases[].case_id' "$fixtures_path"
+}
+
+canonicalize_plan() {
+  local plan="$1"
+  local smoke_root="$2"
+
+  jq --arg smoke_root "$smoke_root" '
+    def scrub:
+      if type == "string" then
+        gsub($smoke_root; "[SMOKE_ROOT]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+    | .plan_id = "swarm-proof-cache-locality-[PLAN_HASH_PREFIX]"
+    | .hash_basis.plan_hash = "[PLAN_HASH]"
+  ' "$plan"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local plan="$2"
+  local smoke_root="$3"
+  local golden_path="${golden_dir}/swarm_proof_cache_locality_optimizer_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_plan "$plan" "$smoke_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+    return 0
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_plan "$plan" "$smoke_root"); then
+    record_failure "${case_id} golden drift"
+  fi
+}
+
+goldens_shape_ok() {
+  local case_id golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_id; do
+    golden_path="${golden_dir}/swarm_proof_cache_locality_optimizer_${case_id}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_id} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done < <(golden_case_names)
 }
 
 run_check() {
@@ -206,6 +274,7 @@ run_check() {
   check_no_forbidden_commands "$optimizer"
   check_no_forbidden_commands "$fixtures_path"
   check_no_forbidden_commands "$contract_path"
+  goldens_shape_ok
 }
 
 run_all_cases() {

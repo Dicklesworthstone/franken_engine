@@ -7,6 +7,7 @@ fixture_root="${IDEA_WIZARD_PLAN_QUALITY_FIXTURES:-${root_dir}/scripts/testdata/
 pass_beads="${fixture_root}/pass_beads.json"
 bad_beads="${fixture_root}/bad_beads.json"
 bv_plan="${fixture_root}/bv_plan.json"
+golden_dir="${IDEA_WIZARD_PLAN_QUALITY_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 failures=0
 
 record_pass() {
@@ -34,11 +35,80 @@ run_check() {
   grep -Fq 'plan_quality_gate_report.json' "$gate_script"
   grep -Fq 'replaces_br_or_bv: false' "$gate_script"
   grep -Fq 'missing_e2e_logging' "$gate_script"
+  goldens_shape_ok
   record_pass "shell syntax and fixture shape"
+}
+
+golden_case_names() {
+  printf '%s\n' pass bad
+}
+
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" --arg root_dir "$root_dir" '
+    def scrub:
+      if type == "string" then
+        gsub($root_dir; "[REPO_ROOT]")
+        | gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local report_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/idea_wizard_plan_quality_gate_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/idea_wizard_plan_quality_gate_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_name} invalid golden json"
+  done < <(golden_case_names)
 }
 
 run_pass_case() {
   local output_dir="$1"
+  local tmp_root="$2"
   "$gate_script" \
     --beads-json "$pass_beads" \
     --bv-plan-json "$bv_plan" \
@@ -62,11 +132,13 @@ run_pass_case() {
     return
   }
   grep -Fq "| \`bd-ep8y0.1\` | \`contract_profile\` |" "${output_dir}/plan_quality_checklist.md"
+  assert_case_golden "pass" "${output_dir}/plan_quality_gate_report.json" "$tmp_root" || return
   record_pass "pass case"
 }
 
 run_bad_case() {
   local output_dir="$1"
+  local tmp_root="$2"
   local actual_exit
 
   set +e
@@ -94,6 +166,7 @@ run_bad_case() {
     return
   }
   grep -Fq 'duplicate_upstream_authority_claim' "${output_dir}/plan_quality_checklist.md"
+  assert_case_golden "bad" "${output_dir}/plan_quality_gate_report.json" "$tmp_root" || return
   record_pass "bad case diagnostics"
 }
 
@@ -105,8 +178,8 @@ case "${1:-check}" in
     run_check
     if [[ "$failures" -eq 0 ]]; then
       tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/idea-wizard-plan-quality.XXXXXX")"
-      run_pass_case "${tmp_root}/pass"
-      run_bad_case "${tmp_root}/bad"
+      run_pass_case "${tmp_root}/pass" "$tmp_root"
+      run_bad_case "${tmp_root}/bad" "$tmp_root"
     fi
     ;;
   run)
@@ -114,8 +187,8 @@ case "${1:-check}" in
     if [[ "$failures" -eq 0 ]]; then
       output_dir="${2:-$(mktemp -d "${TMPDIR:-/tmp}/idea-wizard-plan-quality-run.XXXXXX")}"
       mkdir -p "${output_dir}/pass" "${output_dir}/bad"
-      run_pass_case "${output_dir}/pass"
-      run_bad_case "${output_dir}/bad"
+      run_pass_case "${output_dir}/pass" "$output_dir"
+      run_bad_case "${output_dir}/bad" "$output_dir"
       printf 'idea_wizard_plan_quality_smoke_artifacts=%s\n' "$output_dir"
     fi
     ;;

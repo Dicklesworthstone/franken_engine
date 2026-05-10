@@ -1,0 +1,132 @@
+{
+  "schema_version": "franken-engine.idea-wizard-plan-quality-report.v1",
+  "parent_id": "bd-ep8y0",
+  "source_revision": "fixture-revision",
+  "beads_json": "[REPO_ROOT]/scripts/testdata/idea_wizard_plan_quality_gate/bad_beads.json",
+  "bv_plan_json": null,
+  "closed_authority_ids": [
+    "bd-eozx0",
+    "bd-x82vp"
+  ],
+  "first_actionable_id": "bd-ep8y0.1",
+  "decision": "fail",
+  "child_count": 2,
+  "role_counts": {
+    "contract_profile": 1,
+    "implementation": 0,
+    "test_e2e": 0,
+    "docs_claim": 1,
+    "unspecified": 0
+  },
+  "checklist": [
+    {
+      "id": "bd-ep8y0.1",
+      "title": "[SWARM-LIVE-SNAPSHOT] Replace bd-eozx0 with duplicate contract planner",
+      "description": "Duplicate contract claim. This creates a parallel planner and omits runnable receipts.",
+      "role": "contract_profile",
+      "has_validation": false,
+      "has_e2e_logging": false,
+      "has_claim_language_safeguard": false,
+      "has_non_mutation_guard": false,
+      "mentions_upstream_authority": true,
+      "duplicate_authority_claim": true
+    },
+    {
+      "id": "bd-ep8y0.8",
+      "title": "[CLAIM-FRESHNESS] README observed claims",
+      "description": "Claim docs with vague wording and no executable receipts.",
+      "role": "docs_claim",
+      "has_validation": false,
+      "has_e2e_logging": false,
+      "has_claim_language_safeguard": false,
+      "has_non_mutation_guard": false,
+      "mentions_upstream_authority": false,
+      "duplicate_authority_claim": false
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "error",
+      "code": "missing_implementation_bead",
+      "bead_id": "bd-ep8y0",
+      "detail": "no child bead maps to implementation responsibility",
+      "remediation": "Add or tag an implementation bead."
+    },
+    {
+      "severity": "error",
+      "code": "missing_test_e2e_bead",
+      "bead_id": "bd-ep8y0",
+      "detail": "no child bead maps to test/e2e responsibility",
+      "remediation": "Add explicit e2e/smoke/golden coverage bead."
+    },
+    {
+      "severity": "error",
+      "code": "missing_validation_wording",
+      "bead_id": "bd-ep8y0",
+      "detail": "one or more child beads lack validation wording",
+      "remediation": "Add rch-only or shell/e2e validation expectations."
+    },
+    {
+      "severity": "error",
+      "code": "missing_e2e_logging",
+      "bead_id": "bd-ep8y0",
+      "detail": "one or more child beads lack e2e/logging/report expectations",
+      "remediation": "Add events/report/commands or smoke/golden logging expectations."
+    },
+    {
+      "severity": "error",
+      "code": "missing_claim_language_safeguard",
+      "bead_id": "bd-ep8y0",
+      "detail": "claim/docs child bead lacks downgrade or proof-state safeguards",
+      "remediation": "Require target/hypothesis/observed wording safeguards."
+    },
+    {
+      "severity": "warning",
+      "code": "missing_non_mutation_guard",
+      "bead_id": "bd-ep8y0",
+      "detail": "one or more child beads lack explicit advisory/read-only or no-mutation wording",
+      "remediation": "Add non-mutation wording before coding."
+    },
+    {
+      "severity": "error",
+      "code": "duplicate_upstream_authority_claim",
+      "bead_id": "bd-ep8y0",
+      "detail": "a child bead appears to duplicate existing closed authority bd-eozx0,bd-x82vp",
+      "remediation": "Reuse the closed authority instead of creating a parallel contract/planner."
+    },
+    {
+      "severity": "error",
+      "code": "dependency_cycle",
+      "bead_id": "bd-ep8y0",
+      "detail": "dependency graph contains an intentional or accidental cycle",
+      "remediation": "Fix the br dependency edges before implementation."
+    },
+    {
+      "severity": "error",
+      "code": "first_actionable_not_parented",
+      "bead_id": "bd-ep8y0.1",
+      "detail": "first actionable implementation bead is not linked to the parent",
+      "remediation": "Add dependency/parent-child edge so the first implementation bead is ordered."
+    }
+  ],
+  "diagnostic_counts": {
+    "total": 9,
+    "errors": 8,
+    "warnings": 1
+  },
+  "artifact_paths": {
+    "plan_quality_gate_report_json": "[SMOKE_ROOT]/bad/plan_quality_gate_report.json",
+    "plan_quality_checklist_md": "[SMOKE_ROOT]/bad/plan_quality_checklist.md",
+    "events_jsonl": "[SMOKE_ROOT]/bad/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/bad/commands.txt",
+    "report_md": "[SMOKE_ROOT]/bad/report.md"
+  },
+  "non_mutation_attestation": {
+    "reads_only": true,
+    "replaces_br_or_bv": false,
+    "creates_beads": false,
+    "mutates_beads": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "schema_version": "franken-engine.idea-wizard-plan-quality-report.v1",
+  "parent_id": "bd-ep8y0",
+  "source_revision": "fixture-revision",
+  "beads_json": "[REPO_ROOT]/scripts/testdata/idea_wizard_plan_quality_gate/pass_beads.json",
+  "bv_plan_json": "[REPO_ROOT]/scripts/testdata/idea_wizard_plan_quality_gate/bv_plan.json",
+  "closed_authority_ids": [
+    "bd-eozx0",
+    "bd-x82vp"
+  ],
+  "first_actionable_id": "bd-ep8y0.1",
+  "decision": "pass",
+  "child_count": 4,
+  "role_counts": {
+    "contract_profile": 1,
+    "implementation": 1,
+    "test_e2e": 1,
+    "docs_claim": 1,
+    "unspecified": 0
+  },
+  "checklist": [
+    {
+      "id": "bd-ep8y0.1",
+      "title": "[SWARM-LIVE-SNAPSHOT] Extend bd-eozx0 with read-only capture profile contract",
+      "description": "Contract/profile bead. Reuse bd-eozx0 as canonical live state authority and bd-x82vp for resource lease authority. Validation is shellcheck plus smoke output with events.jsonl, commands.txt, report.md. Advisory read-only; no mutation.",
+      "role": "contract_profile",
+      "has_validation": true,
+      "has_e2e_logging": true,
+      "has_claim_language_safeguard": true,
+      "has_non_mutation_guard": true,
+      "mentions_upstream_authority": true,
+      "duplicate_authority_claim": false
+    },
+    {
+      "id": "bd-ep8y0.3",
+      "title": "[SWARM-LIVE-SNAPSHOT] Add non-mutating live capture adapter",
+      "description": "Implementation bead. Add read-only adapter. Validation uses shellcheck and fixture smoke. Emits events.jsonl, commands.txt, report.md. Advisory-only and does not mutate Agent Mail or br.",
+      "role": "implementation",
+      "has_validation": true,
+      "has_e2e_logging": true,
+      "has_claim_language_safeguard": true,
+      "has_non_mutation_guard": true,
+      "mentions_upstream_authority": false,
+      "duplicate_authority_claim": false
+    },
+    {
+      "id": "bd-ep8y0.5",
+      "title": "[SWARM-LIVE-SNAPSHOT] Add e2e smoke and golden degradation reports",
+      "description": "Test/e2e bead with detailed logging, golden reports, commands.txt, events.jsonl, and rch-free shell validation. Advisory-only no mutation.",
+      "role": "test_e2e",
+      "has_validation": true,
+      "has_e2e_logging": true,
+      "has_claim_language_safeguard": true,
+      "has_non_mutation_guard": true,
+      "mentions_upstream_authority": false,
+      "duplicate_authority_claim": false
+    },
+    {
+      "id": "bd-ep8y0.8",
+      "title": "[CLAIM-FRESHNESS] Add evidence age decay alarms for README and operator claims",
+      "description": "Docs/claim bead. Validate claim-language safeguards with observed/target/hypothesis downgrade text. Emits e2e smoke logs, events.jsonl, commands.txt, report.md. Advisory read-only no mutation.",
+      "role": "docs_claim",
+      "has_validation": true,
+      "has_e2e_logging": true,
+      "has_claim_language_safeguard": true,
+      "has_non_mutation_guard": true,
+      "mentions_upstream_authority": false,
+      "duplicate_authority_claim": false
+    }
+  ],
+  "diagnostics": [],
+  "diagnostic_counts": {
+    "total": 0,
+    "errors": 0,
+    "warnings": 0
+  },
+  "artifact_paths": {
+    "plan_quality_gate_report_json": "[SMOKE_ROOT]/pass/plan_quality_gate_report.json",
+    "plan_quality_checklist_md": "[SMOKE_ROOT]/pass/plan_quality_checklist.md",
+    "events_jsonl": "[SMOKE_ROOT]/pass/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/pass/commands.txt",
+    "report_md": "[SMOKE_ROOT]/pass/report.md"
+  },
+  "non_mutation_attestation": {
+    "reads_only": true,
+    "replaces_br_or_bv": false,
+    "creates_beads": false,
+    "mutates_beads": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

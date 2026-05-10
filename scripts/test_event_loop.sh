@@ -13,6 +13,11 @@ stdout_path="${run_dir}/frankenctl_stdout.log"
 stderr_path="${run_dir}/frankenctl_stderr.log"
 events_path="${run_dir}/events.jsonl"
 extension_id="event-loop-ordering-e2e"
+RCH_BIN="${RCH_BIN:-rch}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
+CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+CARGO_TARGET_DIR="${EVENT_LOOP_E2E_CARGO_TARGET_DIR:-${root_dir}/target_event_loop_e2e}"
+cargo_stderr_path="${run_dir}/cargo_build_stderr.log"
 
 mkdir -p "$run_dir"
 
@@ -27,7 +32,32 @@ echo "Running event loop E2E test..."
 if command -v frankenctl >/dev/null 2>&1; then
   run_cmd=(frankenctl run)
 else
-  run_cmd=(cargo run -p frankenengine-engine --bin frankenctl -- run)
+  if ! command -v "$RCH_BIN" >/dev/null 2>&1; then
+    echo "Required rch binary not found: $RCH_BIN" >&2
+    exit 2
+  fi
+
+  set +e
+  "$RCH_BIN" exec -- env \
+    "RUSTUP_TOOLCHAIN=$RUSTUP_TOOLCHAIN" \
+    "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS" \
+    "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" \
+    cargo build -p frankenengine-engine --bin frankenctl > /dev/null 2>"$cargo_stderr_path"
+  build_status=$?
+  set -e
+
+  if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "$cargo_stderr_path"; then
+    cat "$cargo_stderr_path" >&2
+    echo "rch reported local fallback; refusing local execution" >&2
+    exit 125
+  fi
+
+  if [[ "$build_status" -ne 0 ]]; then
+    cat "$cargo_stderr_path" >&2
+    exit "$build_status"
+  fi
+
+  run_cmd=("${CARGO_TARGET_DIR}/debug/frankenctl" run)
 fi
 
 set +e

@@ -1,0 +1,84 @@
+{
+  "artifacts": {
+    "commands": "[SMOKE_ROOT]/out/commands.txt",
+    "dashboard_json": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.json",
+    "dashboard_markdown": "[SMOKE_ROOT]/out/high_core_validation_pressure_dashboard.md",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_id": "bd-f7zfw",
+  "case_id": "idle_host_fixture",
+  "input_summary": {
+    "agent_mail": {
+      "decision": "available",
+      "repair_allowed": false,
+      "status": "healthy"
+    },
+    "br_readiness": {
+      "open_count": 5,
+      "ready_count": 3,
+      "ready_items": [
+        {
+          "id": "bd-f7zfw",
+          "priority": 2
+        }
+      ]
+    },
+    "local_processes": {
+      "active_compile_count": 0,
+      "cargo_count": 0,
+      "max_local_compile_count": 2,
+      "rustc_count": 0
+    },
+    "proof_shards": {
+      "decision": "ready",
+      "ready_count": 2,
+      "shards": [
+        {
+          "command": "cargo check --all-targets",
+          "cost_class": "heavy",
+          "shard_id": "check-all-targets",
+          "status": "ready"
+        },
+        {
+          "command": "bash -n scripts/example.sh",
+          "cost_class": "cheap",
+          "shard_id": "script-smoke",
+          "status": "ready"
+        }
+      ],
+      "stale": false,
+      "total_count": 2
+    },
+    "rch_jobs": {
+      "active_count": 0,
+      "jobs": [],
+      "max_active": 2
+    },
+    "resource_envelope": {
+      "decision": "pass",
+      "disk_state": "nominal",
+      "memory_state": "nominal",
+      "rch_state": "nominal"
+    }
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_live_queues": false,
+    "queries_live_processes": false,
+    "queries_live_workers": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "pressure_level": "nominal",
+  "pressure_reasons": [],
+  "recommendation": "run_rch_proof",
+  "recommended_commands": [
+    "RCH_PRIORITY=low RCH_VISIBILITY=summary rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch-target-franken-engine-validation-pressure CARGO_INCREMENTAL=0 RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 cargo check --all-targets"
+  ],
+  "schema_version": "franken-engine.high-core-validation-pressure-dashboard.v2",
+  "source_revision": "fixture-idle_host_fixture"
+}

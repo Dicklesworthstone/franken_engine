@@ -1,0 +1,44 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/contradictory_ownership/input.json",
+  "normalized_input": "[SMOKE_ROOT]/contradictory_ownership/out/input.normalized.json",
+  "evidence_hash": "d871e2d634bde00303e9e2fe4d5abe3cf8baca0c0cd663d8fe6db4ceef43f2d0",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "fail_closed",
+  "fail_closed_reasons": [
+    {
+      "code": "contradictory_ownership_evidence",
+      "source_id": "agent_mail_sla_report",
+      "detail": "Agent Mail or live snapshot evidence reports contradictory ownership",
+      "remediation": "Resolve ownership and reservations before recommending br reopen."
+    }
+  ],
+  "degraded_reasons": [
+    {
+      "code": "degraded_agent_mail_sla",
+      "source_id": "agent_mail_sla_report",
+      "detail": "Agent Mail SLA report is degraded or blocked",
+      "remediation": "Treat reopen recommendations as manual-review guidance."
+    }
+  ],
+  "recommendations": [],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/contradictory_ownership/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/contradictory_ownership/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/contradictory_ownership/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/contradictory_ownership/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/contradictory_ownership/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

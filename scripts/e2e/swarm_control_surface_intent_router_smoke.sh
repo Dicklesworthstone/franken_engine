@@ -5,6 +5,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 router="${root_dir}/scripts/swarm_control_surface_intent_router.sh"
 docs_path="${root_dir}/docs/SWARM_CONTROL_SURFACE_INTENT_ROUTER.md"
 fixtures_path="${root_dir}/scripts/testdata/swarm_control_surface_intent_router/cases.json"
+golden_dir="${SWARM_CONTROL_SURFACE_INTENT_ROUTER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 
 record_pass() {
@@ -24,6 +25,7 @@ EOF
 
 run_fixture_case() {
   local case_id="$1"
+  local suite_root="$2"
   local case_json tmp_root catalog intent output_dir expected_decision expected_exit expected_surface expected_reason status
 
   case_json="$(jq -c --arg case_id "$case_id" '.cases[] | select(.case_id == $case_id)' "$fixtures_path")"
@@ -31,7 +33,7 @@ run_fixture_case() {
     record_failure "missing fixture case ${case_id}"
   fi
 
-  tmp_root="${TMPDIR:-/tmp}/franken-engine-swarm-control-surface-intent-fixtures/$USER-$$-$(date -u +%Y%m%dT%H%M%SZ)/${case_id}"
+  tmp_root="${suite_root}/${case_id}"
   catalog="${tmp_root}/catalog.json"
   intent="${tmp_root}/intent.json"
   output_dir="${tmp_root}/out"
@@ -86,7 +88,71 @@ run_fixture_case() {
   grep -Fq './scripts/swarm_control_surface_intent_router.sh' "${output_dir}/commands.txt" \
     || record_failure "${case_id} missing commands invocation"
   grep -Fq 'decision:' "${output_dir}/report.md" || record_failure "${case_id} missing report decision"
+  assert_case_golden "$case_id" "${output_dir}/swarm_control_surface_intent_plan.json" "$suite_root"
   record_pass "$case_id"
+}
+
+golden_case_names() {
+  jq -r '.cases[].case_id' "$fixtures_path"
+}
+
+canonicalize_plan() {
+  local plan="$1"
+  local suite_root="$2"
+
+  jq --arg suite_root "$suite_root" '
+    def scrub:
+      if type == "string" then
+        gsub($suite_root; "[SMOKE_ROOT]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$plan"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local plan="$2"
+  local suite_root="$3"
+  local golden_path="${golden_dir}/swarm_control_surface_intent_router_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_plan "$plan" "$suite_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_plan "$plan" "$suite_root"); then
+    record_failure "${case_id} golden drift"
+  fi
+}
+
+goldens_shape_ok() {
+  local case_id golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_id; do
+    golden_path="${golden_dir}/swarm_control_surface_intent_router_${case_id}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_id} missing checked-in golden"
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done < <(golden_case_names)
 }
 
 run_check() {
@@ -96,14 +162,18 @@ run_check() {
   jq -e '.cases | length >= 16' "$fixtures_path" >/dev/null
   grep -Fq 'The router is artifact-fed.' "$docs_path" \
     || record_failure "missing artifact-fed docs wording"
+  goldens_shape_ok
   record_pass "check"
 }
 
 run_selftest() {
-  local case_id
+  local case_id tmp_parent tmp_root
   run_check
+  tmp_parent="${SWARM_CONTROL_SURFACE_INTENT_ROUTER_SMOKE_ROOT:-${TMPDIR:-/tmp}}"
+  mkdir -p "$tmp_parent"
+  tmp_root="$(mktemp -d "${tmp_parent%/}/swarm-control-surface-intent-router.XXXXXX")"
   while IFS= read -r case_id; do
-    run_fixture_case "$case_id"
+    run_fixture_case "$case_id" "$tmp_root"
   done < <(jq -r '.cases[].case_id' "$fixtures_path")
   record_pass "selftest"
 }

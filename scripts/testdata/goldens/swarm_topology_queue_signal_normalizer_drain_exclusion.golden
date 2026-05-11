@@ -1,0 +1,108 @@
+{
+  "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+  "source_schema_version": "franken-engine.swarm-topology-queue-signal-sources.v1",
+  "source_revision": "fixture-rev",
+  "truth_state": "degraded",
+  "decision": "degraded",
+  "queue_context": {
+    "task_count": 1,
+    "proof_transport_state": "remote_only_ok"
+  },
+  "locality_context": {
+    "recommended_topology_class": "hot_cache_preferring",
+    "warm_cache_residency_state": "hot",
+    "preferred_numa_nodes": [
+      1
+    ],
+    "preferred_worker_ids": [
+      "rch-e"
+    ]
+  },
+  "rehabilitation_context": {
+    "excluded_worker_ids": [
+      "rch-e"
+    ],
+    "watch_worker_ids": [],
+    "rehab_candidate_worker_ids": [],
+    "exclusion_count": 1
+  },
+  "queue_signal_hints": {
+    "rank_bias_mode": "portable_fallback",
+    "hot_cache_reuse_confidence_millionths": 250000,
+    "locality_confidence_millionths": 450000,
+    "usable_preferred_worker_ids": []
+  },
+  "degraded_reasons": [
+    {
+      "code": "excluded_preferred_workers",
+      "source_id": "rehabilitation_ledger_json",
+      "detail": "rehabilitation exclusions removed one or more preferred workers from queue advice"
+    }
+  ],
+  "blocked_reasons": [],
+  "fail_closed_reasons": [],
+  "source_artifacts": [
+    {
+      "source_id": "execution_queue_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/drain_exclusion/out/execution_queue_input.normalized.json",
+      "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+      "trust_state": "remote_only_ok"
+    },
+    {
+      "source_id": "topology_placement_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/drain_exclusion/out/topology_placement_input.normalized.json",
+      "schema_version": "franken-engine.swarm-topology-placement-input.v1",
+      "trust_state": "confirmed"
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/drain_exclusion/out/rehabilitation_ledger.normalized.json",
+      "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+      "trust_state": "degraded"
+    },
+    {
+      "source_id": "placement_adoption_history_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/drain_exclusion/out/placement_adoption_history.normalized.json",
+      "schema_version": "franken-engine.swarm-placement-adoption-history.v1",
+      "trust_state": "provided"
+    },
+    {
+      "source_id": "operator_status_snapshot_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/drain_exclusion/out/operator_status_snapshot.normalized.json",
+      "schema_version": "franken-engine.swarm-operator-status.v1",
+      "trust_state": "provided"
+    }
+  ],
+  "artifact_paths": {
+    "input_json": "[SMOKE_ROOT]/drain_exclusion/out/swarm_topology_queue_signal_input.json",
+    "sources_json": "[SMOKE_ROOT]/drain_exclusion/out/swarm_topology_queue_signal_sources.json",
+    "events_jsonl": "[SMOKE_ROOT]/drain_exclusion/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/drain_exclusion/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/drain_exclusion/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false
+  },
+  "queue_signal_input_id": "[QUEUE_SIGNAL_INPUT_ID]"
+}

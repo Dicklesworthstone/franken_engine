@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "case_id": "stable_non_promotion",
+  "source_revision": "6ff45a36",
+  "candidate_count": 1,
+  "promotion_candidate_count": 0,
+  "non_promotion_count": 1,
+  "candidates": [
+    {
+      "candidate_id": "spt-wide-human-review",
+      "template_key": "wide-human-review",
+      "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --all-targets",
+      "lane": "wide-human-review",
+      "decision": "non_promotion",
+      "reason_code": "stable_non_promotion",
+      "success_count": 3,
+      "current_success_count": 3,
+      "refusal_count": 1,
+      "source_proof_links": [
+        "proofs/wide/pass-1.json",
+        "proofs/wide/pass-2.json",
+        "proofs/wide/pass-3.json",
+        "proofs/wide/refusal.json"
+      ],
+      "applicability_notes": [],
+      "remediation": "Keep this as a stable non-promotion receipt with source proof links and revisit only if new evidence changes the applicability boundary.",
+      "automatic_edit_policy": {
+        "edits_agents_md": false,
+        "edits_scripts": false,
+        "advisory_only": true
+      }
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/stable_non_promotion/out/input.normalized.json",
+    "template_mining_report_json": "[SMOKE_ROOT]/stable_non_promotion/out/template_mining_report.json",
+    "promotion_candidates_jsonl": "[SMOKE_ROOT]/stable_non_promotion/out/promotion_candidates.jsonl",
+    "non_promotion_receipts_jsonl": "[SMOKE_ROOT]/stable_non_promotion/out/non_promotion_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/stable_non_promotion/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stable_non_promotion/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stable_non_promotion/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "report_hash": "9fa93259c62cfd305c3f7b8f6d292b0dd77c9c7fa21b9cacd923081a315f386a"
+}

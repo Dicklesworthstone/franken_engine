@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/expired_reservation/input.json",
+  "normalized_input": "[SMOKE_ROOT]/expired_reservation/out/input.normalized.json",
+  "evidence_hash": "d969474766404b5d94f6fe10f53d8efc4f1e61c835e8cfc5e17e0a60e1e9b42c",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "degraded",
+  "fail_closed_reasons": [],
+  "degraded_reasons": [
+    {
+      "code": "degraded_agent_mail_sla",
+      "source_id": "agent_mail_sla_report",
+      "detail": "Agent Mail SLA report is degraded or blocked",
+      "remediation": "Treat reopen recommendations as manual-review guidance."
+    }
+  ],
+  "recommendations": [
+    {
+      "bead_id": "bd-expired-reservation",
+      "title": "Expired reservation bead",
+      "assignee": "ExpiredAgent",
+      "latest_activity_ts": "2026-05-09T11:00:00Z",
+      "inactivity_seconds": 14400,
+      "inactivity_threshold_seconds": 3600,
+      "evidence_hash": "d969474766404b5d94f6fe10f53d8efc4f1e61c835e8cfc5e17e0a60e1e9b42c",
+      "evidence_sources": {
+        "br_snapshot": null,
+        "agent_mail_sla_report": null,
+        "file_reservations": null,
+        "git_activity": null,
+        "live_snapshot_bundle": null
+      },
+      "recommendation": "manual_review",
+      "reason_code": "expired_reservation",
+      "reason_not_to_act": "Expired reservation evidence requires manual release/ownership review first.",
+      "manual_br_command": null
+    }
+  ],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/expired_reservation/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/expired_reservation/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/expired_reservation/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/expired_reservation/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/expired_reservation/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

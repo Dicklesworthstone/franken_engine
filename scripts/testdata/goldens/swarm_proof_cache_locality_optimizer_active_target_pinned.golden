@@ -1,0 +1,102 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+  "source_revision": "fixture-revision",
+  "decision": "blocked",
+  "host_profile": "64c_256g",
+  "target_dir": "/mnt/rch/active-target",
+  "worker_id": "rch-c",
+  "topology_summary": {
+    "plan_decision": "pass",
+    "receipt_decision": "pass",
+    "ledger_decision": "pass",
+    "adoption_status": "adopted",
+    "recommended_topology_class": "numa_hot_cache_preferred",
+    "warm_cache_residency_state": "hot",
+    "placement_receipt_id": "receipt-pinned"
+  },
+  "proof_cache_summary": {
+    "proof_cache_decision": "cache_hit",
+    "cache_hit_count": 1,
+    "refresh_count": 0
+  },
+  "archive_summary": {
+    "advisory": "retain",
+    "pressure_level": "low",
+    "recommended_action": "preserve_active_target"
+  },
+  "resource_summary": {
+    "decision": "pass",
+    "readiness": "ready",
+    "remote_rch_slot_limit": 12,
+    "memory_total_bytes": 274877906944
+  },
+  "fail_closed_reasons": [],
+  "blocked_reasons": [
+    {
+      "code": "active_target_pinned",
+      "source_id": "active_target_locks",
+      "detail": "target dir has active build or preserve lock evidence"
+    }
+  ],
+  "degraded_reasons": [],
+  "recommendations": [
+    {
+      "recommendation_id": "preserve-active-target",
+      "action": "preserve_active_target",
+      "target_dir": "/mnt/rch/active-target",
+      "worker_id": "rch-c",
+      "confidence": "blocked",
+      "manual_confirmation_required": true,
+      "deletes_or_overwrites_artifacts": false,
+      "reason_codes": [
+        "active_target_pinned"
+      ],
+      "advisory_command": "# advisory-only preserve_active_target target=/mnt/rch/active-target worker=rch-c"
+    }
+  ],
+  "summary": {
+    "recommendation_count": 1,
+    "reuse_recommendation_count": 0,
+    "fresh_target_recommendation_count": 0,
+    "cooling_recommendation_count": 0,
+    "preserve_active_target_count": 1,
+    "fail_closed_count": 0,
+    "blocked_count": 1,
+    "degraded_count": 0
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "upstream_artifact_paths": {
+    "admission_budget_plan_json": "[SMOKE_ROOT]/active_target_pinned/admission_budget_plan_json.json",
+    "warm_target_prefetch_roi_advisory_json": "[SMOKE_ROOT]/active_target_pinned/warm_target_prefetch_roi_advisory_json.json",
+    "proof_cache_plan_json": "[SMOKE_ROOT]/active_target_pinned/proof_cache_plan_json.json",
+    "archive_pressure_scoreboard_json": "[SMOKE_ROOT]/active_target_pinned/archive_pressure_scoreboard_json.json",
+    "worker_truth_report_json": "[SMOKE_ROOT]/active_target_pinned/worker_truth_report_json.json",
+    "swarm_resource_envelope_json": "[SMOKE_ROOT]/active_target_pinned/swarm_resource_envelope_json.json",
+    "swarm_topology_placement_plan_json": "[SMOKE_ROOT]/active_target_pinned/swarm_topology_placement_plan_json.json",
+    "swarm_topology_placement_receipt_json": "[SMOKE_ROOT]/active_target_pinned/swarm_topology_placement_receipt_json.json",
+    "swarm_topology_placement_evidence_ledger_json": "[SMOKE_ROOT]/active_target_pinned/swarm_topology_placement_evidence_ledger_json.json"
+  },
+  "artifact_paths": {
+    "locality_plan_json": "[SMOKE_ROOT]/active_target_pinned/out/locality_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/active_target_pinned/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/active_target_pinned/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/active_target_pinned/out/report.md"
+  },
+  "plan_id": "swarm-proof-cache-locality-[PLAN_HASH_PREFIX]",
+  "hash_basis": {
+    "plan_hash": "[PLAN_HASH]"
+  }
+}

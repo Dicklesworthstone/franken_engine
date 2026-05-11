@@ -242,6 +242,7 @@ local_fallback_observed="$(bool_from_marker 'local fallback|fallback to local|fa
 queue_timeout_observed="$(bool_from_marker 'queue timeout|timed out waiting for remote worker|timeout waiting in queue|queued .*timed out|no remote worker available|no workers available')"
 worker_toolchain_missing_observed="$(bool_from_marker 'cargo-clippy.*not installed|component .*not installed|toolchain.*missing|command not found: (cargo|rustc)|(cargo|rustc): command not found|linker .*not found|No such file or directory.*(cargo|rustc)')"
 interrupted_observed="$(bool_from_marker 'interrupted|cancelled|canceled|received signal|SIGINT|SIGTERM|KeyboardInterrupt|terminated by user')"
+target_dir_fingerprint_observed="$(bool_from_marker 'could not parse/generate dep info|debug/\.fingerprint/[^[:space:]]+/(dep-[^[:space:]]+|invoked\.timestamp).*No such file or directory|extern location for [^[:space:]]+ does not exist: [^[:space:]]+\.rmeta|failed to write .*debug/\.fingerprint|dep-test-integration-test-[^[:space:]]+: No such file or directory')"
 
 remote_started=false
 if [[ "$metadata_remote_started" == "true" ]] || has_marker 'Selected worker:|Executing command remotely|Remote command started'; then
@@ -290,6 +291,13 @@ elif [[ "$interrupted_observed" == "true" ]]; then
   truth_state="incomplete"
   recommended_action="rerun_exact_remote_proof"
   conservative_action="Do not count interrupted output as proof. Salvage artifacts if available, then rerun the exact remote proof command."
+elif [[ "$target_dir_fingerprint_observed" == "true" ]]; then
+  classification="target_dir_fingerprint_corruption"
+  decision="blocked"
+  reason_code="cargo_target_dir_fingerprint_corruption"
+  truth_state="validation_environment_blocker"
+  recommended_action="discard_corrupt_target_and_rerun_remote"
+  conservative_action="Do not count this as source evidence. Use a fresh isolated CARGO_TARGET_DIR and rerun through rch/native-dependency routing; this classifier must not delete target directories."
 elif [[ "$remote_started" == "true" && "$remote_finished" == "true" && "$exit_code" == "0" ]]; then
   classification="remote_success"
   decision="pass"
@@ -362,6 +370,16 @@ case "$classification" in
         "$recommended_command"
     )"
     ;;
+  target_dir_fingerprint_corruption)
+    blocker_text="$(
+      printf "RCH proof blocked: Cargo target-dir dep-info/fingerprint corruption prevented a usable source verdict for command '%s' on worker %s.\nFirst target-dir errors:\n%s\nAdvice: %s\nNext command: '%s'" \
+        "${command_text:-unknown}" \
+        "${worker_id:-unknown}" \
+        "$first_errors_text" \
+        "$conservative_action" \
+        "$recommended_command"
+    )"
+    ;;
   *)
     blocker_text="$(
       printf "RCH proof missing remote evidence for command '%s'; selected worker and remote-finished markers were not both preserved.\nAdvice: %s\nNext command: '%s'" \
@@ -405,6 +423,7 @@ jq -n \
   --argjson queue_timeout_observed "$queue_timeout_observed" \
   --argjson worker_toolchain_missing_observed "$worker_toolchain_missing_observed" \
   --argjson interrupted_observed "$interrupted_observed" \
+  --argjson target_dir_fingerprint_observed "$target_dir_fingerprint_observed" \
   --argjson remote_started "$remote_started" \
   --argjson remote_finished "$remote_finished" \
   '{
@@ -433,7 +452,8 @@ jq -n \
       local_fallback: $local_fallback_observed,
       queue_timeout: $queue_timeout_observed,
       worker_toolchain_missing: $worker_toolchain_missing_observed,
-      interrupted: $interrupted_observed
+      interrupted: $interrupted_observed,
+      target_dir_fingerprint: $target_dir_fingerprint_observed
     },
     first_relevant_errors: ($first_errors | split("\n") | map(select(length > 0))),
     blocker_text: (if $blocker_text == "" then null else $blocker_text end),

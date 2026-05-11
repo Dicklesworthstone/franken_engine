@@ -1,0 +1,14 @@
+{
+  "case_id": "target_dir_fingerprint_corruption",
+  "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/local_target_franken_engine_root_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test",
+  "worker_id": "local-bypass-after-hdf5-gap",
+  "build_id": "proof-target-fingerprint-101",
+  "target_dir": "/tmp/local_target_franken_engine_root_test",
+  "exit_code": 101,
+  "duration_ms": 1203000,
+  "remote_started": true,
+  "remote_finished": true,
+  "started_at": "2026-05-10T20:31:00Z",
+  "completed_at": "2026-05-10T20:51:03Z",
+  "recommended_narrow_command": "RCH_REQUIRE_REMOTE=1 rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_fresh_test CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --tests"
+}

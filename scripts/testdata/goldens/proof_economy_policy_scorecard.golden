@@ -1,0 +1,126 @@
+{
+  "trace_id": "trace-5184f25e82c8636b",
+  "source_revision": "fixture-rev",
+  "pressure_mode": "high",
+  "max_heavy_per_agent": 1,
+  "policy_decision": "pass",
+  "p1_slo_risk": "protected",
+  "fair_share_score_millionths": 700000,
+  "decisions": [
+    {
+      "agent_id": "AgentAlpha",
+      "bead_id": "bd-p1-proof-alpha",
+      "priority": 1,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/alpha cargo test -p frankenengine-engine --test focused -- --nocapture",
+      "target_dir": "[RCH_TARGET]/alpha",
+      "lease_decision": "admit",
+      "decision": "admit_preempt",
+      "reason": "P1 proof lane protected by proof-economy policy",
+      "fairness_reason": "high-priority SLO protection",
+      "slo_class": "p1",
+      "warm_target_reuse": true,
+      "warm_target_reason": "reservation and command ownership agree"
+    },
+    {
+      "agent_id": "AgentBeta",
+      "bead_id": "bd-p3-broad-beta",
+      "priority": 3,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/beta cargo check --all-targets",
+      "target_dir": "[RCH_TARGET]/beta",
+      "lease_decision": "admit",
+      "decision": "defer",
+      "reason": "high-pressure mode defers low-priority broad proof work",
+      "fairness_reason": "pressure-aware deferral",
+      "slo_class": "p3",
+      "warm_target_reuse": false,
+      "warm_target_reason": "no matching reservation ownership evidence"
+    },
+    {
+      "agent_id": "AgentMismatch",
+      "bead_id": "bd-p2-warm-mismatch",
+      "priority": 2,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/mismatch cargo test -p frankenengine-engine --test beta",
+      "target_dir": "[RCH_TARGET]/mismatch",
+      "lease_decision": "admit",
+      "decision": "admit",
+      "reason": "within fair-share policy budget",
+      "fairness_reason": "within agent fair-share budget",
+      "slo_class": "p2",
+      "warm_target_reuse": false,
+      "warm_target_reason": "no matching reservation ownership evidence"
+    },
+    {
+      "agent_id": "AgentNoisy",
+      "bead_id": "bd-p2-noisy-1",
+      "priority": 2,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_1 cargo test -p frankenengine-engine --test alpha",
+      "target_dir": "[RCH_TARGET]/noisy_1",
+      "lease_decision": "admit",
+      "decision": "admit",
+      "reason": "within fair-share policy budget",
+      "fairness_reason": "within agent fair-share budget",
+      "slo_class": "p2",
+      "warm_target_reuse": true,
+      "warm_target_reason": "reservation and command ownership agree"
+    },
+    {
+      "agent_id": "AgentNoisy",
+      "bead_id": "bd-p2-noisy-2",
+      "priority": 2,
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_2 cargo clippy --all-targets -- -D warnings",
+      "target_dir": "[RCH_TARGET]/noisy_2",
+      "lease_decision": "admit",
+      "decision": "defer",
+      "reason": "per-agent heavy proof cap exceeded",
+      "fairness_reason": "agent fairness throttle",
+      "slo_class": "p2",
+      "warm_target_reuse": true,
+      "warm_target_reason": "reservation and command ownership agree"
+    }
+  ],
+  "per_agent": [
+    {
+      "agent_id": "AgentAlpha",
+      "admitted": 1,
+      "deferred": 0,
+      "fail_closed": 0
+    },
+    {
+      "agent_id": "AgentBeta",
+      "admitted": 0,
+      "deferred": 1,
+      "fail_closed": 0
+    },
+    {
+      "agent_id": "AgentMismatch",
+      "admitted": 1,
+      "deferred": 0,
+      "fail_closed": 0
+    },
+    {
+      "agent_id": "AgentNoisy",
+      "admitted": 1,
+      "deferred": 1,
+      "fail_closed": 0
+    }
+  ],
+  "findings": [],
+  "summary": {
+    "command_count": 5,
+    "admitted_count": 3,
+    "deferred_count": 2,
+    "fail_closed_count": 0,
+    "warm_target_reuse_count": 3
+  },
+  "schema_version": "franken-engine.proof-economy-policy-scorecard.v1",
+  "policy_id": "policy-7c8e54462ef24d4f",
+  "hash_basis": {
+    "policy_hash": "policy-7c8e54462ef24d4f"
+  },
+  "artifact_paths": {
+    "policy_scorecard_json": "[SMOKE_ROOT]/eval-a/policy_scorecard.json",
+    "events_jsonl": "[SMOKE_ROOT]/eval-a/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/eval-a/commands.txt",
+    "report_md": "[SMOKE_ROOT]/eval-a/report.md"
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+  "source_revision": "fixture-revision",
+  "decision": "pass",
+  "host_profile": "64c_256g",
+  "target_dir": "/mnt/rch/target-a",
+  "worker_id": "rch-a",
+  "topology_summary": {
+    "plan_decision": "pass",
+    "receipt_decision": "pass",
+    "ledger_decision": "pass",
+    "adoption_status": "adopted",
+    "recommended_topology_class": "numa_hot_cache_preferred",
+    "warm_cache_residency_state": "hot",
+    "placement_receipt_id": "receipt-high-roi"
+  },
+  "proof_cache_summary": {
+    "proof_cache_decision": "cache_hit",
+    "cache_hit_count": 1,
+    "refresh_count": 0
+  },
+  "archive_summary": {
+    "advisory": "retain",
+    "pressure_level": "low",
+    "recommended_action": "retain_hot_archive"
+  },
+  "resource_summary": {
+    "decision": "pass",
+    "readiness": "ready",
+    "remote_rch_slot_limit": 16,
+    "memory_total_bytes": 274877906944
+  },
+  "fail_closed_reasons": [],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "recommendations": [
+    {
+      "recommendation_id": "reuse-warm-target",
+      "action": "reuse_warm_target",
+      "target_dir": "/mnt/rch/target-a",
+      "worker_id": "rch-a",
+      "confidence": "high",
+      "manual_confirmation_required": false,
+      "deletes_or_overwrites_artifacts": false,
+      "reason_codes": [
+        "topology_adopted",
+        "proof_cache_hit",
+        "worker_truth_pass"
+      ],
+      "advisory_command": "# advisory-only reuse_warm_target target=/mnt/rch/target-a worker=rch-a"
+    }
+  ],
+  "summary": {
+    "recommendation_count": 1,
+    "reuse_recommendation_count": 1,
+    "fresh_target_recommendation_count": 0,
+    "cooling_recommendation_count": 0,
+    "preserve_active_target_count": 0,
+    "fail_closed_count": 0,
+    "blocked_count": 0,
+    "degraded_count": 0
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "upstream_artifact_paths": {
+    "admission_budget_plan_json": "[SMOKE_ROOT]/high_roi_reuse/admission_budget_plan_json.json",
+    "warm_target_prefetch_roi_advisory_json": "[SMOKE_ROOT]/high_roi_reuse/warm_target_prefetch_roi_advisory_json.json",
+    "proof_cache_plan_json": "[SMOKE_ROOT]/high_roi_reuse/proof_cache_plan_json.json",
+    "archive_pressure_scoreboard_json": "[SMOKE_ROOT]/high_roi_reuse/archive_pressure_scoreboard_json.json",
+    "worker_truth_report_json": "[SMOKE_ROOT]/high_roi_reuse/worker_truth_report_json.json",
+    "swarm_resource_envelope_json": "[SMOKE_ROOT]/high_roi_reuse/swarm_resource_envelope_json.json",
+    "swarm_topology_placement_plan_json": "[SMOKE_ROOT]/high_roi_reuse/swarm_topology_placement_plan_json.json",
+    "swarm_topology_placement_receipt_json": "[SMOKE_ROOT]/high_roi_reuse/swarm_topology_placement_receipt_json.json",
+    "swarm_topology_placement_evidence_ledger_json": "[SMOKE_ROOT]/high_roi_reuse/swarm_topology_placement_evidence_ledger_json.json"
+  },
+  "artifact_paths": {
+    "locality_plan_json": "[SMOKE_ROOT]/high_roi_reuse/out/locality_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/high_roi_reuse/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/high_roi_reuse/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/high_roi_reuse/out/report.md"
+  },
+  "plan_id": "swarm-proof-cache-locality-[PLAN_HASH_PREFIX]",
+  "hash_basis": {
+    "plan_hash": "[PLAN_HASH]"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+  "agent_id": "CyanOak",
+  "bead_id": "bd-lviqm",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "input_status": {
+    "suite_manifest": "provided",
+    "sticky_worker_state": "provided",
+    "reservation_snapshot": "missing",
+    "local_fallback_markers": "missing"
+  },
+  "sticky_worker_requested": {
+    "preferred_worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+    "sticky_worker_available": true
+  },
+  "fallback_worker_candidate": {
+    "worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/semantic_dark_matter_pipeline_vmi1156319"
+  },
+  "local_fallback_marker_count": 0,
+  "local_fallback_markers": [],
+  "manifest_phase_count": 3,
+  "plan_decision": "admit_sticky",
+  "reason": "sticky worker is available and warm target-dir is uncontested",
+  "assigned_worker_id": "vmi1156319",
+  "assigned_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+  "phase_plans": [
+    {
+      "phase": "check",
+      "command_id": "check-1",
+      "command_class": "check",
+      "assigned_worker_id": "vmi1156319",
+      "assigned_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_bd_lviqm_sticky cargo check -p frankenengine-engine --test semantic_dark_matter_engine_integration"
+    },
+    {
+      "phase": "clippy",
+      "command_id": "clippy-1",
+      "command_class": "clippy",
+      "assigned_worker_id": "vmi1156319",
+      "assigned_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_bd_lviqm_sticky cargo clippy -p frankenengine-engine --test semantic_dark_matter_engine_integration -- -D warnings"
+    },
+    {
+      "phase": "test",
+      "command_id": "test-1",
+      "command_class": "test",
+      "assigned_worker_id": "vmi1156319",
+      "assigned_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+      "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_bd_lviqm_sticky cargo test -p frankenengine-engine --test semantic_dark_matter_engine_integration -- --nocapture"
+    }
+  ],
+  "safe_alternatives": [
+    "keep suite on worker vmi1156319",
+    "reuse warm target-dir [RCH_TARGET]/franken_engine_bd_lviqm_sticky"
+  ],
+  "exit_code": 0,
+  "hash_basis": {
+    "input_hash": "bb0298bcb38c9e6b65863d1cd473c46868ba666dfca1abf666eb5379e520413c",
+    "plan_hash": "e2b068731f7e105b01e6327263e6764fffa1d0f5cdb0d3ce12bc546d162f333e"
+  },
+  "artifact_paths": {
+    "sticky_worker_warm_target_plan_json": "[SMOKE_ROOT]/sticky/sticky_worker_warm_target_plan.json",
+    "sticky_worker_warm_target_summary_md": "[SMOKE_ROOT]/sticky/sticky_worker_warm_target_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/sticky/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/sticky/events.jsonl"
+  }
+}

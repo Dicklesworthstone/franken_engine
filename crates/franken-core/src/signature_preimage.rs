@@ -1362,10 +1362,7 @@ mod tests {
 
     #[test]
     fn signature_event_type_display_all_unique() {
-        // SAFETY: VerificationKey::from_bytes with fixed-size array of correct length cannot fail.
-        let vk1 = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
-        // SAFETY: VerificationKey::from_bytes with fixed-size array of correct length cannot fail.
-        let _vk2 = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]).unwrap();
+        let vk1 = test_signing_key().verification_key();
         let types = [
             SignatureEventType::Signed {
                 signer: vk1.clone(),
@@ -1400,7 +1397,8 @@ mod tests {
 
     #[test]
     fn verification_key_bytes_roundtrip() {
-        let bytes = [99u8; VERIFICATION_KEY_LEN];
+        let source = test_signing_key().verification_key();
+        let bytes = *source.as_bytes();
         let vk = VerificationKey::from_bytes(bytes).unwrap();
         assert_eq!(vk.as_bytes(), &bytes);
     }
@@ -1492,7 +1490,7 @@ mod tests {
     #[test]
     fn enrichment_signature_error_clone_equality() {
         let err = SignatureError::VerificationFailed {
-            signer: VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap(),
+            signer: test_signing_key().verification_key(),
             reason: "tampered".to_string(),
         };
         let err2 = err.clone();
@@ -1560,8 +1558,15 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_serde_roundtrip_preserves_ordering() {
-        let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]).unwrap();
-        let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]).unwrap();
+        let mut keys = [
+            test_signing_key().verification_key(),
+            SigningKey::from_bytes([0x42; SIGNING_KEY_LEN])
+                .unwrap()
+                .verification_key(),
+        ];
+        keys.sort();
+        let vk_a = keys[0].clone();
+        let vk_b = keys[1].clone();
         assert!(vk_a < vk_b, "Ord should order by bytes");
 
         let json_a = serde_json::to_string(&vk_a).unwrap();
@@ -1692,7 +1697,7 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_hex_is_lowercase() {
-        let vk = VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap();
+        let vk = test_signing_key().verification_key();
         let hex = vk.to_hex();
         assert!(
             hex.chars()

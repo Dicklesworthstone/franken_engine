@@ -283,6 +283,11 @@ impl CapabilityProfile {
     pub fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
     }
+
+    /// Get the capabilities in this profile.
+    pub fn capabilities(&self) -> &BTreeSet<RuntimeCapability> {
+        &self.capabilities
+    }
 }
 
 impl fmt::Display for CapabilityProfile {
@@ -739,7 +744,7 @@ mod tests {
     // ── Enrichment: has / len / is_empty ─────────────────────────
 
     #[test]
-    fn full_profile_has_all_16_capabilities() {
+    fn full_profile_has_all_17_capabilities() {
         let full = CapabilityProfile::full();
         let all = [
             RuntimeCapability::VmDispatch,
@@ -758,6 +763,7 @@ mod tests {
             RuntimeCapability::ProcessSpawn,
             RuntimeCapability::FsRead,
             RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
         ];
         for cap in &all {
             assert!(full.has(*cap), "full should have {:?}", cap);
@@ -832,6 +838,7 @@ mod tests {
             RuntimeCapability::ProcessSpawn,
             RuntimeCapability::FsRead,
             RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
         ];
         for cap in &all {
             let s = cap.to_string();
@@ -843,7 +850,7 @@ mod tests {
     #[test]
     fn capability_profile_display_includes_count() {
         let full = CapabilityProfile::full();
-        assert_eq!(full.to_string(), "FullCaps[16]");
+        assert_eq!(full.to_string(), "FullCaps[17]");
         let co = CapabilityProfile::compute_only();
         assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");
     }
@@ -1070,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_capability_display_all_16_unique() {
+    fn runtime_capability_display_all_17_unique() {
         let displays: BTreeSet<String> = [
             RuntimeCapability::VmDispatch,
             RuntimeCapability::GcInvoke,
@@ -1088,14 +1095,15 @@ mod tests {
             RuntimeCapability::ProcessSpawn,
             RuntimeCapability::FsRead,
             RuntimeCapability::FsWrite,
+            RuntimeCapability::ModuleLoad,
         ]
         .iter()
         .map(|c| c.to_string())
         .collect();
         assert_eq!(
             displays.len(),
-            16,
-            "all 16 RuntimeCapability variants have unique Display"
+            17,
+            "all 17 RuntimeCapability variants have unique Display"
         );
     }
 
@@ -1172,8 +1180,8 @@ mod tests {
     }
 
     #[test]
-    fn full_profile_display_shows_count_16() {
-        assert_eq!(CapabilityProfile::full().to_string(), "FullCaps[16]");
+    fn full_profile_display_shows_count_17() {
+        assert_eq!(CapabilityProfile::full().to_string(), "FullCaps[17]");
     }
 
     #[test]
@@ -1189,7 +1197,7 @@ mod tests {
     // -- Enum completeness --------------------------------------------------
 
     #[test]
-    fn full_profile_contains_all_16_capabilities() {
+    fn full_profile_contains_all_17_capabilities() {
         use RuntimeCapability::*;
         let all = [
             VmDispatch,
@@ -1208,6 +1216,7 @@ mod tests {
             ProcessSpawn,
             FsRead,
             FsWrite,
+            ModuleLoad,
         ];
         let full = CapabilityProfile::full();
         for cap in &all {
@@ -1236,9 +1245,10 @@ mod tests {
             ProcessSpawn,
             FsRead,
             FsWrite,
+            ModuleLoad,
         ];
         let strings: BTreeSet<String> = all.iter().map(|c| c.to_string()).collect();
-        assert_eq!(strings.len(), 16, "all display strings should be unique");
+        assert_eq!(strings.len(), 17, "all display strings should be unique");
     }
 
     // -- Profile disjointness pairwise matrix -------------------------------

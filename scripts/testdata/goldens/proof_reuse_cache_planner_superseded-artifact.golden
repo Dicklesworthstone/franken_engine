@@ -1,0 +1,46 @@
+{
+  "schema_version": "franken-engine.proof-reuse-cache-plan.v1",
+  "proof_index_path": "[SMOKE_ROOT]/superseded-index.json",
+  "expected_source_revision": "current-rev",
+  "changed_paths": [],
+  "proof_cache_decision": "refresh_required",
+  "reason": "all matching proof artifacts require refresh before reuse",
+  "cache_hit_artifacts": [],
+  "required_refreshes": [
+    {
+      "artifact_id": "artifact-heavy",
+      "artifact_path": "artifacts/heavy-proof/report.json",
+      "bead_id": "bd-proof",
+      "artifact_role": "proof_manifest",
+      "receipt_kind": "proof_artifact",
+      "source_revision": "current-rev",
+      "freshness_state": "superseded",
+      "refresh_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_proof_reuse cargo test -p frankenengine-engine --test proof_evidence_index_integration -- --nocapture",
+      "reason": "state=superseded",
+      "covered_paths": [
+        "crates/franken-engine/src/proof_evidence_index.rs"
+      ],
+      "invalidated_paths": []
+    }
+  ],
+  "invalid_artifacts": [],
+  "invalidated_paths": [],
+  "refresh_commands": [
+    "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_proof_reuse cargo test -p frankenengine-engine --test proof_evidence_index_integration -- --nocapture"
+  ],
+  "freshness_reports": [
+    "[SMOKE_ROOT]/superseded.json"
+  ],
+  "summary": {
+    "cache_hit_count": 0,
+    "refresh_count": 1,
+    "invalid_count": 0
+  },
+  "errors": [],
+  "artifact_paths": {
+    "proof_cache_plan_json": "[SMOKE_ROOT]/superseded-artifact/proof_cache_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/superseded-artifact/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/superseded-artifact/commands.txt",
+    "report_md": "[SMOKE_ROOT]/superseded-artifact/report.md"
+  }
+}

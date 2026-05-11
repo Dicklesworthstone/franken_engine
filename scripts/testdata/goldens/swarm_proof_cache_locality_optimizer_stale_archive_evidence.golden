@@ -1,0 +1,102 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+  "source_revision": "fixture-revision",
+  "decision": "degraded",
+  "host_profile": "64c_256g",
+  "target_dir": "/mnt/rch/target-stale",
+  "worker_id": "rch-d",
+  "topology_summary": {
+    "plan_decision": "pass",
+    "receipt_decision": "pass",
+    "ledger_decision": "pass",
+    "adoption_status": "adopted",
+    "recommended_topology_class": "numa_hot_cache_preferred",
+    "warm_cache_residency_state": "hot",
+    "placement_receipt_id": "receipt-stale"
+  },
+  "proof_cache_summary": {
+    "proof_cache_decision": "cache_hit",
+    "cache_hit_count": 1,
+    "refresh_count": 0
+  },
+  "archive_summary": {
+    "advisory": "compaction_first",
+    "pressure_level": "medium",
+    "recommended_action": "compact_before_reuse"
+  },
+  "resource_summary": {
+    "decision": "pass",
+    "readiness": "ready",
+    "remote_rch_slot_limit": 12,
+    "memory_total_bytes": 274877906944
+  },
+  "fail_closed_reasons": [],
+  "blocked_reasons": [],
+  "degraded_reasons": [
+    {
+      "code": "stale_archive_evidence",
+      "source_id": "archive_pressure_scoreboard_json",
+      "detail": "archive evidence needs refresh or compaction before reuse confidence is high"
+    }
+  ],
+  "recommendations": [
+    {
+      "recommendation_id": "refresh-archive-evidence",
+      "action": "refresh_archive_evidence",
+      "target_dir": "/mnt/rch/target-stale",
+      "worker_id": "rch-d",
+      "confidence": "partial",
+      "manual_confirmation_required": true,
+      "deletes_or_overwrites_artifacts": false,
+      "reason_codes": [
+        "stale_archive_evidence"
+      ],
+      "advisory_command": "# advisory-only refresh_archive_evidence target=/mnt/rch/target-stale worker=rch-d"
+    }
+  ],
+  "summary": {
+    "recommendation_count": 1,
+    "reuse_recommendation_count": 0,
+    "fresh_target_recommendation_count": 0,
+    "cooling_recommendation_count": 0,
+    "preserve_active_target_count": 0,
+    "fail_closed_count": 0,
+    "blocked_count": 0,
+    "degraded_count": 1
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "upstream_artifact_paths": {
+    "admission_budget_plan_json": "[SMOKE_ROOT]/stale_archive_evidence/admission_budget_plan_json.json",
+    "warm_target_prefetch_roi_advisory_json": "[SMOKE_ROOT]/stale_archive_evidence/warm_target_prefetch_roi_advisory_json.json",
+    "proof_cache_plan_json": "[SMOKE_ROOT]/stale_archive_evidence/proof_cache_plan_json.json",
+    "archive_pressure_scoreboard_json": "[SMOKE_ROOT]/stale_archive_evidence/archive_pressure_scoreboard_json.json",
+    "worker_truth_report_json": "[SMOKE_ROOT]/stale_archive_evidence/worker_truth_report_json.json",
+    "swarm_resource_envelope_json": "[SMOKE_ROOT]/stale_archive_evidence/swarm_resource_envelope_json.json",
+    "swarm_topology_placement_plan_json": "[SMOKE_ROOT]/stale_archive_evidence/swarm_topology_placement_plan_json.json",
+    "swarm_topology_placement_receipt_json": "[SMOKE_ROOT]/stale_archive_evidence/swarm_topology_placement_receipt_json.json",
+    "swarm_topology_placement_evidence_ledger_json": "[SMOKE_ROOT]/stale_archive_evidence/swarm_topology_placement_evidence_ledger_json.json"
+  },
+  "artifact_paths": {
+    "locality_plan_json": "[SMOKE_ROOT]/stale_archive_evidence/out/locality_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale_archive_evidence/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_archive_evidence/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_archive_evidence/out/report.md"
+  },
+  "plan_id": "swarm-proof-cache-locality-[PLAN_HASH_PREFIX]",
+  "hash_basis": {
+    "plan_hash": "[PLAN_HASH]"
+  }
+}

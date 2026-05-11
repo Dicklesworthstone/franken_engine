@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 simulator="${root_dir}/scripts/swarm_lease_exchange_cancellation_salvage_simulator.sh"
 contract_json="${root_dir}/docs/swarm_lease_exchange_cancellation_salvage_simulator_contract_v1.json"
+golden_dir="${SWARM_LEASE_EXCHANGE_CANCELLATION_SALVAGE_SIMULATOR_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS swarm-lease-exchange-cancellation-salvage-simulator %s\n' "$1"
@@ -11,6 +12,17 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL swarm-lease-exchange-cancellation-salvage-simulator %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+stale_reservation
+active_owner
+degraded_rch
+salvage_pinned
+manual_confirmation
+ownership_contradiction
+EOF
 }
 
 write_stale_lock_fixture() {
@@ -343,6 +355,78 @@ write_profiles_fixture() {
   esac
 }
 
+canonicalize_simulation() {
+  local simulation_path="$1"
+  local work_dir="$2"
+
+  jq --arg work_dir "$work_dir" '
+    def scrub:
+      if type == "string" then
+        gsub($work_dir; "[CASE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+    | .simulation_id = "[SIMULATION_ID]"
+    | .hash_basis.input_hash = "[INPUT_HASH]"
+    | .hash_basis.simulation_hash = "[SIMULATION_HASH]"
+  ' "$simulation_path"
+}
+
+assert_case_golden() {
+  local scenario="$1"
+  local simulation_path="$2"
+  local work_dir="$3"
+  local golden_path="${golden_dir}/swarm_lease_exchange_cancellation_salvage_simulator_${scenario}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_simulation "$simulation_path" "$work_dir" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${scenario}: missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_simulation "$simulation_path" "$work_dir"); then
+    record_failure "${scenario}: golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local scenario golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r scenario; do
+    golden_path="${golden_dir}/swarm_lease_exchange_cancellation_salvage_simulator_${scenario}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${scenario}: missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${scenario}: invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
+}
+
 run_case() {
   local scenario="$1"
   local expected_action="$2"
@@ -379,6 +463,7 @@ run_case() {
   jq -e --arg action "$expected_action" '.recommendations[0].simulated_action == $action' "$simulation_path" >/dev/null
   jq -e --arg decision "$expected_decision" '.decision == $decision' "$simulation_path" >/dev/null
   jq -e '.artifact_paths.commands_txt | type == "string"' "$simulation_path" >/dev/null
+  assert_case_golden "$scenario" "$simulation_path" "$work_dir"
   if grep -E 'br update|release_file_reservations|pkill|kill ' "${work_dir}/out/commands.txt" >/dev/null 2>&1; then
     record_failure "${scenario}: commands.txt includes forbidden mutation hints"
     return 1
@@ -387,10 +472,13 @@ run_case() {
 }
 
 run_check() {
+  bash -n "$simulator"
+  bash -n "${BASH_SOURCE[0]}"
   jq -e '
     .schema_version == "franken-engine.swarm-lease-exchange-cancellation-salvage-simulator-contract.v1"
     and (.simulation_schema_version == "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1")
   ' "$contract_json" >/dev/null
+  goldens_shape_ok
 
   run_case stale_reservation simulate_lease_exchange advisory 0
   run_case active_owner contact_owner_before_exchange manual_review_required 75

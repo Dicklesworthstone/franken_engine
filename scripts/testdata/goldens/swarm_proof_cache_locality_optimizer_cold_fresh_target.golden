@@ -1,0 +1,108 @@
+{
+  "schema_version": "franken-engine.swarm-proof-cache-locality-plan.v1",
+  "source_revision": "fixture-revision",
+  "decision": "degraded",
+  "host_profile": "small_host",
+  "target_dir": null,
+  "worker_id": "rch-b",
+  "topology_summary": {
+    "plan_decision": "pass",
+    "receipt_decision": "pass",
+    "ledger_decision": "pass",
+    "adoption_status": "adopted",
+    "recommended_topology_class": "numa_cache_cold_fallback",
+    "warm_cache_residency_state": "cold",
+    "placement_receipt_id": "receipt-cold"
+  },
+  "proof_cache_summary": {
+    "proof_cache_decision": "refresh_required",
+    "cache_hit_count": 0,
+    "refresh_count": 1
+  },
+  "archive_summary": {
+    "advisory": "retain",
+    "pressure_level": "low",
+    "recommended_action": "retain_archive"
+  },
+  "resource_summary": {
+    "decision": "pass",
+    "readiness": "ready",
+    "remote_rch_slot_limit": 4,
+    "memory_total_bytes": 68719476736
+  },
+  "fail_closed_reasons": [],
+  "blocked_reasons": [],
+  "degraded_reasons": [
+    {
+      "code": "proof_cache_refresh_required",
+      "source_id": "proof_cache_plan_json",
+      "detail": "proof cache requires refresh before reuse confidence is high"
+    },
+    {
+      "code": "warm_target_cooling_required",
+      "source_id": "warm_target_prefetch_roi_advisory_json",
+      "detail": "warm-target advisory asks for cooling or deferral"
+    }
+  ],
+  "recommendations": [
+    {
+      "recommendation_id": "allocate-fresh-target",
+      "action": "allocate_fresh_target",
+      "target_dir": null,
+      "worker_id": "rch-b",
+      "confidence": "bounded",
+      "manual_confirmation_required": false,
+      "deletes_or_overwrites_artifacts": false,
+      "reason_codes": [
+        "cold_or_missing_cache",
+        "avoid_overclaiming_reuse"
+      ],
+      "advisory_command": "# advisory-only allocate_fresh_target target=none worker=rch-b"
+    }
+  ],
+  "summary": {
+    "recommendation_count": 1,
+    "reuse_recommendation_count": 0,
+    "fresh_target_recommendation_count": 1,
+    "cooling_recommendation_count": 0,
+    "preserve_active_target_count": 0,
+    "fail_closed_count": 0,
+    "blocked_count": 0,
+    "degraded_count": 2
+  },
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "pins_workers_automatically": false,
+    "rebinds_hosts_automatically": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "upstream_artifact_paths": {
+    "admission_budget_plan_json": "[SMOKE_ROOT]/cold_fresh_target/admission_budget_plan_json.json",
+    "warm_target_prefetch_roi_advisory_json": "[SMOKE_ROOT]/cold_fresh_target/warm_target_prefetch_roi_advisory_json.json",
+    "proof_cache_plan_json": "[SMOKE_ROOT]/cold_fresh_target/proof_cache_plan_json.json",
+    "archive_pressure_scoreboard_json": "[SMOKE_ROOT]/cold_fresh_target/archive_pressure_scoreboard_json.json",
+    "worker_truth_report_json": "[SMOKE_ROOT]/cold_fresh_target/worker_truth_report_json.json",
+    "swarm_resource_envelope_json": "[SMOKE_ROOT]/cold_fresh_target/swarm_resource_envelope_json.json",
+    "swarm_topology_placement_plan_json": "[SMOKE_ROOT]/cold_fresh_target/swarm_topology_placement_plan_json.json",
+    "swarm_topology_placement_receipt_json": "[SMOKE_ROOT]/cold_fresh_target/swarm_topology_placement_receipt_json.json",
+    "swarm_topology_placement_evidence_ledger_json": "[SMOKE_ROOT]/cold_fresh_target/swarm_topology_placement_evidence_ledger_json.json"
+  },
+  "artifact_paths": {
+    "locality_plan_json": "[SMOKE_ROOT]/cold_fresh_target/out/locality_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/cold_fresh_target/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/cold_fresh_target/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/cold_fresh_target/out/report.md"
+  },
+  "plan_id": "swarm-proof-cache-locality-[PLAN_HASH_PREFIX]",
+  "hash_basis": {
+    "plan_hash": "[PLAN_HASH]"
+  }
+}

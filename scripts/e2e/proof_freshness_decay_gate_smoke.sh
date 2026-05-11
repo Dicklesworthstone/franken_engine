@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 gate="${root_dir}/scripts/proof_freshness_decay_gate.sh"
 docs_path="${root_dir}/docs/PROOF_FRESHNESS_DECAY_GATE.md"
+golden_dir="${PROOF_FRESHNESS_DECAY_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS proof-freshness-decay %s\n' "$1"
@@ -11,6 +12,19 @@ record_pass() {
 
 record_failure() {
   printf 'FAIL proof-freshness-decay %s\n' "$1" >&2
+}
+
+golden_case_names() {
+  cat <<'EOF'
+fresh
+stale-by-time
+stale-by-source-revision
+stale-by-changed-path
+mismatched-schema
+incomplete-bundle
+superseded
+false-fresh-missing-source
+EOF
 }
 
 write_artifact() {
@@ -92,6 +106,75 @@ assert_report() {
   test -s "${case_dir}/report.md"
 }
 
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local report_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/proof_freshness_decay_gate_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local missing=0
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/proof_freshness_decay_gate_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      missing=1
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      missing=1
+    }
+  done < <(golden_case_names)
+
+  [[ "$missing" -eq 0 ]]
+}
+
 run_case() {
   local tmp_root="$1"
   local case_name="$2"
@@ -123,6 +206,7 @@ run_case() {
   fi
 
   assert_report "$case_dir" "$expected_state" "$expected_reusable"
+  assert_case_golden "$case_name" "${case_dir}/proof_freshness_report.json" "$tmp_root"
   record_pass "${case_name} classified as ${expected_state}"
 }
 
@@ -176,6 +260,7 @@ run_check() {
 
   bash -n "$gate"
   bash -n "${BASH_SOURCE[0]}"
+  goldens_shape_ok
   record_pass "bash syntax"
 
   jq empty "$docs_path" >/dev/null 2>&1 && {

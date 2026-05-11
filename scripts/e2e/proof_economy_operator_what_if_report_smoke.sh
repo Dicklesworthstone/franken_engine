@@ -8,6 +8,9 @@ brownout_detector="${root_dir}/scripts/proof_queue_brownout_starvation_detector.
 what_if_report="${root_dir}/scripts/proof_economy_operator_what_if_report.sh"
 docs_path="${root_dir}/docs/PROOF_ECONOMY_OPERATOR_WHAT_IF_REPORT.md"
 contract_path="${root_dir}/docs/proof_economy_operator_what_if_contract_v1.json"
+golden_dir="${PROOF_ECONOMY_WHAT_IF_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
+report_golden_path="${golden_dir}/proof_economy_operator_what_if_report.golden"
+dashboard_golden_path="${golden_dir}/proof_economy_operator_what_if_dashboard_contract.golden"
 
 record_pass() {
   printf 'PASS proof-economy-what-if %s\n' "$1"
@@ -80,12 +83,61 @@ write_trace_fixture() {
   jq -n '{cache_hit_artifacts: [], required_refreshes: []}' >"${dir}/proof_cache.json"
 }
 
+canonicalize_json() {
+  local json_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$json_path"
+}
+
+assert_golden() {
+  local label="$1"
+  local actual_path="$2"
+  local golden_path="$3"
+  local tmp_root="$4"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden_path")"
+    canonicalize_json "$actual_path" "$tmp_root" >"$golden_path"
+    record_pass "updated ${label} golden"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing ${label} golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_json "$actual_path" "$tmp_root"); then
+    record_failure "${label} golden drift"
+    return 1
+  fi
+  record_pass "${label} golden matches"
+}
+
 run_check() {
   local scope_file
 
   bash -n "$what_if_report"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
+  if [[ "${UPDATE_GOLDENS:-0}" != "1" ]]; then
+    [[ -f "$report_golden_path" ]] || { record_failure "missing report golden"; return 1; }
+    [[ -f "$dashboard_golden_path" ]] || { record_failure "missing dashboard golden"; return 1; }
+    jq empty "$report_golden_path" "$dashboard_golden_path"
+  fi
   grep -q 'franken-engine.proof-economy-operator-what-if-report.v1' "$docs_path"
   grep -q 'dashboard_contract.json' "$docs_path"
   grep -q '/dp/frankentui' "$docs_path"
@@ -183,6 +235,8 @@ run_selftest() {
     and ([.field_inventory[].field] | index("recommended_operator_action") != null)
   ' "${report_a}/dashboard_contract.json" >/dev/null
   record_pass "dashboard contract field inventory"
+  assert_golden "what-if report" "${report_a}/what_if_report.json" "$report_golden_path" "$tmp_root"
+  assert_golden "dashboard contract" "${report_a}/dashboard_contract.json" "$dashboard_golden_path" "$tmp_root"
 
   missing_dir="${tmp_root}/missing-artifact"
   set +e

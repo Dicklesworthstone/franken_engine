@@ -1,0 +1,88 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "omitted_refusal_reason_fail_closed",
+  "source_revision": "82884d67",
+  "decision": "fail_closed",
+  "overall_status": "blocked",
+  "fail_closed_reasons": [
+    "panel_omits_refusal_reasons"
+  ],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 1,
+    "reusable_verdict_count": 0,
+    "reuse_refusal_count": 1,
+    "stale_proof_count": 0,
+    "contaminated_proof_count": 0,
+    "fairness_debt_total": 0,
+    "coalesced_count": 0
+  },
+  "rows": [
+    {
+      "row_id": "pending-req-omitted-refusal",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-omitted-refusal",
+      "proof_fingerprint": "fp-omitted-refusal",
+      "agent": "MossySpire",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/omitted-refusal/proof_request.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-omitted-refusal",
+      "kind": "reuse_refusal",
+      "status": "reuse_refused",
+      "proof_fingerprint": "fp-omitted-refusal",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "artifact-index-snapshot",
+        "fixtures/omitted-refusal/proof_artifact_index.json",
+        "fixtures/omitted-refusal/reuse_refusal_receipt.json"
+      ],
+      "refusal_reasons": [
+        "changed_dependency_root"
+      ],
+      "recommended_next_action": "Keep the refusal visible and schedule a fresh proof or human review."
+    }
+  ],
+  "recommended_next_actions": [
+    {
+      "row_id": "pending-req-omitted-refusal",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-omitted-refusal",
+      "action": "Keep the refusal visible and schedule a fresh proof or human review."
+    }
+  ],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/omitted_refusal_reason_fail_closed/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "83bfc3e3d2f05864dd287adcfe6e72711eb77359f1f31cc638af4158a04f7921"
+}

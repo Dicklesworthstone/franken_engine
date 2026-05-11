@@ -1,0 +1,140 @@
+{
+  "schema_version": "franken-engine.swarm-worker-capability-toolchain-input.v1",
+  "source_schema_version": "franken-engine.swarm-worker-capability-toolchain-sources.v1",
+  "source_revision": "fixture-rev",
+  "truth_state": "blocked",
+  "decision": "blocked",
+  "queue_context": {
+    "task_count": 1,
+    "proof_transport_state": "remote_only_ok"
+  },
+  "topology_context": {
+    "recommended_topology_class": "numa_local",
+    "preferred_worker_ids": [
+      "rch-d"
+    ]
+  },
+  "rehabilitation_context": {
+    "excluded_worker_ids": [],
+    "watch_worker_ids": [],
+    "rehab_candidate_worker_ids": []
+  },
+  "capability_context": {
+    "required_capabilities": [
+      "cargo.check",
+      "rch.exec"
+    ],
+    "coverage_confirmed_task_ids": [],
+    "missing_required_capability_task_ids": [
+      "bd-cap-d"
+    ]
+  },
+  "toolchain_context": {
+    "required_toolchain_fingerprints": [
+      "nightly|rustc:1.90.0|cargo:1.90.0"
+    ],
+    "toolchain_mismatch_task_ids": []
+  },
+  "routing_hints": {
+    "routing_mode": "blocked_missing_required_capability",
+    "advised_worker_ids": [],
+    "broader_fallback_task_ids": []
+  },
+  "degraded_reasons": [],
+  "blocked_reasons": [
+    {
+      "code": "missing_required_capability",
+      "source_id": "worker_capability_snapshot_json",
+      "detail": "no non-excluded worker covers the required capabilities for one or more tasks"
+    }
+  ],
+  "fail_closed_reasons": [],
+  "source_artifacts": [
+    {
+      "source_id": "execution_queue_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/execution_queue_input.normalized.json",
+      "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+      "trust_state": "remote_only_ok"
+    },
+    {
+      "source_id": "topology_queue_signal_input_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/topology_queue_signal_input.normalized.json",
+      "schema_version": "franken-engine.swarm-topology-queue-signal-input.v1",
+      "trust_state": "confirmed"
+    },
+    {
+      "source_id": "rehabilitation_ledger_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/rehabilitation_ledger.normalized.json",
+      "schema_version": "franken-engine.swarm-rch-stall-rehabilitation-ledger.v1",
+      "trust_state": "pass"
+    },
+    {
+      "source_id": "rch_remote_compile_stall_bundle_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/rch_remote_compile_stall_bundle.normalized.json",
+      "schema_version": "franken-engine.rch-remote-compile-stall-bundle.v1",
+      "trust_state": "confirmed"
+    },
+    {
+      "source_id": "worker_capability_snapshot_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/worker_capability_snapshot.normalized.json",
+      "schema_version": "franken-engine.swarm-worker-capability-snapshot.v1",
+      "trust_state": "provided"
+    },
+    {
+      "source_id": "worker_toolchain_snapshot_json",
+      "required": true,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/worker_toolchain_snapshot.normalized.json",
+      "schema_version": "franken-engine.swarm-worker-toolchain-snapshot.v1",
+      "trust_state": "provided"
+    },
+    {
+      "source_id": "resource_envelope_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/resource_envelope.normalized.json",
+      "schema_version": "franken-engine.swarm-resource-envelope.v1",
+      "trust_state": "provided"
+    },
+    {
+      "source_id": "operator_status_snapshot_json",
+      "required": false,
+      "provided": true,
+      "artifact_path": "[SMOKE_ROOT]/blocked_missing_required_capability/out/operator_status_snapshot.normalized.json",
+      "schema_version": "franken-engine.swarm-operator-status.v1",
+      "trust_state": "provided"
+    }
+  ],
+  "artifact_paths": {
+    "input_json": "[SMOKE_ROOT]/blocked_missing_required_capability/out/swarm_worker_capability_toolchain_input.json",
+    "sources_json": "[SMOKE_ROOT]/blocked_missing_required_capability/out/swarm_worker_capability_toolchain_sources.json",
+    "events_jsonl": "[SMOKE_ROOT]/blocked_missing_required_capability/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/blocked_missing_required_capability/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/blocked_missing_required_capability/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "reroutes_tasks_automatically": false
+  },
+  "routing_input_id": "[ROUTING_INPUT_ID]"
+}

@@ -1,0 +1,86 @@
+{
+  "agent_mail": {
+    "decision": "degraded",
+    "recovery_mode": "corrupt",
+    "repair_allowed": false,
+    "status": "error"
+  },
+  "artifacts": {
+    "capsule_json": "[SMOKE_ROOT]/out/swarm_handoff_capsule.json",
+    "capsule_markdown": "[SMOKE_ROOT]/out/swarm_handoff_capsule.md",
+    "commands": "[SMOKE_ROOT]/out/handoff_commands.txt",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_state": {
+    "active_bead_id": "bd-d5kxj",
+    "agent_name": "RainyBadger",
+    "in_progress": [
+      {
+        "assignee": "RainyBadger",
+        "id": "bd-d5kxj",
+        "priority": 2,
+        "status": "in_progress",
+        "title": "Add deterministic swarm handoff capsule generator"
+      }
+    ],
+    "in_progress_count": 1,
+    "ready": [],
+    "ready_count": 0
+  },
+  "blocked_reasons": [],
+  "branch_status": {
+    "ahead": 1,
+    "behind": 0,
+    "branch": "feature/handoff",
+    "main_ref": "origin/main",
+    "source_revision": "fixture-corrupted_agent_mail_fixture"
+  },
+  "capsule_id": "swarm-handoff-corrupted_agent_mail_fixture_fixture_corrupted_agent_mail_fixture",
+  "case_id": "corrupted_agent_mail_fixture",
+  "decision": "degraded",
+  "degraded_reasons": [
+    {
+      "code": "FE-IW3-HANDOFF-MAIL-DEGRADED",
+      "detail": "Agent Mail is unavailable or corrupt; use br state as continuity anchor"
+    }
+  ],
+  "dirty_worktree": {
+    "owned_dirty_count": 0,
+    "owned_dirty_paths": [],
+    "owned_paths": [],
+    "unrelated_dirty_count": 0,
+    "unrelated_dirty_paths": []
+  },
+  "generated_epoch_seconds": 1778418000,
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "proof_only": true,
+    "reads_file_contents": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "next_actions": [
+    "Use br assignee/status as the visible soft lock while Agent Mail is red."
+  ],
+  "operator_notes": {
+    "body_copied": false,
+    "notes": []
+  },
+  "rch_jobs": {
+    "active_count": 0,
+    "jobs": []
+  },
+  "recent_commits": [],
+  "schema_version": "franken-engine.swarm-handoff-capsule.v1",
+  "source_revision": "fixture-corrupted_agent_mail_fixture",
+  "validation_receipts": {
+    "bad_count": 0,
+    "receipts": []
+  }
+}

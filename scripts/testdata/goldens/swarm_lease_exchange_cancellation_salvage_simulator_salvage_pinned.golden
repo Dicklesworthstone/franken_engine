@@ -1,0 +1,102 @@
+{
+  "schema_version": "franken-engine.swarm-lease-exchange-cancellation-salvage-simulation.v1",
+  "source_revision": "smoke",
+  "decision": "manual_review_required",
+  "exit_code": 75,
+  "summary": {
+    "request_count": 1,
+    "lease_exchange_candidate_count": 0,
+    "salvage_promotion_candidate_count": 0,
+    "manual_review_count": 1,
+    "ownership_fail_closed_count": 0,
+    "top_recommendation_request_id": "req-1",
+    "top_recommendation_action": "preserve_pinned_evidence"
+  },
+  "input_status": {
+    "stale_lock_recommendations_json": "provided",
+    "admission_budget_plan_json": "provided",
+    "resource_lease_plan_json": "provided",
+    "remote_proof_gc_guard_json": "provided",
+    "archive_pressure_scoreboard_json": "provided",
+    "reservation_snapshot_json": "provided",
+    "agent_profiles_json": "provided"
+  },
+  "upstream_summary": {
+    "budget_profile": "degraded",
+    "lease_decision": "defer",
+    "lease_reason": "target dir already leased by another worker",
+    "gc_guard_decision": "deny_gc",
+    "gc_guard_recommended_action": "pin_until_salvage_clears",
+    "archive_pressure_advisory": "fail_closed",
+    "archive_pressure_action": "preserve_pinned_evidence",
+    "salvage_workflow_state": "orphan_reconciliation_required"
+  },
+  "recommendations": [
+    {
+      "request_id": "req-1",
+      "bead_id": "bd-sim-1",
+      "agent_id": "AgentRequester",
+      "bead_priority": 2,
+      "priority_class": "P2",
+      "current_admission_decision": "admit_narrow",
+      "current_reasons": [
+        "rch_degradation_requires_narrow_scope",
+        "resource_lease_restricted"
+      ],
+      "ownership_status": "stale_reclaimable",
+      "ownership_evidence": {
+        "status": "stale_reclaimable",
+        "assignee": "AgentStale",
+        "holder_candidates": [
+          "AgentStale"
+        ],
+        "reason_codes": [
+          "safe_to_reopen"
+        ]
+      },
+      "simulated_action": "preserve_pinned_evidence",
+      "bottleneck_relief_score_millionths": 500000,
+      "fairness_impact_score_millionths": 800000,
+      "artifact_preservation_score_millionths": 1000000,
+      "coordination_risk_score_millionths": 250000,
+      "overall_score_millionths": 697500,
+      "counterfactual": {
+        "simulated_exchange": false,
+        "expected_residency": "keep artifact set pinned",
+        "expected_next_step": "preserve_pinned_evidence",
+        "salvage_outcome": "preserve_pinned_evidence"
+      },
+      "simulated_effects": {
+        "lease_exchange_candidate": false,
+        "salvage_promotion_candidate": false,
+        "archive_salvage_pinned": true
+      }
+    }
+  ],
+  "simulation_id": "[SIMULATION_ID]",
+  "hash_basis": {
+    "input_hash": "[INPUT_HASH]",
+    "simulation_hash": "[SIMULATION_HASH]"
+  },
+  "truth_constraints": [
+    "report_only",
+    "no_br_update",
+    "no_reservation_release",
+    "no_process_kill"
+  ],
+  "upstream_artifact_paths": {
+    "stale_lock_recommendations_json": "[CASE_ROOT]/stale.json",
+    "admission_budget_plan_json": "[CASE_ROOT]/admission.json",
+    "resource_lease_plan_json": "[CASE_ROOT]/lease.json",
+    "remote_proof_gc_guard_json": "[CASE_ROOT]/gc_guard.json",
+    "archive_pressure_scoreboard_json": "[CASE_ROOT]/pressure.json",
+    "reservation_snapshot_json": "[CASE_ROOT]/reservations.json",
+    "agent_profiles_json": "[CASE_ROOT]/profiles.json"
+  },
+  "artifact_paths": {
+    "lease_exchange_cancellation_salvage_simulation_json": "[CASE_ROOT]/out/lease_exchange_cancellation_salvage_simulation.json",
+    "events_jsonl": "[CASE_ROOT]/out/events.jsonl",
+    "commands_txt": "[CASE_ROOT]/out/commands.txt",
+    "report_md": "[CASE_ROOT]/out/report.md"
+  }
+}

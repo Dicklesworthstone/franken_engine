@@ -1,0 +1,44 @@
+{
+  "schema_version": "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+  "agent_id": "CyanOak",
+  "bead_id": "bd-lviqm",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "input_status": {
+    "suite_manifest": "provided",
+    "sticky_worker_state": "provided",
+    "reservation_snapshot": "provided",
+    "local_fallback_markers": "missing"
+  },
+  "sticky_worker_requested": {
+    "preferred_worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/franken_engine_bd_lviqm_sticky",
+    "sticky_worker_available": true
+  },
+  "fallback_worker_candidate": {
+    "worker_id": "vmi1156319",
+    "warm_target_dir": "[RCH_TARGET]/semantic_dark_matter_pipeline_vmi1156319"
+  },
+  "local_fallback_marker_count": 0,
+  "local_fallback_markers": [],
+  "manifest_phase_count": 3,
+  "plan_decision": "defer_conflicting_target_dir",
+  "reason": "warm target-dir is currently held by another agent",
+  "assigned_worker_id": null,
+  "assigned_target_dir": null,
+  "phase_plans": [],
+  "safe_alternatives": [
+    "wait for the conflicting target-dir lease to clear",
+    "mint a new cold target-dir in a separate planning pass"
+  ],
+  "exit_code": 75,
+  "hash_basis": {
+    "input_hash": "136cae0324a442b55e5e51b74127293388622eb19b92174082fc00c07d0d577a",
+    "plan_hash": "8f75a5eb1bb1bef3e40f075c659e087c0edc9c7ef840460af0d24d061d89808e"
+  },
+  "artifact_paths": {
+    "sticky_worker_warm_target_plan_json": "[SMOKE_ROOT]/conflict/sticky_worker_warm_target_plan.json",
+    "sticky_worker_warm_target_summary_md": "[SMOKE_ROOT]/conflict/sticky_worker_warm_target_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/conflict/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/conflict/events.jsonl"
+  }
+}

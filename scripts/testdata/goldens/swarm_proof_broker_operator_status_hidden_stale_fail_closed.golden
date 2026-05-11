@@ -1,0 +1,88 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "hidden_stale_fail_closed",
+  "source_revision": "82884d67",
+  "decision": "fail_closed",
+  "overall_status": "blocked",
+  "fail_closed_reasons": [
+    "panel_hides_stale_evidence"
+  ],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 1,
+    "reusable_verdict_count": 0,
+    "reuse_refusal_count": 1,
+    "stale_proof_count": 1,
+    "contaminated_proof_count": 0,
+    "fairness_debt_total": 0,
+    "coalesced_count": 0
+  },
+  "rows": [
+    {
+      "row_id": "pending-req-hidden-stale",
+      "kind": "pending_proof_request",
+      "status": "pending",
+      "request_id": "req-hidden-stale",
+      "proof_fingerprint": "fp-hidden-stale",
+      "agent": "MaroonElk",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "fixtures/hidden-stale/proof_request.json",
+        "proof-request-snapshot"
+      ],
+      "refusal_reasons": [],
+      "recommended_next_action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-hidden-stale",
+      "kind": "reuse_refusal",
+      "status": "stale_refused",
+      "proof_fingerprint": "fp-hidden-stale",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_operator_status CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker_operator_status --lib -- --nocapture",
+      "source_evidence": [
+        "artifact-index-snapshot",
+        "fixtures/hidden-stale/proof_artifact_index.json",
+        "fixtures/hidden-stale/reuse_refusal_receipt.json"
+      ],
+      "refusal_reasons": [
+        "expired_ttl"
+      ],
+      "recommended_next_action": "Rerun or refresh the stale proof evidence before reuse."
+    }
+  ],
+  "recommended_next_actions": [
+    {
+      "row_id": "pending-req-hidden-stale",
+      "action": "Compare this request against reusable evidence or schedule a fresh proof before marking it green."
+    },
+    {
+      "row_id": "refusal-fp-hidden-stale",
+      "action": "Rerun or refresh the stale proof evidence before reuse."
+    }
+  ],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/hidden_stale_fail_closed/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "b8f70e5a7c61d105dffd5fd65197e216e664cdb17d3c4a7d6b5b8ca06fe369a6"
+}

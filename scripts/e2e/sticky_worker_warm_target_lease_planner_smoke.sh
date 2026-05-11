@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 planner="${root_dir}/scripts/sticky_worker_warm_target_lease_planner.sh"
 docs_path="${root_dir}/docs/STICKY_WORKER_WARM_TARGET_LEASE_PLANNER.md"
+golden_dir="${STICKY_WORKER_WARM_TARGET_LEASE_PLANNER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS sticky-worker-warm-target %s\n' "$1"
@@ -110,13 +111,15 @@ run_check() {
     --output-dir "${TMPDIR:-/tmp}/sticky-worker-warm-target-rch-policy" \
     --scope-file "$scope_file" >/dev/null
   record_pass "rch policy compliance"
+  goldens_shape_ok
 }
 
 run_case() {
   local case_name="$1"
   local expected_exit="$2"
   local output_dir="$3"
-  shift 3
+  local tmp_root="$4"
+  shift 4
 
   local output actual_exit
   set +e
@@ -134,7 +137,78 @@ run_case() {
   test -s "${output_dir}/sticky_worker_warm_target_summary.md"
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/events.jsonl"
+  assert_case_golden "$case_name" "${output_dir}/sticky_worker_warm_target_plan.json" "$tmp_root"
   record_pass "$case_name"
+}
+
+golden_case_names() {
+  printf '%s\n' \
+    same-worker-reuse \
+    worker-unavailable-fallback \
+    conflicting-target-dir-holder \
+    rejected-local-fallback-marker
+}
+
+canonicalize_plan() {
+  local plan="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$plan"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local plan="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/sticky_worker_warm_target_lease_planner_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_plan "$plan" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_plan "$plan" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/sticky_worker_warm_target_lease_planner_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_name} invalid golden json"
+  done < <(golden_case_names)
 }
 
 run_selftest() {
@@ -155,6 +229,7 @@ run_selftest() {
   write_workers "${fixture_dir}/workers-sticky.json" "idle" "idle"
   sticky_dir="${tmp_root}/sticky"
   run_case "same-worker-reuse" 0 "$sticky_dir" \
+    "$tmp_root" \
     --agent-id CyanOak \
     --bead-id bd-lviqm \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
@@ -176,6 +251,7 @@ run_selftest() {
   write_workers "${fixture_dir}/workers-fallback.json" "busy" "idle"
   fallback_dir="${tmp_root}/fallback"
   run_case "worker-unavailable-fallback" 0 "$fallback_dir" \
+    "$tmp_root" \
     --agent-id CyanOak \
     --bead-id bd-lviqm \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
@@ -206,6 +282,7 @@ run_selftest() {
   write_workers "${fixture_dir}/workers-conflict.json" "idle" "idle"
   conflict_dir="${tmp_root}/conflict"
   run_case "conflicting-target-dir-holder" 75 "$conflict_dir" \
+    "$tmp_root" \
     --agent-id CyanOak \
     --bead-id bd-lviqm \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \
@@ -234,6 +311,7 @@ run_selftest() {
   ' >"${fixture_dir}/fallback-markers.json"
   fail_closed_dir="${tmp_root}/fail-closed"
   run_case "rejected-local-fallback-marker" 42 "$fail_closed_dir" \
+    "$tmp_root" \
     --agent-id CyanOak \
     --bead-id bd-lviqm \
     --suite-manifest-json "${fixture_dir}/suite_manifest.json" \

@@ -1,0 +1,104 @@
+{
+  "agent_mail": {
+    "decision": "available",
+    "recovery_mode": null,
+    "repair_allowed": false,
+    "status": "ok"
+  },
+  "artifacts": {
+    "capsule_json": "[SMOKE_ROOT]/out/swarm_handoff_capsule.json",
+    "capsule_markdown": "[SMOKE_ROOT]/out/swarm_handoff_capsule.md",
+    "commands": "[SMOKE_ROOT]/out/handoff_commands.txt",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_state": {
+    "active_bead_id": "bd-d5kxj",
+    "agent_name": "RainyBadger",
+    "in_progress": [
+      {
+        "assignee": "RainyBadger",
+        "id": "bd-d5kxj",
+        "priority": 2,
+        "status": "in_progress",
+        "title": "Add deterministic swarm handoff capsule generator"
+      }
+    ],
+    "in_progress_count": 1,
+    "ready": [],
+    "ready_count": 0
+  },
+  "blocked_reasons": [],
+  "branch_status": {
+    "ahead": 0,
+    "behind": 0,
+    "branch": "main",
+    "main_ref": "origin/main",
+    "source_revision": "fixture-clean_repo_fixture"
+  },
+  "capsule_id": "swarm-handoff-clean_repo_fixture_fixture_clean_repo_fixture",
+  "case_id": "clean_repo_fixture",
+  "decision": "ready",
+  "degraded_reasons": [],
+  "dirty_worktree": {
+    "owned_dirty_count": 0,
+    "owned_dirty_paths": [],
+    "owned_paths": [],
+    "unrelated_dirty_count": 0,
+    "unrelated_dirty_paths": []
+  },
+  "generated_epoch_seconds": 1778418000,
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "proof_only": true,
+    "reads_file_contents": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "next_actions": [
+    "Capsule is ready for takeover; proceed from active bead and validation receipts."
+  ],
+  "operator_notes": {
+    "body_copied": false,
+    "notes": [
+      {
+        "digest": "sha256-note-clean",
+        "note_id": "note-clean",
+        "source": "operator"
+      }
+    ]
+  },
+  "rch_jobs": {
+    "active_count": 0,
+    "jobs": []
+  },
+  "recent_commits": [
+    {
+      "author": "OtherAgent",
+      "commit": "abc1234",
+      "subject": "Prior proof surface",
+      "timestamp": "2026-05-10T11:00:00Z"
+    }
+  ],
+  "schema_version": "franken-engine.swarm-handoff-capsule.v1",
+  "source_revision": "fixture-clean_repo_fixture",
+  "validation_receipts": {
+    "bad_count": 0,
+    "receipts": [
+      {
+        "artifact_path": "artifacts/clean/jq.log",
+        "command_id": "jq-empty-contract",
+        "receipt_id": "smoke-check",
+        "reuse_eligible": true,
+        "source_revision": "fixture-clean",
+        "status": "passed",
+        "transcript_digest": "sha256-clean"
+      }
+    ]
+  }
+}

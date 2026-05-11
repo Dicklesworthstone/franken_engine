@@ -491,13 +491,11 @@ impl ContainmentExecutor {
 
     /// Get all receipts for an extension.
     pub fn receipts(&self, extension_id: &str) -> Vec<&ContainmentReceipt> {
-        // SAFETY: Caller must ensure extension_id exists in the executor.
-        // This method is used in test contexts where extension presence is guaranteed.
         self.extensions
             .iter()
             .find(|e| e.extension_id == extension_id)
             .map(|e| e.receipts.iter().collect())
-            .unwrap()
+            .unwrap_or_default()
     }
 
     /// Get the forensic snapshot for a quarantined extension.

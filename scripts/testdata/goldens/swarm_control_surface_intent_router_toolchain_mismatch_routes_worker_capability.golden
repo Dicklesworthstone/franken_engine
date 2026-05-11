@@ -1,0 +1,147 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-toolchain_mismatch_routes_worker_capability",
+  "decision": "pass",
+  "catalog_json": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "swarm_worker_capability_toolchain_normalizer",
+      "score": 45,
+      "matched_intent_tags": [
+        "worker-capability",
+        "toolchain",
+        "normalizer",
+        "proof-routing"
+      ],
+      "matched_symptom_tags": [
+        "rch-toolchain-blocker"
+      ],
+      "purpose": "worker capability toolchain",
+      "implementation_script": "scripts/swarm_worker_capability_toolchain_normalizer.sh",
+      "smoke_script": "scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh",
+      "contract_json": "docs/swarm_worker_capability_toolchain_input_contract_v1.json",
+      "runbook_doc": "docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md",
+      "owning_bead_id": "bd-wplun",
+      "required_inputs": [
+        "swarm_worker_capability_toolchain_input_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "worker_capability_toolchain_normalized.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "worker_capability_toolchain"
+    },
+    {
+      "surface_id": "build_storm_qos_batch_planner",
+      "score": 10,
+      "matched_intent_tags": [
+        "resource-pressure"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "build storm QoS batching",
+      "implementation_script": "scripts/build_storm_qos_batch_planner.sh",
+      "smoke_script": "scripts/e2e/build_storm_qos_batch_planner_smoke.sh",
+      "contract_json": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "runbook_doc": "docs/BUILD_STORM_QOS_BATCH_PLANNER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "pending_requests_json",
+        "resource_lease_plans_json",
+        "proof_cost_history_json",
+        "rch_workers_json"
+      ],
+      "emitted_artifacts": [
+        "build_storm_batch_plan.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "build_storm_qos"
+    },
+    {
+      "surface_id": "proof_economy_replay_trace_normalizer",
+      "score": 10,
+      "matched_intent_tags": [
+        "normalizer"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "proof economy replay trace",
+      "implementation_script": "scripts/proof_economy_replay_trace_normalizer.sh",
+      "smoke_script": "scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh",
+      "contract_json": "docs/proof_economy_replay_trace_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_REPLAY_TRACE_NORMALIZER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_replay_trace_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_replay_trace_normalized.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    }
+  ],
+  "advisory_commands": [
+    "bash scripts/e2e/build_storm_qos_batch_planner_smoke.sh check",
+    "bash scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh check",
+    "bash scripts/e2e/swarm_worker_capability_toolchain_normalizer_smoke.sh check"
+  ],
+  "artifacts_to_preserve": [
+    "build_storm_batch_plan.json",
+    "proof_economy_replay_trace_normalized.json",
+    "worker_capability_toolchain_normalized.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [],
+  "fail_closed_count": 0,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/toolchain_mismatch_routes_worker_capability/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

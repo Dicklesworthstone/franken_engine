@@ -1,0 +1,73 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-stale_ownership_causal_trace_gap",
+  "decision": "pass",
+  "catalog_json": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "swarm_agent_causal_trace_spine",
+      "score": 15,
+      "matched_intent_tags": [
+        "causal-trace"
+      ],
+      "matched_symptom_tags": [
+        "stale-owner"
+      ],
+      "purpose": "causal trace",
+      "implementation_script": "scripts/swarm_agent_causal_trace_graph.sh",
+      "smoke_script": "scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+      "contract_json": "docs/swarm_agent_causal_trace_spine_contract_v1.json",
+      "runbook_doc": "docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md",
+      "owning_bead_id": "bd-crcrp",
+      "required_inputs": [
+        "bead_snapshot_json"
+      ],
+      "emitted_artifacts": [
+        "swarm_agent_causal_trace_graph.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "swarm_agent_causal_trace"
+    }
+  ],
+  "advisory_commands": [
+    "bash scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh check"
+  ],
+  "artifacts_to_preserve": [
+    "swarm_agent_causal_trace_graph.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [],
+  "fail_closed_count": 0,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_ownership_causal_trace_gap/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "compatible_warm_cache_ordering",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-warm",
+      "request_id": "req-warm",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-warm",
+      "action": "rerun_now",
+      "reason": "compatible_warm_cache_ordering",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Move the request back to normal proof scheduling.",
+      "remediation": "Move the request back to normal proof scheduling."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "rerun_now",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/compatible_warm_cache_ordering/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "0a487a0a2c7054badc6424221fadf14e66a1707a8de7151e066ae5c705bd77a7"
+}

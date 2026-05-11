@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "fairness_recovery_after_deferral",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-alpha",
+      "request_id": "req-alpha",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-alpha",
+      "action": "rerun_now",
+      "reason": "fairness_debt_recovery",
+      "fairness_debt": 4,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Move the request back to normal proof scheduling.",
+      "remediation": "Move the request back to normal proof scheduling."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "rerun_now",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/fairness_recovery_after_deferral/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "dd1d281892b19c2d316801d19ec4d4866b02aecdd7867d1fa86e9b1bcc8b177e"
+}

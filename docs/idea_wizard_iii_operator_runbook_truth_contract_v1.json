@@ -1,0 +1,74 @@
+{
+  "schema_version": "franken-engine.idea-wizard-iii-operator-runbook-truth-contract.v1",
+  "bead_id": "bd-99t7y",
+  "surface_id": "idea_wizard_iii_operator_truth_gate",
+  "purpose": "Keep IDEA-WIZARD-III operator docs and help text aligned with advisory-only, replayable, RCH-wrapped proof policy.",
+  "runbook": "docs/IDEA_WIZARD_III_OPERATOR_WORKFLOW.md",
+  "truth_gate_script": "scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh",
+  "required_denials": [
+    "does not mutate live queues",
+    "does not claim, close, reopen, or reassign beads",
+    "does not send Agent Mail",
+    "does not repair the Agent Mail database",
+    "does not run local heavy Cargo validation",
+    "does not start `rch`",
+    "does not mutate remote workers",
+    "does not delete or overwrite target directories"
+  ],
+  "required_commands": {
+    "check": "./scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh check",
+    "replay": "./scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh selftest",
+    "preserved_bundle_replay": "HIGH_CORE_VALIDATION_PRESSURE_FIXTURES=\"${PRESERVED_BUNDLE}/high_core_validation_pressure_dashboard/cases.json\" ./scripts/e2e/high_core_validation_pressure_dashboard_smoke.sh selftest"
+  },
+  "referenced_contracts": [
+    {
+      "surface_id": "swarm_handoff_capsule_generator",
+      "path": "docs/swarm_handoff_capsule_generator_contract_v1.json"
+    },
+    {
+      "surface_id": "high_core_validation_pressure_dashboard",
+      "path": "docs/high_core_validation_pressure_dashboard_contract_v2.json"
+    },
+    {
+      "surface_id": "swarm_resource_envelope",
+      "path": "docs/swarm_resource_envelope_contract_v1.json"
+    },
+    {
+      "surface_id": "swarm_admission_budget_planner",
+      "path": "docs/swarm_admission_budget_planner_contract_v1.json"
+    }
+  ],
+  "forbidden_claim_classes": [
+    "live_queue_mutation",
+    "automatic_agent_mail_repair",
+    "local_heavy_cargo_validation",
+    "bare_rch_execution_by_truth_gate",
+    "remote_worker_mutation",
+    "target_dir_deletion_or_overwrite"
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_live_queues": false,
+    "mutates_br": false,
+    "claims_beads": false,
+    "closes_beads": false,
+    "reopens_beads": false,
+    "reassigns_beads": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "runs_local_heavy_cargo": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "validation_commands": [
+    "jq empty docs/idea_wizard_iii_operator_runbook_truth_contract_v1.json",
+    "bash -n scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh",
+    "./scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh check",
+    "./scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh selftest",
+    "git diff --check -- docs/IDEA_WIZARD_III_OPERATOR_WORKFLOW.md docs/idea_wizard_iii_operator_runbook_truth_contract_v1.json scripts/e2e/idea_wizard_iii_operator_runbook_truth_gate.sh"
+  ]
+}

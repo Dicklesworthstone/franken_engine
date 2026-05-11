@@ -1,0 +1,121 @@
+{
+  "agent_mail": {
+    "decision": "available",
+    "recovery_mode": null,
+    "repair_allowed": false,
+    "status": "ok"
+  },
+  "artifacts": {
+    "capsule_json": "[SMOKE_ROOT]/out/swarm_handoff_capsule.json",
+    "capsule_markdown": "[SMOKE_ROOT]/out/swarm_handoff_capsule.md",
+    "commands": "[SMOKE_ROOT]/out/handoff_commands.txt",
+    "events": "[SMOKE_ROOT]/out/events.jsonl"
+  },
+  "bead_state": {
+    "active_bead_id": "bd-d5kxj",
+    "agent_name": "RainyBadger",
+    "in_progress": [
+      {
+        "assignee": "RainyBadger",
+        "id": "bd-d5kxj",
+        "priority": 2,
+        "status": "in_progress",
+        "title": "Add deterministic swarm handoff capsule generator"
+      },
+      {
+        "assignee": "CreamRobin",
+        "id": "bd-w8jfe",
+        "priority": 1,
+        "status": "in_progress",
+        "title": "Add objective-to-artifact completion audit gate"
+      }
+    ],
+    "in_progress_count": 2,
+    "ready": [
+      {
+        "id": "bd-f7zfw",
+        "priority": 2,
+        "status": "open",
+        "title": "Add high-core validation pressure dashboard v2"
+      }
+    ],
+    "ready_count": 1
+  },
+  "blocked_reasons": [],
+  "branch_status": {
+    "ahead": 2,
+    "behind": 1,
+    "branch": "feature/handoff",
+    "main_ref": "origin/main",
+    "source_revision": "fixture-dirty_multi_agent_fixture"
+  },
+  "capsule_id": "swarm-handoff-dirty_multi_agent_fixture_fixture_dirty_multi_agent_fixture",
+  "case_id": "dirty_multi_agent_fixture",
+  "decision": "degraded",
+  "degraded_reasons": [
+    {
+      "code": "FE-IW3-HANDOFF-UNRELATED-DIRTY",
+      "detail": "Dirty paths outside current ownership require human/agent review"
+    }
+  ],
+  "dirty_worktree": {
+    "owned_dirty_count": 1,
+    "owned_dirty_paths": [
+      {
+        "owner": null,
+        "path": "scripts/swarm_handoff_capsule_generator.sh",
+        "status": "M"
+      }
+    ],
+    "owned_paths": [
+      "scripts/swarm_handoff_capsule_generator.sh"
+    ],
+    "unrelated_dirty_count": 1,
+    "unrelated_dirty_paths": [
+      {
+        "owner": "CreamRobin",
+        "path": "crates/franken-engine/src/shadow_replay_verifier.rs",
+        "status": "M"
+      }
+    ]
+  },
+  "generated_epoch_seconds": 1778418000,
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "mutates_br": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "proof_only": true,
+    "reads_file_contents": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "next_actions": [
+    "Coordinate dirty paths outside current ownership before editing or committing overlap files."
+  ],
+  "operator_notes": {
+    "body_copied": false,
+    "notes": []
+  },
+  "rch_jobs": {
+    "active_count": 0,
+    "jobs": []
+  },
+  "recent_commits": [
+    {
+      "author": "RainyBadger",
+      "commit": "def5678",
+      "subject": "Strengthen Parquet export format tests",
+      "timestamp": "2026-05-10T12:48:00Z"
+    }
+  ],
+  "schema_version": "franken-engine.swarm-handoff-capsule.v1",
+  "source_revision": "fixture-dirty_multi_agent_fixture",
+  "validation_receipts": {
+    "bad_count": 0,
+    "receipts": []
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "schema_version": "franken-engine.rch-sync-closure-hotspot-ledger.v1",
+  "analysis_status": "degraded",
+  "degradation_reason": "missing_transfer_log",
+  "suite_manifest_status": "provided",
+  "transfer_log_status": "missing",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "manifest_command_count": 3,
+  "logged_command_count": 0,
+  "total_unique_roots": 0,
+  "repeated_hotspot_count": 0,
+  "total_full_sync_commands": 0,
+  "total_narrow_sync_commands": 0,
+  "unobserved_command_ids": [
+    "cmd-full-1",
+    "cmd-full-2",
+    "cmd-narrow-1"
+  ],
+  "command_summaries": [],
+  "hotspots": [],
+  "hash_basis": {
+    "input_hash": "1fef67642c2b7e8d9d7b36111298f0a2de0ad901ec2a2b3386755e2dacda4ae6",
+    "ledger_hash": "45c2a38604c69f168de841e080cacb6cba402a7feeee289845cf55dbe85d856d"
+  },
+  "artifact_paths": {
+    "sync_closure_hotspots_json": "[SMOKE_ROOT]/missing-transfer-log/sync_closure_hotspots.json",
+    "sync_closure_summary_md": "[SMOKE_ROOT]/missing-transfer-log/sync_closure_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/missing-transfer-log/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/missing-transfer-log/events.jsonl"
+  }
+}

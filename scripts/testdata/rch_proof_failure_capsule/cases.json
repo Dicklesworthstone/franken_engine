@@ -84,6 +84,21 @@
         "blocker_contains": "interrupted before a usable verdict",
         "exit_code": 42
       }
+    },
+    {
+      "case_id": "target_dir_fingerprint_corruption",
+      "expected": {
+        "case_id": "target_dir_fingerprint_corruption",
+        "classification": "target_dir_fingerprint_corruption",
+        "decision": "blocked",
+        "reason_code": "cargo_target_dir_fingerprint_corruption",
+        "source_evidence": false,
+        "proof_usable": false,
+        "recommended_action": "discard_corrupt_target_and_rerun_remote",
+        "blocker_contains": "target-dir dep-info/fingerprint corruption",
+        "first_error_contains": "error: could not parse/generate dep info",
+        "exit_code": 42
+      }
     }
   ]
 }

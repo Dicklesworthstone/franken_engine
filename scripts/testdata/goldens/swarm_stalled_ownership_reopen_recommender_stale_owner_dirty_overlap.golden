@@ -1,0 +1,51 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/stale_owner_dirty_overlap/input.json",
+  "normalized_input": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/input.normalized.json",
+  "evidence_hash": "a2a740a9dd78bee207ff3cef6683db22d735fdf45d1266454181146db28c1b56",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "degraded",
+  "fail_closed_reasons": [],
+  "degraded_reasons": [],
+  "recommendations": [
+    {
+      "bead_id": "bd-dirty",
+      "title": "Stale dirty bead",
+      "assignee": "DirtyAgent",
+      "latest_activity_ts": "2026-05-09T11:05:00Z",
+      "inactivity_seconds": 14100,
+      "inactivity_threshold_seconds": 3600,
+      "evidence_hash": "a2a740a9dd78bee207ff3cef6683db22d735fdf45d1266454181146db28c1b56",
+      "evidence_sources": {
+        "br_snapshot": null,
+        "agent_mail_sla_report": null,
+        "file_reservations": null,
+        "git_activity": null,
+        "live_snapshot_bundle": null
+      },
+      "recommendation": "manual_review",
+      "reason_code": "dirty_overlap",
+      "reason_not_to_act": "Dirty file overlap exists for this bead or assignee.",
+      "manual_br_command": null
+    }
+  ],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_owner_dirty_overlap/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

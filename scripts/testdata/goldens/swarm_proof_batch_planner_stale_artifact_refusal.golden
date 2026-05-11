@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "stale_artifact_refusal",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-alpha",
+      "request_id": "req-alpha",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-alpha",
+      "action": "rerun_later",
+      "reason": "stale_artifact_refusal",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Refresh stale evidence and re-enter the request into the planner.",
+      "remediation": "Refresh stale evidence and re-enter the request into the planner."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "rerun_later",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/stale_artifact_refusal/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/stale_artifact_refusal/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/stale_artifact_refusal/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/stale_artifact_refusal/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_artifact_refusal/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_artifact_refusal/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "a16a4f8b45913eaa53fff7909809f5ae0acc16dfe322a9e42e486fb07120d126"
+}

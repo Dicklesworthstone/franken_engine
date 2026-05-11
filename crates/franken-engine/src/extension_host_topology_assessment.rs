@@ -1189,7 +1189,9 @@ mod tests {
         assert_eq!(tenth, 100_000);
 
         // Test that our scale is reasonable for precision
-        assert!(FIXED_POINT_SCALE_MILLIONTHS > 100_000);
-        assert!(FIXED_POINT_SCALE_MILLIONTHS <= 10_000_000);
+        const _: () = {
+            assert!(FIXED_POINT_SCALE_MILLIONTHS > 100_000);
+            assert!(FIXED_POINT_SCALE_MILLIONTHS <= 10_000_000);
+        };
     }
 }

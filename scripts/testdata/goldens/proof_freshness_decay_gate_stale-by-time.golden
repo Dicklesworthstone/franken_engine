@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "artifact_path": "[SMOKE_ROOT]/stale-time.json",
+  "proof_artifact_id": "proof-stale-time",
+  "artifact_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "expected_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "artifact_status": "pass",
+  "freshness_state": "stale_by_time",
+  "reusable": false,
+  "reason": "current time exceeds the artifact freshness deadline",
+  "recommended_next_action": "Refresh the proof artifact before publishing or relying on the claim.",
+  "generated_timestamp_ms": 1699990000000,
+  "freshness_deadline_ms": 1699990100000,
+  "now_ms": 1700000050000,
+  "covered_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs",
+    "scripts/focused_proof_runner.sh"
+  ],
+  "changed_paths": [],
+  "superseded_by": null,
+  "artifact_paths": {
+    "proof_freshness_report_json": "[SMOKE_ROOT]/stale-by-time/proof_freshness_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale-by-time/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale-by-time/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale-by-time/report.md"
+  }
+}

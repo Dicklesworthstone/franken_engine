@@ -288,7 +288,7 @@ pub fn create_mixed_state_journal_fixture() -> ShadowEvidenceJournalExport {
     let event_id_counter = 5000i64;
 
     // Mix of healthy, degraded, and edge case events
-    let states = vec![
+    let states = [
         ("healthy", "normal"),
         ("degraded", "extended"),
         ("healthy", "normal"),

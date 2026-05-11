@@ -1,0 +1,73 @@
+{
+  "schema_version": "franken-engine.stale-lock-recommendations.v1",
+  "generated_epoch_seconds": 100000,
+  "stale_owner_seconds": 1000,
+  "recent_activity_seconds": 3600,
+  "snapshot_status": {
+    "agent_profiles": "provided",
+    "thread_timestamps": "provided",
+    "file_reservations": "provided",
+    "git_activity": "provided"
+  },
+  "stale_lock_recommendations": [
+    {
+      "bead_id": "bd-stale",
+      "title": "stale owner",
+      "priority": 2,
+      "assignee": "OldAgent",
+      "safe_to_reopen": true,
+      "contact_first": false,
+      "recommendation": "safe_to_reopen",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      },
+      "suggested_br_commands": [
+        "br update bd-stale --status open --assignee \"\""
+      ],
+      "contact_commands": [
+        "fetch inbox and thread messages for bd-stale",
+        "send Agent Mail contact-first message to OldAgent"
+      ]
+    }
+  ],
+  "safe_to_reopen": [
+    "bd-stale"
+  ],
+  "contact_first": [],
+  "evidence": [
+    {
+      "bead_id": "bd-stale",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      }
+    }
+  ],
+  "artifact_paths": {
+    "stale_lock_recommendations_json": "[SMOKE_ROOT]/stale-owner/stale_lock_recommendations.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale-owner/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale-owner/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale-owner/report.md"
+  }
+}

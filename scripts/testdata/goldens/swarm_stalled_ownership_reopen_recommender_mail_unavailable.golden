@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/mail_unavailable/input.json",
+  "normalized_input": "[SMOKE_ROOT]/mail_unavailable/out/input.normalized.json",
+  "evidence_hash": "2bcfa1e1f9f7a7a27180f3774cf4179090f59ee3890f1104fbb59e7588202bdb",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "degraded",
+  "fail_closed_reasons": [],
+  "degraded_reasons": [
+    {
+      "code": "mail_unavailable",
+      "source_id": "agent_mail_sla_report",
+      "detail": "Agent Mail SLA report is missing",
+      "remediation": "Generate the Agent Mail SLA panel before trusting stale-owner recommendations."
+    }
+  ],
+  "recommendations": [
+    {
+      "bead_id": "bd-mail-missing",
+      "title": "Mail missing bead",
+      "assignee": "UnknownAgent",
+      "latest_activity_ts": "2026-05-09T11:00:00Z",
+      "inactivity_seconds": 14400,
+      "inactivity_threshold_seconds": 3600,
+      "evidence_hash": "2bcfa1e1f9f7a7a27180f3774cf4179090f59ee3890f1104fbb59e7588202bdb",
+      "evidence_sources": {
+        "br_snapshot": null,
+        "agent_mail_sla_report": null,
+        "file_reservations": null,
+        "git_activity": null,
+        "live_snapshot_bundle": null
+      },
+      "recommendation": "manual_review",
+      "reason_code": "mail_unavailable",
+      "reason_not_to_act": "Agent Mail SLA evidence is missing; do not reopen from br state alone.",
+      "manual_br_command": null
+    }
+  ],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/mail_unavailable/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/mail_unavailable/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/mail_unavailable/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/mail_unavailable/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/mail_unavailable/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

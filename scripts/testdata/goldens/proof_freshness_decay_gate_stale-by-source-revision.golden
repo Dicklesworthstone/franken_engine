@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "artifact_path": "[SMOKE_ROOT]/stale-rev.json",
+  "proof_artifact_id": "proof-stale-rev",
+  "artifact_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "expected_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "source_revision": "old-rev",
+  "expected_source_revision": "current-rev",
+  "artifact_status": "pass",
+  "freshness_state": "stale_by_source_revision",
+  "reusable": false,
+  "reason": "artifact source_revision does not match the requested source revision",
+  "recommended_next_action": "Rerun the proof with rch exec for the current source revision.",
+  "generated_timestamp_ms": 1700000000000,
+  "freshness_deadline_ms": 1700000100000,
+  "now_ms": 1700000050000,
+  "covered_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs",
+    "scripts/focused_proof_runner.sh"
+  ],
+  "changed_paths": [],
+  "superseded_by": null,
+  "artifact_paths": {
+    "proof_freshness_report_json": "[SMOKE_ROOT]/stale-by-source-revision/proof_freshness_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale-by-source-revision/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale-by-source-revision/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale-by-source-revision/report.md"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index.v1",
+  "case_id": "failed_proof_refusal",
+  "source_revision": "[SOURCE_REVISION]",
+  "row_count": 1,
+  "reusable_count": 0,
+  "refused_count": 1,
+  "rows": [
+    {
+      "proof_fingerprint": "spbreq-fixture",
+      "verdict_status": "failed",
+      "index_decision": "reuse_refused",
+      "reuse_eligible": false,
+      "freshness": "invalidated",
+      "invalidation_reasons": [
+        "failed_proof_reuse_refusal"
+      ],
+      "remediation": "Treat the receipt as failure evidence only; it cannot satisfy green proof.",
+      "source_revision": "fixture-source",
+      "dependency_closure_fingerprint": "dep-a",
+      "rch_version": "rch-1",
+      "toolchain": "rust-2026-05-09",
+      "expires_at_epoch": 1778367600,
+      "artifact_bundle": {
+        "complete": true,
+        "members": [
+          "run_manifest.json",
+          "events.jsonl",
+          "commands.txt",
+          "proof_transcript.txt",
+          "verdict_receipt.json",
+          "report.md"
+        ]
+      },
+      "artifact_paths": {
+        "run_manifest_json": "fixtures/run_manifest.json",
+        "verdict_receipt_json": "fixtures/verdict_receipt.json"
+      },
+      "receipt_kind": "negative_reuse_refusal_receipt"
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/failed_proof_refusal/out/input.normalized.json",
+    "proof_artifact_index_json": "[SMOKE_ROOT]/failed_proof_refusal/out/proof_artifact_index.json",
+    "proof_artifact_index_jsonl": "[SMOKE_ROOT]/failed_proof_refusal/out/proof_artifact_index.jsonl",
+    "reuse_receipts_jsonl": "[SMOKE_ROOT]/failed_proof_refusal/out/reuse_receipts.jsonl",
+    "reuse_refusal_receipts_jsonl": "[SMOKE_ROOT]/failed_proof_refusal/out/reuse_refusal_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/failed_proof_refusal/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/failed_proof_refusal/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/failed_proof_refusal/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "index_hash": "f3f15cd16e24badfaaae8b8b847850289bd009819c1b50320a639e0b89916545"
+}

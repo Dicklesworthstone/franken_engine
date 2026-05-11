@@ -1,0 +1,25 @@
+{
+  "artifacts": {
+    "commands_txt": "[SMOKE_ROOT]/bad-live-out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/bad-live-out/report.md",
+    "runbook_truth_report_json": "[SMOKE_ROOT]/bad-live-out/runbook_truth_report.json"
+  },
+  "contract_json": "[REPO_ROOT]/docs/idea_wizard_iii_operator_runbook_truth_contract_v1.json",
+  "decision": "fail_closed",
+  "mutation_policy": {
+    "advisory_only": true,
+    "deletes_or_overwrites_target_dirs": false,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "mutates_live_queues": false,
+    "mutates_remote_workers": false,
+    "proof_only": true,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false
+  },
+  "reason": "runbook truth gate rejected docs or contract",
+  "runbook_md": "[SMOKE_ROOT]/bad-live.md",
+  "schema_version": "franken-engine.idea-wizard-iii-operator-truth-report.v1"
+}

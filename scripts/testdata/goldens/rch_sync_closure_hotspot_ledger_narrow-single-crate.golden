@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.rch-sync-closure-hotspot-ledger.v1",
+  "analysis_status": "ok",
+  "degradation_reason": null,
+  "suite_manifest_status": "provided",
+  "transfer_log_status": "provided",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "manifest_command_count": 3,
+  "logged_command_count": 1,
+  "total_unique_roots": 1,
+  "repeated_hotspot_count": 0,
+  "total_full_sync_commands": 0,
+  "total_narrow_sync_commands": 1,
+  "unobserved_command_ids": [
+    "cmd-full-1",
+    "cmd-full-2"
+  ],
+  "command_summaries": [
+    {
+      "command_id": "cmd-narrow-1",
+      "suite_id": "semantic-dark-matter-pipeline",
+      "worker_id": "ts2",
+      "closure_class": "narrow",
+      "root_count": 1,
+      "transfer_bytes": 2048,
+      "closure_roots": [
+        "crates/franken-engine/src/novelty_scoring_contract.rs"
+      ]
+    }
+  ],
+  "hotspots": [
+    {
+      "root": "crates/franken-engine/src/novelty_scoring_contract.rs",
+      "occurrence_count": 1,
+      "full_sync_hits": 0,
+      "narrow_sync_hits": 1,
+      "commands": [
+        "cmd-narrow-1"
+      ],
+      "suites": [
+        "semantic-dark-matter-pipeline"
+      ],
+      "workers": [
+        "ts2"
+      ]
+    }
+  ],
+  "hash_basis": {
+    "input_hash": "0cd935e8e78698c6ba2e079f11d687f0b261760cbc5013bf9227b339e5723367",
+    "ledger_hash": "98d993f7be854a9962a52266245769395aa7bef6f9d3b93cd650ed5bce7c8e3b"
+  },
+  "artifact_paths": {
+    "sync_closure_hotspots_json": "[SMOKE_ROOT]/narrow-single-crate/sync_closure_hotspots.json",
+    "sync_closure_summary_md": "[SMOKE_ROOT]/narrow-single-crate/sync_closure_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/narrow-single-crate/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/narrow-single-crate/events.jsonl"
+  }
+}

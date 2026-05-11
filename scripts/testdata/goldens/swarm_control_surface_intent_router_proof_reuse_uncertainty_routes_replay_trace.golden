@@ -1,0 +1,144 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-proof_reuse_uncertainty_routes_replay_trace",
+  "decision": "pass",
+  "catalog_json": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "proof_economy_replay_trace_normalizer",
+      "score": 45,
+      "matched_intent_tags": [
+        "proof-economy",
+        "replay-trace",
+        "normalizer",
+        "determinism"
+      ],
+      "matched_symptom_tags": [
+        "trace-shape-drift"
+      ],
+      "purpose": "proof economy replay trace",
+      "implementation_script": "scripts/proof_economy_replay_trace_normalizer.sh",
+      "smoke_script": "scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh",
+      "contract_json": "docs/proof_economy_replay_trace_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_REPLAY_TRACE_NORMALIZER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_replay_trace_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_replay_trace_normalized.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    },
+    {
+      "surface_id": "proof_economy_counterfactual_replay_runner",
+      "score": 10,
+      "matched_intent_tags": [
+        "proof-economy"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "proof economy counterfactual replay",
+      "implementation_script": "scripts/proof_economy_counterfactual_replay_runner.sh",
+      "smoke_script": "scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh",
+      "contract_json": "docs/proof_economy_counterfactual_replay_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_COUNTERFACTUAL_REPLAY_RUNNER.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_counterfactual_replay_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_counterfactual_replay.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    },
+    {
+      "surface_id": "proof_economy_operator_what_if_report",
+      "score": 10,
+      "matched_intent_tags": [
+        "proof-economy"
+      ],
+      "matched_symptom_tags": [],
+      "purpose": "proof economy operator what-if",
+      "implementation_script": "scripts/proof_economy_operator_what_if_report.sh",
+      "smoke_script": "scripts/e2e/proof_economy_operator_what_if_report_smoke.sh",
+      "contract_json": "docs/proof_economy_operator_what_if_contract_v1.json",
+      "runbook_doc": "docs/PROOF_ECONOMY_OPERATOR_WHAT_IF_REPORT.md",
+      "owning_bead_id": "bd-4obje",
+      "required_inputs": [
+        "proof_economy_operator_what_if_contract_v1"
+      ],
+      "emitted_artifacts": [
+        "proof_economy_operator_what_if_report.json"
+      ],
+      "validation_commands": [
+        "bash scripts/e2e/proof_economy_operator_what_if_report_smoke.sh check"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "proof_economy"
+    }
+  ],
+  "advisory_commands": [
+    "bash scripts/e2e/proof_economy_counterfactual_replay_runner_smoke.sh check",
+    "bash scripts/e2e/proof_economy_operator_what_if_report_smoke.sh check",
+    "bash scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh check"
+  ],
+  "artifacts_to_preserve": [
+    "proof_economy_counterfactual_replay.json",
+    "proof_economy_operator_what_if_report.json",
+    "proof_economy_replay_trace_normalized.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [],
+  "fail_closed_count": 0,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/proof_reuse_uncertainty_routes_replay_trace/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

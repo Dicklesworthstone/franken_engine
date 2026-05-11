@@ -1,0 +1,70 @@
+{
+  "schema_version": "franken-engine.build-storm-batch-plan.v1",
+  "batch_id": "batch-18b9b60fbe95a35b",
+  "stable_output_hash": "944591195ff27a6b4c032e714d42a03c65618ac764534e5441d41e9858558095",
+  "batch_decision": "planned",
+  "fairness_reason": "all pending requests fit within fairness and worker capacity",
+  "max_parallel_heavy": 2,
+  "configured_max_parallel_heavy": 2,
+  "max_per_agent_heavy": 1,
+  "retry_after_seconds": 0,
+  "admitted_commands": [
+    {
+      "request_id": "beta-proof",
+      "agent_id": "CyanOak",
+      "bead_id": "bd-beta",
+      "bead_priority": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/beta cargo test -p frankenengine-engine --test beta_proof",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": false,
+      "stale_proof_refresh": false,
+      "wait_seconds": 0,
+      "submitted_order": 2,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P1",
+      "batch_decision": "admit",
+      "fairness_reason": "admitted within heavy capacity and per-agent fairness budget",
+      "retry_after_seconds": 0
+    },
+    {
+      "request_id": "alpha-proof",
+      "agent_id": "ScarletOwl",
+      "bead_id": "bd-alpha",
+      "bead_priority": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/alpha cargo test -p frankenengine-engine --test alpha_proof",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": false,
+      "stale_proof_refresh": false,
+      "wait_seconds": 0,
+      "submitted_order": 1,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P1",
+      "batch_decision": "admit",
+      "fairness_reason": "admitted within heavy capacity and per-agent fairness budget",
+      "retry_after_seconds": 0
+    }
+  ],
+  "deferred_commands": [],
+  "rch_worker_snapshot": {
+    "total_workers": 2,
+    "idle_workers": 2
+  },
+  "artifact_paths": {
+    "build_storm_batch_plan_json": "[SMOKE_ROOT]/balanced-two/build_storm_batch_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/balanced-two/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/balanced-two/commands.txt",
+    "report_md": "[SMOKE_ROOT]/balanced-two/report.md"
+  }
+}

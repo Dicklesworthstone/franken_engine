@@ -1,0 +1,81 @@
+{
+  "schema_version": "franken-engine.stale-lock-recommendations.v1",
+  "generated_epoch_seconds": 100000,
+  "stale_owner_seconds": 1000,
+  "recent_activity_seconds": 3600,
+  "snapshot_status": {
+    "agent_profiles": "missing",
+    "thread_timestamps": "missing",
+    "file_reservations": "missing",
+    "git_activity": "missing"
+  },
+  "stale_lock_recommendations": [
+    {
+      "bead_id": "bd-degraded",
+      "title": "missing mail",
+      "priority": 2,
+      "assignee": "MissingMail",
+      "safe_to_reopen": false,
+      "contact_first": true,
+      "recommendation": "manual_confirmation_required",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 0,
+        "owner_inactive_seconds": 999999999,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [
+          "agent_profiles_missing",
+          "thread_timestamps_missing",
+          "file_reservations_missing",
+          "git_activity_missing"
+        ],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      },
+      "suggested_br_commands": [],
+      "contact_commands": [
+        "fetch inbox and thread messages for bd-degraded",
+        "send Agent Mail contact-first message to MissingMail"
+      ]
+    }
+  ],
+  "safe_to_reopen": [],
+  "contact_first": [
+    "bd-degraded"
+  ],
+  "evidence": [
+    {
+      "bead_id": "bd-degraded",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 0,
+        "owner_inactive_seconds": 999999999,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [
+          "agent_profiles_missing",
+          "thread_timestamps_missing",
+          "file_reservations_missing",
+          "git_activity_missing"
+        ],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      }
+    }
+  ],
+  "artifact_paths": {
+    "stale_lock_recommendations_json": "[SMOKE_ROOT]/degraded/stale_lock_recommendations.json",
+    "events_jsonl": "[SMOKE_ROOT]/degraded/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/degraded/commands.txt",
+    "report_md": "[SMOKE_ROOT]/degraded/report.md"
+  }
+}

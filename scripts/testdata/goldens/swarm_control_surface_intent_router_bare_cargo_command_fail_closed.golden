@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-bare_cargo_command_fail_closed",
+  "decision": "fail_closed",
+  "catalog_json": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/intent.json",
+  "operator_constraints": {},
+  "recommendations": [
+    {
+      "surface_id": "bare_cargo_surface",
+      "score": 15,
+      "matched_intent_tags": [
+        "bare-cargo"
+      ],
+      "matched_symptom_tags": [
+        "bad-command"
+      ],
+      "purpose": "bad command fixture",
+      "implementation_script": "scripts/bare_cargo_surface.sh",
+      "smoke_script": "scripts/e2e/bare_cargo_surface_smoke.sh",
+      "contract_json": "docs/bare_cargo_surface_contract_v1.json",
+      "runbook_doc": "docs/BARE_CARGO_SURFACE.md",
+      "owning_bead_id": "bd-bare",
+      "required_inputs": [
+        "input_json"
+      ],
+      "emitted_artifacts": [
+        "report.json"
+      ],
+      "validation_commands": [
+        "cargo test -p frankenengine-engine --lib"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "upstream_surface_ids": [],
+      "downstream_surface_ids": [],
+      "operator_status_section": "bare_cargo"
+    }
+  ],
+  "advisory_commands": [
+    "cargo test -p frankenengine-engine --lib"
+  ],
+  "artifacts_to_preserve": [
+    "report.json"
+  ],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [
+    {
+      "code": "FE-SWARM-INTENT-BARE-HEAVY-CARGO",
+      "surface_id": "bare_cargo_surface",
+      "detail": "recommended commands include bare heavy Cargo"
+    }
+  ],
+  "fail_closed_count": 1,
+  "duplicate_new_work_warnings": [
+    "A matching catalog surface already exists; extend or relate new work instead of creating an unlinked duplicate."
+  ],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/bare_cargo_command_fail_closed/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-engine.artifact-retrieval-budget-manifest-gate.v1",
+  "suite_id": "semantic-dark-matter-pipeline",
+  "suite_manifest_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/summary.md"
+  ],
+  "declared_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "replay_critical_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "retrieved_artifacts": [
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/commands.txt",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/events.jsonl",
+    "artifacts/semantic_dark_matter_pipeline/20260505T234535Z/run_manifest.json"
+  ],
+  "undeclared_by_suite": [],
+  "over_budget_retrievals": [],
+  "missing_replay_critical_artifacts": [],
+  "broad_declared_artifacts": [],
+  "broad_retrieved_artifacts": [],
+  "budget_verdict": "pass",
+  "reason": "declared retrieval budget matches the replay-critical artifact set",
+  "exit_code": 0,
+  "hash_basis": {
+    "input_hash": "feae97d25b9b5bfaa264ff68a32a2e9b79b35a19f4bd144fa63e1037a66647a3",
+    "verdict_hash": "d09d8ca4894e77c6f0c64dc5d85be14cb3d4287aa5f85113f518e529432143ff"
+  },
+  "artifact_paths": {
+    "artifact_retrieval_budget_verdict_json": "[SMOKE_ROOT]/deterministic-b/artifact_retrieval_budget_verdict.json",
+    "artifact_retrieval_budget_summary_md": "[SMOKE_ROOT]/deterministic-b/artifact_retrieval_budget_summary.md",
+    "commands_txt": "[SMOKE_ROOT]/deterministic-b/commands.txt",
+    "events_jsonl": "[SMOKE_ROOT]/deterministic-b/events.jsonl"
+  }
+}

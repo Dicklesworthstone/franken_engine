@@ -1,0 +1,37 @@
+{
+  "schema_version": "franken-engine.stalled-ownership-reopen-recommendations.v1",
+  "source_revision": "fixture-revision",
+  "input_json": "[SMOKE_ROOT]/missing_br_snapshot/input.json",
+  "normalized_input": "[SMOKE_ROOT]/missing_br_snapshot/out/input.normalized.json",
+  "evidence_hash": "f8b42d4e3b91979075c0517b1525d4b5a4fe42f8e1ced54748fb94e78d7714fa",
+  "evaluated_at": "2026-05-09T15:00:00Z",
+  "decision": "fail_closed",
+  "fail_closed_reasons": [
+    {
+      "code": "missing_br_snapshot",
+      "source_id": "br_in_progress",
+      "detail": "required br in-progress snapshot is missing",
+      "remediation": "Export br in-progress JSON before recommending reopen commands."
+    }
+  ],
+  "degraded_reasons": [],
+  "recommendations": [],
+  "artifact_paths": {
+    "stalled_ownership_reopen_recommendations_json": "[SMOKE_ROOT]/missing_br_snapshot/out/stalled_ownership_reopen_recommendations.json",
+    "reopen_receipts_md": "[SMOKE_ROOT]/missing_br_snapshot/out/reopen_receipts.md",
+    "events_jsonl": "[SMOKE_ROOT]/missing_br_snapshot/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/missing_br_snapshot/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/missing_br_snapshot/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "advisory_only": true,
+    "runs_br_reopen": false,
+    "mutates_br": false,
+    "reassigns_beads": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "edits_files": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  }
+}

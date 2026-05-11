@@ -31,13 +31,14 @@ run_check() {
   jq empty "$cases_json" >/dev/null
   jq -e '
     .schema_version == "franken-engine.rch-proof-failure-capsule-fixtures.v1"
-    and (.cases | length) >= 6
+    and (.cases | length) >= 7
     and ([.cases[].case_id] | index("remote_success") != null)
     and ([.cases[].case_id] | index("remote_compile_failure") != null)
     and ([.cases[].case_id] | index("local_fallback") != null)
     and ([.cases[].case_id] | index("queue_timeout") != null)
     and ([.cases[].case_id] | index("worker_toolchain_missing") != null)
     and ([.cases[].case_id] | index("interrupted_build") != null)
+    and ([.cases[].case_id] | index("target_dir_fingerprint_corruption") != null)
     and all(.cases[]; has("expected"))
   ' "$cases_json" >/dev/null || record_failure "fixture shape"
 
@@ -140,6 +141,13 @@ run_case() {
   if [[ "$case_id" == "local_fallback" ]]; then
     if ! jq -e '.classification != "remote_success" and .proof_usable == false and .observed_markers.local_fallback == true' "${output_dir}/proof_failure_capsule.json" >/dev/null; then
       record_failure "local_fallback classified as usable proof"
+      return
+    fi
+  fi
+
+  if [[ "$case_id" == "target_dir_fingerprint_corruption" ]]; then
+    if ! jq -e '.classification != "remote_compile_failure" and .proof_usable == false and .source_evidence == false and .observed_markers.target_dir_fingerprint == true' "${output_dir}/proof_failure_capsule.json" >/dev/null; then
+      record_failure "target_dir_fingerprint_corruption classified as source proof"
       return
     fi
   fi

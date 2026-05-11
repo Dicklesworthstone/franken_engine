@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "fresh_artifact_reuse",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-alpha",
+      "request_id": "req-alpha",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-alpha",
+      "action": "reuse",
+      "reason": "fresh_reusable_artifact",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Invalidate the reuse receipt and schedule a fresh proof.",
+      "remediation": "Invalidate the reuse receipt and schedule a fresh proof."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "reuse",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/fresh_artifact_reuse/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/fresh_artifact_reuse/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/fresh_artifact_reuse/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/fresh_artifact_reuse/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/fresh_artifact_reuse/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/fresh_artifact_reuse/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "09f9c3d0d4e9bc104e839f4d3395fb0a91f7f70c20f788ae9b94db6f22e55c80"
+}

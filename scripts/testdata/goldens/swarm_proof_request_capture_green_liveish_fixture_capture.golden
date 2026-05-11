@@ -1,0 +1,81 @@
+{
+  "schema_version": "franken-engine.swarm-proof-request-capture.v1",
+  "case_id": "green_liveish_fixture_capture",
+  "bead_id": "bd-ua5n2.2",
+  "source_revision": "fdf5e0e0",
+  "decision": "pass",
+  "fail_closed_reasons": [],
+  "proof_request_count": 1,
+  "proof_requests": [
+    {
+      "trace_id": "trace-green_liveish_fixture_capture",
+      "proof_request_id": "spbreq-capture-green_liveish_fixture_capture",
+      "bead_id": "bd-ua5n2.2",
+      "agent": "MossySpire",
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_bd_ua5n2_2 cargo test -p frankenengine-engine proof_request_capture --lib -- --nocapture",
+      "request_kind": "closeout_proof",
+      "captured_at": "2026-05-09T22:50:00Z",
+      "source_revision": "fdf5e0e0",
+      "source_evidence": [
+        {
+          "kind": "br",
+          "evidence_path": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_br_snapshot.json",
+          "id": "bd-ua5n2.2"
+        },
+        {
+          "kind": "agent_mail",
+          "evidence_path": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_agent_mail_snapshot.json",
+          "id": "14586"
+        },
+        {
+          "kind": "git",
+          "evidence_path": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_git_status.json",
+          "id": "git-status"
+        },
+        {
+          "kind": "rch_summary",
+          "evidence_path": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_rch_summary.json",
+          "id": "rch-green-1"
+        }
+      ]
+    }
+  ],
+  "diagnostics": {
+    "br_fresh": true,
+    "agent_mail_present": true,
+    "command_candidates": [
+      "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_bd_ua5n2_2 cargo test -p frankenengine-engine proof_request_capture --lib -- --nocapture"
+    ],
+    "dirty_paths": [
+      "scripts/swarm_proof_request_capture.sh"
+    ],
+    "claimed_paths": [
+      "docs/SWARM_PROOF_REQUEST_CAPTURE.md",
+      "scripts/e2e/swarm_proof_request_capture_smoke.sh",
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/testdata/swarm_proof_request_capture/cases.json"
+    ],
+    "dirty_outside_claimed_lane": [],
+    "local_fallback_observed": false
+  },
+  "artifact_paths": {
+    "proof_request_capture_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/proof_request_capture.json",
+    "proof_requests_jsonl": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/proof_requests.jsonl",
+    "run_manifest_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/run_manifest.json",
+    "events_jsonl": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/report.md",
+    "br_snapshot_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_br_snapshot.json",
+    "agent_mail_snapshot_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_agent_mail_snapshot.json",
+    "git_status_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_git_status.json",
+    "rch_summary_json": "[SMOKE_ROOT]/green_liveish_fixture_capture/out/source_rch_summary.json"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-restore-verification.v1",
+  "bundle_id": "bundle-archive",
+  "restore_verdict": "fail_closed",
+  "reason": "archive pack manifest hash does not match its actual contents",
+  "missing_replay_paths": [],
+  "missing_expected_paths": [],
+  "unexpected_paths": [],
+  "tampered_manifest_hash": true,
+  "archive_state": "cold_archived",
+  "exit_code": 42,
+  "hash_basis": {
+    "verification_hash": "838748029c3ec9b76b6976d02241502504a38b67776d59bc0888bad11e8f0dba"
+  },
+  "upstream_artifact_paths": {
+    "residency_manifest_json": "[SMOKE_ROOT]/tampered-archive-fails.residency.json",
+    "compaction_plan_json": "[SMOKE_ROOT]/tampered-archive-fails.compaction.json",
+    "archive_source_files_json": "",
+    "archive_pack_input_json": "[SMOKE_ROOT]/tampered-archive-fails.pack-input.json"
+  },
+  "artifact_paths": {
+    "archive_pack_json": "[SMOKE_ROOT]/tampered-archive-fails/archive_pack.json",
+    "restore_verification_report_json": "[SMOKE_ROOT]/tampered-archive-fails/restore_verification_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/tampered-archive-fails/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/tampered-archive-fails/commands.txt",
+    "report_md": "[SMOKE_ROOT]/tampered-archive-fails/report.md"
+  }
+}

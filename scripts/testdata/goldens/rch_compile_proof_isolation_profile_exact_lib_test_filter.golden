@@ -1,0 +1,73 @@
+{
+  "schema_version": "franken-engine.rch-compile-proof-isolation-profile.v1",
+  "case_id": "exact_lib_test_filter",
+  "source_revision": "fixture-revision",
+  "decision": "degraded",
+  "command": {
+    "text": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine object_create_descriptor --lib -- --nocapture",
+    "class": "cargo_test",
+    "package": "frankenengine-engine",
+    "target": "lib"
+  },
+  "classification": {
+    "compile_surface": "package_lib_test",
+    "broadness": "broad",
+    "target_relevance": "target_relevant",
+    "proof_strength": "weak",
+    "allowed_fallback": "narrow_rch_only"
+  },
+  "target_context": {
+    "changed_paths": [
+      "crates/franken-engine/src/stdlib.rs"
+    ],
+    "target_hints": [
+      "crates/franken-engine/src/stdlib.rs"
+    ]
+  },
+  "validation_recommendation": {
+    "kind": "exact_lib_test_filter",
+    "command_text": "rch exec -- env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine object_create_descriptor --lib -- --nocapture",
+    "rationale": "exact lib test filter is narrower than full lib or all-targets validation",
+    "desired_tests": [
+      {
+        "filter": "object_create_descriptor",
+        "kind": "lib_filter"
+      }
+    ],
+    "blocking_diagnostics": [],
+    "rust_validation_uses_rch": true
+  },
+  "evidence_health": {
+    "local_fallback_observed": false,
+    "transcript_truncated": false,
+    "missing_command_metadata": false,
+    "fail_closed_reasons": []
+  },
+  "recommendations": [
+    "prefer_exact_integration_or_file_local_filter",
+    "record_unrelated_compile_drift_if_rerun_blocks"
+  ],
+  "artifact_paths": {
+    "compile_proof_isolation_profile_json": "[CASE_ROOT]/out/compile_proof_isolation_profile.json",
+    "run_manifest_json": "[CASE_ROOT]/out/run_manifest.json",
+    "events_jsonl": "[CASE_ROOT]/out/events.jsonl",
+    "commands_txt": "[CASE_ROOT]/out/commands.txt",
+    "report_md": "[CASE_ROOT]/out/report.md"
+  },
+  "input_artifacts": {
+    "metadata_json": "[CASE_ROOT]/input/metadata.json",
+    "changed_paths_json": "[CASE_ROOT]/input/changed_paths.json"
+  },
+  "contract_paths": {
+    "profile_contract_json": "docs/rch_compile_proof_isolation_profile_contract_v1.json",
+    "operator_doc": "docs/RCH_COMPILE_PROOF_ISOLATION_PROFILE.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "creates_beads": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "changes_workers": false
+  }
+}

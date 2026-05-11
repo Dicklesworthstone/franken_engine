@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "case_id": "contradictory_failure_history",
+  "source_revision": "6ff45a36",
+  "candidate_count": 1,
+  "promotion_candidate_count": 0,
+  "non_promotion_count": 1,
+  "candidates": [
+    {
+      "candidate_id": "spt-no-default-features-check",
+      "template_key": "no-default-features-check",
+      "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p {package} --no-default-features",
+      "lane": "no-default-features",
+      "decision": "non_promotion",
+      "reason_code": "contradictory_failure_history",
+      "success_count": 3,
+      "current_success_count": 3,
+      "refusal_count": 1,
+      "source_proof_links": [
+        "proofs/no-default/contradiction.json",
+        "proofs/no-default/pass-1.json",
+        "proofs/no-default/pass-2.json",
+        "proofs/no-default/pass-3.json"
+      ],
+      "applicability_notes": [],
+      "remediation": "Resolve contradictory failure history and document applicability boundaries before promotion.",
+      "automatic_edit_policy": {
+        "edits_agents_md": false,
+        "edits_scripts": false,
+        "advisory_only": true
+      }
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/contradictory_failure_history/out/input.normalized.json",
+    "template_mining_report_json": "[SMOKE_ROOT]/contradictory_failure_history/out/template_mining_report.json",
+    "promotion_candidates_jsonl": "[SMOKE_ROOT]/contradictory_failure_history/out/promotion_candidates.jsonl",
+    "non_promotion_receipts_jsonl": "[SMOKE_ROOT]/contradictory_failure_history/out/non_promotion_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/contradictory_failure_history/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/contradictory_failure_history/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/contradictory_failure_history/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "report_hash": "7d144154ce38cc081de1f61442b079b617246c976ffb69119be0ca3226ff82f7"
+}

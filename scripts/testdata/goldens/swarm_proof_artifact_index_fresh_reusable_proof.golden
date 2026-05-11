@@ -1,0 +1,59 @@
+{
+  "schema_version": "franken-engine.swarm-proof-artifact-index.v1",
+  "case_id": "fresh_reusable_proof",
+  "source_revision": "[SOURCE_REVISION]",
+  "row_count": 1,
+  "reusable_count": 1,
+  "refused_count": 0,
+  "rows": [
+    {
+      "proof_fingerprint": "spbreq-fixture",
+      "verdict_status": "passed",
+      "index_decision": "reuse_allowed",
+      "reuse_eligible": true,
+      "freshness": "fresh",
+      "invalidation_reasons": [],
+      "remediation": "Reuse is allowed while the source, dependency, toolchain, RCH, dirty-state, and artifact bundle remain unchanged.",
+      "source_revision": "fixture-source",
+      "dependency_closure_fingerprint": "dep-a",
+      "rch_version": "rch-1",
+      "toolchain": "rust-2026-05-09",
+      "expires_at_epoch": 1778367600,
+      "artifact_bundle": {
+        "complete": true,
+        "members": [
+          "run_manifest.json",
+          "events.jsonl",
+          "commands.txt",
+          "proof_transcript.txt",
+          "verdict_receipt.json",
+          "report.md"
+        ]
+      },
+      "artifact_paths": {
+        "run_manifest_json": "fixtures/run_manifest.json",
+        "verdict_receipt_json": "fixtures/verdict_receipt.json"
+      },
+      "receipt_kind": "positive_reuse_receipt"
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/fresh_reusable_proof/out/input.normalized.json",
+    "proof_artifact_index_json": "[SMOKE_ROOT]/fresh_reusable_proof/out/proof_artifact_index.json",
+    "proof_artifact_index_jsonl": "[SMOKE_ROOT]/fresh_reusable_proof/out/proof_artifact_index.jsonl",
+    "reuse_receipts_jsonl": "[SMOKE_ROOT]/fresh_reusable_proof/out/reuse_receipts.jsonl",
+    "reuse_refusal_receipts_jsonl": "[SMOKE_ROOT]/fresh_reusable_proof/out/reuse_refusal_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/fresh_reusable_proof/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/fresh_reusable_proof/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/fresh_reusable_proof/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "index_hash": "bc8e28045297828fcbb39810eab70b783a4476c1b9b3a5566b446cf20b91d912"
+}

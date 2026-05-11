@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 planner="${root_dir}/scripts/build_storm_qos_batch_planner.sh"
 docs_path="${root_dir}/docs/BUILD_STORM_QOS_BATCH_PLANNER.md"
+golden_dir="${BUILD_STORM_QOS_BATCH_PLANNER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 
 record_pass() {
   printf 'PASS build-storm-qos-batch-planner %s\n' "$1"
@@ -47,7 +48,8 @@ run_case() {
   local expected_decision="$2"
   local expected_exit="$3"
   local output_dir="$4"
-  shift 4
+  local tmp_root="$5"
+  shift 5
   local output
   local exit_code
 
@@ -80,6 +82,7 @@ run_case() {
   test -s "${output_dir}/events.jsonl"
   test -s "${output_dir}/commands.txt"
   test -s "${output_dir}/report.md"
+  assert_case_golden "$case_name" "${output_dir}/build_storm_batch_plan.json" "$tmp_root"
   record_pass "${case_name} decided ${expected_decision}"
 }
 
@@ -106,6 +109,81 @@ assert_deferred_reason() {
   ' "$plan" >/dev/null
 }
 
+golden_case_names() {
+  printf '%s\n' \
+    balanced-two-agent-admission \
+    balanced-two-agent-repeat \
+    one-noisy-agent-throttled \
+    p1-proof-refresh-preempts-p3-broad-check \
+    all-workers-busy \
+    stale-proof-refresh-short-retry
+}
+
+canonicalize_plan() {
+  local plan="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$plan"
+}
+
+assert_case_golden() {
+  local case_name="$1"
+  local plan="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/build_storm_qos_batch_planner_${case_name}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_plan "$plan" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_name} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_plan "$plan" "$tmp_root"); then
+    record_failure "${case_name} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_name golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_name; do
+    golden_path="${golden_dir}/build_storm_qos_batch_planner_${case_name}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_name} missing checked-in golden"
+      return 1
+    fi
+    jq empty "$golden_path" >/dev/null || {
+      record_failure "${case_name} invalid golden json"
+      return 1
+    }
+  done < <(golden_case_names)
+}
+
 run_check() {
   local scope_file
 
@@ -123,6 +201,7 @@ run_check() {
     --output-dir "${TMPDIR:-/tmp}/build-storm-qos-rch-policy" \
     --scope-file "$scope_file" >/dev/null
   record_pass "rch policy compliance"
+  goldens_shape_ok
 }
 
 run_selftest() {
@@ -143,6 +222,7 @@ run_selftest() {
     {request_id:"beta-proof", agent_id:"CyanOak", bead_id:"bd-beta", bead_priority:1, proof_refresh:true, heavy:true, command:("rch exec -- env CARGO_TARGET_DIR=" + $target_dir + "/beta cargo test -p frankenengine-engine --test beta_proof"), submitted_order:2}
   ]}' >"${fixture_dir}/balanced.json"
   run_case "balanced-two-agent-admission" "planned" 0 "${tmp_root}/balanced-one" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/balanced.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \
@@ -150,6 +230,7 @@ run_selftest() {
     --max-parallel-heavy 2
   assert_admitted_ids "${tmp_root}/balanced-one/build_storm_batch_plan.json" alpha-proof beta-proof
   run_case "balanced-two-agent-repeat" "planned" 0 "${tmp_root}/balanced-two" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/balanced.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \
@@ -169,6 +250,7 @@ run_selftest() {
     {request_id:"quiet-a", agent_id:"QuietAgent", bead_id:"bd-quiet-a", bead_priority:1, proof_refresh:true, heavy:true, command:("rch exec -- env CARGO_TARGET_DIR=" + $target_dir + "/quiet-a cargo test -p frankenengine-engine --test quiet_a"), submitted_order:3}
   ]}' >"${fixture_dir}/noisy.json"
   run_case "one-noisy-agent-throttled" "planned" 0 "${tmp_root}/noisy-agent" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/noisy.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \
@@ -184,6 +266,7 @@ run_selftest() {
     {request_id:"p3-broad-check", agent_id:"CyanOak", bead_id:"bd-p3", bead_priority:3, broad_check:true, heavy:true, command:("rch exec -- env CARGO_TARGET_DIR=" + $target_dir + "/p3 cargo check --all-targets"), submitted_order:1}
   ]}' >"${fixture_dir}/preempt.json"
   run_case "p1-proof-refresh-preempts-p3-broad-check" "planned" 0 "${tmp_root}/preempt" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/preempt.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \
@@ -194,6 +277,7 @@ run_selftest() {
 
   write_workers "${fixture_dir}/workers-busy.json" 0
   run_case "all-workers-busy" "all_deferred" 75 "${tmp_root}/all-workers-busy" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/balanced.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \
@@ -206,6 +290,7 @@ run_selftest() {
     {request_id:"stale-refresh", agent_id:"CyanOak", bead_id:"bd-stale", bead_priority:1, proof_refresh:true, stale_proof_refresh:true, heavy:true, command:("rch exec -- env CARGO_TARGET_DIR=" + $target_dir + "/stale cargo test -p frankenengine-engine --test stale_refresh"), submitted_order:2}
   ]}' >"${fixture_dir}/stale.json"
   run_case "stale-proof-refresh-short-retry" "planned" 0 "${tmp_root}/stale-retry" \
+    "$tmp_root" \
     --pending-requests-json "${fixture_dir}/stale.json" \
     --resource-lease-plans-json "${fixture_dir}/leases.json" \
     --proof-cost-history-json "${fixture_dir}/costs.json" \

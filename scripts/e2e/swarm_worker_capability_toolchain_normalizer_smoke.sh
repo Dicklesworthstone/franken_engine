@@ -6,6 +6,7 @@ normalizer="${root_dir}/scripts/swarm_worker_capability_toolchain_normalizer.sh"
 docs_path="${root_dir}/docs/SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER.md"
 contract_path="${root_dir}/docs/swarm_worker_capability_toolchain_input_contract_v1.json"
 fixture_bundle_path="${root_dir}/scripts/testdata/swarm_worker_capability_toolchain/worker_capability_toolchain_fixtures.json"
+golden_dir="${SWARM_WORKER_CAPABILITY_TOOLCHAIN_NORMALIZER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 failures=0
 
 record_pass() {
@@ -71,6 +72,10 @@ check_no_bare_heavy_cargo() {
   done < <(jq -r '.. | strings' "$path" 2>/dev/null || sed -n '1,240p' "$path")
 }
 
+golden_case_names() {
+  jq -r '.scenarios[].scenario_id' "$fixture_bundle_path"
+}
+
 contract_shape_ok() {
   jq -e '
     .schema_version == "franken-engine.swarm-worker-capability-toolchain-normalizer-contract.v1"
@@ -114,10 +119,74 @@ fixtures_shape_ok() {
   ' "$fixture_bundle_path" >/dev/null
 }
 
+canonicalize_toolchain_input() {
+  local input_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+    | .routing_input_id = "[ROUTING_INPUT_ID]"
+  ' "$input_path"
+}
+
+assert_case_golden() {
+  local scenario="$1"
+  local input_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/swarm_worker_capability_toolchain_normalizer_${scenario}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_toolchain_input "$input_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${scenario} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_toolchain_input "$input_path" "$tmp_root"); then
+    record_failure "${scenario} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local scenario golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r scenario; do
+    golden_path="${golden_dir}/swarm_worker_capability_toolchain_normalizer_${scenario}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${scenario} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${scenario} invalid golden json"
+  done < <(golden_case_names)
+}
+
 run_case() {
   local scenario="$1"
   local input_dir="$2"
   local output_dir="$3"
+  local tmp_root="$4"
   local expected_decision expected_truth_state expected_exit_code expected_routing_mode
   expected_decision="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_decision' "$fixture_bundle_path")"
   expected_truth_state="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_truth_state' "$fixture_bundle_path")"
@@ -152,6 +221,7 @@ run_case() {
     record_failure "${scenario} decision, truth state, or routing mode mismatch"
     return 1
   }
+  assert_case_golden "$scenario" "${output_dir}/swarm_worker_capability_toolchain_input.json" "$tmp_root" || return 1
 }
 
 run_check() {
@@ -169,6 +239,7 @@ run_check() {
   else
     record_failure "fixture bundle shape mismatch"
   fi
+  goldens_shape_ok
 
   grep -Fq 'advisory-only' "$docs_path" || record_failure "docs must say advisory-only"
   grep -Fq 'local fallback contamination fails closed' "$docs_path" || record_failure "docs must mention local fallback contamination"
@@ -192,7 +263,7 @@ run_selftest() {
       record_failure "could not materialize fixture ${scenario}"
       continue
     }
-    run_case "$scenario" "$input_dir" "$output_dir" || continue
+    run_case "$scenario" "$input_dir" "$output_dir" "$tmp_root" || continue
 
     jq -e \
       --argjson expected_advised "$(jq -c --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_advised_worker_ids' "$fixture_bundle_path")" \

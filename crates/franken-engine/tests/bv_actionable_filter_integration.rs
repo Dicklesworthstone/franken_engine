@@ -89,32 +89,32 @@ fn apply_bv_filter(bv_output: &Value, blocked: &Value, in_progress: &Value) -> V
     }
 
     // Filter tracks
-    if let Some(plan) = output.get_mut("plan") {
-        if let Some(tracks) = plan.get_mut("tracks").and_then(|v| v.as_array_mut()) {
-            let mut filtered_tracks = Vec::new();
+    if let Some(plan) = output.get_mut("plan")
+        && let Some(tracks) = plan.get_mut("tracks").and_then(|v| v.as_array_mut())
+    {
+        let mut filtered_tracks = Vec::new();
 
-            for track in tracks {
-                if let Some(items) = track.get_mut("items").and_then(|v| v.as_array_mut()) {
-                    let mut filtered_items = Vec::new();
+        for track in tracks {
+            if let Some(items) = track.get_mut("items").and_then(|v| v.as_array_mut()) {
+                let mut filtered_items = Vec::new();
 
-                    for item in items {
-                        if let Some(item_id) = item.get("id").and_then(|v| v.as_str()) {
-                            if !excluded_ids.contains(&item_id.to_string()) {
-                                filtered_items.push(item.clone());
-                            }
-                        }
-                    }
-
-                    if !filtered_items.is_empty() {
-                        let mut filtered_track = track.clone();
-                        filtered_track["items"] = Value::Array(filtered_items);
-                        filtered_tracks.push(filtered_track);
+                for item in items {
+                    if let Some(item_id) = item.get("id").and_then(|v| v.as_str())
+                        && excluded_ids.iter().all(|id| id != item_id)
+                    {
+                        filtered_items.push(item.clone());
                     }
                 }
-            }
 
-            plan["tracks"] = Value::Array(filtered_tracks);
+                if !filtered_items.is_empty() {
+                    let mut filtered_track = track.clone();
+                    filtered_track["items"] = Value::Array(filtered_items);
+                    filtered_tracks.push(filtered_track);
+                }
+            }
         }
+
+        plan["tracks"] = Value::Array(filtered_tracks);
     }
 
     output

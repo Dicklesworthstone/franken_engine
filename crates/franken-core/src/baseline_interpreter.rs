@@ -264,7 +264,7 @@ pub enum Value {
     GeneratorFunction(u32),
     /// Live generator object reference (index into generator store).
     Generator(u32),
-    /// Async function reference (calling creates a suspended AsyncFunctionObject).
+    /// Async function reference (index into interpreter closure store).
     AsyncFunction(u32),
     /// Live async function object reference (index into async function store).
     AsyncFunctionObject(u32),
@@ -1685,8 +1685,6 @@ pub struct InterpreterCore {
     pending_captures: Vec<u32>,
     /// Generator object store.
     generators: Vec<GeneratorObject>,
-    /// Async function object store.
-    async_functions: Vec<AsyncFunctionObject>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
@@ -1765,7 +1763,6 @@ impl InterpreterCore {
             closures: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
-            async_functions: Vec::new(),
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
@@ -3208,34 +3205,10 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        // For now, return a placeholder promise that resolves to {value: undefined, done: true}
-        // Full implementation would execute the async generator body with suspension/resumption
-        let result_promise = self.promise_store.create().0;
-        let result_id = self.alloc_object_with_prototype(None)?;
-        {
-            self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
-            self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
-        }
-        let js_val =
-            crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(result_id.0));
-        let label = crate::ifc_artifacts::Label::Public;
-        self.promise_store
-            .fulfill(
-                crate::promise_model::PromiseHandle(result_promise),
-                js_val,
-                label,
-                &mut self.event_loop.microtasks,
-            )
-            .map_err(|e| InterpreterError::TypeError {
-                expected: "promise fulfillment".into(),
-                got: format!("failed to fulfill promise: {e:?}"),
-            })?;
-
-        // Mark as completed for simplicity
-        let async_gen = &mut self.async_generators[gen_id as usize];
-        async_gen.phase = AsyncGeneratorPhase::Completed;
-
-        Ok(Value::Promise(result_promise))
+        Err(InterpreterError::TypeError {
+            expected: "implemented async generator body execution".into(),
+            got: "async generator .next() body execution is not implemented".into(),
+        })
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -3469,12 +3442,18 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    if let Value::AsyncFunction(_) = &callee_val {
+                        return Err(InterpreterError::TypeError {
+                            expected: "implemented async function body execution".to_string(),
+                            got: "async function call execution is not implemented".to_string(),
+                        });
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
-                        | Value::AsyncFunction(closure_id)
                         | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -3515,43 +3494,6 @@ impl InterpreterCore {
                         });
                         self.write_reg(dst, Value::Generator(gen_id))?;
                         self.ip += 1;
-                        continue;
-                    }
-
-                    // Async function call: create a suspended AsyncFunctionObject and result Promise.
-                    if let Value::AsyncFunction(cid) = &callee_val {
-                        // Create the result Promise first
-                        let result_promise = self.promise_store.create().0;
-
-                        let _async_id =
-                            u32::try_from(self.async_functions.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async function table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_functions.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::SuspendedStart,
-                            result_promise,
-                        });
-
-                        // Return the result Promise immediately
-                        self.write_reg(dst, Value::Promise(result_promise))?;
-                        self.ip += 1;
-
-                        // TODO: Start async function execution immediately
-                        // For now we just return the promise. In a full implementation,
-                        // we would begin executing the async function body and handle
-                        // suspension/resumption via the event loop
-
                         continue;
                     }
 
@@ -4086,7 +4028,7 @@ impl InterpreterCore {
                         };
                         // Push elements to target array
                         if self.heap.get(arr_id.0 as usize).is_some() {
-                            let mut next_idx = self
+                            let next_idx = self
                                 .heap
                                 .get(arr_id.0 as usize)
                                 .map(|obj| {
@@ -4097,9 +4039,20 @@ impl InterpreterCore {
                                     })
                                 })
                                 .unwrap_or(0);
-                            for elem in elements {
-                                self.set_object_property(arr_id, next_idx.to_string(), elem)?;
-                                next_idx += 1;
+                            for (offset, elem) in elements.into_iter().enumerate() {
+                                let offset = u32::try_from(offset).map_err(|_| {
+                                    InterpreterError::TypeError {
+                                        expected: "array index capacity".into(),
+                                        got: format!("spread element offset {offset}"),
+                                    }
+                                })?;
+                                let idx = next_idx.checked_add(offset).ok_or_else(|| {
+                                    InterpreterError::TypeError {
+                                        expected: "array index capacity".into(),
+                                        got: format!("array index overflow at {next_idx}+{offset}"),
+                                    }
+                                })?;
+                                self.set_object_property(arr_id, idx.to_string(), elem)?;
                             }
                         }
                     }
@@ -6441,6 +6394,13 @@ impl InterpreterCore {
                     // the argument to the result promise as a fulfillment value.
                     let _ = self.fulfill_promise(result_promise, argument, label.clone());
                 }
+                crate::promise_model::Microtask::PromiseRejection {
+                    reason,
+                    result_promise,
+                    label: task_label,
+                } => {
+                    let _ = self.reject_promise(result_promise, reason, task_label);
+                }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
                     then_handler: _,
@@ -8179,6 +8139,18 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn test_quickjs_config_with(
+        extra: impl IntoIterator<Item = RuntimeCapability>,
+    ) -> InterpreterConfig {
+        let mut config = test_quickjs_config();
+        config.granted_capabilities.extend(extra);
+        config
+    }
+
+    fn test_router() -> LaneRouter {
+        LaneRouter::with_configs(test_quickjs_config(), test_v8_config())
+    }
+
     #[allow(dead_code)]
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
         // SAFETY: Test helper assumes valid module execution; unwrap safe in test context
@@ -8240,6 +8212,25 @@ mod tests {
         fn records(&self) -> Vec<HookRecord> {
             self.records.lock().unwrap().clone()
         }
+
+        fn records_without_startup_module_record(&self) -> Vec<HookRecord> {
+            let mut records = self.records();
+            let is_startup_module_record = matches!(
+                records.first(),
+                Some(HookRecord::Allocation {
+                    ctx,
+                    kind,
+                    size_hint,
+                }) if ctx.instruction_count == 0
+                    && ctx.current_ip == 0
+                    && *kind == AllocKind::Object
+                    && *size_hint == 0
+            );
+            if is_startup_module_record {
+                records.remove(0);
+            }
+            records
+        }
     }
 
     impl InterpreterHook for RecordingHook {
@@ -8292,7 +8283,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_property_access() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8318,7 +8309,7 @@ mod tests {
 
         assert_eq!(result.value, Value::Int(99));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Property {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8334,7 +8325,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_call() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
         core.registers[1] = Value::Int(5);
@@ -8363,7 +8354,7 @@ mod tests {
 
         assert_eq!(result.value, Value::Int(5));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Call {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8382,7 +8373,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_allocation() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8395,7 +8386,7 @@ mod tests {
 
         assert!(matches!(result.value, Value::Object(_)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8411,7 +8402,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_closure_allocation() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8437,7 +8428,7 @@ mod tests {
 
         assert!(matches!(result.value, Value::Closure(0)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8453,7 +8444,7 @@ mod tests {
     #[test]
     fn interpreter_hook_allow_continues_execution() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook);
 
@@ -8486,7 +8477,7 @@ mod tests {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8509,7 +8500,7 @@ mod tests {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
-        let lane = QuickJsLane::new();
+        let lane = QuickJsLane::with_config(test_quickjs_config());
         let result = lane
             .execute_with_hook(
                 &test_module(vec![Ir3Instruction::NewObject { dst: 0 }]),
@@ -8525,12 +8516,12 @@ mod tests {
             ))
         );
         assert_eq!(result.value, Value::Undefined);
-        assert_eq!(result.instructions_executed, 1);
+        assert_eq!(result.instructions_executed, 0);
     }
 
     #[test]
     fn interpreter_hook_none_preserves_execution_when_unset() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
@@ -8557,7 +8548,7 @@ mod tests {
     #[test]
     fn interpreter_hook_receives_correct_context() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8571,7 +8562,7 @@ mod tests {
         let result = core.execute(&module).unwrap();
         assert!(matches!(result.value, Value::Object(_)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "extension://hook-test".to_string(),
@@ -8766,7 +8757,7 @@ mod tests {
     }
 
     #[test]
-    fn div_by_zero() {
+    fn div_by_zero_returns_infinity() {
         let m = test_module(vec![
             Ir3Instruction::LoadInt { dst: 1, value: 10 },
             Ir3Instruction::LoadInt { dst: 2, value: 0 },
@@ -8776,8 +8767,8 @@ mod tests {
                 rhs: 2,
             },
         ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert_eq!(err, InterpreterError::DivisionByZero);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Float(Float64::new(f64::INFINITY)));
     }
 
     #[test]
@@ -8883,7 +8874,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 1000;
         let mut core = InterpreterCore::new(config, "test");
         // Pre-set registers: r3 = callee function, r1 = argument.
@@ -8920,7 +8911,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 1000;
         let mut core = InterpreterCore::new(config, "test");
         core.registers[1] = Value::Int(5);
@@ -8954,7 +8945,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_call_depth = 10;
         config.instruction_budget = 100;
         let mut core = InterpreterCore::new(config, "test");
@@ -8972,7 +8963,7 @@ mod tests {
         // Infinite loop.
         let m = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 5;
         let lane = QuickJsLane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -8990,7 +8981,7 @@ mod tests {
             value: 1,
         }]);
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_registers = 256;
         let lane = QuickJsLane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -9054,8 +9045,7 @@ mod tests {
             },
             Ir3Instruction::Halt,
         ]);
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = BTreeSet::from([RuntimeCapability::NetworkEgress]);
+        let config = test_quickjs_config_with([RuntimeCapability::NetworkEgress]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
@@ -9229,8 +9219,7 @@ mod tests {
         ]);
         m.required_capabilities = vec![CapabilityTag("fs".to_string())];
 
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
+        let config = test_quickjs_config_with([RuntimeCapability::FsRead]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
 
@@ -9291,7 +9280,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::DefaultFallback);
@@ -9301,7 +9290,7 @@ mod tests {
     fn router_selects_quickjs_for_capability_module() {
         let mut m = test_module(vec![Ir3Instruction::Halt]);
         m.required_capabilities = vec![CapabilityTag("net".to_string())];
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::SecuritySensitive);
@@ -9314,7 +9303,7 @@ mod tests {
             .chain(std::iter::once(Ir3Instruction::Halt))
             .collect();
         let m = test_module(instrs);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);
@@ -9326,7 +9315,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", Some(LaneChoice::V8)).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::PolicyDirective);
@@ -9732,7 +9721,7 @@ mod tests {
     #[test]
     fn v8_budget_exhaustion() {
         let m = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
-        let mut config = InterpreterConfig::v8_defaults();
+        let mut config = test_v8_config();
         config.instruction_budget = 5;
         let lane = V8Lane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -9972,7 +9961,7 @@ mod tests {
         }
         instrs.push(Ir3Instruction::Halt);
         let m = test_module(instrs);
-        let router = LaneRouter::new();
+        let router = test_router();
         // SAFETY: router.execute() with valid test module and valid parameters
         // cannot fail under normal test conditions.
         let result = router.execute(&m, "test", None).unwrap();
@@ -9982,7 +9971,7 @@ mod tests {
 
     #[test]
     fn alloc_object_and_heap_size() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
         assert_eq!(core.estimated_memory_bytes(), 0);
@@ -9997,7 +9986,7 @@ mod tests {
 
     #[test]
     fn alloc_object_with_prototype_respects_heap_budget() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 2;
         let mut core = InterpreterCore::new(config, "heap-budget");
         assert_eq!(core.alloc_object_with_prototype(None).unwrap(), ObjectId(0));
@@ -10015,7 +10004,7 @@ mod tests {
 
     #[test]
     fn custom_heap_budget_allows_limit_then_fails() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 10;
         let mut core = InterpreterCore::new(config, "custom-heap-budget");
         for expected in 0_u32..10 {
@@ -10037,7 +10026,7 @@ mod tests {
 
     #[test]
     fn estimated_memory_bytes_tracks_property_growth() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "memory-estimate");
         let oid = core.alloc_object_with_prototype(None).unwrap();
         let before = core.estimated_memory_bytes();
@@ -10050,7 +10039,7 @@ mod tests {
 
     #[test]
     fn new_object_instruction_returns_memory_budget_exceeded() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 0;
         let mut core = InterpreterCore::new(config, "budget");
         let module = test_module(vec![
@@ -10070,7 +10059,7 @@ mod tests {
 
     #[test]
     fn load_str_instruction_returns_memory_budget_exceeded() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_total_memory_bytes = 1;
         let mut core = InterpreterCore::new(config, "string-budget");
         let module = test_module_with_pool(
@@ -10093,7 +10082,7 @@ mod tests {
     #[test]
     fn instruction_budget_and_memory_budget_are_independent() {
         let budget_module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
-        let mut budget_config = InterpreterConfig::quickjs_defaults();
+        let mut budget_config = test_quickjs_config();
         budget_config.instruction_budget = 5;
         budget_config.max_total_memory_bytes = u64::MAX;
         let budget_lane = QuickJsLane::with_config(budget_config);
@@ -10118,7 +10107,7 @@ mod tests {
             ],
             vec!["hello".to_string()],
         );
-        let mut memory_config = InterpreterConfig::quickjs_defaults();
+        let mut memory_config = test_quickjs_config();
         memory_config.instruction_budget = 10_000;
         memory_config.max_total_memory_bytes = 1;
         let memory_lane = QuickJsLane::with_config(memory_config);
@@ -10248,7 +10237,7 @@ mod tests {
             is_generator: true,
         });
 
-        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "generator");
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator");
         let result = core.execute(&module).unwrap();
         assert_eq!(result.value, Value::Generator(0));
 
@@ -10423,7 +10412,7 @@ mod tests {
 
     #[test]
     fn push_scope_instruction_respects_max_scope_depth() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_scope_depth = 2;
         let mut core = InterpreterCore::new(config, "scope-depth-budget");
         let module = test_module(vec![
@@ -10848,6 +10837,9 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "vm-dispatch-test");
 
         let module = test_module(vec![Ir3Instruction::Halt]);
@@ -11172,7 +11164,7 @@ mod tests {
         use super::*;
 
         pub(super) fn test_interpreter() -> InterpreterCore {
-            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test-containment")
+            InterpreterCore::new(test_quickjs_config(), "test-containment")
         }
 
         #[test]
@@ -11417,30 +11409,76 @@ mod tests {
         use super::*;
 
         #[test]
-        fn async_function_call_returns_promise() {
-            let mut core = test_interpreter();
+        fn create_async_function_stores_closure_reference_without_executor_state() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-create");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async".to_string()),
+                    is_generator: false,
+                }],
+            );
 
-            // Create a simple async function object in the store
-            let async_func_id = core.async_functions.len() as u32;
-            core.async_functions.push(AsyncFunctionObject {
-                function_index: 0, // dummy function index
-                closure_index: None,
-                saved_ip: 0,
-                saved_registers: Vec::new(),
-                saved_register_base: 0,
-                phase: AsyncFunctionPhase::SuspendedStart,
-                result_promise: 0, // will be set when called
-            });
+            core.execute(&module).expect("module should halt cleanly");
 
-            // Test that calling an async function returns a promise
-            let async_func_value = Value::AsyncFunction(async_func_id);
+            assert_eq!(core.promise_store.len(), 0);
+            assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
+        }
 
-            // For now, we can't fully test this without a complete module
-            // but we can verify the Value::AsyncFunction variant exists
-            match async_func_value {
-                Value::AsyncFunction(id) => assert_eq!(id, async_func_id),
-                _ => panic!("Expected AsyncFunction value"),
+        #[test]
+        fn async_function_call_execution_fails_closed_before_allocating_promise() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-call");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            let error = core
+                .execute(&module)
+                .expect_err("unsupported async function execution must fail closed");
+
+            match error {
+                InterpreterError::TypeError { expected, got } => {
+                    assert_eq!(expected, "implemented async function body execution");
+                    assert_eq!(got, "async function call execution is not implemented");
+                }
+                other => panic!("expected TypeError, got {other:?}"),
             }
+            assert_eq!(core.promise_store.len(), 0);
+            assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
         }
 
         #[test]
@@ -11495,28 +11533,124 @@ mod tests {
         }
 
         #[test]
-        #[ignore = "API drift: BaselineInterpreter type removed (renamed to InterpreterCore, helpers gone)"]
         fn value_to_js_value_conversion() {
-            panic!(
-                "legacy lib test requires rewrite before re-enable: BaselineInterpreter removed"
-            );
+            let cases = [
+                (Value::Undefined, crate::object_model::JsValue::Undefined),
+                (Value::Null, crate::object_model::JsValue::Null),
+                (Value::Bool(true), crate::object_model::JsValue::Bool(true)),
+                (
+                    Value::Bool(false),
+                    crate::object_model::JsValue::Bool(false),
+                ),
+                (Value::Int(42), crate::object_model::JsValue::Int(42)),
+                (
+                    Value::Float(Float64::new(3.25)),
+                    crate::object_model::JsValue::Float(3.25f64.to_bits()),
+                ),
+                (
+                    Value::Str("hello".to_string()),
+                    crate::object_model::JsValue::Str("hello".to_string()),
+                ),
+                (
+                    Value::Object(ObjectId(100)),
+                    crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(100)),
+                ),
+                (
+                    Value::Function(5),
+                    crate::object_model::JsValue::Function(5),
+                ),
+            ];
+
+            for (input, expected) in cases {
+                assert_eq!(InterpreterCore::value_to_js_value(&input), expected);
+            }
+
+            assert!(matches!(
+                InterpreterCore::value_to_js_value(&Value::Promise(7)),
+                crate::object_model::JsValue::Str(_)
+            ));
         }
 
         #[test]
-        #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_creation() {
-            panic!("legacy lib test requires rewrite before re-enable: run_module removed");
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-generator-create");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            core.execute(&module)
+                .expect("async generator function creation should succeed");
+
+            assert_eq!(core.closures.len(), 1);
+            assert_eq!(core.closures[0].function_index, 0);
+            assert!(matches!(
+                core.registers[0],
+                Value::AsyncGeneratorFunction(0)
+            ));
         }
 
         #[test]
-        #[ignore = "API drift: InterpreterCore::run_module renamed/removed; test needs rewrite against execute()"]
         fn async_generator_function_call_creates_object() {
-            panic!("legacy lib test requires rewrite before re-enable: run_module removed");
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-generator-call");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncGenerator {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            core.execute(&module)
+                .expect("async generator function call should succeed");
+
+            assert_eq!(core.async_generators.len(), 1);
+            let created = &core.async_generators[0];
+            assert_eq!(created.function_index, 0);
+            assert_eq!(created.closure_index, Some(0));
+            assert!(matches!(created.phase, AsyncGeneratorPhase::SuspendedStart));
+            assert!(matches!(core.registers[1], Value::AsyncGeneratorObject(0)));
         }
 
         #[test]
         fn async_generator_next_returns_promise() {
             let mut core = test_interpreter();
+            core.config
+                .granted_capabilities
+                .insert(RuntimeCapability::HeapAllocate);
 
             // Create async generator, call it to get object, then call .next()
             let async_gen_id = {
@@ -11539,6 +11673,42 @@ mod tests {
                 Value::Promise(_) => {}
                 _ => panic!("Expected Promise value, got {:?}", result),
             }
+        }
+
+        #[test]
+        fn async_generator_next_suspended_start_fails_closed() {
+            let mut core = test_interpreter();
+
+            let async_gen_id = {
+                core.async_generators.push(AsyncGeneratorObject {
+                    function_index: 0,
+                    closure_index: None,
+                    saved_ip: 0,
+                    saved_registers: Vec::new(),
+                    saved_register_base: 0,
+                    phase: AsyncGeneratorPhase::SuspendedStart,
+                });
+                (core.async_generators.len() - 1) as u32
+            };
+
+            let error = core
+                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
+                .expect_err("unsupported async generator body execution must fail closed");
+
+            match error {
+                InterpreterError::TypeError { expected, got } => {
+                    assert_eq!(expected, "implemented async generator body execution");
+                    assert_eq!(
+                        got,
+                        "async generator .next() body execution is not implemented"
+                    );
+                }
+                other => panic!("expected TypeError, got {other:?}"),
+            }
+            assert!(matches!(
+                core.async_generators[async_gen_id as usize].phase,
+                AsyncGeneratorPhase::SuspendedStart
+            ));
         }
 
         #[test]

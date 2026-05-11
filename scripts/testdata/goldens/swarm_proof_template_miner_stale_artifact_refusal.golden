@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "case_id": "stale_artifact_refusal",
+  "source_revision": "6ff45a36",
+  "candidate_count": 1,
+  "promotion_candidate_count": 0,
+  "non_promotion_count": 1,
+  "candidates": [
+    {
+      "candidate_id": "spt-golden-proof",
+      "template_key": "golden-proof",
+      "command_template": "bash scripts/e2e/{golden}_smoke.sh check",
+      "lane": "golden-proof",
+      "decision": "non_promotion",
+      "reason_code": "stale_artifact_refusal",
+      "success_count": 3,
+      "current_success_count": 3,
+      "refusal_count": 1,
+      "source_proof_links": [
+        "proofs/golden/pass-1.json",
+        "proofs/golden/pass-2.json",
+        "proofs/golden/pass-3.json",
+        "proofs/golden/stale.json"
+      ],
+      "applicability_notes": [],
+      "remediation": "Refresh the stale artifact evidence and rerun the miner before considering promotion.",
+      "automatic_edit_policy": {
+        "edits_agents_md": false,
+        "edits_scripts": false,
+        "advisory_only": true
+      }
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/stale_artifact_refusal/out/input.normalized.json",
+    "template_mining_report_json": "[SMOKE_ROOT]/stale_artifact_refusal/out/template_mining_report.json",
+    "promotion_candidates_jsonl": "[SMOKE_ROOT]/stale_artifact_refusal/out/promotion_candidates.jsonl",
+    "non_promotion_receipts_jsonl": "[SMOKE_ROOT]/stale_artifact_refusal/out/non_promotion_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/stale_artifact_refusal/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale_artifact_refusal/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale_artifact_refusal/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "report_hash": "d63031807643d425d971abec679625ef3188c7b10413c5b1d9ff2e609eb2ab69"
+}

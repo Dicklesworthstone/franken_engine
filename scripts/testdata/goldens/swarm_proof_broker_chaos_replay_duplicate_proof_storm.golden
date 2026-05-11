@@ -1,0 +1,1021 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-chaos-replay.v1",
+  "case_id": "duplicate_proof_storm",
+  "source_revision": "92ee8196",
+  "decision": "pass",
+  "fail_closed_reasons": [],
+  "scenario": {
+    "scenario_id": "chaos-duplicate_proof_storm",
+    "scenario_kind": "duplicate_proof_storm",
+    "replayable": true,
+    "reason_codes": [
+      "duplicate_command_burst"
+    ],
+    "original_evidence": {
+      "agent_mail": {
+        "messages": [
+          {
+            "id": 1,
+            "subject": "proof request",
+            "thread_id": "bd-ua5n2"
+          }
+        ],
+        "reservations": [
+          {
+            "path": "scripts/swarm_proof_broker_chaos_replay.sh"
+          }
+        ],
+        "status": "present"
+      },
+      "bundle_path": "fixtures/chaos/base/proof_bundle.json",
+      "proof_requests": [
+        {
+          "accepted_env_allowlist": [
+            "CARGO_TARGET_DIR",
+            "CARGO_INCREMENTAL",
+            "CARGO_BUILD_JOBS"
+          ],
+          "agent": "MossySpire",
+          "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+          "command_kind": "cargo_test",
+          "dependency_closure_roots": [
+            "scripts/swarm_proof_request_capture.sh",
+            "scripts/swarm_proof_equivalence_classifier.sh",
+            "scripts/swarm_proof_artifact_index.sh",
+            "scripts/swarm_proof_batch_planner.sh",
+            "scripts/swarm_proof_broker_operator_status.sh"
+          ],
+          "dirty_paths": [],
+          "evidence_paths": [
+            "fixtures/chaos/base/proof_request.json",
+            "fixtures/chaos/base/agent_mail_snapshot.json",
+            "fixtures/chaos/base/rch_summary.json"
+          ],
+          "feature_flags": [],
+          "git_commit": "fixture-source-revision",
+          "normalized_command_argv": [
+            "rch",
+            "exec",
+            "--",
+            "env",
+            "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+            "CARGO_INCREMENTAL=0",
+            "CARGO_BUILD_JOBS=1",
+            "cargo",
+            "test",
+            "-p",
+            "frankenengine-engine",
+            "proof_broker",
+            "--lib",
+            "--",
+            "--nocapture"
+          ],
+          "package": "frankenengine-engine",
+          "proof_fingerprint": "fp-chaos",
+          "rch_posture": "remote",
+          "request_id": "req-chaos",
+          "source_revision": "fixture-source-revision",
+          "target_dir_policy": "disposable_remote_target_dir",
+          "target_kind": "lib_test_filter",
+          "target_name": "lib",
+          "test_filter": "proof_broker"
+        }
+      ],
+      "rch": {
+        "status": "present",
+        "summary_path": "fixtures/chaos/base/rch_summary.json",
+        "worker_posture": "remote"
+      }
+    },
+    "deterministic_deltas": {
+      "artifact_freshness": "fresh",
+      "changed_dependency_roots": [],
+      "changed_dirty_paths": [],
+      "duplicate_request_count": 4,
+      "rch_worker_posture": "remote",
+      "request_timing_offsets_ms": [
+        0,
+        5,
+        10,
+        15
+      ]
+    },
+    "perturbed_requests": [
+      {
+        "accepted_env_allowlist": [
+          "CARGO_TARGET_DIR",
+          "CARGO_INCREMENTAL",
+          "CARGO_BUILD_JOBS"
+        ],
+        "agent": "MossySpire",
+        "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+        "command_kind": "cargo_test",
+        "dependency_closure_roots": [
+          "scripts/swarm_proof_request_capture.sh",
+          "scripts/swarm_proof_equivalence_classifier.sh",
+          "scripts/swarm_proof_artifact_index.sh",
+          "scripts/swarm_proof_batch_planner.sh",
+          "scripts/swarm_proof_broker_operator_status.sh"
+        ],
+        "dirty_paths": [],
+        "evidence_paths": [
+          "fixtures/chaos/base/proof_request.json",
+          "fixtures/chaos/base/agent_mail_snapshot.json",
+          "fixtures/chaos/base/rch_summary.json"
+        ],
+        "feature_flags": [],
+        "git_commit": "fixture-source-revision",
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "-p",
+          "frankenengine-engine",
+          "proof_broker",
+          "--lib",
+          "--",
+          "--nocapture"
+        ],
+        "package": "frankenengine-engine",
+        "proof_fingerprint": "fp-chaos",
+        "rch_posture": "remote",
+        "request_id": "req-chaos-0",
+        "source_revision": "fixture-source-revision",
+        "target_dir_policy": "disposable_remote_target_dir",
+        "target_kind": "lib_test_filter",
+        "target_name": "lib",
+        "test_filter": "proof_broker",
+        "requested_at_offset_ms": 0
+      },
+      {
+        "accepted_env_allowlist": [
+          "CARGO_TARGET_DIR",
+          "CARGO_INCREMENTAL",
+          "CARGO_BUILD_JOBS"
+        ],
+        "agent": "MossySpire",
+        "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+        "command_kind": "cargo_test",
+        "dependency_closure_roots": [
+          "scripts/swarm_proof_request_capture.sh",
+          "scripts/swarm_proof_equivalence_classifier.sh",
+          "scripts/swarm_proof_artifact_index.sh",
+          "scripts/swarm_proof_batch_planner.sh",
+          "scripts/swarm_proof_broker_operator_status.sh"
+        ],
+        "dirty_paths": [],
+        "evidence_paths": [
+          "fixtures/chaos/base/proof_request.json",
+          "fixtures/chaos/base/agent_mail_snapshot.json",
+          "fixtures/chaos/base/rch_summary.json"
+        ],
+        "feature_flags": [],
+        "git_commit": "fixture-source-revision",
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "-p",
+          "frankenengine-engine",
+          "proof_broker",
+          "--lib",
+          "--",
+          "--nocapture"
+        ],
+        "package": "frankenengine-engine",
+        "proof_fingerprint": "fp-chaos",
+        "rch_posture": "remote",
+        "request_id": "req-chaos-1",
+        "source_revision": "fixture-source-revision",
+        "target_dir_policy": "disposable_remote_target_dir",
+        "target_kind": "lib_test_filter",
+        "target_name": "lib",
+        "test_filter": "proof_broker",
+        "requested_at_offset_ms": 5
+      },
+      {
+        "accepted_env_allowlist": [
+          "CARGO_TARGET_DIR",
+          "CARGO_INCREMENTAL",
+          "CARGO_BUILD_JOBS"
+        ],
+        "agent": "MossySpire",
+        "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+        "command_kind": "cargo_test",
+        "dependency_closure_roots": [
+          "scripts/swarm_proof_request_capture.sh",
+          "scripts/swarm_proof_equivalence_classifier.sh",
+          "scripts/swarm_proof_artifact_index.sh",
+          "scripts/swarm_proof_batch_planner.sh",
+          "scripts/swarm_proof_broker_operator_status.sh"
+        ],
+        "dirty_paths": [],
+        "evidence_paths": [
+          "fixtures/chaos/base/proof_request.json",
+          "fixtures/chaos/base/agent_mail_snapshot.json",
+          "fixtures/chaos/base/rch_summary.json"
+        ],
+        "feature_flags": [],
+        "git_commit": "fixture-source-revision",
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "-p",
+          "frankenengine-engine",
+          "proof_broker",
+          "--lib",
+          "--",
+          "--nocapture"
+        ],
+        "package": "frankenengine-engine",
+        "proof_fingerprint": "fp-chaos",
+        "rch_posture": "remote",
+        "request_id": "req-chaos-2",
+        "source_revision": "fixture-source-revision",
+        "target_dir_policy": "disposable_remote_target_dir",
+        "target_kind": "lib_test_filter",
+        "target_name": "lib",
+        "test_filter": "proof_broker",
+        "requested_at_offset_ms": 10
+      },
+      {
+        "accepted_env_allowlist": [
+          "CARGO_TARGET_DIR",
+          "CARGO_INCREMENTAL",
+          "CARGO_BUILD_JOBS"
+        ],
+        "agent": "MossySpire",
+        "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+        "command_kind": "cargo_test",
+        "dependency_closure_roots": [
+          "scripts/swarm_proof_request_capture.sh",
+          "scripts/swarm_proof_equivalence_classifier.sh",
+          "scripts/swarm_proof_artifact_index.sh",
+          "scripts/swarm_proof_batch_planner.sh",
+          "scripts/swarm_proof_broker_operator_status.sh"
+        ],
+        "dirty_paths": [],
+        "evidence_paths": [
+          "fixtures/chaos/base/proof_request.json",
+          "fixtures/chaos/base/agent_mail_snapshot.json",
+          "fixtures/chaos/base/rch_summary.json"
+        ],
+        "feature_flags": [],
+        "git_commit": "fixture-source-revision",
+        "normalized_command_argv": [
+          "rch",
+          "exec",
+          "--",
+          "env",
+          "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+          "CARGO_INCREMENTAL=0",
+          "CARGO_BUILD_JOBS=1",
+          "cargo",
+          "test",
+          "-p",
+          "frankenengine-engine",
+          "proof_broker",
+          "--lib",
+          "--",
+          "--nocapture"
+        ],
+        "package": "frankenengine-engine",
+        "proof_fingerprint": "fp-chaos",
+        "rch_posture": "remote",
+        "request_id": "req-chaos-3",
+        "source_revision": "fixture-source-revision",
+        "target_dir_policy": "disposable_remote_target_dir",
+        "target_kind": "lib_test_filter",
+        "target_name": "lib",
+        "test_filter": "proof_broker",
+        "requested_at_offset_ms": 15
+      }
+    ],
+    "expected_invariants": {
+      "classifier_verdict": "reuse_allowed",
+      "artifact_index_decision": "reuse_allowed",
+      "batch_planner_action": "coalesce",
+      "operator_status_projection": "coalesced",
+      "agent_mail_status": "present",
+      "exact_replay_commands_present": true
+    },
+    "invariant_agreement": true,
+    "replay_commands": [
+      "./scripts/swarm_proof_equivalence_classifier.sh --fixture-json classifier_input.json --output-dir replay/classifier",
+      "./scripts/swarm_proof_artifact_index.sh --fixture-json artifact_index_input.json --output-dir replay/artifact_index",
+      "./scripts/swarm_proof_batch_planner.sh --fixture-json batch_planner_input.json --output-dir replay/batch_planner",
+      "./scripts/swarm_proof_broker_operator_status.sh --fixture-json operator_status_input.json --output-dir replay/operator_status"
+    ],
+    "component_inputs": {
+      "classifier": {
+        "candidate": {
+          "accepted_env_allowlist": [
+            "CARGO_TARGET_DIR",
+            "CARGO_INCREMENTAL",
+            "CARGO_BUILD_JOBS"
+          ],
+          "agent": "MossySpire",
+          "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+          "command_kind": "cargo_test",
+          "dependency_closure_roots": [
+            "scripts/swarm_proof_request_capture.sh",
+            "scripts/swarm_proof_equivalence_classifier.sh",
+            "scripts/swarm_proof_artifact_index.sh",
+            "scripts/swarm_proof_batch_planner.sh",
+            "scripts/swarm_proof_broker_operator_status.sh"
+          ],
+          "dirty_paths": [],
+          "evidence_paths": [
+            "fixtures/chaos/base/proof_request.json",
+            "fixtures/chaos/base/agent_mail_snapshot.json",
+            "fixtures/chaos/base/rch_summary.json"
+          ],
+          "feature_flags": [],
+          "git_commit": "fixture-source-revision",
+          "normalized_command_argv": [
+            "rch",
+            "exec",
+            "--",
+            "env",
+            "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+            "CARGO_INCREMENTAL=0",
+            "CARGO_BUILD_JOBS=1",
+            "cargo",
+            "test",
+            "-p",
+            "frankenengine-engine",
+            "proof_broker",
+            "--lib",
+            "--",
+            "--nocapture"
+          ],
+          "package": "frankenengine-engine",
+          "proof_fingerprint": "fp-chaos",
+          "rch_posture": "remote",
+          "request_id": "req-chaos",
+          "source_revision": "fixture-source-revision",
+          "target_dir_policy": "disposable_remote_target_dir",
+          "target_kind": "lib_test_filter",
+          "target_name": "lib",
+          "test_filter": "proof_broker"
+        },
+        "requested": {
+          "accepted_env_allowlist": [
+            "CARGO_TARGET_DIR",
+            "CARGO_INCREMENTAL",
+            "CARGO_BUILD_JOBS"
+          ],
+          "agent": "MossySpire",
+          "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+          "command_kind": "cargo_test",
+          "dependency_closure_roots": [
+            "scripts/swarm_proof_request_capture.sh",
+            "scripts/swarm_proof_equivalence_classifier.sh",
+            "scripts/swarm_proof_artifact_index.sh",
+            "scripts/swarm_proof_batch_planner.sh",
+            "scripts/swarm_proof_broker_operator_status.sh"
+          ],
+          "dirty_paths": [],
+          "evidence_paths": [
+            "fixtures/chaos/base/proof_request.json",
+            "fixtures/chaos/base/agent_mail_snapshot.json",
+            "fixtures/chaos/base/rch_summary.json"
+          ],
+          "feature_flags": [],
+          "git_commit": "fixture-source-revision",
+          "normalized_command_argv": [
+            "rch",
+            "exec",
+            "--",
+            "env",
+            "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+            "CARGO_INCREMENTAL=0",
+            "CARGO_BUILD_JOBS=1",
+            "cargo",
+            "test",
+            "-p",
+            "frankenengine-engine",
+            "proof_broker",
+            "--lib",
+            "--",
+            "--nocapture"
+          ],
+          "package": "frankenengine-engine",
+          "proof_fingerprint": "fp-chaos",
+          "rch_posture": "remote",
+          "request_id": "req-chaos",
+          "source_revision": "fixture-source-revision",
+          "target_dir_policy": "disposable_remote_target_dir",
+          "target_kind": "lib_test_filter",
+          "target_name": "lib",
+          "test_filter": "proof_broker",
+          "local_fallback_observed": false
+        }
+      },
+      "artifact_index": {
+        "case_id": "duplicate_proof_storm",
+        "proofs": [
+          {
+            "proof_fingerprint": "fp-chaos",
+            "verdict_status": "passed",
+            "now_epoch": 2000,
+            "expires_at_epoch": 3000,
+            "source_revision": "fixture-source-revision",
+            "expected_source_revision": "fixture-source-revision",
+            "dependency_closure_fingerprint": "base",
+            "expected_dependency_closure_fingerprint": "base",
+            "rch_posture": "remote",
+            "local_fallback_observed": false,
+            "retrieval_complete": true,
+            "artifact_bundle": {
+              "complete": true,
+              "artifacts": [
+                "proof.log",
+                "metadata.json"
+              ]
+            },
+            "artifact_paths": {
+              "preserved_evidence": "fixtures/chaos/base/proof_bundle.json"
+            }
+          }
+        ]
+      },
+      "batch_planner": {
+        "case_id": "duplicate_proof_storm",
+        "requests": [
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-0",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 0
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-1",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 5
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-2",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 10
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-3",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 15
+          }
+        ],
+        "artifact_index": [
+          {
+            "proof_fingerprint": "fp-chaos",
+            "reuse_eligible": true,
+            "freshness": "fresh",
+            "invalidation_reasons": []
+          }
+        ],
+        "workers": [
+          {
+            "worker_id": "worker-chaos-a",
+            "target_isolation": "compatible",
+            "warm_cache_fingerprints": [
+              "fp-chaos"
+            ]
+          }
+        ],
+        "fairness_debt": [],
+        "operator_policy": {
+          "conflict": false
+        }
+      },
+      "operator_status": {
+        "case_id": "duplicate_proof_storm",
+        "proof_requests": [
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-0",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 0
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-1",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 5
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-2",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 10
+          },
+          {
+            "accepted_env_allowlist": [
+              "CARGO_TARGET_DIR",
+              "CARGO_INCREMENTAL",
+              "CARGO_BUILD_JOBS"
+            ],
+            "agent": "MossySpire",
+            "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+            "command_kind": "cargo_test",
+            "dependency_closure_roots": [
+              "scripts/swarm_proof_request_capture.sh",
+              "scripts/swarm_proof_equivalence_classifier.sh",
+              "scripts/swarm_proof_artifact_index.sh",
+              "scripts/swarm_proof_batch_planner.sh",
+              "scripts/swarm_proof_broker_operator_status.sh"
+            ],
+            "dirty_paths": [],
+            "evidence_paths": [
+              "fixtures/chaos/base/proof_request.json",
+              "fixtures/chaos/base/agent_mail_snapshot.json",
+              "fixtures/chaos/base/rch_summary.json"
+            ],
+            "feature_flags": [],
+            "git_commit": "fixture-source-revision",
+            "normalized_command_argv": [
+              "rch",
+              "exec",
+              "--",
+              "env",
+              "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+              "CARGO_INCREMENTAL=0",
+              "CARGO_BUILD_JOBS=1",
+              "cargo",
+              "test",
+              "-p",
+              "frankenengine-engine",
+              "proof_broker",
+              "--lib",
+              "--",
+              "--nocapture"
+            ],
+            "package": "frankenengine-engine",
+            "proof_fingerprint": "fp-chaos",
+            "rch_posture": "remote",
+            "request_id": "req-chaos-3",
+            "source_revision": "fixture-source-revision",
+            "target_dir_policy": "disposable_remote_target_dir",
+            "target_kind": "lib_test_filter",
+            "target_name": "lib",
+            "test_filter": "proof_broker",
+            "requested_at_offset_ms": 15
+          }
+        ],
+        "artifact_index": [
+          {
+            "proof_fingerprint": "fp-chaos",
+            "reuse_eligible": true,
+            "freshness": "fresh",
+            "invalidation_reasons": []
+          }
+        ],
+        "batch_recommendations": [
+          {
+            "recommendation_id": "rec-duplicate_proof_storm",
+            "request_id": "req-chaos-0",
+            "proof_fingerprint": "fp-chaos",
+            "action": "coalesce",
+            "evidence_paths": [
+              "fixtures/duplicate_proof_storm/batch_plan.json"
+            ]
+          }
+        ],
+        "equivalence_receipts": [
+          {
+            "classifier_hash": "classifier-duplicate_proof_storm",
+            "proof_fingerprint": "fp-chaos",
+            "verdict": "reuse_allowed",
+            "reuse_eligible": true,
+            "reason_codes": [],
+            "requested": {
+              "accepted_env_allowlist": [
+                "CARGO_TARGET_DIR",
+                "CARGO_INCREMENTAL",
+                "CARGO_BUILD_JOBS"
+              ],
+              "agent": "MossySpire",
+              "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_broker --lib -- --nocapture",
+              "command_kind": "cargo_test",
+              "dependency_closure_roots": [
+                "scripts/swarm_proof_request_capture.sh",
+                "scripts/swarm_proof_equivalence_classifier.sh",
+                "scripts/swarm_proof_artifact_index.sh",
+                "scripts/swarm_proof_batch_planner.sh",
+                "scripts/swarm_proof_broker_operator_status.sh"
+              ],
+              "dirty_paths": [],
+              "evidence_paths": [
+                "fixtures/chaos/base/proof_request.json",
+                "fixtures/chaos/base/agent_mail_snapshot.json",
+                "fixtures/chaos/base/rch_summary.json"
+              ],
+              "feature_flags": [],
+              "git_commit": "fixture-source-revision",
+              "normalized_command_argv": [
+                "rch",
+                "exec",
+                "--",
+                "env",
+                "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_chaos",
+                "CARGO_INCREMENTAL=0",
+                "CARGO_BUILD_JOBS=1",
+                "cargo",
+                "test",
+                "-p",
+                "frankenengine-engine",
+                "proof_broker",
+                "--lib",
+                "--",
+                "--nocapture"
+              ],
+              "package": "frankenengine-engine",
+              "proof_fingerprint": "fp-chaos",
+              "rch_posture": "remote",
+              "request_id": "req-chaos",
+              "source_revision": "fixture-source-revision",
+              "target_dir_policy": "disposable_remote_target_dir",
+              "target_kind": "lib_test_filter",
+              "target_name": "lib",
+              "test_filter": "proof_broker"
+            },
+            "artifact_paths": {
+              "classifier_report": "fixtures/duplicate_proof_storm/equivalence_report.json"
+            }
+          }
+        ],
+        "fairness_debt": [],
+        "operator_policy": {
+          "panel_claims_mutation_authority": false,
+          "hide_stale_evidence": false,
+          "omit_refusal_reasons": false
+        }
+      }
+    },
+    "scenario_hash": "d74b0c6004a55e431b10db5e2940393be6288fcc9e4725c23da6ea821858eff6"
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/input.normalized.json",
+    "chaos_replay_bundle_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/chaos_replay_bundle.json",
+    "scenarios_jsonl": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/scenarios.jsonl",
+    "replay_commands_sh": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/replay_commands.sh",
+    "classifier_input_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/classifier_input.json",
+    "artifact_index_input_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/artifact_index_input.json",
+    "batch_planner_input_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/batch_planner_input.json",
+    "operator_status_input_json": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/operator_status_input.json",
+    "events_jsonl": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/duplicate_proof_storm-a/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  }
+}

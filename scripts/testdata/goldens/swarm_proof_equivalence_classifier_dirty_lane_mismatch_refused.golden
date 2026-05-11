@@ -1,0 +1,118 @@
+{
+  "schema_version": "franken-engine.swarm-proof-equivalence-report.v1",
+  "case_id": "dirty_lane_mismatch_refused",
+  "source_revision": "a8f32e40",
+  "verdict": "reuse_refused",
+  "reason_codes": [
+    "dirty_lane_mismatch"
+  ],
+  "remediation": "Refresh dirty-path evidence and rerun the proof for the current claimed lane.",
+  "candidate": {
+    "accepted_env_allowlist": [
+      "CARGO_TARGET_DIR",
+      "CARGO_INCREMENTAL",
+      "CARGO_BUILD_JOBS"
+    ],
+    "command_kind": "cargo_test",
+    "dependency_closure_roots": [
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "dirty_paths": [
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "feature_flags": [],
+    "git_commit": "fixture-source-revision",
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "cargo",
+      "test",
+      "-p",
+      "frankenengine-engine",
+      "proof_request_capture",
+      "--lib",
+      "--",
+      "--nocapture"
+    ],
+    "package": "frankenengine-engine",
+    "rch_posture": "remote",
+    "source_revision": "fixture-source-revision",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "target_kind": "lib_test_filter",
+    "target_name": "lib",
+    "test_filter": "proof_request_capture"
+  },
+  "requested": {
+    "accepted_env_allowlist": [
+      "CARGO_TARGET_DIR",
+      "CARGO_INCREMENTAL",
+      "CARGO_BUILD_JOBS"
+    ],
+    "command_kind": "cargo_test",
+    "dependency_closure_roots": [
+      "scripts/swarm_proof_request_capture.sh",
+      "scripts/swarm_proof_equivalence_classifier.sh"
+    ],
+    "dirty_paths": [
+      "docs/SWARM_PROOF_EQUIVALENCE_CLASSIFIER.md"
+    ],
+    "feature_flags": [],
+    "git_commit": "fixture-source-revision",
+    "normalized_command_argv": [
+      "rch",
+      "exec",
+      "--",
+      "env",
+      "CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence",
+      "CARGO_INCREMENTAL=0",
+      "CARGO_BUILD_JOBS=1",
+      "cargo",
+      "test",
+      "-p",
+      "frankenengine-engine",
+      "proof_request_capture",
+      "--lib",
+      "--",
+      "--nocapture"
+    ],
+    "package": "frankenengine-engine",
+    "rch_posture": "remote",
+    "source_revision": "fixture-source-revision",
+    "target_dir_policy": "disposable_remote_target_dir",
+    "target_kind": "lib_test_filter",
+    "target_name": "lib",
+    "test_filter": "proof_request_capture"
+  },
+  "partial_overlap": {
+    "relation": "same_scope",
+    "candidate_target_rank": 1,
+    "requested_target_rank": 1,
+    "candidate_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_request_capture --lib -- --nocapture",
+    "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_equivalence CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine proof_request_capture --lib -- --nocapture"
+  },
+  "artifact_paths": {
+    "equivalence_report_json": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/equivalence_report.json",
+    "reuse_refusal_receipt_json": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/reuse_refusal_receipt.json",
+    "run_manifest_json": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/run_manifest.json",
+    "events_jsonl": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/report.md",
+    "candidate_request_json": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/candidate_request.json",
+    "requested_request_json": "[SMOKE_ROOT]/dirty_lane_mismatch_refused/out/requested_request.json"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "classifier_hash": "f0eb0e660a85d658ff0195871cd343b088dc6238f47ea72e18308efbc660a683"
+}

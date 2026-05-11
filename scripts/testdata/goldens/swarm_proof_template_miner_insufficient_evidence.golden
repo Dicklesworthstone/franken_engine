@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "case_id": "insufficient_evidence",
+  "source_revision": "6ff45a36",
+  "candidate_count": 1,
+  "promotion_candidate_count": 0,
+  "non_promotion_count": 1,
+  "candidates": [
+    {
+      "candidate_id": "spt-script-smoke-gate",
+      "template_key": "script-smoke-gate",
+      "command_template": "bash scripts/e2e/{name}_smoke.sh selftest",
+      "lane": "script-smoke-gate",
+      "decision": "non_promotion",
+      "reason_code": "insufficient_evidence",
+      "success_count": 1,
+      "current_success_count": 1,
+      "refusal_count": 0,
+      "source_proof_links": [
+        "proofs/script-smoke/pass-1.json"
+      ],
+      "applicability_notes": [],
+      "remediation": "Keep collecting current successful proof rows and refusal examples before promoting this template.",
+      "automatic_edit_policy": {
+        "edits_agents_md": false,
+        "edits_scripts": false,
+        "advisory_only": true
+      }
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/insufficient_evidence/out/input.normalized.json",
+    "template_mining_report_json": "[SMOKE_ROOT]/insufficient_evidence/out/template_mining_report.json",
+    "promotion_candidates_jsonl": "[SMOKE_ROOT]/insufficient_evidence/out/promotion_candidates.jsonl",
+    "non_promotion_receipts_jsonl": "[SMOKE_ROOT]/insufficient_evidence/out/non_promotion_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/insufficient_evidence/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/insufficient_evidence/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/insufficient_evidence/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "report_hash": "af18ea6fb95aa2e2531d5720ca33d30bd50da0c718061fd21337007278afe65e"
+}

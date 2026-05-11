@@ -2736,7 +2736,8 @@ fn parse_statement_inner(
         return self::parse_block_statement(statement, goal, span, context);
     }
 
-    let expression = parse_expression(statement, &span, context, 1)?;
+    let expression_source = statement.strip_suffix(';').unwrap_or(statement).trim();
+    let expression = parse_expression(expression_source, &span, context, 1)?;
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
@@ -4708,6 +4709,13 @@ fn try_parse_binary(
             i += 1;
             continue;
         }
+        if b == b'/'
+            && slash_can_start_regexp(expr, i)
+            && let Some((_pattern, _flags, consumed)) = parse_regexp_literal_prefix(&expr[i..])
+        {
+            i += consumed;
+            continue;
+        }
         if let Some((op, len)) = match_binary_operator_at(bytes, i) {
             // For the same precedence, prefer the rightmost for right-associative,
             // leftmost for left-associative.
@@ -4757,6 +4765,34 @@ fn try_parse_binary(
         left: Box::new(left),
         right: Box::new(right),
     }))
+}
+
+fn slash_can_start_regexp(expr: &str, slash_pos: usize) -> bool {
+    let Some(prev) = expr[..slash_pos].trim_end().as_bytes().last().copied() else {
+        return true;
+    };
+
+    matches!(
+        prev,
+        b'(' | b'['
+            | b'{'
+            | b','
+            | b':'
+            | b'?'
+            | b'='
+            | b'!'
+            | b'~'
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'/'
+            | b'%'
+            | b'<'
+            | b'>'
+    )
 }
 
 /// Match a binary operator at byte position `i`. Returns (operator, byte_length).
@@ -5809,6 +5845,11 @@ fn parse_quoted_string(input: &str) -> Option<String> {
 /// The pattern may contain escaped slashes (`\/`) or character classes with
 /// slashes (`[/]`). Flags are the standard ECMAScript regex flags: g, i, m, s, u, y.
 fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
+    let (pattern, flags, _consumed) = parse_regexp_literal_prefix(input)?;
+    Some((pattern, flags))
+}
+
+fn parse_regexp_literal_prefix(input: &str) -> Option<(String, String, usize)> {
     let input = input.trim();
     if !input.starts_with('/') {
         return None;
@@ -5850,7 +5891,8 @@ fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
                     break;
                 }
             }
-            return Some((pattern.to_string(), flags));
+            let consumed = i + 1 + flags.len();
+            return Some((pattern.to_string(), flags, consumed));
         }
         i += 1;
     }

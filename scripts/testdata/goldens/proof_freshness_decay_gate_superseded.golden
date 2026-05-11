@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "artifact_path": "[SMOKE_ROOT]/superseded.json",
+  "proof_artifact_id": "proof-superseded",
+  "artifact_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "expected_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "artifact_status": "pass",
+  "freshness_state": "superseded",
+  "reusable": false,
+  "reason": "artifact declares newer evidence supersedes it",
+  "recommended_next_action": "Use the superseding artifact or rerun the proof against the current source revision.",
+  "generated_timestamp_ms": 1700000000000,
+  "freshness_deadline_ms": 1700000100000,
+  "now_ms": 1700000050000,
+  "covered_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs",
+    "scripts/focused_proof_runner.sh"
+  ],
+  "changed_paths": [],
+  "superseded_by": "proof-newer",
+  "artifact_paths": {
+    "proof_freshness_report_json": "[SMOKE_ROOT]/superseded/proof_freshness_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/superseded/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/superseded/commands.txt",
+    "report_md": "[SMOKE_ROOT]/superseded/report.md"
+  }
+}

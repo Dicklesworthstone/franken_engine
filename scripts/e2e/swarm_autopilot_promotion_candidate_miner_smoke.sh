@@ -6,6 +6,7 @@ miner="${root_dir}/scripts/swarm_autopilot_promotion_candidate_miner.sh"
 fixtures_path="${SWARM_AUTOPILOT_PROMOTION_CANDIDATE_MINER_FIXTURES:-${root_dir}/scripts/testdata/swarm_autopilot_promotion_candidate_miner/cases.json}"
 contract_path="${root_dir}/docs/swarm_autopilot_promotion_candidate_miner_contract_v1.json"
 docs_path="${root_dir}/docs/SWARM_AUTOPILOT_PROMOTION_CANDIDATE_MINER.md"
+golden_dir="${SWARM_AUTOPILOT_PROMOTION_CANDIDATE_MINER_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 failures=0
 
@@ -97,6 +98,10 @@ docs_shape_ok() {
     && grep -Fq 'Each candidate preserves confidence band, required evidence count, observed evidence count, contradictory outcome reasons, and exact source artifact paths.' "$docs_path" \
     && grep -Fq 'Contradictory hindsight blocks promotion truth.' "$docs_path" \
     && grep -Fq 'The miner never promotes automatically.' "$docs_path"
+}
+
+golden_case_names() {
+  jq -r '.cases[].case_id' "$fixtures_path"
 }
 
 materialize_case() {
@@ -204,6 +209,68 @@ validate_outputs() {
     || record_failure "${case_id} commands.txt missing promotion miner command"
 }
 
+canonicalize_candidates() {
+  local candidates_path="$1"
+  local case_dir="$2"
+
+  jq --arg case_dir "$case_dir" '
+    def scrub:
+      if type == "string" then
+        gsub($case_dir; "[CASE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$candidates_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local candidates_path="$2"
+  local case_dir="$3"
+  local golden_path="${golden_dir}/swarm_autopilot_promotion_candidate_miner_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_candidates "$candidates_path" "$case_dir" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_candidates "$candidates_path" "$case_dir"); then
+    record_failure "${case_id} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_id golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r case_id; do
+    golden_path="${golden_dir}/swarm_autopilot_promotion_candidate_miner_${case_id}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_id} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done < <(golden_case_names)
+}
+
 run_case() {
   local case_id="$1"
   local case_dir="$2"
@@ -230,12 +297,16 @@ run_case() {
 
   validate_required_artifacts "$output_case_dir"
   validate_outputs "$output_case_dir" "$case_id" "$expected_json"
+  assert_case_golden "$case_id" "${output_case_dir}/swarm_autopilot_promotion_candidates.json" "$case_dir"
 }
 
 run_check() {
+  bash -n "$miner"
+  bash -n "${BASH_SOURCE[0]}"
   fixtures_shape_ok || record_failure "fixtures shape mismatch"
   contract_shape_ok || record_failure "contract JSON shape mismatch"
   docs_shape_ok || record_failure "docs truth text mismatch"
+  goldens_shape_ok
   if [[ "$failures" -eq 0 ]]; then
     record_pass "check"
   fi

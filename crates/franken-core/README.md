@@ -1,14 +1,14 @@
-# FrankenEngine Core (Reference Only)
+# FrankenEngine Core
 
-⚠️ **This crate is currently excluded from the workspace and is reference-only.**
+⚠️ **This crate is currently excluded from the workspace.**
 
-## Status: Incomplete Modularization
+## Status: Standalone Manifest Compileable
 
-This crate represents an in-progress modularization effort (commit cb049273) to extract core runtime modules from the main `frankenengine-engine` crate. However, the extraction is incomplete and **does not compile**.
+This crate represents an in-progress modularization effort to extract core runtime modules from the main `frankenengine-engine` crate. The standalone crate manifest is expected to compile, but workspace integration remains a separate follow-up because the public API boundary still needs deliberate validation.
 
-## Missing Critical Modules
+## Extracted Runtime Modules
 
-The following 5 core modules are referenced throughout the codebase but not yet implemented:
+The following core modules are extracted from `frankenengine-engine` for standalone compileability:
 
 1. **`object_model`** - JavaScript value types, object handles, and runtime representation
 2. **`promise_model`** - Promise infrastructure, handles, and settlement outcomes  
@@ -16,20 +16,13 @@ The following 5 core modules are referenced throughout the codebase but not yet 
 4. **`control_plane`** - Execution control and coordination mechanisms
 5. **`trust_zone`** - Security boundaries and isolation primitives
 
-## Impact
+## Workspace Integration
 
-These missing modules cause **100+ compilation errors** across multiple files, particularly in:
-- `baseline_interpreter.rs` - Heavy usage of `JsValue`, `PromiseHandle`, `SettledOutcome`
-- Other core execution modules that depend on runtime object model
+**Do not add this crate to the workspace** until the integration pass validates the extracted API boundary against the full workspace.
 
-## Resolution Path
+Before re-adding it to the root workspace:
+1. Validate the standalone manifest and focused runtime tests.
+2. Audit the copied runtime modules for API drift against `frankenengine-engine`.
+3. Run the full workspace compiler, lint, format, and test gates with `franken-core` included.
 
-**Do not add this crate to the workspace** until the modularization effort is completed. The missing modules represent fundamental architectural components that require careful design and implementation.
-
-To complete the modularization:
-1. Extract the 5 missing modules from `frankenengine-engine`
-2. Ensure all cross-module dependencies are properly defined
-3. Validate the extracted modules compile and pass tests
-4. Re-add to workspace in `Cargo.toml`
-
-Until then, this directory serves as a **reference for the intended modular architecture** but should not be built or deployed.
+Until then, this directory should be built directly through `cargo --manifest-path crates/franken-core/Cargo.toml ...` rather than as a workspace member.

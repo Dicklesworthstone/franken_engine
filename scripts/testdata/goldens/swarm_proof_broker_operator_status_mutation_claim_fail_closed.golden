@@ -1,0 +1,47 @@
+{
+  "schema_version": "franken-engine.swarm-proof-broker-operator-status.v1",
+  "case_id": "mutation_claim_fail_closed",
+  "source_revision": "82884d67",
+  "decision": "fail_closed",
+  "overall_status": "blocked",
+  "fail_closed_reasons": [
+    "panel_claims_live_mutation_authority"
+  ],
+  "hidden_green_status": false,
+  "summary_counts": {
+    "pending_request_count": 0,
+    "reusable_verdict_count": 0,
+    "reuse_refusal_count": 0,
+    "stale_proof_count": 0,
+    "contaminated_proof_count": 0,
+    "fairness_debt_total": 0,
+    "coalesced_count": 0
+  },
+  "rows": [],
+  "recommended_next_actions": [],
+  "frankentui_boundary": {
+    "renderer_boundary": "frankentui",
+    "renderer_repo": "/dp/frankentui",
+    "implemented_here": false,
+    "mutation_authority": false
+  },
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/input.normalized.json",
+    "operator_status_bundle_json": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/operator_status_bundle.json",
+    "frankentui_panel_contract_json": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/frankentui_panel_contract.json",
+    "operator_status_rows_jsonl": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/operator_status_rows.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/mutation_claim_fail_closed/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "claims_live_mutation_authority": false
+  },
+  "status_hash": "ee861a1a194b25015ebbbb80d7bddc4d8c682fc3630a00228e229b15792caec4"
+}

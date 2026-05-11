@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.swarm-control-surface-intent-plan.v1",
+  "source_revision": "fixture-no_matching_surface_fail_closed",
+  "decision": "fail_closed",
+  "catalog_json": "[SMOKE_ROOT]/no_matching_surface_fail_closed/catalog.json",
+  "intent_json": "[SMOKE_ROOT]/no_matching_surface_fail_closed/intent.json",
+  "operator_constraints": {},
+  "recommendations": [],
+  "advisory_commands": [],
+  "artifacts_to_preserve": [],
+  "blocked_reasons": [],
+  "degraded_reasons": [],
+  "fail_closed_reasons": [
+    {
+      "code": "FE-SWARM-INTENT-NO-MATCH",
+      "surface_id": "catalog",
+      "detail": "no catalog surface matched requested intent or symptom tags"
+    }
+  ],
+  "fail_closed_count": 1,
+  "duplicate_new_work_warnings": [],
+  "artifact_paths": {
+    "swarm_control_surface_intent_plan_json": "[SMOKE_ROOT]/no_matching_surface_fail_closed/out/swarm_control_surface_intent_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/no_matching_surface_fail_closed/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/no_matching_surface_fail_closed/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/no_matching_surface_fail_closed/out/report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_live_queue_policy": false
+  }
+}

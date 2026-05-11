@@ -1,0 +1,31 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "artifact_path": "[SMOKE_ROOT]/stale-path.json",
+  "proof_artifact_id": "proof-stale-path",
+  "artifact_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "expected_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "artifact_status": "pass",
+  "freshness_state": "stale_by_changed_path",
+  "reusable": false,
+  "reason": "changed path overlaps a path covered by the proof artifact: crates/franken-engine/src/proof_evidence_index.rs -> crates/franken-engine/src/proof_evidence_index.rs",
+  "recommended_next_action": "Rerun the proof because covered source changed after the artifact was generated.",
+  "generated_timestamp_ms": 1700000000000,
+  "freshness_deadline_ms": 1700000100000,
+  "now_ms": 1700000050000,
+  "covered_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs",
+    "scripts/focused_proof_runner.sh"
+  ],
+  "changed_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs"
+  ],
+  "superseded_by": null,
+  "artifact_paths": {
+    "proof_freshness_report_json": "[SMOKE_ROOT]/stale-by-changed-path/proof_freshness_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/stale-by-changed-path/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/stale-by-changed-path/commands.txt",
+    "report_md": "[SMOKE_ROOT]/stale-by-changed-path/report.md"
+  }
+}

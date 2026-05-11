@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+  "artifact_path": "[SMOKE_ROOT]/fresh.json",
+  "proof_artifact_id": "proof-fresh",
+  "artifact_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "expected_schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "source_revision": "current-rev",
+  "expected_source_revision": "current-rev",
+  "artifact_status": "pass",
+  "freshness_state": "fresh",
+  "reusable": true,
+  "reason": "proof artifact is reusable for the requested source state",
+  "recommended_next_action": "Reuse the proof artifact and record this freshness receipt with the operator evidence.",
+  "generated_timestamp_ms": 1700000000000,
+  "freshness_deadline_ms": 1700000100000,
+  "now_ms": 1700000050000,
+  "covered_paths": [
+    "crates/franken-engine/src/proof_evidence_index.rs",
+    "scripts/focused_proof_runner.sh"
+  ],
+  "changed_paths": [],
+  "superseded_by": null,
+  "artifact_paths": {
+    "proof_freshness_report_json": "[SMOKE_ROOT]/fresh/proof_freshness_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/fresh/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/fresh/commands.txt",
+    "report_md": "[SMOKE_ROOT]/fresh/report.md"
+  }
+}

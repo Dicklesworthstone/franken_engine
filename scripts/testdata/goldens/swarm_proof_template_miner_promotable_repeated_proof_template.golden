@@ -1,0 +1,52 @@
+{
+  "schema_version": "franken-engine.swarm-proof-template-mining-report.v1",
+  "case_id": "promotable_repeated_proof_template",
+  "source_revision": "6ff45a36",
+  "candidate_count": 1,
+  "promotion_candidate_count": 1,
+  "non_promotion_count": 0,
+  "candidates": [
+    {
+      "candidate_id": "spt-lib-test-filter",
+      "template_key": "lib-test-filter",
+      "command_template": "rch exec -- env CARGO_TARGET_DIR={tmp} CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p {package} {filter} --lib -- --nocapture",
+      "lane": "lib-test-filter",
+      "decision": "promotion_candidate",
+      "reason_code": "promote",
+      "success_count": 3,
+      "current_success_count": 3,
+      "refusal_count": 1,
+      "source_proof_links": [
+        "proofs/lib-test-filter/pass-1.json",
+        "proofs/lib-test-filter/pass-2.json",
+        "proofs/lib-test-filter/pass-3.json",
+        "proofs/lib-test-filter/refusal-env.json"
+      ],
+      "applicability_notes": [],
+      "remediation": "Promote this as a documented validation recipe after a human reviews the candidate; do not edit AGENTS.md automatically.",
+      "automatic_edit_policy": {
+        "edits_agents_md": false,
+        "edits_scripts": false,
+        "advisory_only": true
+      }
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/input.normalized.json",
+    "template_mining_report_json": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/template_mining_report.json",
+    "promotion_candidates_jsonl": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/promotion_candidates.jsonl",
+    "non_promotion_receipts_jsonl": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/non_promotion_receipts.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/promotable_repeated_proof_template/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "edits_agents_md": false,
+    "edits_scripts": false
+  },
+  "report_hash": "0c85d56c0891c6ada030e3ac60b577ff8ef03d2634a04c4ae50dce6114814916"
+}

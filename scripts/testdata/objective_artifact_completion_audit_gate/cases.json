@@ -1,0 +1,117 @@
+{
+  "schema_version": "franken-engine.objective-artifact-completion-audit-gate-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "objective_fully_covered",
+      "objective_json": {
+        "objective_id": "iw3-covered",
+        "deliverables": [
+          {
+            "deliverable_id": "contract",
+            "title": "Contract and docs are present",
+            "required_artifacts": ["docs/contract.json", "docs/runbook.md"],
+            "required_commands": ["jq-contract", "smoke-check"],
+            "required_beads": ["bd-example"],
+            "required_proofs": ["receipt-green"]
+          }
+        ]
+      },
+      "evidence_json": {
+        "artifacts": [
+          {"path": "docs/contract.json", "status": "present"},
+          {"path": "docs/runbook.md", "status": "present"}
+        ],
+        "commands": [
+          {"id": "jq-contract", "exit_code": 0},
+          {"id": "smoke-check", "exit_code": 0}
+        ],
+        "beads": [
+          {"id": "bd-example", "status": "closed"}
+        ],
+        "proof_receipts": [
+          {"id": "receipt-green", "status": "passed", "reuse_eligible": true}
+        ]
+      },
+      "expected": {
+        "decision": "complete",
+        "satisfied_count": 1,
+        "missing_count": 0,
+        "weakly_verified_count": 0
+      }
+    },
+    {
+      "case_id": "test_passing_requirement_missing",
+      "objective_json": {
+        "objective_id": "iw3-test-proxy",
+        "deliverables": [
+          {
+            "deliverable_id": "contract",
+            "title": "Contract is required, test alone is not enough",
+            "required_artifacts": ["docs/contract.json"],
+            "required_commands": ["smoke-check"]
+          }
+        ]
+      },
+      "evidence_json": {
+        "commands": [
+          {"id": "smoke-check", "exit_code": 0}
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "satisfied_count": 0,
+        "missing_count": 1,
+        "weakly_verified_count": 0
+      }
+    },
+    {
+      "case_id": "manifest_present_not_covering_objective",
+      "objective_json": {
+        "objective_id": "iw3-manifest-proxy",
+        "deliverables": [
+          {
+            "deliverable_id": "bridge",
+            "title": "Bridge artifact is required",
+            "required_artifacts": ["artifacts/bridge.json"]
+          }
+        ]
+      },
+      "evidence_json": {
+        "manifests": [
+          {"path": "manifest.json", "covers": ["bridge"]}
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "required_weak_code": "FE-IW3-COMPLETION-MANIFEST-PROXY",
+        "satisfied_count": 0,
+        "missing_count": 1,
+        "weakly_verified_count": 0
+      }
+    },
+    {
+      "case_id": "stale_memory_only_evidence",
+      "objective_json": {
+        "objective_id": "iw3-memory-proxy",
+        "deliverables": [
+          {
+            "deliverable_id": "completion",
+            "title": "Completion cannot be based on memory alone"
+          }
+        ]
+      },
+      "evidence_json": {
+        "memory_notes": [
+          {"covers": ["completion"], "note": "prior run said this was done"}
+        ]
+      },
+      "expected": {
+        "decision": "blocked",
+        "required_weak_code": "FE-IW3-COMPLETION-MEMORY-ONLY",
+        "satisfied_count": 0,
+        "missing_count": 0,
+        "weakly_verified_count": 1
+      }
+    }
+  ]
+}

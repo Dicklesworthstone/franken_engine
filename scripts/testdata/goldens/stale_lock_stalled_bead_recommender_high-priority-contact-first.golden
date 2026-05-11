@@ -1,0 +1,71 @@
+{
+  "schema_version": "franken-engine.stale-lock-recommendations.v1",
+  "generated_epoch_seconds": 100000,
+  "stale_owner_seconds": 1000,
+  "recent_activity_seconds": 3600,
+  "snapshot_status": {
+    "agent_profiles": "provided",
+    "thread_timestamps": "provided",
+    "file_reservations": "provided",
+    "git_activity": "provided"
+  },
+  "stale_lock_recommendations": [
+    {
+      "bead_id": "bd-p1",
+      "title": "high priority",
+      "priority": 1,
+      "assignee": "OldP1",
+      "safe_to_reopen": false,
+      "contact_first": true,
+      "recommendation": "contact_first_high_priority",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": true,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      },
+      "suggested_br_commands": [],
+      "contact_commands": [
+        "fetch inbox and thread messages for bd-p1",
+        "send Agent Mail contact-first message to OldP1"
+      ]
+    }
+  ],
+  "safe_to_reopen": [],
+  "contact_first": [
+    "bd-p1"
+  ],
+  "evidence": [
+    {
+      "bead_id": "bd-p1",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 0,
+        "high_priority_requires_contact": true,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": []
+      }
+    }
+  ],
+  "artifact_paths": {
+    "stale_lock_recommendations_json": "[SMOKE_ROOT]/high-priority/stale_lock_recommendations.json",
+    "events_jsonl": "[SMOKE_ROOT]/high-priority/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/high-priority/commands.txt",
+    "report_md": "[SMOKE_ROOT]/high-priority/report.md"
+  }
+}

@@ -1,0 +1,658 @@
+{
+  "schema_version": "franken-engine.idea-wizard-iv-saturation-convergence.v1",
+  "bead_id": "bd-vaths.1",
+  "parent_bead_id": "bd-vaths",
+  "track": "IDEA-WIZARD-IV",
+  "purpose": "Define the advisory saturation convergence and closed-bead proof-integrity contract for zero-ready swarm states.",
+  "docs": {
+    "operator_contract": "docs/IDEA_WIZARD_IV_SATURATION_CONVERGENCE.md",
+    "machine_contract": "docs/idea_wizard_iv_saturation_convergence_v1.json",
+    "smoke_script": "scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh"
+  },
+  "required_surface_fields": [
+    "surface_id",
+    "owning_bead_id",
+    "source_inputs",
+    "emitted_artifacts",
+    "required_report_fields",
+    "mutation_policy",
+    "rch_policy",
+    "freshness_policy",
+    "zero_ready_policy",
+    "duplicate_surface_refs",
+    "validation_commands"
+  ],
+  "global_mutation_boundary": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reopens_beads": false,
+    "closes_beads": false,
+    "defers_beads": false,
+    "reassigns_beads": false,
+    "sends_agent_mail": false,
+    "acknowledges_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "global_rch_policy": {
+    "heavy_cargo_examples_allowed_only_when_wrapped": true,
+    "required_heavy_cargo_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+    "canonical_heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_saturation CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+    "bare_heavy_cargo_is_fail_closed": true,
+    "missing_target_dir_is_fail_closed": true,
+    "local_fallback_contaminates_green_proof": true,
+    "accepted_lightweight_local_validation": [
+      "jq empty",
+      "jq -e",
+      "bash -n",
+      "rg",
+      "git diff --check"
+    ]
+  },
+  "zero_ready_classifications": [
+    "true_saturation",
+    "tracker_blind_spot",
+    "coordination_degraded",
+    "proof_integrity_gap",
+    "validation_map_missing",
+    "resource_pressure_blocked"
+  ],
+  "decisions": [
+    "green",
+    "degraded",
+    "fail_closed",
+    "observe_only"
+  ],
+  "failure_reason_codes": [
+    "FE-IW4-DUPLICATE-SURFACE",
+    "FE-IW4-MISSING-REQUIRED-FIELD",
+    "FE-IW4-UNSAFE-MUTATION",
+    "FE-IW4-BARE-HEAVY-CARGO",
+    "FE-IW4-MISSING-RCH-TARGET-DIR",
+    "FE-IW4-LOCAL-FALLBACK-CONTAMINATION",
+    "FE-IW4-TRACKER-BLIND-SPOT",
+    "FE-IW4-MAIL-OUTAGE-HIDDEN",
+    "FE-IW4-WEAK-CLOSED-BEAD-PROOF",
+    "FE-IW4-VALIDATION-MAP-MISSING",
+    "FE-IW4-RESOURCE-PRESSURE-BLOCKED",
+    "FE-IW4-UNDER_SPECIFIED_REPLAY"
+  ],
+  "source_inventories": [
+    {
+      "inventory_id": "swarm_actionability_truth_gate",
+      "artifact": "docs/swarm_actionability_truth_gate_contract_v1.json",
+      "reuse": "br/bv divergence, stale-source, dirty-overlap, and observe-only claim policy"
+    },
+    {
+      "inventory_id": "swarm_proof_broker",
+      "artifact": "docs/swarm_proof_broker_contract_v1.json",
+      "reuse": "proof fingerprints, freshness, contaminated proof, and reuse refusal semantics"
+    },
+    {
+      "inventory_id": "swarm_live_readonly_capture_profile",
+      "artifact": "docs/SWARM_LIVE_READONLY_CAPTURE_PROFILE.md",
+      "reuse": "read-only br, bv, git, RCH, and optional Agent Mail capture policy"
+    },
+    {
+      "inventory_id": "agent_mail_outage_continuity_bridge",
+      "artifact": "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+      "reuse": "visible degraded coordination and br soft-lock fallback language"
+    },
+    {
+      "inventory_id": "swarm_resource_envelope",
+      "artifact": "docs/swarm_resource_envelope_contract_v1.json",
+      "reuse": "host, disk, target-dir, RCH capacity, and pressure evidence"
+    }
+  ],
+  "surfaces": [
+    {
+      "surface_id": "saturation_convergence_contract",
+      "owning_bead_id": "bd-vaths.1",
+      "source_inputs": [
+        "AGENTS.md",
+        "README.md",
+        "br ready --json",
+        "bv --recipe actionable --robot-plan",
+        "Agent Mail health JSON when available",
+        "prior closed idea-wizard and swarm-control bead inventory"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_SATURATION_CONVERGENCE.md",
+        "docs/idea_wizard_iv_saturation_convergence_v1.json",
+        "scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "source_revision",
+        "generated_at_utc",
+        "decision",
+        "classification",
+        "source_freshness",
+        "mutation_policy",
+        "rch_policy",
+        "artifact_paths",
+        "fail_closed_reasons"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_br": false,
+        "sends_agent_mail": false,
+        "repairs_agent_mail_db": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_git": false,
+        "mutates_remote_workers": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "heavy_cargo_examples_allowed": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+        "heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_saturation_contract CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets"
+      },
+      "freshness_policy": {
+        "source_revision_required": true,
+        "jsonl_db_sync_required": true,
+        "stale_decision": "fail_closed",
+        "mail_outage_decision": "degraded"
+      },
+      "zero_ready_policy": {
+        "true_saturation_requires": [
+          "fresh br ready and br list evidence",
+          "fresh bv actionable plan evidence",
+          "no hidden tracker or lock failure",
+          "coordination health packet present or explicitly degraded",
+          "closed-bead proof integrity packet present",
+          "validation-impact packet present",
+          "resource heatmap packet present"
+        ],
+        "default_when_missing_required_packet": "fail_closed"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "swarm_actionability_truth_gate",
+          "artifact": "docs/swarm_actionability_truth_gate_contract_v1.json",
+          "reuse": "actionability and br/bv divergence vocabulary"
+        },
+        {
+          "surface_id": "idea_wizard_iii_swarm_proof_economy",
+          "artifact": "docs/idea_wizard_iii_swarm_proof_economy_v1.json",
+          "reuse": "prior idea-wizard overlap and degraded coordination boundary"
+        }
+      ],
+      "validation_commands": [
+        "jq empty docs/idea_wizard_iv_saturation_convergence_v1.json",
+        "bash -n scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check",
+        "git diff --check -- docs/IDEA_WIZARD_IV_SATURATION_CONVERGENCE.md docs/idea_wizard_iv_saturation_convergence_v1.json scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh"
+      ]
+    },
+    {
+      "surface_id": "closed_bead_proof_integrity_normalizer",
+      "owning_bead_id": "bd-vgj5t",
+      "source_inputs": [
+        ".beads/issues.jsonl",
+        "br list --all --json",
+        "git log touching .beads/issues.jsonl",
+        "validation command transcripts",
+        "artifact manifests when present"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_CLOSED_BEAD_PROOF_INTEGRITY.md",
+        "scripts/idea_wizard_iv_closed_bead_proof_integrity.sh",
+        "scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh",
+        "closed_bead_proof_integrity.json",
+        "weak_evidence.jsonl",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "source_revision",
+        "closed_bead_count",
+        "weak_evidence_count",
+        "proof_strength_buckets",
+        "fail_closed_reasons"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_br": false,
+        "mutates_git": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR="
+      },
+      "freshness_policy": {
+        "source_revision_required": true,
+        "jsonl_db_sync_required": true,
+        "stale_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "classification_when_weak_evidence": "proof_integrity_gap",
+        "default_decision": "degraded"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "objective_artifact_completion_audit_gate",
+          "artifact": "docs/IDEA_WIZARD_III_SWARM_PROOF_ECONOMY.md",
+          "reuse": "objective-to-artifact comparison vocabulary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_closed_bead_proof_integrity.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh check",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_closed_bead_proof CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine closed_bead_proof"
+      ]
+    },
+    {
+      "surface_id": "coordination_health_repair_packet",
+      "owning_bead_id": "bd-o9wbd",
+      "source_inputs": [
+        "Agent Mail health JSON",
+        "br assignee and status fallback",
+        "git dirty path scope"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_COORDINATION_HEALTH_PACKET.md",
+        "scripts/idea_wizard_iv_coordination_health_packet.sh",
+        "scripts/e2e/idea_wizard_iv_coordination_health_packet_smoke.sh",
+        "coordination_health_packet.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "health_level",
+        "diagnosis",
+        "repair_recommendations",
+        "fallback_lock",
+        "mutation_policy"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "repairs_agent_mail_db": false,
+        "sends_agent_mail": false,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": false,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR="
+      },
+      "freshness_policy": {
+        "agent_mail_health_required": true,
+        "unavailable_decision": "degraded",
+        "malformed_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "classification_when_red": "coordination_degraded",
+        "default_decision": "degraded"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "agent_mail_outage_continuity_bridge",
+          "artifact": "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+          "reuse": "mail outage visibility and br fallback shape"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_coordination_health_packet.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_coordination_health_packet_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_coordination_health_packet_smoke.sh check",
+        "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check"
+      ]
+    },
+    {
+      "surface_id": "validation_impact_planner",
+      "owning_bead_id": "bd-k53rr",
+      "source_inputs": [
+        "git changed files",
+        "bead labels",
+        "crate and test inventory",
+        "prior validation transcripts",
+        "RCH posture"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_VALIDATION_IMPACT_PLANNER.md",
+        "scripts/idea_wizard_iv_validation_impact_planner.sh",
+        "scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh",
+        "validation_impact_plan.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "changed_paths",
+        "recommended_commands",
+        "cost_class",
+        "proof_sufficiency",
+        "rch_policy"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_br": false,
+        "mutates_git": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+        "heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_validation_impact CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --all-targets -- -D warnings"
+      },
+      "freshness_policy": {
+        "source_revision_required": true,
+        "stale_transcript_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "classification_when_missing": "validation_map_missing",
+        "default_decision": "degraded"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "all_target_cargo_proof_shard_planner",
+          "artifact": "docs/idea_wizard_iii_swarm_proof_economy_v1.json",
+          "reuse": "RCH-safe proof shard vocabulary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_validation_impact_planner.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh check",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_validation_impact CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine validation_impact"
+      ]
+    },
+    {
+      "surface_id": "resource_proof_heatmap_integrator",
+      "owning_bead_id": "bd-my2jw",
+      "source_inputs": [
+        "RCH worker status",
+        "queue depth",
+        "target-dir heat",
+        "proof-cache residency",
+        "pressure metrics when provided"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_RESOURCE_PROOF_HEATMAP.md",
+        "scripts/idea_wizard_iv_resource_proof_heatmap.sh",
+        "scripts/e2e/idea_wizard_iv_resource_proof_heatmap_smoke.sh",
+        "resource_proof_heatmap.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "worker_pressure",
+        "cache_heat",
+        "memory_headroom_class",
+        "scheduling_advice",
+        "degraded_reasons"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_remote_workers": false,
+        "deletes_or_overwrites_target_dirs": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR="
+      },
+      "freshness_policy": {
+        "rch_status_required": true,
+        "missing_optional_pressure_decision": "degraded"
+      },
+      "zero_ready_policy": {
+        "classification_when_pressure_blocks": "resource_pressure_blocked",
+        "default_decision": "degraded"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "swarm_resource_envelope",
+          "artifact": "docs/swarm_resource_envelope_contract_v1.json",
+          "reuse": "resource pressure vocabulary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_resource_proof_heatmap.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_resource_proof_heatmap_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_resource_proof_heatmap_smoke.sh check",
+        "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check"
+      ]
+    },
+    {
+      "surface_id": "zero_ready_saturation_no_mock_drill",
+      "owning_bead_id": "bd-aqijn",
+      "source_inputs": [
+        "real br zero-ready snapshot",
+        "real or preserved Agent Mail health snapshot",
+        "real RCH health snapshot",
+        "git status snapshot",
+        "child surface reports"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_ZERO_READY_SATURATION_DRILL.md",
+        "scripts/idea_wizard_iv_zero_ready_saturation_drill.sh",
+        "scripts/e2e/idea_wizard_iv_zero_ready_saturation_replay.sh",
+        "scripts/e2e/idea_wizard_iv_zero_ready_saturation_drill_smoke.sh",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "saturation_convergence_report.json",
+        "step_logs/step_000.log"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "classification",
+        "decision",
+        "child_reports",
+        "artifact_paths",
+        "fail_closed_reasons"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_br": false,
+        "sends_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_git": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR="
+      },
+      "freshness_policy": {
+        "source_revision_required": true,
+        "child_reports_required": true,
+        "stale_child_report_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "default_decision": "fail_closed",
+        "green_requires_all_child_packets": true
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "degraded_coordination_no_mock_drill",
+          "artifact": "docs/idea_wizard_iii_swarm_proof_economy_v1.json",
+          "reuse": "degraded coordination no-mock drill boundary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_zero_ready_saturation_drill.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_zero_ready_saturation_replay.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_zero_ready_saturation_drill_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_zero_ready_saturation_drill_smoke.sh check",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_saturation_drill CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine zero_ready_saturation"
+      ]
+    },
+    {
+      "surface_id": "saturation_operator_truth_gate",
+      "owning_bead_id": "bd-ks5p4",
+      "source_inputs": [
+        "README.md",
+        "operator docs",
+        "machine contract",
+        "preserved acceptance bundle"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_OPERATOR_STATUS_TRUTH_GATE.md",
+        "scripts/idea_wizard_iv_operator_status_truth_gate.sh",
+        "scripts/e2e/idea_wizard_iv_operator_status_truth_gate_replay.sh",
+        "scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh",
+        "operator_truth_gate_report.json",
+        "operator_status.md",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "claim_sensitivity_checks",
+        "observed_claims",
+        "targeted_claims",
+        "violations"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "mutates_git": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": false,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR="
+      },
+      "freshness_policy": {
+        "acceptance_bundle_required_for_observed_claims": true,
+        "missing_bundle_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "classification_when_claim_overstates_evidence": "proof_integrity_gap",
+        "default_decision": "fail_closed"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "rgc_docs_help_surface_audit",
+          "artifact": "docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md",
+          "reuse": "claim-sensitive docs audit vocabulary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_operator_status_truth_gate.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_operator_status_truth_gate_replay.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh check",
+        "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check"
+      ]
+    },
+    {
+      "surface_id": "saturation_acceptance_suite",
+      "owning_bead_id": "bd-w06ui",
+      "source_inputs": [
+        "all child surface reports",
+        "replay wrapper output",
+        "docs truth gate report",
+        "RCH validation transcript"
+      ],
+      "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_ACCEPTANCE_SUITE.md",
+        "scripts/idea_wizard_iv_acceptance_suite.sh",
+        "scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh",
+        "acceptance_manifest.json",
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "report.md"
+      ],
+      "required_report_fields": [
+        "schema_version",
+        "child_beads",
+        "child_artifacts",
+        "validation_commands",
+        "acceptance_decision",
+        "residual_risks"
+      ],
+      "mutation_policy": {
+        "advisory_only": true,
+        "proof_only": true,
+        "closes_beads": false,
+        "mutates_br": false,
+        "runs_cargo": false,
+        "runs_rch": false
+      },
+      "rch_policy": {
+        "runs_rch": false,
+        "emits_commands_only": true,
+        "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+        "heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_acceptance CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine saturation_convergence"
+      },
+      "freshness_policy": {
+        "child_reports_required": true,
+        "source_revision_required": true,
+        "stale_decision": "fail_closed"
+      },
+      "zero_ready_policy": {
+        "green_requires_all_child_packets": true,
+        "default_decision": "fail_closed"
+      },
+      "duplicate_surface_refs": [
+        {
+          "surface_id": "idea_wizard_iii_acceptance_suite",
+          "artifact": "docs/idea_wizard_iii_swarm_proof_economy_v1.json",
+          "reuse": "wave-level acceptance and replay vocabulary"
+        }
+      ],
+      "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_acceptance_suite.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh check",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_acceptance CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine saturation_convergence"
+      ]
+    }
+  ],
+  "contract_validation_commands": [
+    "jq empty docs/idea_wizard_iv_saturation_convergence_v1.json",
+    "bash -n scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh",
+    "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check",
+    "rg -n 'rch exec -- env CARGO_TARGET_DIR=' docs/IDEA_WIZARD_IV_SATURATION_CONVERGENCE.md docs/idea_wizard_iv_saturation_convergence_v1.json",
+    "git diff --check -- docs/IDEA_WIZARD_IV_SATURATION_CONVERGENCE.md docs/idea_wizard_iv_saturation_convergence_v1.json scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh"
+  ]
+}

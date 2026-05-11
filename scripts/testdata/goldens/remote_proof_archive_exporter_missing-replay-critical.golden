@@ -1,0 +1,30 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-restore-verification.v1",
+  "bundle_id": "bundle-archive",
+  "restore_verdict": "fail_closed",
+  "reason": "archive pack is missing replay-critical artifacts",
+  "missing_replay_paths": [
+    "/archive/replay-retained.bin"
+  ],
+  "missing_expected_paths": [],
+  "unexpected_paths": [],
+  "tampered_manifest_hash": false,
+  "archive_state": "cold_archived",
+  "exit_code": 42,
+  "hash_basis": {
+    "verification_hash": "2f3b0dbdae773f31a8e5c7bc957aa6c75ba179b6f4a6491982d39aa5dd791f9b"
+  },
+  "upstream_artifact_paths": {
+    "residency_manifest_json": "[SMOKE_ROOT]/missing-replay-critical.residency.json",
+    "compaction_plan_json": "[SMOKE_ROOT]/missing-replay-critical.compaction.json",
+    "archive_source_files_json": "[SMOKE_ROOT]/missing-replay-critical.source.json",
+    "archive_pack_input_json": ""
+  },
+  "artifact_paths": {
+    "archive_pack_json": "[SMOKE_ROOT]/missing-replay-critical/archive_pack.json",
+    "restore_verification_report_json": "[SMOKE_ROOT]/missing-replay-critical/restore_verification_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/missing-replay-critical/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/missing-replay-critical/commands.txt",
+    "report_md": "[SMOKE_ROOT]/missing-replay-critical/report.md"
+  }
+}

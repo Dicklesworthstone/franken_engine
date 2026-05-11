@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.swarm-proof-batch-plan.v1",
+  "case_id": "incompatible_target_isolation",
+  "source_revision": "[SOURCE_REVISION]",
+  "recommendation_count": 1,
+  "recommendations": [
+    {
+      "recommendation_id": "proof-batch-req-isolated",
+      "request_id": "req-isolated",
+      "agent": "MossySpire",
+      "proof_fingerprint": "fp-isolated",
+      "action": "keep_isolated",
+      "reason": "incompatible_target_isolation",
+      "fairness_debt": 0,
+      "warm_cache_advisory_only": true,
+      "evidence_paths": [
+        "fixtures/proof_request.json",
+        "fixtures/artifact_index.json",
+        "fixtures/workers.json"
+      ],
+      "rollback_note": "Keep separate target-dir policy and avoid warm-cache sharing.",
+      "remediation": "Keep separate target-dir policy and avoid warm-cache sharing."
+    }
+  ],
+  "action_counts": [
+    {
+      "action": "keep_isolated",
+      "count": 1
+    }
+  ],
+  "artifact_paths": {
+    "input_normalized_json": "[SMOKE_ROOT]/incompatible_target_isolation/out/input.normalized.json",
+    "batch_plan_json": "[SMOKE_ROOT]/incompatible_target_isolation/out/batch_plan.json",
+    "recommendations_jsonl": "[SMOKE_ROOT]/incompatible_target_isolation/out/recommendations.jsonl",
+    "events_jsonl": "[SMOKE_ROOT]/incompatible_target_isolation/out/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/incompatible_target_isolation/out/commands.txt",
+    "report_md": "[SMOKE_ROOT]/incompatible_target_isolation/out/report.md"
+  },
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false,
+    "creates_deletes_target_dirs": false
+  },
+  "plan_hash": "fd5fb7f227c95b7742baa33d82300921d43e6aeeb2e0f6d083e79a22890a5741"
+}

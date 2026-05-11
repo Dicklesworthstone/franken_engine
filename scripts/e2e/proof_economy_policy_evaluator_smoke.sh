@@ -6,6 +6,7 @@ normalizer="${root_dir}/scripts/proof_economy_replay_trace_normalizer.sh"
 evaluator="${root_dir}/scripts/proof_economy_policy_evaluator.sh"
 docs_path="${root_dir}/docs/PROOF_ECONOMY_POLICY_EVALUATOR.md"
 contract_path="${root_dir}/docs/proof_economy_policy_evaluator_contract_v1.json"
+golden_path="${PROOF_ECONOMY_POLICY_GOLDEN:-${root_dir}/scripts/testdata/goldens/proof_economy_policy_scorecard.golden}"
 
 record_pass() {
   printf 'PASS proof-economy-policy %s\n' "$1"
@@ -79,12 +80,58 @@ write_trace_fixture() {
   jq -n '{cache_hit_artifacts: [], required_refreshes: []}' >"${dir}/proof_cache.json"
 }
 
+canonicalize_scorecard() {
+  local scorecard_path="$1"
+  local tmp_root="$2"
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$scorecard_path"
+}
+
+assert_scorecard_golden() {
+  local scorecard_path="$1"
+  local tmp_root="$2"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$(dirname "$golden_path")"
+    canonicalize_scorecard "$scorecard_path" "$tmp_root" >"$golden_path"
+    record_pass "updated policy scorecard golden"
+    return
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "missing policy scorecard golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_scorecard "$scorecard_path" "$tmp_root"); then
+    record_failure "policy scorecard golden drift"
+    return 1
+  fi
+  record_pass "policy scorecard golden matches"
+}
+
 run_check() {
   local scope_file
 
   bash -n "$evaluator"
   bash -n "${BASH_SOURCE[0]}"
   jq empty "$contract_path"
+  if [[ "${UPDATE_GOLDENS:-0}" != "1" ]]; then
+    [[ -f "$golden_path" ]] || { record_failure "missing policy scorecard golden"; return 1; }
+    jq empty "$golden_path"
+  fi
   grep -q 'franken-engine.proof-economy-policy-scorecard.v1' "$docs_path"
   grep -q 'policy_scorecard.json' "$docs_path"
 
@@ -140,6 +187,7 @@ run_selftest() {
     and any(.decisions[]; .bead_id == "bd-p2-warm-mismatch" and .warm_target_reuse == false)
   ' "${eval_a}/policy_scorecard.json" >/dev/null
   record_pass "fair-share pressure and warm-target decisions"
+  assert_scorecard_golden "${eval_a}/policy_scorecard.json" "$tmp_root"
 
   eval_b="${tmp_root}/eval-b"
   "$evaluator" \

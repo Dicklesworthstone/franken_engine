@@ -1,0 +1,85 @@
+{
+  "schema_version": "franken-engine.stale-lock-recommendations.v1",
+  "generated_epoch_seconds": 100000,
+  "stale_owner_seconds": 1000,
+  "recent_activity_seconds": 3600,
+  "snapshot_status": {
+    "agent_profiles": "provided",
+    "thread_timestamps": "provided",
+    "file_reservations": "provided",
+    "git_activity": "provided"
+  },
+  "stale_lock_recommendations": [
+    {
+      "bead_id": "bd-git",
+      "title": "recent git",
+      "priority": 2,
+      "assignee": "OldGit",
+      "safe_to_reopen": false,
+      "contact_first": true,
+      "recommendation": "contact_first_recent_git_activity",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 1,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": [
+          {
+            "path": "scripts/owned-by-oldgit.sh",
+            "bead_id": "bd-git",
+            "agent_id": "OldGit",
+            "touched_ts": ""
+          }
+        ]
+      },
+      "suggested_br_commands": [],
+      "contact_commands": [
+        "fetch inbox and thread messages for bd-git",
+        "send Agent Mail contact-first message to OldGit"
+      ]
+    }
+  ],
+  "safe_to_reopen": [],
+  "contact_first": [
+    "bd-git"
+  ],
+  "evidence": [
+    {
+      "bead_id": "bd-git",
+      "evidence": {
+        "now_epoch_seconds": 100000,
+        "owner_last_active_epoch_seconds": 80000,
+        "owner_inactive_seconds": 20000,
+        "stale_owner_threshold_seconds": 1000,
+        "active_reservations_count": 0,
+        "recent_thread_count": 0,
+        "recent_git_activity_count": 1,
+        "high_priority_requires_contact": false,
+        "degraded_reasons": [],
+        "active_reservations": [],
+        "recent_threads": [],
+        "recent_git_activity": [
+          {
+            "path": "scripts/owned-by-oldgit.sh",
+            "bead_id": "bd-git",
+            "agent_id": "OldGit",
+            "touched_ts": ""
+          }
+        ]
+      }
+    }
+  ],
+  "artifact_paths": {
+    "stale_lock_recommendations_json": "[SMOKE_ROOT]/recent-git/stale_lock_recommendations.json",
+    "events_jsonl": "[SMOKE_ROOT]/recent-git/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/recent-git/commands.txt",
+    "report_md": "[SMOKE_ROOT]/recent-git/report.md"
+  }
+}

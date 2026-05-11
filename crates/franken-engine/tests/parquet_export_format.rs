@@ -30,6 +30,31 @@ fn export_to_parquet(entries: &[EvidenceEntry]) -> Result<Vec<u8>, Box<dyn std::
     Ok(result.payload_bytes)
 }
 
+fn assert_decoded_audit_schema(
+    parquet_bytes: &[u8],
+    expected_rows: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let decoded = read_parquet_bytes(parquet_bytes)?;
+    let column_names: Vec<&str> = decoded
+        .column_names()
+        .iter()
+        .map(|name| name.as_str())
+        .collect();
+
+    assert_eq!(
+        decoded.shape(),
+        (expected_rows, 5),
+        "decoded Parquet should preserve audit row and column counts"
+    );
+    assert_eq!(
+        column_names,
+        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
+        "decoded Parquet should preserve audit export schema"
+    );
+
+    Ok(())
+}
+
 /// Create a test evidence entry for testing.
 fn create_test_entry(id_suffix: &str, kind: &str, timestamp: u64, summary: &str) -> EvidenceEntry {
     let schema_id = SchemaId::from_definition(b"parquet-export-test-evidence");
@@ -85,18 +110,8 @@ fn test_parquet_format_produces_binary() {
         "Should start with PAR1 Parquet magic header"
     );
 
-    let roundtrip =
-        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
-    assert_eq!(
-        roundtrip.index().len(),
-        entries.len(),
-        "Parquet roundtrip should preserve evidence rows"
-    );
-    assert_eq!(
-        roundtrip.column_names(),
-        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
-        "Parquet roundtrip should preserve evidence columns"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should decode the audit export schema");
 }
 
 #[test]
@@ -133,13 +148,8 @@ fn test_parquet_multi_row_preserves_count() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    let roundtrip =
-        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
-    assert_eq!(
-        roundtrip.index().len(),
-        entries.len(),
-        "Parquet roundtrip should preserve evidence row count"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should recover all audit rows");
 }
 
 #[test]
@@ -181,13 +191,8 @@ fn test_parquet_schema_preservation() {
     let parquet_bytes = result.unwrap();
     assert_eq!(&parquet_bytes[0..4], b"PAR1", "Should have PAR1 magic");
 
-    let roundtrip =
-        read_parquet_bytes(&parquet_bytes).expect("exported Parquet should parse via fp_io");
-    assert_eq!(
-        roundtrip.column_names(),
-        vec!["entry_id", "kind", "timestamp", "summary", "evidence_hash"],
-        "Parquet roundtrip should preserve the evidence schema"
-    );
+    assert_decoded_audit_schema(&parquet_bytes, entries.len())
+        .expect("Parquet reader should preserve audit export schema");
 }
 
 #[test]

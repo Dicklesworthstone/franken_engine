@@ -1,0 +1,28 @@
+{
+  "schema_version": "franken-engine.remote-proof-archive-restore-verification.v1",
+  "bundle_id": "bundle-archive",
+  "restore_verdict": "verified",
+  "reason": "archive pack covers the expected retained artifacts and its manifest hash is stable",
+  "missing_replay_paths": [],
+  "missing_expected_paths": [],
+  "unexpected_paths": [],
+  "tampered_manifest_hash": false,
+  "archive_state": "cold_archived",
+  "exit_code": 0,
+  "hash_basis": {
+    "verification_hash": "dbf188a495b80de571116e6cbe56465a13cc71ae76873094fdbb6a551481b527"
+  },
+  "upstream_artifact_paths": {
+    "residency_manifest_json": "[SMOKE_ROOT]/archive-export-success.residency.json",
+    "compaction_plan_json": "[SMOKE_ROOT]/archive-export-success.compaction.json",
+    "archive_source_files_json": "[SMOKE_ROOT]/archive-export-success.source.json",
+    "archive_pack_input_json": ""
+  },
+  "artifact_paths": {
+    "archive_pack_json": "[SMOKE_ROOT]/archive-export-success/archive_pack.json",
+    "restore_verification_report_json": "[SMOKE_ROOT]/archive-export-success/restore_verification_report.json",
+    "events_jsonl": "[SMOKE_ROOT]/archive-export-success/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/archive-export-success/commands.txt",
+    "report_md": "[SMOKE_ROOT]/archive-export-success/report.md"
+  }
+}

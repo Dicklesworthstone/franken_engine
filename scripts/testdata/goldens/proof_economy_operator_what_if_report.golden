@@ -1,0 +1,312 @@
+{
+  "trace_id": "trace-0c947d1871f94e75",
+  "counterfactual_id": "counterfactual-5f096bcd0d837182",
+  "brownout_id": "brownout-6aaf19c600c11031",
+  "policy_decision": "fail_closed",
+  "dashboard": {
+    "queue_depth": 5,
+    "fair_share_score_millionths": 666667,
+    "p1_slo_risk": "protected",
+    "brownout_state": "fail_closed",
+    "recommended_operator_action": "Pause broad proof fanout, drain protected P1/P2 work, refresh queue capacity, and rerun counterfactual replay."
+  },
+  "dashboard_contract": {
+    "schema_version": "franken-engine.proof-economy-operator-dashboard-contract.v1",
+    "ui_reuse_policy": "Future interactive UI must reuse /dp/frankentui; this artifact is JSON/Markdown only.",
+    "field_inventory": [
+      {
+        "field": "queue_depth",
+        "type": "integer",
+        "source_json_pointer": "/dashboard/queue_depth",
+        "required": true
+      },
+      {
+        "field": "fair_share_score_millionths",
+        "type": "integer",
+        "source_json_pointer": "/dashboard/fair_share_score_millionths",
+        "required": true
+      },
+      {
+        "field": "p1_slo_risk",
+        "type": "string",
+        "source_json_pointer": "/dashboard/p1_slo_risk",
+        "required": true
+      },
+      {
+        "field": "brownout_state",
+        "type": "string",
+        "source_json_pointer": "/dashboard/brownout_state",
+        "required": true
+      },
+      {
+        "field": "recommended_operator_action",
+        "type": "string",
+        "source_json_pointer": "/dashboard/recommended_operator_action",
+        "required": true
+      }
+    ]
+  },
+  "changed_decision_evidence_links": [
+    {
+      "link_id": "what-if-link-fair-share-bd-p2-noisy-2",
+      "policy_name": "fair_share",
+      "bead_id": "bd-p2-noisy-2",
+      "agent_id": "AgentNoisy",
+      "before": "scheduled",
+      "after": "defer",
+      "fairness_reason": "agent fairness throttle",
+      "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded",
+      "policy_input_evidence": {
+        "policy_matrix": {
+          "explanation": "Bound per-agent heavy proof fanout while preserving P1 admission.",
+          "max_heavy_per_agent": 1,
+          "ordering_strategy": "priority_preempt",
+          "policy_index": 1,
+          "policy_label": "Fair-share cap",
+          "policy_name": "fair_share",
+          "pressure_mode": "normal"
+        },
+        "trace_command": {
+          "agent_id": "AgentNoisy",
+          "bead_id": "bd-p2-noisy-2",
+          "estimated_cpu_slots": null,
+          "lease_decision": "busy",
+          "memory_class": null,
+          "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_2 cargo clippy --all-targets -- -D warnings",
+          "target_dir": "[RCH_TARGET]/noisy_2"
+        },
+        "counterfactual_policy_id": "policy-a415a55c5e6cf6a6",
+        "brownout_findings": [
+          {
+            "code": "queue_brownout_all_workers_busy",
+            "evidence": {
+              "command_count": 5,
+              "trace_id": "trace-0c947d1871f94e75"
+            },
+            "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+            "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+            "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+            "severity": "error"
+          }
+        ]
+      }
+    },
+    {
+      "link_id": "what-if-link-fair-share-bd-p2-noisy-3",
+      "policy_name": "fair_share",
+      "bead_id": "bd-p2-noisy-3",
+      "agent_id": "AgentNoisy",
+      "before": "scheduled",
+      "after": "defer",
+      "fairness_reason": "agent fairness throttle",
+      "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded",
+      "policy_input_evidence": {
+        "policy_matrix": {
+          "explanation": "Bound per-agent heavy proof fanout while preserving P1 admission.",
+          "max_heavy_per_agent": 1,
+          "ordering_strategy": "priority_preempt",
+          "policy_index": 1,
+          "policy_label": "Fair-share cap",
+          "policy_name": "fair_share",
+          "pressure_mode": "normal"
+        },
+        "trace_command": {
+          "agent_id": "AgentNoisy",
+          "bead_id": "bd-p2-noisy-3",
+          "estimated_cpu_slots": null,
+          "lease_decision": "busy",
+          "memory_class": null,
+          "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_3 cargo test -p frankenengine-engine --test gamma",
+          "target_dir": "[RCH_TARGET]/noisy_3"
+        },
+        "counterfactual_policy_id": "policy-a415a55c5e6cf6a6",
+        "brownout_findings": [
+          {
+            "code": "queue_brownout_all_workers_busy",
+            "evidence": {
+              "command_count": 5,
+              "trace_id": "trace-0c947d1871f94e75"
+            },
+            "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+            "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+            "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+            "severity": "error"
+          }
+        ]
+      }
+    },
+    {
+      "link_id": "what-if-link-high-pressure-bd-p3-broad-beta",
+      "policy_name": "high_pressure",
+      "bead_id": "bd-p3-broad-beta",
+      "agent_id": "AgentBeta",
+      "before": "scheduled",
+      "after": "defer",
+      "fairness_reason": "pressure-aware deferral",
+      "explanation": "pressure-aware deferral: high-pressure mode defers low-priority broad proof work",
+      "policy_input_evidence": {
+        "policy_matrix": {
+          "explanation": "Defer broad P3 proof work when slots are under pressure.",
+          "max_heavy_per_agent": 1,
+          "ordering_strategy": "priority_preempt",
+          "policy_index": 2,
+          "policy_label": "High-pressure brownout",
+          "policy_name": "high_pressure",
+          "pressure_mode": "high"
+        },
+        "trace_command": {
+          "agent_id": "AgentBeta",
+          "bead_id": "bd-p3-broad-beta",
+          "estimated_cpu_slots": null,
+          "lease_decision": "busy",
+          "memory_class": null,
+          "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/beta cargo check --all-targets",
+          "target_dir": "[RCH_TARGET]/beta"
+        },
+        "counterfactual_policy_id": "policy-3412488fe1df1c7b",
+        "brownout_findings": [
+          {
+            "code": "queue_brownout_all_workers_busy",
+            "evidence": {
+              "command_count": 5,
+              "trace_id": "trace-0c947d1871f94e75"
+            },
+            "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+            "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+            "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+            "severity": "error"
+          },
+          {
+            "code": "low_priority_starvation",
+            "evidence": {
+              "agent_id": "AgentBeta",
+              "bead_id": "bd-p3-broad-beta",
+              "explanation": "pressure-aware deferral: high-pressure mode defers low-priority broad proof work",
+              "fairness_reason": "pressure-aware deferral",
+              "policy_name": "",
+              "priority": 3
+            },
+            "finding_id": "finding-low_priority_starvation-bd-p3-broad-beta",
+            "message": "Low-priority proof work is deferred by counterfactual policy and needs bounded remediation.",
+            "remediation": "Bound the P3 deferral window, split the broad proof target, and schedule a retry after protected P1/P2 lanes drain.",
+            "severity": "warning"
+          }
+        ]
+      }
+    },
+    {
+      "link_id": "what-if-link-high-pressure-bd-p2-noisy-2",
+      "policy_name": "high_pressure",
+      "bead_id": "bd-p2-noisy-2",
+      "agent_id": "AgentNoisy",
+      "before": "scheduled",
+      "after": "defer",
+      "fairness_reason": "agent fairness throttle",
+      "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded",
+      "policy_input_evidence": {
+        "policy_matrix": {
+          "explanation": "Defer broad P3 proof work when slots are under pressure.",
+          "max_heavy_per_agent": 1,
+          "ordering_strategy": "priority_preempt",
+          "policy_index": 2,
+          "policy_label": "High-pressure brownout",
+          "policy_name": "high_pressure",
+          "pressure_mode": "high"
+        },
+        "trace_command": {
+          "agent_id": "AgentNoisy",
+          "bead_id": "bd-p2-noisy-2",
+          "estimated_cpu_slots": null,
+          "lease_decision": "busy",
+          "memory_class": null,
+          "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_2 cargo clippy --all-targets -- -D warnings",
+          "target_dir": "[RCH_TARGET]/noisy_2"
+        },
+        "counterfactual_policy_id": "policy-3412488fe1df1c7b",
+        "brownout_findings": [
+          {
+            "code": "queue_brownout_all_workers_busy",
+            "evidence": {
+              "command_count": 5,
+              "trace_id": "trace-0c947d1871f94e75"
+            },
+            "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+            "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+            "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+            "severity": "error"
+          }
+        ]
+      }
+    },
+    {
+      "link_id": "what-if-link-high-pressure-bd-p2-noisy-3",
+      "policy_name": "high_pressure",
+      "bead_id": "bd-p2-noisy-3",
+      "agent_id": "AgentNoisy",
+      "before": "scheduled",
+      "after": "defer",
+      "fairness_reason": "agent fairness throttle",
+      "explanation": "agent fairness throttle: per-agent heavy proof cap exceeded",
+      "policy_input_evidence": {
+        "policy_matrix": {
+          "explanation": "Defer broad P3 proof work when slots are under pressure.",
+          "max_heavy_per_agent": 1,
+          "ordering_strategy": "priority_preempt",
+          "policy_index": 2,
+          "policy_label": "High-pressure brownout",
+          "policy_name": "high_pressure",
+          "pressure_mode": "high"
+        },
+        "trace_command": {
+          "agent_id": "AgentNoisy",
+          "bead_id": "bd-p2-noisy-3",
+          "estimated_cpu_slots": null,
+          "lease_decision": "busy",
+          "memory_class": null,
+          "requested_command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/noisy_3 cargo test -p frankenengine-engine --test gamma",
+          "target_dir": "[RCH_TARGET]/noisy_3"
+        },
+        "counterfactual_policy_id": "policy-3412488fe1df1c7b",
+        "brownout_findings": [
+          {
+            "code": "queue_brownout_all_workers_busy",
+            "evidence": {
+              "command_count": 5,
+              "trace_id": "trace-0c947d1871f94e75"
+            },
+            "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+            "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+            "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot.",
+            "severity": "error"
+          }
+        ]
+      }
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "finding-queue_brownout_all_workers_busy-trace-0c947d1871f94e75",
+      "severity": "error",
+      "code": "queue_brownout_all_workers_busy",
+      "message": "All replayed proof commands report busy, queued, or deferred lease decisions.",
+      "remediation": "Pause broad proof fanout, admit one P1/P2 lane first, and retry deferred commands only after a fresh slot snapshot."
+    }
+  ],
+  "summary": {
+    "changed_decision_count": 5,
+    "missing_artifact_count": 0,
+    "finding_count": 1
+  },
+  "schema_version": "franken-engine.proof-economy-operator-what-if-report.v1",
+  "what_if_id": "what-if-6bfb0597610dd653",
+  "hash_basis": {
+    "what_if_hash": "what-if-6bfb0597610dd653"
+  },
+  "artifact_paths": {
+    "what_if_report_json": "[SMOKE_ROOT]/what-if-a/what_if_report.json",
+    "dashboard_contract_json": "[SMOKE_ROOT]/what-if-a/dashboard_contract.json",
+    "events_jsonl": "[SMOKE_ROOT]/what-if-a/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/what-if-a/commands.txt",
+    "report_md": "[SMOKE_ROOT]/what-if-a/report.md"
+  }
+}

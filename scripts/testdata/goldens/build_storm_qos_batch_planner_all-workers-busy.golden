@@ -1,0 +1,70 @@
+{
+  "schema_version": "franken-engine.build-storm-batch-plan.v1",
+  "batch_id": "batch-5ccbb867ee8909c7",
+  "stable_output_hash": "98a43d12e766a83a93cc15d1e23b33b20cfdb108150a13a7ec1c247189781e6d",
+  "batch_decision": "all_deferred",
+  "fairness_reason": "all requests deferred by worker capacity, resource leases, or fairness gates",
+  "max_parallel_heavy": 0,
+  "configured_max_parallel_heavy": 2,
+  "max_per_agent_heavy": 1,
+  "retry_after_seconds": 300,
+  "admitted_commands": [],
+  "deferred_commands": [
+    {
+      "request_id": "beta-proof",
+      "agent_id": "CyanOak",
+      "bead_id": "bd-beta",
+      "bead_priority": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/beta cargo test -p frankenengine-engine --test beta_proof",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": false,
+      "stale_proof_refresh": false,
+      "wait_seconds": 0,
+      "submitted_order": 2,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P1",
+      "batch_decision": "defer",
+      "fairness_reason": "all rch workers busy; no heavy validation slots available",
+      "retry_after_seconds": 300
+    },
+    {
+      "request_id": "alpha-proof",
+      "agent_id": "ScarletOwl",
+      "bead_id": "bd-alpha",
+      "bead_priority": 1,
+      "command": "rch exec -- env CARGO_TARGET_DIR=[RCH_TARGET]/franken_engine_build_storm/alpha cargo test -p frankenengine-engine --test alpha_proof",
+      "target_dir": "",
+      "heavy": true,
+      "docs_only": false,
+      "broad_check": true,
+      "proof_refresh": true,
+      "fail_closed_proof_refresh": false,
+      "stale_proof_refresh": false,
+      "wait_seconds": 0,
+      "submitted_order": 1,
+      "estimated_seconds": 0,
+      "lease_decision": "admit",
+      "lease_reason": "lease admitted",
+      "priority_class": "P1",
+      "batch_decision": "defer",
+      "fairness_reason": "all rch workers busy; no heavy validation slots available",
+      "retry_after_seconds": 300
+    }
+  ],
+  "rch_worker_snapshot": {
+    "total_workers": 2,
+    "idle_workers": 0
+  },
+  "artifact_paths": {
+    "build_storm_batch_plan_json": "[SMOKE_ROOT]/all-workers-busy/build_storm_batch_plan.json",
+    "events_jsonl": "[SMOKE_ROOT]/all-workers-busy/events.jsonl",
+    "commands_txt": "[SMOKE_ROOT]/all-workers-busy/commands.txt",
+    "report_md": "[SMOKE_ROOT]/all-workers-busy/report.md"
+  }
+}

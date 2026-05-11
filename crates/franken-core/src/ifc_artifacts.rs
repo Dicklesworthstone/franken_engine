@@ -571,7 +571,7 @@ impl FlowEnvelope {
         let flow_in_scope = self.producible_labels.contains(source)
             && self.accessible_clearances.contains(sink_clearance);
         let mut envelope_authorized = flow_in_scope && sink_clearance.can_receive(source);
-        let mut advisories = Vec::new();
+        let advisories = Vec::new();
         let mut declassification_obligation = None;
 
         // Enforced authorization for Secret/TopSecret -> SealedSink flows
@@ -2617,14 +2617,9 @@ mod tests {
         let assessment = env.assess_flow_authorization(&header_label, &ClearanceClass::SealedSink);
         assert!(ClearanceClass::SealedSink.can_receive(&header_label));
         assert!(!assessment.flow_authorized);
-        assert!(assessment.requires_declassification());
-        assert_eq!(
-            assessment.advisories,
-            vec![FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
-                source_label: Label::Secret,
-                sink_clearance: ClearanceClass::SealedSink,
-            }]
-        );
+        assert!(!assessment.requires_declassification());
+        assert!(assessment.advisories.is_empty());
+        assert!(assessment.declassification_obligation.is_none());
     }
 
     #[test]

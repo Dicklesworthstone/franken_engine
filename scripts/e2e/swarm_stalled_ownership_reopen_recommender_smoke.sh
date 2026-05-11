@@ -4,6 +4,7 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 recommender_script="${root_dir}/scripts/swarm_stalled_ownership_reopen_recommender.sh"
 fixtures_path="${SWARM_STALLED_OWNERSHIP_REOPEN_FIXTURES:-${root_dir}/scripts/testdata/swarm_stalled_ownership_reopen_recommender/cases.json}"
+golden_dir="${SWARM_STALLED_OWNERSHIP_REOPEN_GOLDEN_DIR:-${root_dir}/scripts/testdata/goldens}"
 mode="${1:-check}"
 output_dir="${2:-${SWARM_STALLED_OWNERSHIP_REOPEN_OUTPUT_DIR:-}}"
 failures=0
@@ -75,7 +76,70 @@ run_check() {
   grep -Fq 'sends_agent_mail:false' "$recommender_script"
   grep -Fq 'runs_cargo:false' "$recommender_script"
   grep -Fq 'runs_rch:false' "$recommender_script"
+  goldens_shape_ok
   record_pass "shell syntax and fixture shape"
+}
+
+canonicalize_report() {
+  local report_path="$1"
+  local tmp_root="$2"
+
+  jq --arg tmp_root "$tmp_root" '
+    def scrub:
+      if type == "string" then
+        gsub($tmp_root; "[SMOKE_ROOT]")
+        | gsub("/tmp/rch_target_"; "[RCH_TARGET]/")
+        | gsub("/tmp/[A-Za-z0-9._-]+"; "[TMP_PATH]")
+        | gsub("/data/tmp/[A-Za-z0-9._-]+"; "[DATA_TMP_PATH]")
+      elif type == "array" then
+        map(scrub)
+      elif type == "object" then
+        with_entries(.value |= scrub)
+      else
+        .
+      end;
+    scrub
+  ' "$report_path"
+}
+
+assert_case_golden() {
+  local case_id="$1"
+  local report_path="$2"
+  local tmp_root="$3"
+  local golden_path="${golden_dir}/swarm_stalled_ownership_reopen_recommender_${case_id}.golden"
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    mkdir -p "$golden_dir"
+    canonicalize_report "$report_path" "$tmp_root" >"$golden_path"
+    return 0
+  fi
+
+  if [[ ! -f "$golden_path" ]]; then
+    record_failure "${case_id} missing golden"
+    return 1
+  fi
+
+  if ! diff -u "$golden_path" <(canonicalize_report "$report_path" "$tmp_root"); then
+    record_failure "${case_id} golden drift"
+    return 1
+  fi
+}
+
+goldens_shape_ok() {
+  local case_id golden_path
+
+  if [[ "${UPDATE_GOLDENS:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  for case_id in "${case_ids[@]}"; do
+    golden_path="${golden_dir}/swarm_stalled_ownership_reopen_recommender_${case_id}.golden"
+    if [[ ! -f "$golden_path" ]]; then
+      record_failure "${case_id} missing checked-in golden"
+      continue
+    fi
+    jq empty "$golden_path" >/dev/null || record_failure "${case_id} invalid golden json"
+  done
 }
 
 run_case() {
@@ -165,6 +229,7 @@ run_case() {
       return
     }
   fi
+  assert_case_golden "$case_id" "${case_dir}/out/stalled_ownership_reopen_recommendations.json" "$tmp_root" || return
 
   jq -s 'length >= 1' "${case_dir}/out/events.jsonl" >/dev/null
   grep -Fq './scripts/swarm_stalled_ownership_reopen_recommender.sh' "${case_dir}/out/commands.txt"

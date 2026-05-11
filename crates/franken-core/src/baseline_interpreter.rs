@@ -264,7 +264,7 @@ pub enum Value {
     GeneratorFunction(u32),
     /// Live generator object reference (index into generator store).
     Generator(u32),
-    /// Async function reference (calling creates a suspended AsyncFunctionObject).
+    /// Async function reference (index into interpreter closure store).
     AsyncFunction(u32),
     /// Live async function object reference (index into async function store).
     AsyncFunctionObject(u32),
@@ -1685,8 +1685,6 @@ pub struct InterpreterCore {
     pending_captures: Vec<u32>,
     /// Generator object store.
     generators: Vec<GeneratorObject>,
-    /// Async function object store.
-    async_functions: Vec<AsyncFunctionObject>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
     /// Promise store for ES2020 Promise semantics.
@@ -1765,7 +1763,6 @@ impl InterpreterCore {
             closures: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
-            async_functions: Vec::new(),
             async_generators: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
@@ -3445,12 +3442,18 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    if let Value::AsyncFunction(_) = &callee_val {
+                        return Err(InterpreterError::TypeError {
+                            expected: "implemented async function body execution".to_string(),
+                            got: "async function call execution is not implemented".to_string(),
+                        });
+                    }
+
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
-                        | Value::AsyncFunction(closure_id)
                         | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -3491,43 +3494,6 @@ impl InterpreterCore {
                         });
                         self.write_reg(dst, Value::Generator(gen_id))?;
                         self.ip += 1;
-                        continue;
-                    }
-
-                    // Async function call: create a suspended AsyncFunctionObject and result Promise.
-                    if let Value::AsyncFunction(cid) = &callee_val {
-                        // Create the result Promise first
-                        let result_promise = self.promise_store.create().0;
-
-                        let _async_id =
-                            u32::try_from(self.async_functions.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async function table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_functions.len()
-                                    ),
-                                }
-                            })?;
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: Some(*cid),
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::SuspendedStart,
-                            result_promise,
-                        });
-
-                        // Return the result Promise immediately
-                        self.write_reg(dst, Value::Promise(result_promise))?;
-                        self.ip += 1;
-
-                        // TODO: Start async function execution immediately
-                        // For now we just return the promise. In a full implementation,
-                        // we would begin executing the async function body and handle
-                        // suspension/resumption via the event loop
-
                         continue;
                     }
 
@@ -11411,30 +11377,76 @@ mod tests {
         use super::*;
 
         #[test]
-        fn async_function_call_returns_promise() {
-            let mut core = test_interpreter();
+        fn create_async_function_stores_closure_reference_without_executor_state() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-create");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async".to_string()),
+                    is_generator: false,
+                }],
+            );
 
-            // Create a simple async function object in the store
-            let async_func_id = core.async_functions.len() as u32;
-            core.async_functions.push(AsyncFunctionObject {
-                function_index: 0, // dummy function index
-                closure_index: None,
-                saved_ip: 0,
-                saved_registers: Vec::new(),
-                saved_register_base: 0,
-                phase: AsyncFunctionPhase::SuspendedStart,
-                result_promise: 0, // will be set when called
-            });
+            core.execute(&module).expect("module should halt cleanly");
 
-            // Test that calling an async function returns a promise
-            let async_func_value = Value::AsyncFunction(async_func_id);
+            assert_eq!(core.promise_store.len(), 0);
+            assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
+        }
 
-            // For now, we can't fully test this without a complete module
-            // but we can verify the Value::AsyncFunction variant exists
-            match async_func_value {
-                Value::AsyncFunction(id) => assert_eq!(id, async_func_id),
-                _ => panic!("Expected AsyncFunction value"),
+        #[test]
+        fn async_function_call_execution_fails_closed_before_allocating_promise() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-call");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Halt,
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+
+            let error = core
+                .execute(&module)
+                .expect_err("unsupported async function execution must fail closed");
+
+            match error {
+                InterpreterError::TypeError { expected, got } => {
+                    assert_eq!(expected, "implemented async function body execution");
+                    assert_eq!(got, "async function call execution is not implemented");
+                }
+                other => panic!("expected TypeError, got {other:?}"),
             }
+            assert_eq!(core.promise_store.len(), 0);
+            assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
         }
 
         #[test]

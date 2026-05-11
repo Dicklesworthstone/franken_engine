@@ -319,6 +319,9 @@
         "RCH posture"
       ],
       "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_VALIDATION_IMPACT_PLANNER.md",
+        "scripts/idea_wizard_iv_validation_impact_planner.sh",
+        "scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh",
         "validation_impact_plan.json",
         "events.jsonl",
         "commands.txt",
@@ -362,6 +365,9 @@
         }
       ],
       "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_validation_impact_planner.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_validation_impact_planner_smoke.sh check",
         "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_validation_impact CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine validation_impact"
       ]
     },

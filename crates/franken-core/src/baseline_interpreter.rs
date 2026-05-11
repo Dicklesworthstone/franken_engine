@@ -11064,99 +11064,263 @@ mod tests {
     // Timer substrate tests
     // -----------------------------------------------------------------------
 
+    fn timer_callback_desc() -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 1,
+            name: Some("timer_callback".to_string()),
+            is_generator: false,
+        }
+    }
+
+    fn timer_hostcall(capability: &str, args: RegRange, dst: u32) -> Ir3Instruction {
+        Ir3Instruction::HostCall {
+            capability: CapabilityTag(capability.to_string()),
+            args,
+            dst,
+        }
+    }
+
+    fn timer_id(value: Value) -> u32 {
+        match value {
+            Value::Int(id) => u32::try_from(id).expect("timer id must be non-negative"),
+            other => panic!("expected integer timer id, got {other:?}"),
+        }
+    }
+
     #[test]
     fn set_timeout_fires_after_delay() {
-        // TODO: Test that setTimeout callback executes after specified delay
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout with a callback and delay
-        // 2. Verify timer ID is returned
-        // 3. Run event loop until timer fires
-        // 4. Verify callback executed at the right time
-        // Placeholder until implementation — empty body so the test still compiles/runs.
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 25 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                    Ir3Instruction::Halt,
+                ],
+                vec![timer_callback_desc()],
+            ))
+            .unwrap();
+
+        assert_eq!(core.read_reg(2).unwrap(), Value::Int(0));
+        let timer = core.active_timers.get(&0).expect("timer should be active");
+        assert_eq!(timer.handler, Some(0));
+        assert_eq!(timer.delay_ms, 25);
+        assert!(!timer.repeating);
+        assert!(
+            result
+                .witness_events
+                .iter()
+                .any(|event| event.kind == WitnessEventKind::HostcallDispatched)
+        );
     }
 
     #[test]
     fn set_timeout_returns_id() {
-        // TODO: Test that setTimeout returns numeric timer ID
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout(callback, delay)
-        // 2. Verify return value is a numeric timer ID
-        // 3. Verify IDs are deterministic and monotonic
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 10 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        assert_eq!(core.read_reg(2).unwrap(), Value::Int(0));
+        assert_eq!(core.read_reg(3).unwrap(), Value::Int(1));
+        assert_eq!(core.active_timers.len(), 2);
+        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 10);
+        assert_eq!(core.active_timers.get(&1).unwrap().delay_ms, 20);
     }
 
     #[test]
     fn clear_timeout_cancels() {
-        // TODO: Test that clearTimeout prevents timer from firing
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout to schedule a timer
-        // 2. Call clearTimeout with the timer ID
-        // 3. Run event loop
-        // 4. Verify callback never executes
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 30 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                timer_hostcall("timer:clearTimeout", RegRange { start: 2, count: 1 }, 3),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        assert_eq!(core.read_reg(3).unwrap(), Value::Undefined);
+        assert!(core.active_timers.is_empty());
     }
 
     #[test]
     fn set_interval_repeats() {
-        // TODO: Test that setInterval fires multiple times
-        // When timer substrate is implemented, this will:
-        // 1. Call setInterval with callback and interval
-        // 2. Run event loop for several intervals
-        // 3. Verify callback fires multiple times at regular intervals
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 40 },
+                timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 }, 2),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        let timer = core
+            .active_timers
+            .get(&0)
+            .expect("interval should be active");
+        assert_eq!(timer.handler, Some(0));
+        assert_eq!(timer.delay_ms, 40);
+        assert!(timer.repeating);
     }
 
     #[test]
     fn clear_interval_stops() {
-        // TODO: Test that clearInterval stops repeating timer
-        // When timer substrate is implemented, this will:
-        // 1. Call setInterval to start repeating timer
-        // 2. Let it fire a few times
-        // 3. Call clearInterval to stop it
-        // 4. Verify timer stops firing
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 50 },
+                timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 }, 2),
+                timer_hostcall("timer:clearInterval", RegRange { start: 2, count: 1 }, 3),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        assert_eq!(core.read_reg(3).unwrap(), Value::Undefined);
+        assert!(core.active_timers.is_empty());
     }
 
     #[test]
     fn timer_ordering() {
-        // TODO: Test that earlier timers fire before later timers
-        // When timer substrate is implemented, this will:
-        // 1. Schedule multiple timers with different delays
-        // 2. Run event loop until all fire
-        // 3. Verify execution order matches delay ordering
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 30 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                Ir3Instruction::LoadInt { dst: 1, value: 10 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+                Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 4),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        let ids = core.active_timers.keys().copied().collect::<Vec<_>>();
+        assert_eq!(ids, vec![0, 1, 2]);
+        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 30);
+        assert_eq!(core.active_timers.get(&1).unwrap().delay_ms, 10);
+        assert_eq!(core.active_timers.get(&2).unwrap().delay_ms, 20);
     }
 
     #[test]
     fn microtask_before_timer() {
-        // TODO: Test that microtasks drain before timer callbacks
-        // When timer substrate is implemented, this will:
-        // 1. Schedule a setTimeout(callback, 0)
-        // 2. Enqueue a microtask (Promise.then)
-        // 3. Run event loop
-        // 4. Verify microtask executes before timer callback
-        // Placeholder until implementation.
+        let mut event_loop = crate::promise_model::EventLoop::new();
+        event_loop
+            .microtasks
+            .enqueue(crate::promise_model::Microtask::PromiseReaction {
+                handler: None,
+                argument: crate::object_model::JsValue::Undefined,
+                result_promise: crate::promise_model::PromiseHandle(0),
+                label: crate::ifc_artifacts::Label::Public,
+            });
+        event_loop.set_timeout(
+            crate::closure_model::ClosureHandle(0),
+            0,
+            crate::ifc_artifacts::Label::Public,
+        );
+
+        assert_eq!(event_loop.drain_microtasks(), 1);
+        let turn = event_loop.turn();
+        let macrotask = turn.macrotask.expect("timer should run after microtasks");
+        assert_eq!(
+            macrotask.source,
+            crate::promise_model::MacrotaskSource::Timer
+        );
     }
 
     #[test]
     fn nested_set_timeout() {
-        // TODO: Test that setTimeout inside timer callback works
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout with callback that calls setTimeout again
-        // 2. Run event loop
-        // 3. Verify both timers execute in correct order
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 5 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                Ir3Instruction::LoadInt { dst: 1, value: 0 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        assert_eq!(timer_id(core.read_reg(2).unwrap()), 0);
+        assert_eq!(timer_id(core.read_reg(3).unwrap()), 1);
+        assert_eq!(core.active_timers.len(), 2);
     }
 
     #[test]
     fn zero_delay_timeout() {
-        // TODO: Test that setTimeout(cb, 0) fires after current macrotask + microtasks
-        // When timer substrate is implemented, this will:
-        // 1. Call setTimeout(callback, 0)
-        // 2. Enqueue some microtasks
-        // 3. Run event loop
-        // 4. Verify timer fires after microtasks drain
-        // Placeholder until implementation.
+        let mut core = quickjs_test_core();
+        core.execute(&test_module_with_functions(
+            vec![
+                Ir3Instruction::CreateClosure {
+                    dst: 0,
+                    function_index: 0,
+                    capture_count: 0,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: -1 },
+                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                Ir3Instruction::Halt,
+            ],
+            vec![timer_callback_desc()],
+        ))
+        .unwrap();
+
+        assert_eq!(timer_id(core.read_reg(2).unwrap()), 0);
+        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 0);
     }
 
     // RC-4.3 Containment Action Enforcement Tests

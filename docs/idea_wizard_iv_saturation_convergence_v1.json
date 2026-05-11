@@ -528,9 +528,16 @@
         "preserved acceptance bundle"
       ],
       "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_OPERATOR_STATUS_TRUTH_GATE.md",
+        "scripts/idea_wizard_iv_operator_status_truth_gate.sh",
+        "scripts/e2e/idea_wizard_iv_operator_status_truth_gate_replay.sh",
+        "scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh",
         "operator_truth_gate_report.json",
+        "operator_status.md",
+        "run_manifest.json",
         "events.jsonl",
         "commands.txt",
+        "trace_ids.json",
         "report.md"
       ],
       "required_report_fields": [
@@ -568,6 +575,10 @@
         }
       ],
       "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_operator_status_truth_gate.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_operator_status_truth_gate_replay.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_operator_status_truth_gate_smoke.sh check",
         "bash scripts/e2e/idea_wizard_iv_saturation_convergence_contract_smoke.sh check"
       ]
     },

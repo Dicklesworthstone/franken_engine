@@ -1054,10 +1054,8 @@ mod tests {
 
     #[test]
     fn test_replay_verifier_zero_batch_size_validation() {
-        let config = ReplayConfig {
-            max_events_per_batch: 0,
-            ..ReplayConfig::default()
-        };
+        let mut config = ReplayConfig::default();
+        config.max_events_per_batch = 0;
 
         let result = ShadowReplayVerifier::new(config, 300);
         assert!(result.is_err());

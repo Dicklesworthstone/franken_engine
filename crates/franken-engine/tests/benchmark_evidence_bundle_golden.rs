@@ -188,15 +188,15 @@ fn create_deterministic_bundle() -> EvidenceBundle {
 }
 
 fn create_deterministic_config() -> BundleConfig {
-    BundleConfig {
-        min_runs_per_workload: 2,
-        max_cv_millionths: 100_000, // 0.1
-        min_parity_ratio: 900_000,  // 0.9
-        max_environment_drift: 0,
-        required_categories: BTreeSet::new(),
-        required_parity_targets: BTreeSet::new(),
-        min_verification_epoch: epoch(40),
-    }
+    let mut config = BundleConfig::default();
+    config.min_runs_per_workload = 2;
+    config.max_cv_millionths = 100_000; // 0.1
+    config.min_parity_ratio = 900_000; // 0.9
+    config.max_environment_drift = 0;
+    config.required_categories = BTreeSet::new();
+    config.required_parity_targets = BTreeSet::new();
+    config.min_verification_epoch = epoch(40);
+    config
 }
 
 // ---------------------------------------------------------------------------

@@ -4004,9 +4004,11 @@ mod tests {
     ///
     /// This harness validates all documented invariants that every TypedStoreRecord
     /// implementer must satisfy. New typed models must pass this contract test.
-    fn assert_typed_store_record_contract<T>(valid_record: T, another_valid_record: T)
-    where
-        T: TypedStoreRecord + Clone + PartialEq + std::fmt::Debug,
+    fn assert_typed_store_record_contract<T: TypedStoreRecord>(
+        valid_record: T,
+        another_valid_record: T,
+    ) where
+        T: Clone + PartialEq + std::fmt::Debug,
     {
         // Test 1: Basic typed roundtrip (to_store_record/from_store_record)
         assert_typed_roundtrip(&valid_record);
@@ -4030,9 +4032,9 @@ mod tests {
         assert_store_kind_consistency::<T>(&valid_record);
     }
 
-    fn assert_typed_roundtrip<T>(record: &T)
+    fn assert_typed_roundtrip<T: TypedStoreRecord>(record: &T)
     where
-        T: TypedStoreRecord + Clone + PartialEq + std::fmt::Debug,
+        T: Clone + PartialEq + std::fmt::Debug,
     {
         let store_record = record
             .to_store_record(42)
@@ -4221,9 +4223,9 @@ mod tests {
         );
     }
 
-    fn assert_deterministic_allocation<T>(record1: &T, record2: &T)
+    fn assert_deterministic_allocation<T: TypedStoreRecord>(record1: &T, record2: &T)
     where
-        T: TypedStoreRecord + Clone,
+        T: Clone,
     {
         // Test that key generation is deterministic
         let key1a = record1.typed_record_key().expect("should generate key");

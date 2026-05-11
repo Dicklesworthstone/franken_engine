@@ -154,31 +154,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn build_command_line(context: &ArtifactContext) -> String {
-    format!(
-        "cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- --artifact-dir {} --trace-id {} --decision-id {} --policy-id {} --run-id {} --generated-at-utc {} --source-commit {} --toolchain {}",
-        context.artifact_dir.display(),
-        context.trace_id,
-        context.decision_id,
-        context.policy_id,
-        context.run_id,
-        context.generated_at_utc,
-        context.source_commit,
-        context.toolchain,
-    )
-}
-
-fn usage() -> String {
-    [
-        "franken_seqlock_candidate_inventory usage:",
-        "  cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- \\",
-        "      --artifact-dir <path> [--summary] [--trace-id <id>] [--decision-id <id>] \\",
-        "      [--policy-id <id>] [--run-id <id>] [--generated-at-utc <rfc3339>] \\",
-        "      [--source-commit <sha>] [--toolchain <name>]",
-    ]
-    .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,4 +208,29 @@ mod tests {
             "run-seqlock_candidate_inventory-20260101T000203"
         );
     }
+}
+
+fn build_command_line(context: &ArtifactContext) -> String {
+    format!(
+        "cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- --artifact-dir {} --trace-id {} --decision-id {} --policy-id {} --run-id {} --generated-at-utc {} --source-commit {} --toolchain {}",
+        context.artifact_dir.display(),
+        context.trace_id,
+        context.decision_id,
+        context.policy_id,
+        context.run_id,
+        context.generated_at_utc,
+        context.source_commit,
+        context.toolchain,
+    )
+}
+
+fn usage() -> String {
+    [
+        "franken_seqlock_candidate_inventory usage:",
+        "  cargo run -p frankenengine-engine --bin franken_seqlock_candidate_inventory -- \\",
+        "      --artifact-dir <path> [--summary] [--trace-id <id>] [--decision-id <id>] \\",
+        "      [--policy-id <id>] [--run-id <id>] [--generated-at-utc <rfc3339>] \\",
+        "      [--source-commit <sha>] [--toolchain <name>]",
+    ]
+    .join("\n")
 }

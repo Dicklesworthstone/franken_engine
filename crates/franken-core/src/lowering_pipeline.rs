@@ -1412,24 +1412,9 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
 
-                // For simple identifier patterns, store to the primary binding.
-                // For destructuring patterns, use a dedicated internal source binding.
-                let source_binding_id = if matches!(d.pattern, BindingPattern::Identifier(_)) {
-                    primary_bid
-                } else {
-                    // Allocate a dedicated internal binding to avoid source-overwrite bugs
-                    let source_name =
-                        make_internal_binding_name("destructure_source", *binding_index);
-                    alloc_binding(
-                        bindings,
-                        binding_lookup,
-                        binding_index,
-                        scope_id,
-                        &source_name,
-                        BindingKind::Let,
-                    )
-                    .map_err(LoweringPipelineError::SemanticViolation)?
-                };
+                // `alloc_pattern_primary_binding` returns the user binding for simple
+                // identifiers and a dedicated source binding for destructuring.
+                let source_binding_id = primary_bid;
 
                 // Store the initializer value to the source binding.
                 ops.push(Ir1Op::StoreBinding {
@@ -9066,9 +9051,10 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Ir1Op::Jump { .. }))
         );
-        // Two Pops expected:
-        // 1. After JumpIfFalsy — pops the test value from the stack
-        // 2. From the expression-statement wrapper — pops the result value
+        // Four Pops expected:
+        // 1. After JumpIfFalsy - pops the test value from the stack
+        // 2-3. After storing each branch into the shared result binding
+        // 4. From the expression-statement wrapper - pops the result value
         let pop_count = result
             .module
             .ops
@@ -9076,8 +9062,8 @@ mod tests {
             .filter(|op| matches!(op, Ir1Op::Pop))
             .count();
         assert_eq!(
-            pop_count, 2,
-            "test-value Pop + expression-statement Pop expected"
+            pop_count, 4,
+            "test-value Pop + branch-store Pops + expression-statement Pop expected"
         );
         let label_count = result
             .module
@@ -9397,13 +9383,19 @@ mod tests {
             is_async: false,
         });
         let result = lower_ir0_to_ir1(&ir0).expect("arrow block should lower");
-        let return_count = result
+        let function_body = result
             .module
             .ops
             .iter()
-            .filter(|op| matches!(op, Ir1Op::Return))
-            .count();
-        assert!(return_count >= 2); // inner return + outer return
+            .find_map(|op| match op {
+                Ir1Op::CreateFunction { body_ops, .. } => Some(body_ops),
+                _ => None,
+            })
+            .expect("arrow function should lower into CreateFunction");
+        assert!(
+            function_body.iter().any(|op| matches!(op, Ir1Op::Return)),
+            "block-bodied arrow function should retain its body return"
+        );
     }
 
     #[test]

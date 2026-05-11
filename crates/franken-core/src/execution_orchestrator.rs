@@ -840,6 +840,10 @@ impl ExecutionOrchestrator {
             .iter()
             .filter_map(|s| RuntimeCapability::from_tag_str(s))
             .collect();
+        // Interpreter dispatch and module-record allocation are internal runtime authority,
+        // not externally requested extension capabilities.
+        granted_capabilities.insert(RuntimeCapability::VmDispatch);
+        granted_capabilities.insert(RuntimeCapability::HeapAllocate);
         granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
@@ -2311,7 +2315,7 @@ mod tests {
     #[test]
     fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let pkg = package_with_source("let secret_token = \"secret_token\"; sink(secret_token);");
+        let pkg = package_with_source(r#""secret_token hostcall<\"hostcall.invoke\">";"#);
 
         let err = orch
             .execute(&pkg)

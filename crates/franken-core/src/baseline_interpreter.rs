@@ -8139,6 +8139,18 @@ mod tests {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
     }
 
+    fn test_quickjs_config_with(
+        extra: impl IntoIterator<Item = RuntimeCapability>,
+    ) -> InterpreterConfig {
+        let mut config = test_quickjs_config();
+        config.granted_capabilities.extend(extra);
+        config
+    }
+
+    fn test_router() -> LaneRouter {
+        LaneRouter::with_configs(test_quickjs_config(), test_v8_config())
+    }
+
     #[allow(dead_code)]
     fn assert_both_lanes_value(module: &Ir3Module, expected: Value) {
         // SAFETY: Test helper assumes valid module execution; unwrap safe in test context
@@ -8200,6 +8212,25 @@ mod tests {
         fn records(&self) -> Vec<HookRecord> {
             self.records.lock().unwrap().clone()
         }
+
+        fn records_without_startup_module_record(&self) -> Vec<HookRecord> {
+            let mut records = self.records();
+            let is_startup_module_record = matches!(
+                records.first(),
+                Some(HookRecord::Allocation {
+                    ctx,
+                    kind,
+                    size_hint,
+                }) if ctx.instruction_count == 0
+                    && ctx.current_ip == 0
+                    && *kind == AllocKind::Object
+                    && *size_hint == 0
+            );
+            if is_startup_module_record {
+                records.remove(0);
+            }
+            records
+        }
     }
 
     impl InterpreterHook for RecordingHook {
@@ -8252,7 +8283,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_property_access() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8278,7 +8309,7 @@ mod tests {
 
         assert_eq!(result.value, Value::Int(99));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Property {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8294,7 +8325,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_call() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
         core.registers[1] = Value::Int(5);
@@ -8323,7 +8354,7 @@ mod tests {
 
         assert_eq!(result.value, Value::Int(5));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Call {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8342,7 +8373,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_allocation() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8355,7 +8386,7 @@ mod tests {
 
         assert!(matches!(result.value, Value::Object(_)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8371,7 +8402,7 @@ mod tests {
     #[test]
     fn interpreter_hook_called_on_closure_allocation() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8397,7 +8428,7 @@ mod tests {
 
         assert!(matches!(result.value, Value::Closure(0)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "test".to_string(),
@@ -8413,7 +8444,7 @@ mod tests {
     #[test]
     fn interpreter_hook_allow_continues_execution() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook);
 
@@ -8446,7 +8477,7 @@ mod tests {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8469,7 +8500,7 @@ mod tests {
         let hook = Arc::new(RecordingHook::with_allocation_action(
             HookAction::Terminate("policy denied object allocation".to_string()),
         ));
-        let lane = QuickJsLane::new();
+        let lane = QuickJsLane::with_config(test_quickjs_config());
         let result = lane
             .execute_with_hook(
                 &test_module(vec![Ir3Instruction::NewObject { dst: 0 }]),
@@ -8485,12 +8516,12 @@ mod tests {
             ))
         );
         assert_eq!(result.value, Value::Undefined);
-        assert_eq!(result.instructions_executed, 1);
+        assert_eq!(result.instructions_executed, 0);
     }
 
     #[test]
     fn interpreter_hook_none_preserves_execution_when_unset() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         let oid = core.alloc_object_with_prototype(None).unwrap();
         core.heap[oid.0 as usize]
@@ -8517,7 +8548,7 @@ mod tests {
     #[test]
     fn interpreter_hook_receives_correct_context() {
         let hook = Arc::new(RecordingHook::allow_all());
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test-trace");
         core.set_hook(hook.clone());
 
@@ -8531,7 +8562,7 @@ mod tests {
         let result = core.execute(&module).unwrap();
         assert!(matches!(result.value, Value::Object(_)));
         assert_eq!(
-            hook.records(),
+            hook.records_without_startup_module_record(),
             vec![HookRecord::Allocation {
                 ctx: HookContext {
                     extension_id: "extension://hook-test".to_string(),
@@ -8726,7 +8757,7 @@ mod tests {
     }
 
     #[test]
-    fn div_by_zero() {
+    fn div_by_zero_returns_infinity() {
         let m = test_module(vec![
             Ir3Instruction::LoadInt { dst: 1, value: 10 },
             Ir3Instruction::LoadInt { dst: 2, value: 0 },
@@ -8736,8 +8767,8 @@ mod tests {
                 rhs: 2,
             },
         ]);
-        let err = quickjs_execute(&m).unwrap_err();
-        assert_eq!(err, InterpreterError::DivisionByZero);
+        let result = quickjs_execute(&m).unwrap();
+        assert_eq!(result.value, Value::Float(Float64::new(f64::INFINITY)));
     }
 
     #[test]
@@ -8843,7 +8874,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 1000;
         let mut core = InterpreterCore::new(config, "test");
         // Pre-set registers: r3 = callee function, r1 = argument.
@@ -8880,7 +8911,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 1000;
         let mut core = InterpreterCore::new(config, "test");
         core.registers[1] = Value::Int(5);
@@ -8914,7 +8945,7 @@ mod tests {
             }],
         );
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_call_depth = 10;
         config.instruction_budget = 100;
         let mut core = InterpreterCore::new(config, "test");
@@ -8932,7 +8963,7 @@ mod tests {
         // Infinite loop.
         let m = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.instruction_budget = 5;
         let lane = QuickJsLane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -8950,7 +8981,7 @@ mod tests {
             value: 1,
         }]);
 
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_registers = 256;
         let lane = QuickJsLane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -9014,8 +9045,7 @@ mod tests {
             },
             Ir3Instruction::Halt,
         ]);
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = BTreeSet::from([RuntimeCapability::NetworkEgress]);
+        let config = test_quickjs_config_with([RuntimeCapability::NetworkEgress]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
         assert_eq!(result.value, Value::Undefined);
@@ -9189,8 +9219,7 @@ mod tests {
         ]);
         m.required_capabilities = vec![CapabilityTag("fs".to_string())];
 
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
+        let config = test_quickjs_config_with([RuntimeCapability::FsRead]);
         let lane = QuickJsLane::with_config(config);
         let result = lane.execute(&m, "test").unwrap();
 
@@ -9251,7 +9280,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::DefaultFallback);
@@ -9261,7 +9290,7 @@ mod tests {
     fn router_selects_quickjs_for_capability_module() {
         let mut m = test_module(vec![Ir3Instruction::Halt]);
         m.required_capabilities = vec![CapabilityTag("net".to_string())];
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::SecuritySensitive);
@@ -9274,7 +9303,7 @@ mod tests {
             .chain(std::iter::once(Ir3Instruction::Halt))
             .collect();
         let m = test_module(instrs);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);
@@ -9286,7 +9315,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = LaneRouter::new();
+        let router = test_router();
         let result = router.execute(&m, "test", Some(LaneChoice::V8)).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::PolicyDirective);
@@ -9692,7 +9721,7 @@ mod tests {
     #[test]
     fn v8_budget_exhaustion() {
         let m = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
-        let mut config = InterpreterConfig::v8_defaults();
+        let mut config = test_v8_config();
         config.instruction_budget = 5;
         let lane = V8Lane::with_config(config);
         let err = lane.execute(&m, "test").unwrap_err();
@@ -9932,7 +9961,7 @@ mod tests {
         }
         instrs.push(Ir3Instruction::Halt);
         let m = test_module(instrs);
-        let router = LaneRouter::new();
+        let router = test_router();
         // SAFETY: router.execute() with valid test module and valid parameters
         // cannot fail under normal test conditions.
         let result = router.execute(&m, "test", None).unwrap();
@@ -9942,7 +9971,7 @@ mod tests {
 
     #[test]
     fn alloc_object_and_heap_size() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
         assert_eq!(core.estimated_memory_bytes(), 0);
@@ -9957,7 +9986,7 @@ mod tests {
 
     #[test]
     fn alloc_object_with_prototype_respects_heap_budget() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 2;
         let mut core = InterpreterCore::new(config, "heap-budget");
         assert_eq!(core.alloc_object_with_prototype(None).unwrap(), ObjectId(0));
@@ -9975,7 +10004,7 @@ mod tests {
 
     #[test]
     fn custom_heap_budget_allows_limit_then_fails() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 10;
         let mut core = InterpreterCore::new(config, "custom-heap-budget");
         for expected in 0_u32..10 {
@@ -9997,7 +10026,7 @@ mod tests {
 
     #[test]
     fn estimated_memory_bytes_tracks_property_growth() {
-        let config = InterpreterConfig::quickjs_defaults();
+        let config = test_quickjs_config();
         let mut core = InterpreterCore::new(config, "memory-estimate");
         let oid = core.alloc_object_with_prototype(None).unwrap();
         let before = core.estimated_memory_bytes();
@@ -10010,7 +10039,7 @@ mod tests {
 
     #[test]
     fn new_object_instruction_returns_memory_budget_exceeded() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_heap_objects = 0;
         let mut core = InterpreterCore::new(config, "budget");
         let module = test_module(vec![
@@ -10030,7 +10059,7 @@ mod tests {
 
     #[test]
     fn load_str_instruction_returns_memory_budget_exceeded() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_total_memory_bytes = 1;
         let mut core = InterpreterCore::new(config, "string-budget");
         let module = test_module_with_pool(
@@ -10053,7 +10082,7 @@ mod tests {
     #[test]
     fn instruction_budget_and_memory_budget_are_independent() {
         let budget_module = test_module(vec![Ir3Instruction::Jump { target: 0 }]);
-        let mut budget_config = InterpreterConfig::quickjs_defaults();
+        let mut budget_config = test_quickjs_config();
         budget_config.instruction_budget = 5;
         budget_config.max_total_memory_bytes = u64::MAX;
         let budget_lane = QuickJsLane::with_config(budget_config);
@@ -10078,7 +10107,7 @@ mod tests {
             ],
             vec!["hello".to_string()],
         );
-        let mut memory_config = InterpreterConfig::quickjs_defaults();
+        let mut memory_config = test_quickjs_config();
         memory_config.instruction_budget = 10_000;
         memory_config.max_total_memory_bytes = 1;
         let memory_lane = QuickJsLane::with_config(memory_config);
@@ -10208,7 +10237,7 @@ mod tests {
             is_generator: true,
         });
 
-        let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "generator");
+        let mut core = InterpreterCore::new(test_quickjs_config(), "generator");
         let result = core.execute(&module).unwrap();
         assert_eq!(result.value, Value::Generator(0));
 
@@ -10383,7 +10412,7 @@ mod tests {
 
     #[test]
     fn push_scope_instruction_respects_max_scope_depth() {
-        let mut config = InterpreterConfig::quickjs_defaults();
+        let mut config = test_quickjs_config();
         config.max_scope_depth = 2;
         let mut core = InterpreterCore::new(config, "scope-depth-budget");
         let module = test_module(vec![
@@ -10808,6 +10837,9 @@ mod tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "vm-dispatch-test");
 
         let module = test_module(vec![Ir3Instruction::Halt]);
@@ -11132,7 +11164,7 @@ mod tests {
         use super::*;
 
         pub(super) fn test_interpreter() -> InterpreterCore {
-            InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test-containment")
+            InterpreterCore::new(test_quickjs_config(), "test-containment")
         }
 
         #[test]

@@ -592,6 +592,9 @@
         "RCH validation transcript"
       ],
       "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_ACCEPTANCE_SUITE.md",
+        "scripts/idea_wizard_iv_acceptance_suite.sh",
+        "scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh",
         "acceptance_manifest.json",
         "run_manifest.json",
         "events.jsonl",
@@ -638,6 +641,9 @@
         }
       ],
       "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_acceptance_suite.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_acceptance_suite_smoke.sh check",
         "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_acceptance CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine saturation_convergence"
       ]
     }

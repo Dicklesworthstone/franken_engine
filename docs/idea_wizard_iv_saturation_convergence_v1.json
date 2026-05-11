@@ -206,9 +206,15 @@
         "artifact manifests when present"
       ],
       "emitted_artifacts": [
+        "docs/IDEA_WIZARD_IV_CLOSED_BEAD_PROOF_INTEGRITY.md",
+        "scripts/idea_wizard_iv_closed_bead_proof_integrity.sh",
+        "scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh",
         "closed_bead_proof_integrity.json",
+        "weak_evidence.jsonl",
+        "run_manifest.json",
         "events.jsonl",
         "commands.txt",
+        "trace_ids.json",
         "report.md"
       ],
       "required_report_fields": [
@@ -249,6 +255,9 @@
         }
       ],
       "validation_commands": [
+        "bash -n scripts/idea_wizard_iv_closed_bead_proof_integrity.sh",
+        "bash -n scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh",
+        "bash scripts/e2e/idea_wizard_iv_closed_bead_proof_integrity_smoke.sh check",
         "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_closed_bead_proof CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine closed_bead_proof"
       ]
     },

@@ -12,6 +12,7 @@
         "source_revision": "rev-current",
         "source_hash": "src-hash-current",
         "cargo_lock_hash": "lock-hash-current",
+        "dependency_root_hash": "dep-root-current",
         "package": "frankenengine-engine",
         "target_kind": "lib",
         "test_filter": "shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release",
@@ -51,6 +52,7 @@
               "source_revision": "rev-current",
               "source_hash": "src-hash-current",
               "cargo_lock_hash": "lock-hash-current",
+              "dependency_root_hash": "dep-root-current",
               "package": "frankenengine-engine",
               "target_kind": "lib",
               "test_filter": "shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release",
@@ -236,6 +238,89 @@
           "transport": "shell_wrapper",
           "has_target_dir": true
         }
+      }
+    },
+    {
+      "case_id": "support_crate_contamination",
+      "expected_decision": "fail_closed",
+      "expected_exit": 42,
+      "expected_reason": "support_crate_contamination",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "compatibility": {
+              "support_crate_contamination_observed": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "all_targets_broadening",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "target_kind_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "target_kind": "all-targets",
+              "test_filter": "",
+              "command_fingerprint": "cmd-all-targets"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_freshness",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "missing_freshness",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_decision": "fail_closed",
+        "admission_rows": [
+          {
+            "deterministic_reasons": [
+              "matching freshness report is missing"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "missing_source_hash",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "source_hash_unproven",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "source_revision": "rev-current"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "dependency_root_drift",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "dependency_root_hash_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "dependency_root_hash": "dep-root-old"
+            }
+          }
+        ]
       }
     }
   ]

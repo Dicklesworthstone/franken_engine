@@ -255,10 +255,14 @@ jq -n \
          or b($row.compatibility.support_crate_contamination_observed) then "support_crate_contamination" else empty end
     ] | unique | sort) as $hard_reasons
   | ([
-      if (($proof_doc.admission_decision // "") != "admit_reuse") then "proof_reuse_not_admitted" else empty end,
+      if (($proof_doc.admission_decision // "") == "fail_closed") then "proof_reuse_fail_closed"
+      elif (($proof_doc.admission_decision // "") != "admit_reuse") then "proof_reuse_not_admitted"
+      else empty end,
+      if any(arr($row.deterministic_reasons)[]?; (tostring | test("freshness.*missing|matching freshness report is missing"))) then "missing_freshness" else empty end,
       mismatch("source_revision"; $req.source_revision; ident($row; "source_revision")),
       mismatch("source_hash"; $req.source_hash; ident($row; "source_hash")),
       mismatch("cargo_lock_hash"; $req.cargo_lock_hash; ident($row; "cargo_lock_hash")),
+      if s($req.dependency_root_hash) != "" then mismatch("dependency_root_hash"; $req.dependency_root_hash; ident($row; "dependency_root_hash")) else empty end,
       mismatch("rustflags"; $req.rustflags; ident($row; "rustflags")),
       mismatch("toolchain"; $req.toolchain; ident($row; "toolchain")),
       mismatch("package"; $req.package; ident($row; "package")),
@@ -298,6 +302,7 @@ jq -n \
         source_revision: ($req.source_revision // null),
         source_hash: ($req.source_hash // null),
         cargo_lock_hash: ($req.cargo_lock_hash // null),
+        dependency_root_hash: ($req.dependency_root_hash // null),
         package: ($req.package // null),
         target_kind: ($req.target_kind // null),
         test_filter: ($req.test_filter // null),

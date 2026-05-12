@@ -19,8 +19,9 @@ use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal,
     Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
-    IrError, IrLevel, IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind,
-    ScopeNode, verify_ir1_source, verify_ir3_specialization,
+    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, IrError, IrLevel, IteratorCloseReason, Reg,
+    RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
+    verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -2354,10 +2355,16 @@ fn lower_statement_to_ir1_with_flow(
                     is_generator: false,
                 });
 
+                let property_key = match method.kind {
+                    MethodKind::Get => format!("{IR_ACCESSOR_GET_PREFIX}{method_name}"),
+                    MethodKind::Set => format!("{IR_ACCESSOR_SET_PREFIX}{method_name}"),
+                    MethodKind::Method | MethodKind::Constructor => method_name,
+                };
+
                 // SetProperty pops value (top), then object (next).
                 // Stack is now: [target_obj, method_fn]
                 ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(method_name),
+                    key: Ir1PropertyKey::Static(property_key),
                 });
                 // Do not emit Pop here: module-level Pop updates the script
                 // completion register and can clobber the class binding when

@@ -348,6 +348,13 @@ pub enum Ir1PropertyKey {
     Dynamic,
 }
 
+/// Private IR1/IR3 static-key prefix used by class lowering to define accessor
+/// descriptors without extending the register-machine instruction set.
+pub const IR_ACCESSOR_GET_PREFIX: &str = "__franken_ir_accessor_get__:";
+/// Private IR1/IR3 static-key prefix used by class lowering to define accessor
+/// descriptors without extending the register-machine instruction set.
+pub const IR_ACCESSOR_SET_PREFIX: &str = "__franken_ir_accessor_set__:";
+
 impl Ir1PropertyKey {
     pub fn canonical_value(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();

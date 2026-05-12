@@ -932,7 +932,7 @@ pub fn submit_observation(
 
     let entry_id = format!(
         "hpte-{}-{}-{}",
-        &kernel.kernel_id,
+        kernel.kernel_id,
         seq,
         hex_prefix(&content_hash),
     );

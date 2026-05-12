@@ -691,7 +691,7 @@ pub fn derive_child_context(
     );
 
     let event = DerivationEvent {
-        event_id: format!("deriv-{}-{}", &parent.context_id, &child_id,),
+        event_id: format!("deriv-{}-{}", parent.context_id, child_id,),
         parent_id: parent.context_id.clone(),
         child_id,
         child_origin: origin,

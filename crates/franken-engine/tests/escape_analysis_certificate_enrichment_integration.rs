@@ -444,7 +444,7 @@ fn enrichment_certificate_clone_independence() {
 #[test]
 fn enrichment_certificate_debug_nonempty() {
     let env = make_envelope();
-    assert!(!format!("{:?}", &env.certificates[0]).is_empty());
+    assert!(!format!("{:?}", env.certificates[0]).is_empty());
 }
 
 #[test]

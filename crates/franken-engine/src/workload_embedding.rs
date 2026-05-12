@@ -352,7 +352,7 @@ impl EmbeddingBuilder {
         }
         let content_hash = ContentHash::compute(&hash_buf);
 
-        let embedding_id = format!("emb-{}-{}", &self.trace_id, &content_hash.to_hex()[..12]);
+        let embedding_id = format!("emb-{}-{}", self.trace_id, &content_hash.to_hex()[..12]);
 
         WorkloadEmbedding {
             schema_version: EMBEDDING_SCHEMA_VERSION.to_string(),

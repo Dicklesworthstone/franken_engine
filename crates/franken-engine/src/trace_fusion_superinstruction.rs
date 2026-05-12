@@ -532,7 +532,7 @@ pub fn build_superinstruction(
             exit_data.extend_from_slice(&(i as u32).to_le_bytes());
             let deopt_hash = ContentHash::compute(&exit_data);
             SideExitDescriptor {
-                exit_id: format!("exit-{}-{i}", &seg.id),
+                exit_id: format!("exit-{}-{i}", seg.id),
                 guard_index: i as u32,
                 target_pc: (i as u64) * 16,
                 deopt_state_hash: deopt_hash,

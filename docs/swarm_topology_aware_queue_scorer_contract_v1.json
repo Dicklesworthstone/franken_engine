@@ -30,10 +30,12 @@
     "queue_advisory_id",
     "truth_state",
     "decision",
+    "admission_decision",
     "reason_codes",
     "worker_exclusions",
     "locality_bias_summary",
     "risk_budget_summary",
+    "selected_command_policy",
     "feedback_summary",
     "source_artifacts",
     "artifact_paths",
@@ -51,12 +53,21 @@
     "blocked",
     "fail_closed"
   ],
+  "admission_decisions": [
+    "admit",
+    "narrow",
+    "defer",
+    "fail_closed"
+  ],
   "reason_codes": [
     "hot_cache_reuse_preferred",
     "numa_locality_preferred",
     "drained_worker_excluded",
     "probe_required_worker_excluded",
     "contradictory_locality",
+    "memory_headroom_too_low",
+    "missing_target_dir_evidence",
+    "unsafe_command_broadening",
     "telemetry_gap",
     "local_fallback_contaminated",
     "cache_reuse_outcome_confirmed",
@@ -66,14 +77,17 @@
     "Malformed topology queue signal, proof-cache locality plan, queue artifact, bottleneck report, or locality outcome samples fail closed.",
     "Local fallback contamination fails closed and invalidates remote-only queue truth.",
     "Fail-closed or contaminated upstream locality evidence must stay fail-closed.",
+    "Provided validation commands that omit rch exec -- or CARGO_TARGET_DIR fail closed.",
     "The scorer must not claim that it changed the live queue or pinned workers."
   ],
   "blocked_rules": [
     "Contradictory locality evidence blocks ranking advice.",
+    "Memory headroom below the topology admission floor defers proof admission.",
     "Blocked upstream locality evidence remains blocked instead of being upgraded by cache feedback."
   ],
   "degraded_rules": [
     "Missing optional support evidence degrades confidence.",
+    "Missing selected target-dir evidence narrows advice until the proof-cache locality planner provides it.",
     "Drained or probe-required worker exclusions degrade confidence instead of preserving the original preferred set.",
     "Cache reuse misses degrade advice instead of being counted as healthy reuse."
   ],

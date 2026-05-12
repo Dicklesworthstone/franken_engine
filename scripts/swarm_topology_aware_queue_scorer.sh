@@ -309,6 +309,7 @@ topology_truth_state="$(jq -r '.truth_state // "unknown"' "$topology_signal_norm
 rank_bias_mode="$(jq -r '.queue_signal_hints.rank_bias_mode // "portable_fallback"' "$topology_signal_normalized")"
 proof_transport_state="$(jq -r '.queue_context.proof_transport_state // "unknown"' "$topology_signal_normalized")"
 task_count="$(jq '.queue_context.task_count // 0' "$topology_signal_normalized")"
+validation_commands_json="$(jq -c '.queue_context.validation_commands // []' "$topology_signal_normalized")"
 preferred_worker_ids_json="$(jq -c '.locality_context.preferred_worker_ids // []' "$topology_signal_normalized")"
 usable_preferred_worker_ids_json="$(jq -c '.queue_signal_hints.usable_preferred_worker_ids // []' "$topology_signal_normalized")"
 preferred_numa_nodes_json="$(jq -c '.locality_context.preferred_numa_nodes // []' "$topology_signal_normalized")"
@@ -322,6 +323,7 @@ recommended_topology_class="$(jq -r '.topology_summary.recommended_topology_clas
 warm_cache_residency_state="$(jq -r '.topology_summary.warm_cache_residency_state // "unknown"' "$locality_plan_normalized")"
 proof_cache_decision="$(jq -r '.proof_cache_summary.proof_cache_decision // "unknown"' "$locality_plan_normalized")"
 locality_plan_action="$(jq -r '.recommendations[0].action // "none"' "$locality_plan_normalized")"
+resource_memory_available_bytes="$(jq -r '.memory_pressure.available_bytes // .capacity_budget.memory_available_bytes // empty' "$resource_envelope_normalized")"
 queue_row_count="$(jq '((.queue_artifact.queue // .queue // []) | length)' "$queue_artifact_normalized")"
 bottleneck_count="$(jq '(.bottleneck_count // (.bottlenecks | length) // (.bottleneck_ids | length) // 0)' "$bottleneck_report_normalized")"
 critical_bottleneck_count="$(jq '(.critical_bottleneck_count // 0)' "$bottleneck_report_normalized")"
@@ -342,6 +344,12 @@ fi
 if jq -e '((.mutation_policy.runs_cargo // false) or (.mutation_policy.runs_rch // false) or (.mutation_policy.mutates_remote_workers // false) or (.mutation_policy.changes_live_queue_policy // false) or (.mutation_policy.pins_workers_automatically // false))' "$locality_plan_normalized" >/dev/null; then
   append_reason "$fail_closed_reasons_jsonl" "unsafe_mutation_policy" "proof_cache_locality_plan_json" "proof cache locality plan claims live mutation or heavy execution authority"
 fi
+if jq -e '
+  (.queue_context.validation_commands // [])
+  | any(.[]?; (type != "string") or (contains("rch exec --") | not) or (contains("CARGO_TARGET_DIR=") | not))
+' "$topology_signal_normalized" >/dev/null; then
+  append_reason "$fail_closed_reasons_jsonl" "unsafe_command_broadening" "topology_queue_signal_input_json" "validation commands must preserve rch exec -- env and explicit CARGO_TARGET_DIR policy"
+fi
 
 if [[ "$topology_decision" == "fail_closed" || "$topology_truth_state" == "contaminated" || "$rank_bias_mode" == "fail_closed" || "$proof_transport_state" == "local_fallback_detected" ]]; then
   append_reason "$fail_closed_reasons_jsonl" "local_fallback_contaminated" "topology_queue_signal_input_json" "topology queue signal input records local fallback contamination"
@@ -359,9 +367,15 @@ fi
 if jq -e 'length > 0' <<<"$drift_task_ids_json" >/dev/null; then
   append_reason "$blocked_reasons_jsonl" "contradictory_locality" "locality_outcome_samples_json" "locality outcome samples record contradictory execution paths"
 fi
+if [[ -n "$resource_memory_available_bytes" && "$resource_memory_available_bytes" -lt 68719476736 ]]; then
+  append_reason "$blocked_reasons_jsonl" "memory_headroom_too_low" "resource_envelope_json" "resource envelope reports less than 64 GiB available memory for topology-aware proof admission"
+fi
 
 if [[ "$topology_decision" == "degraded" || "$topology_truth_state" == "degraded" || "$locality_plan_decision" == "degraded" || "$placement_adoption_history_status" == "missing" || "$operator_status_snapshot_status" == "missing" || "$resource_envelope_status" == "missing" || "$tail_latency_locality_status" == "missing" ]]; then
   append_reason "$degraded_reasons_jsonl" "telemetry_gap" "optional_support" "optional support evidence is missing or upstream locality evidence is degraded"
+fi
+if [[ -z "$plan_target_dir" ]]; then
+  append_reason "$degraded_reasons_jsonl" "missing_target_dir_evidence" "proof_cache_locality_plan_json" "proof cache locality plan did not select a target directory"
 fi
 if jq -e 'length > 0' <<<"$missed_task_ids_json" >/dev/null; then
   append_reason "$degraded_reasons_jsonl" "cache_reuse_outcome_missed" "locality_outcome_samples_json" "locality outcome samples record missed cache reuse"
@@ -403,6 +417,18 @@ elif [[ -s "$degraded_reasons_jsonl" ]]; then
   decision="degraded"
   truth_state="degraded"
 fi
+admission_decision="admit"
+case "$decision" in
+  degraded)
+    admission_decision="narrow"
+    ;;
+  blocked)
+    admission_decision="defer"
+    ;;
+  fail_closed)
+    admission_decision="fail_closed"
+    ;;
+esac
 
 reason_codes_json="$(jq -nc \
   --arg rank_bias_mode "$rank_bias_mode" \
@@ -451,6 +477,7 @@ jq -n \
   --arg source_revision "$source_revision" \
   --arg truth_state "$truth_state" \
   --arg decision "$decision" \
+  --arg admission_decision "$admission_decision" \
   --arg rank_bias_mode "$rank_bias_mode" \
   --arg plan_worker_id "$plan_worker_id" \
   --arg plan_target_dir "$plan_target_dir" \
@@ -468,6 +495,7 @@ jq -n \
   --argjson usable_preferred_worker_ids "$usable_preferred_worker_ids_json" \
   --argjson preferred_numa_nodes "$preferred_numa_nodes_json" \
   --argjson excluded_worker_ids "$excluded_worker_ids_json" \
+  --argjson validation_commands "$validation_commands_json" \
   --argjson reason_codes "$reason_codes_json" \
   --argjson confirmed_task_ids "$confirmed_task_ids_json" \
   --argjson missed_task_ids "$missed_task_ids_json" \
@@ -495,6 +523,7 @@ jq -n \
     source_revision:$source_revision,
     truth_state:$truth_state,
     decision:$decision,
+    admission_decision:$admission_decision,
     reason_codes:$reason_codes,
     worker_exclusions:{
       excluded_worker_ids:$excluded_worker_ids,
@@ -528,6 +557,15 @@ jq -n \
       },
       queue_risk_budget_state:(if $risk_conservative_mode then "conservative" else "normal" end),
       proof_transport_state:$proof_transport_state
+    },
+    selected_command_policy:{
+      selected_commands:$validation_commands,
+      command_count:($validation_commands | length),
+      requires_rch_exec_env:true,
+      requires_cargo_target_dir:true,
+      preserves_validation_planner_commands:true,
+      runs_selected_commands:false,
+      unsafe_broadening_fail_closed:true
     },
     feedback_summary:{
       locality_outcome_sample_count:($confirmed_task_ids | length) + ($missed_task_ids | length) + ($drift_task_ids | length) + ($contamination_task_ids | length) + ($drained_avoided_task_ids | length) + ($probe_avoided_task_ids | length),
@@ -570,6 +608,7 @@ mv "$bundle_tmp" "$bundle_path"
   printf -- "- queue_advisory_id: \`%s\`\n" "$queue_advisory_id"
   printf -- "- truth_state: \`%s\`\n" "$truth_state"
   printf -- "- decision: \`%s\`\n" "$decision"
+  printf -- "- admission_decision: \`%s\`\n" "$admission_decision"
   printf -- "- rank_bias_mode: \`%s\`\n" "$rank_bias_mode"
   printf -- "- advised_worker_id: \`%s\`\n" "${plan_worker_id:-none}"
   printf -- "- recommended_topology_class: \`%s\`\n" "$recommended_topology_class"

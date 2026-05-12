@@ -19,7 +19,10 @@
           "decision": "pass",
           "queue_context": {
             "task_count": 1,
-            "proof_transport_state": "remote_only_ok"
+            "proof_transport_state": "remote_only_ok",
+            "validation_commands": [
+              "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_topology cargo test -p frankenengine-engine --lib"
+            ]
           },
           "locality_context": {
             "recommended_topology_class": "numa_local_hot_cache",

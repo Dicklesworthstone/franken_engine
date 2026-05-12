@@ -95,8 +95,13 @@ contract_shape_ok() {
     and (.advisory_fields | index("worker_exclusions") != null)
     and (.advisory_fields | index("locality_bias_summary") != null)
     and (.advisory_fields | index("risk_budget_summary") != null)
+    and (.advisory_fields | index("selected_command_policy") != null)
+    and (.advisory_fields | index("admission_decision") != null)
     and (.advisory_fields | index("feedback_summary") != null)
     and (.reason_codes | index("drained_worker_excluded") != null)
+    and (.reason_codes | index("unsafe_command_broadening") != null)
+    and (.reason_codes | index("memory_headroom_too_low") != null)
+    and (.reason_codes | index("missing_target_dir_evidence") != null)
     and (.reason_codes | index("cache_reuse_outcome_confirmed") != null)
     and (.reason_codes | index("cache_reuse_outcome_missed") != null)
     and (.fail_closed_rules | map(test("local fallback contamination"; "i")) | any)
@@ -192,6 +197,7 @@ run_case() {
     --arg feedback_reason_code "$expected_feedback_reason_code" '
     .decision == $decision
     and .truth_state == $truth_state
+    and .admission_decision == (if $decision == "pass" then "admit" elif $decision == "degraded" then "narrow" elif $decision == "blocked" then "defer" else "fail_closed" end)
     and .locality_bias_summary.rank_bias_mode == $rank_bias_mode
     and (.reason_codes | index($required_reason_code) != null)
     and (.reason_codes | index($feedback_reason_code) != null)
@@ -201,6 +207,9 @@ run_case() {
     and .mutation_policy.mutates_remote_workers == false
     and .mutation_policy.changes_live_queue_policy == false
     and .mutation_policy.pins_workers_automatically == false
+    and .selected_command_policy.requires_rch_exec_env == true
+    and .selected_command_policy.requires_cargo_target_dir == true
+    and .selected_command_policy.runs_selected_commands == false
   ' "${output_dir}/queue_advisory_bundle.json" >/dev/null || {
     record_failure "${scenario} advisory bundle mismatch"
     return 1

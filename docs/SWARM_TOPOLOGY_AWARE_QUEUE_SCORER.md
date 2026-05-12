@@ -42,10 +42,12 @@ The advisory bundle preserves:
 - `queue_advisory_id`
 - `truth_state`
 - `decision`
+- `admission_decision`: `admit`, `narrow`, `defer`, or `fail_closed`
 - `reason_codes`
 - `worker_exclusions`
 - `locality_bias_summary`
 - `risk_budget_summary`
+- `selected_command_policy`
 - `feedback_summary`
 - `source_artifacts`
 - `artifact_paths`
@@ -54,7 +56,13 @@ The advisory bundle preserves:
 ## Truth Rules
 
 - Local fallback contamination fails closed.
+- Validation commands supplied by the queue signal must preserve `rch exec --`
+  and an explicit `CARGO_TARGET_DIR=...`; unsafe broadening fails closed.
 - Contradictory locality evidence blocks queue advice.
+- Resource-envelope memory headroom below the topology admission floor defers
+  proof admission.
+- Missing target-dir evidence narrows admission advice until the proof-cache
+  locality planner selects a target directory.
 - Missing optional support evidence degrades confidence instead of healthy by
   default.
 - Drained or probe-required worker exclusions degrade advice instead of keeping

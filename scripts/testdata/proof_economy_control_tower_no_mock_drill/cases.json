@@ -1,0 +1,389 @@
+{
+  "schema_version": "franken-engine.proof-economy-control-tower-no-mock-drill-fixtures.v1",
+  "base_sources": {
+    "br_snapshot_json": {
+      "issues": [
+        {
+          "id": "bd-operator",
+          "title": "Proof economy control tower operator drill",
+          "status": "closed",
+          "priority": 2,
+          "assignee": "CreamRobin",
+          "updated_at": "2026-05-12T00:00:00Z",
+          "close_reason": "control tower drill emitted replayable artifacts"
+        }
+      ],
+      "ready_issues": [],
+      "sync_status": {
+        "dirty_count": 0,
+        "db_newer": false,
+        "jsonl_newer": false
+      },
+      "file_reservations": [
+        {
+          "id": 1,
+          "path_pattern": "scripts/e2e/proof_economy_control_tower_no_mock_drill.sh",
+          "agent_name": "CreamRobin",
+          "bead_id": "bd-operator",
+          "exclusive": true
+        }
+      ]
+    },
+    "git_snapshot_json": {
+      "dirty_paths": [],
+      "write_set_paths": [
+        "scripts/e2e/proof_economy_control_tower_no_mock_drill.sh"
+      ],
+      "commits": [
+        {
+          "commit": "abc1234",
+          "message": "Add proof economy control tower drill",
+          "bead_id": "bd-operator"
+        }
+      ]
+    },
+    "mail_health_json": {
+      "state": "healthy",
+      "message": "Agent Mail snapshot available",
+      "remediation": "Continue to use Agent Mail receipts as corroborating evidence."
+    },
+    "rch_log_json": {
+      "jobs": [
+        {
+          "job_id": "rch-proof-healthy",
+          "status": "ok",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_control_tower cargo test -p frankenengine-engine --test proof_control_tower"
+        }
+      ],
+      "validation_artifacts": [
+        {
+          "artifact_path": "run_manifest.json",
+          "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "local_fallback_detected": false
+        }
+      ],
+      "validation_commands": [
+        {
+          "display": "jq empty docs/proof_economy_control_tower_contract_v1.json",
+          "exit_code": 0
+        }
+      ]
+    },
+    "artifact_snapshot_json": {
+      "proof_index_json": {
+        "schema_version": "franken-engine.proof-evidence-query.v1",
+        "query_kind": "by_bead",
+        "rows": [
+          {
+            "evidence_id": 1,
+            "bead_id": "bd-operator",
+            "source_revision": "current-rev",
+            "artifact_id": "artifact-control-tower-hit",
+            "artifact_path": "artifacts/proofs/control-tower-hit.json",
+            "artifact_role": "proof_manifest",
+            "artifact_sha256": "sha-hit",
+            "receipt_kind": "proof_artifact",
+            "gate_status": "pass",
+            "generated_timestamp_ms": 1700000000000,
+            "freshness_deadline_ms": 1800000000000,
+            "metadata_json": "{\"source_hash\":\"hash-current\",\"command_fingerprint\":\"cmd-control-tower\",\"cargo_target_dir\":\"/tmp/rch_target_control_tower\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_control_tower cargo test -p frankenengine-engine --test proof_control_tower\",\"covered_paths\":[\"scripts/proof_economy_control_tower.sh\"],\"local_fallback_observed\":false}"
+          }
+        ]
+      },
+      "freshness_reports": [
+        {
+          "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+          "proof_artifact_id": "artifact-control-tower-hit",
+          "artifact_path": "artifacts/proofs/control-tower-hit.json",
+          "source_revision": "current-rev",
+          "expected_source_revision": "current-rev",
+          "source_hash": "hash-current",
+          "expected_source_hash": "hash-current",
+          "freshness_state": "fresh",
+          "reusable": true,
+          "reason": "state=fresh",
+          "covered_paths": [
+            "scripts/proof_economy_control_tower.sh"
+          ]
+        }
+      ]
+    },
+    "replay_trace_json": {
+      "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+      "trace_id": "trace-control-tower-healthy",
+      "command_rows": [
+        {
+          "agent_id": "CreamRobin",
+          "bead_id": "bd-operator",
+          "priority": 2,
+          "lease_decision": "granted"
+        },
+        {
+          "agent_id": "BlueLake",
+          "bead_id": "bd-support",
+          "priority": 1,
+          "lease_decision": "granted"
+        }
+      ]
+    },
+    "counterfactual_report_json": {
+      "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+      "counterfactual_id": "cf-control-tower-healthy",
+      "policy_outcomes": [
+        {
+          "policy_name": "fair_share",
+          "scheduled_count": 2,
+          "policy_decision": "pass",
+          "deferred_commands": []
+        }
+      ]
+    },
+    "tail_latency_report_json": {
+      "schema_version": "franken-engine.tail-latency-control-plane.v1",
+      "guardrails": {
+        "state": "nominal",
+        "fallback_activated": false,
+        "violated_stage_count": 0
+      }
+    },
+    "advisory_mutation_snapshot_json": {
+      "attempted_mutations": []
+    }
+  },
+  "cases": [
+    {
+      "case_id": "healthy_control_tower",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": true,
+      "sources": {},
+      "expected": {
+        "decision": "pass",
+        "required_reason_code": ""
+      }
+    },
+    {
+      "case_id": "mail_degraded_rch_timeout",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": false,
+      "sources": {
+        "mail_health_json": {
+          "state": "degraded_read_only",
+          "message": "Agent Mail DB is readable only after schema corruption",
+          "remediation": "Use br ownership as the soft lock and attach degraded mail evidence to the operator report."
+        },
+        "rch_log_json": {
+          "jobs": [
+            {
+              "job_id": "rch-proof-timeout",
+              "status": "timeout",
+              "timed_out": true,
+              "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_timeout cargo test -p frankenengine-engine --test proof_timeout",
+              "message": "remote worker timed out before producing the manifest",
+              "remediation": "Split the proof or rerun through rch with a smaller isolated target dir before admitting reuse."
+            }
+          ],
+          "validation_artifacts": [
+            {
+              "artifact_path": "remote-timeout.log",
+              "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "local_fallback_detected": false
+            }
+          ],
+          "validation_commands": [
+            {
+              "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_timeout cargo test -p frankenengine-engine --test proof_timeout",
+              "exit_code": 124
+            }
+          ]
+        },
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-control-tower-rch-timeout",
+          "command_rows": [
+            {
+              "agent_id": "CreamRobin",
+              "bead_id": "bd-timeout-a",
+              "priority": 2,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "CreamRobin",
+              "bead_id": "bd-timeout-b",
+              "priority": 2,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "BlueLake",
+              "bead_id": "bd-timeout-c",
+              "priority": 2,
+              "lease_decision": "granted"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "required_reason_code": "rch_timeout"
+      }
+    },
+    {
+      "case_id": "missing_manifest_fail_closed",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": true,
+      "sources": {
+        "rch_log_json": {
+          "jobs": [
+            {
+              "job_id": "rch-proof-missing-manifest",
+              "status": "ok",
+              "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_missing_manifest cargo test -p frankenengine-engine --test proof_missing_manifest"
+            }
+          ],
+          "validation_artifacts": [],
+          "validation_commands": [
+            {
+              "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_missing_manifest cargo test -p frankenengine-engine --test proof_missing_manifest",
+              "exit_code": 0
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "required_reason_code": "missing_rch_manifest"
+      }
+    },
+    {
+      "case_id": "local_cargo_fallback_fail_closed",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": true,
+      "sources": {
+        "rch_log_json": {
+          "jobs": [
+            {
+              "job_id": "rch-proof-local-fallback",
+              "status": "local_fallback",
+              "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_local_fallback cargo test -p frankenengine-engine --test proof_local_fallback",
+              "remediation": "Discard this proof and rerun remotely with fallback disabled."
+            }
+          ],
+          "validation_artifacts": [
+            {
+              "artifact_path": "run_manifest.json",
+              "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "local_fallback_detected": true,
+              "stderr": "[RCH] local fallback detected while remote proof was required"
+            }
+          ],
+          "validation_commands": [
+            {
+              "display": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_local_fallback cargo test -p frankenengine-engine --test proof_local_fallback",
+              "exit_code": 0
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "required_reason_code": "local_cargo_fallback_detected"
+      }
+    },
+    {
+      "case_id": "duplicate_reuse_without_source_hash_fail_closed",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": true,
+      "sources": {
+        "artifact_snapshot_json": {
+          "proof_index_json": {
+            "schema_version": "franken-engine.proof-evidence-query.v1",
+            "query_kind": "by_bead",
+            "rows": [
+              {
+                "evidence_id": 21,
+                "bead_id": "bd-operator",
+                "source_revision": "current-rev",
+                "artifact_id": "artifact-duplicate",
+                "artifact_path": "artifacts/proofs/duplicate-a.json",
+                "artifact_role": "proof_manifest",
+                "artifact_sha256": "sha-duplicate-a",
+                "receipt_kind": "proof_artifact",
+                "gate_status": "pass",
+                "generated_timestamp_ms": 1700000000000,
+                "freshness_deadline_ms": 1800000000000,
+                "metadata_json": "{\"source_hash\":\"hash-old\",\"command_fingerprint\":\"cmd-duplicate\",\"cargo_target_dir\":\"/tmp/rch_target_duplicate\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_duplicate cargo test -p frankenengine-engine --test proof_duplicate\",\"covered_paths\":[\"scripts/proof_economy_control_tower.sh\"]}"
+              },
+              {
+                "evidence_id": 22,
+                "bead_id": "bd-operator",
+                "source_revision": "current-rev",
+                "artifact_id": "artifact-duplicate",
+                "artifact_path": "artifacts/proofs/duplicate-b.json",
+                "artifact_role": "proof_manifest",
+                "artifact_sha256": "sha-duplicate-b",
+                "receipt_kind": "proof_artifact",
+                "gate_status": "pass",
+                "generated_timestamp_ms": 1700000000000,
+                "freshness_deadline_ms": 1800000000000,
+                "metadata_json": "{\"source_hash\":\"hash-old\",\"command_fingerprint\":\"cmd-duplicate\",\"cargo_target_dir\":\"/tmp/rch_target_duplicate\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_duplicate cargo test -p frankenengine-engine --test proof_duplicate\",\"covered_paths\":[\"scripts/proof_economy_control_tower.sh\"]}"
+              }
+            ]
+          },
+          "freshness_reports": [
+            {
+              "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+              "proof_artifact_id": "artifact-duplicate",
+              "artifact_path": "artifacts/proofs/duplicate-a.json",
+              "source_revision": "current-rev",
+              "expected_source_revision": "current-rev",
+              "source_hash": "hash-old",
+              "expected_source_hash": "hash-current",
+              "freshness_state": "fresh",
+              "reusable": true,
+              "reason": "state=fresh",
+              "covered_paths": [
+                "scripts/proof_economy_control_tower.sh"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "required_reason_code": "duplicate_proof_reuse_without_source_hash"
+      }
+    },
+    {
+      "case_id": "advisory_mutation_attempt_fail_closed",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "max_agent_share_millionths": 500000,
+      "complete_run_expected": true,
+      "sources": {
+        "advisory_mutation_snapshot_json": {
+          "attempted_mutations": [
+            {
+              "target": "br",
+              "operation": "close",
+              "command": "br close bd-operator --reason automatic-drill-close",
+              "remediation": "Require explicit operator approval before any mutation from an advisory drill."
+            }
+          ]
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "required_reason_code": "advisory_mutation_attempt"
+      }
+    }
+  ]
+}

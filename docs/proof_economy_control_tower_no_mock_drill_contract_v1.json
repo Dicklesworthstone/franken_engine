@@ -1,0 +1,75 @@
+{
+  "schema_version": "franken-engine.proof-economy-control-tower-no-mock-drill-contract.v1",
+  "bead_id": "bd-ksuqm",
+  "component": "proof_economy_control_tower_no_mock_drill",
+  "purpose": "Run the proof-economy control tower workflow end to end with preserved br/git/mail/rch/artifact snapshots and real repo scripts.",
+  "drill_script": "scripts/e2e/proof_economy_control_tower_no_mock_drill.sh",
+  "operator_docs": "docs/PROOF_ECONOMY_CONTROL_TOWER_NO_MOCK_DRILL.md",
+  "fixtures": "scripts/testdata/proof_economy_control_tower_no_mock_drill/cases.json",
+  "component_scripts": [
+    "scripts/proof_reuse_admission_bundle.sh",
+    "scripts/proof_queue_tail_latency_rescue_gate.sh",
+    "scripts/agent_run_evidence_index.sh",
+    "scripts/proof_economy_control_tower.sh"
+  ],
+  "modes": [
+    "check",
+    "run",
+    "replay",
+    "selftest"
+  ],
+  "output_schema": "franken-engine.proof-economy-control-tower-no-mock-drill.operator-report.v1",
+  "required_artifacts": [
+    "run_manifest.json",
+    "events.jsonl",
+    "commands.txt",
+    "trace_ids.json",
+    "operator_report.json",
+    "report.md",
+    "cases/<case_id>/operator_case_report.json",
+    "cases/<case_id>/components/proof_reuse_admission/proof_reuse_admission_bundle.json",
+    "cases/<case_id>/components/tail_latency_rescue/tail_latency_rescue_receipt.json",
+    "cases/<case_id>/components/agent_run_evidence_index/agent_run_evidence_index.json",
+    "cases/<case_id>/components/control_tower/proof_economy_control_tower_report.json"
+  ],
+  "required_fixture_cases": [
+    "healthy_control_tower",
+    "mail_degraded_rch_timeout",
+    "missing_manifest_fail_closed",
+    "local_cargo_fallback_fail_closed",
+    "duplicate_reuse_without_source_hash_fail_closed",
+    "advisory_mutation_attempt_fail_closed"
+  ],
+  "required_fail_closed_reasons": [
+    "missing_rch_manifest",
+    "local_cargo_fallback_detected",
+    "duplicate_proof_reuse_without_source_hash",
+    "advisory_mutation_attempt"
+  ],
+  "required_degraded_reasons": [
+    "agent_mail_degraded",
+    "rch_timeout"
+  ],
+  "mutation_policy": {
+    "fixture_fed_only": true,
+    "proof_only": true,
+    "advisory_only": true,
+    "queries_live_agent_mail": false,
+    "mutates_br": false,
+    "releases_reservations": false,
+    "sends_agent_mail": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "changes_live_queue_policy": false
+  },
+  "validation_commands": [
+    "jq empty docs/proof_economy_control_tower_no_mock_drill_contract_v1.json scripts/testdata/proof_economy_control_tower_no_mock_drill/cases.json",
+    "bash -n scripts/e2e/proof_economy_control_tower_no_mock_drill.sh",
+    "shellcheck -x scripts/e2e/proof_economy_control_tower_no_mock_drill.sh",
+    "bash scripts/e2e/proof_economy_control_tower_no_mock_drill.sh check",
+    "bash scripts/e2e/proof_economy_control_tower_no_mock_drill.sh run",
+    "bash scripts/e2e/proof_economy_control_tower_no_mock_drill.sh selftest",
+    "git diff --check -- scripts/e2e/proof_economy_control_tower_no_mock_drill.sh scripts/testdata/proof_economy_control_tower_no_mock_drill/cases.json docs/proof_economy_control_tower_no_mock_drill_contract_v1.json docs/PROOF_ECONOMY_CONTROL_TOWER_NO_MOCK_DRILL.md"
+  ]
+}

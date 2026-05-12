@@ -81,6 +81,11 @@
       "rationale": "Reduced a known placeholder-success divergence risk in baseline_interpreter."
     },
     {
+      "bead_id": "bd-77ec1",
+      "role": "open engine async generator .next body execution gap",
+      "rationale": "Tracks that suspended async generator .next() still fails closed in the engine and must not be claimed as complete support until real body resumption lands."
+    },
+    {
       "bead_id": "bd-la2e0",
       "role": "async function fail-closed franken-core fix",
       "rationale": "Reduced a known unsupported async function placeholder risk in baseline_interpreter."
@@ -112,10 +117,11 @@
       "engine_path": "crates/franken-engine/src/baseline_interpreter.rs",
       "engine_export_present": true,
       "file_relation": "different",
-      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes; ownership needs dedicated proof.",
-      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion.",
+      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes and an open engine async-generator .next body-execution gap; ownership needs dedicated proof.",
+      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion, including proof that suspended async generator .next() executes or remains explicitly out of scope.",
       "known_beads": [
         "bd-yqpka",
+        "bd-77ec1",
         "bd-la2e0",
         "bd-nwhcp",
         "bd-dymfz"

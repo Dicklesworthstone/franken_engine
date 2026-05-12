@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end test for async generators & for-await-of implementation - RC-2.6
-# Tests async function* syntax, yield with promise wrapping, and for-await-of iteration
+# End-to-end acceptance probe for async generators & for-await-of - RC-2.6.
+# This must fail closed while bd-77ec1 is open: suspended async generator
+# .next() body execution is not implemented beyond object creation and
+# explicit fail-closed handling.
 
 LOG="artifacts/test_async_generators_$(date +%s).jsonl"
 ARTIFACTS="artifacts/async_generators_evidence/$(date +%Y%m%d_%H%M%S)"
@@ -13,14 +15,15 @@ echo "=== Async Generators & for-await-of Integration Test ==="
 echo "Artifacts directory: $ARTIFACTS"
 echo "Log file: $LOG"
 
-echo '{"suite":"async_generators_integration","started":"'$(date -Iseconds)'"}' >> "$LOG"
+printf '{"suite":"async_generators_integration","started":"%s"}\n' "$(date -Iseconds)" >> "$LOG"
 
 run_test() {
     local name=$1 js_content=$2
     echo "Running test: $name"
     echo "$js_content" > "/tmp/fe_ag_${name}.js"
 
-    # Try to run with frankenctl (will fail until fully implemented)
+    # Try to run with frankenctl. Failures remain acceptance evidence while
+    # suspended async generator body execution is still incomplete.
     if command -v frankenctl >/dev/null 2>&1; then
         frankenctl run --input "/tmp/fe_ag_${name}.js" --out "/tmp/fe_ag_${name}.json" 2>&1
         test_exit=$?
@@ -150,6 +153,7 @@ cat > "$ARTIFACTS/test_summary.json" << EOF
   "total_test_cases": $total_tests,
   "passed_test_cases": $passed_tests,
   "failed_test_cases": $failed_tests,
+  "known_limitation": "bd-77ec1 tracks suspended async generator .next() body execution; this suite is not proof of complete async generator support unless all cases execute successfully.",
   "test_results": {
     "basic_async_gen": {"exit_code": $test1_exit},
     "async_gen_with_await": {"exit_code": $test2_exit},
@@ -162,7 +166,8 @@ cat > "$ARTIFACTS/test_summary.json" << EOF
 }
 EOF
 
-echo '{"suite":"async_generators_integration","completed":"'$(date -Iseconds)'","total":'$total_tests',"passed":'$passed_tests',"failed":'$failed_tests'}' >> "$LOG"
+printf '{"suite":"async_generators_integration","completed":"%s","total":%s,"passed":%s,"failed":%s}\n' \
+    "$(date -Iseconds)" "$total_tests" "$passed_tests" "$failed_tests" >> "$LOG"
 
 if [ $failed_tests -eq 0 ]; then
     echo "✅ All async generators integration tests passed!"

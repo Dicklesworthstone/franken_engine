@@ -57,6 +57,7 @@ proof attached.
 | `bd-zsais` | Restored standalone manifest compileability and several extracted modules. |
 | `bd-dymfz` | Restored standalone franken-core test baseline. |
 | `bd-yqpka` | Fail-closed async-generator placeholder fix in franken-core. |
+| `bd-77ec1` | Open engine follow-up for suspended async-generator `.next()` body execution and truthful support claims. |
 | `bd-la2e0` | Fail-closed async-function placeholder fix in franken-core. |
 | `bd-nwhcp` | Timer placeholder tests replaced with executable regressions. |
 

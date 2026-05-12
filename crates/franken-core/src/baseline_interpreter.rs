@@ -43,7 +43,7 @@ use crate::checkpoint::{
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
-    WitnessEvent, WitnessEventKind,
+    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, WitnessEvent, WitnessEventKind,
 };
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -423,6 +423,10 @@ pub struct ObjectId(pub u32);
 pub struct HeapObject {
     /// Property storage (BTreeMap for deterministic ordering).
     pub properties: BTreeMap<String, Value>,
+    /// Accessor descriptor storage, parallel to `properties` so the baseline
+    /// heap can model the object_model accessor/data split.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accessors: BTreeMap<String, AccessorProperty>,
     /// Prototype link used by membership operators and constructor instances.
     pub prototype: Option<ObjectId>,
     /// Constructor function index that allocated this object via `Construct`.
@@ -436,6 +440,25 @@ impl HeapObject {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+/// Baseline accessor descriptor: getter/setter functions for one property key.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AccessorProperty {
+    pub get: Option<Value>,
+    pub set: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeProperty {
+    Data(Value),
+    Accessor(AccessorProperty),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccessorKind {
+    Get,
+    Set,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -803,8 +826,9 @@ struct ClosureValue {
 struct CallFrame {
     /// Return address (instruction index to resume at in caller).
     return_ip: usize,
-    /// Register where the return value should be placed.
-    return_reg: u32,
+    /// Register where the return value should be placed. Some internal calls
+    /// intentionally discard completion values, such as accessor setters.
+    return_reg: Option<u32>,
     /// Base register offset for this frame (reserved for frame isolation).
     register_base: usize,
     /// Function table index (reserved for frame-level diagnostics).
@@ -2611,7 +2635,9 @@ impl InterpreterCore {
             } else {
                 return_val
             };
-            self.write_reg(frame.return_reg, effective_val)?;
+            if let Some(return_reg) = frame.return_reg {
+                self.write_reg(return_reg, effective_val)?;
+            }
             self.ip = frame.return_ip;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             Ok(None)
@@ -3015,6 +3041,116 @@ impl InterpreterCore {
         let ctx = self.hook_context(module);
         let function_ref = self.function_ref(module, callee, function_index);
         self.enforce_hook_action(hook.pre_call(&ctx, &function_ref, args))
+    }
+
+    fn enter_function_call(
+        &mut self,
+        module: &Ir3Module,
+        callee_val: Value,
+        this_value: Value,
+        mut arg_vals: Vec<Value>,
+        return_ip: usize,
+        return_reg: Option<u32>,
+    ) -> Result<(), InterpreterError> {
+        let (func_idx, captured_env, closure_id) = match &callee_val {
+            Value::Function(idx) => (*idx, None, None),
+            Value::Closure(closure_id) => {
+                let closure =
+                    self.closures
+                        .get(*closure_id as usize)
+                        .ok_or_else(|| InterpreterError::TypeError {
+                            expected: "valid closure".to_string(),
+                            got: format!("closure#{closure_id} not found"),
+                        })?;
+                (
+                    closure.function_index,
+                    Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
+                    Some(*closure_id),
+                )
+            }
+            _ => {
+                return Err(InterpreterError::TypeError {
+                    expected: "function".to_string(),
+                    got: callee_val.type_name().to_string(),
+                });
+            }
+        };
+
+        let func = module.function_table.get(func_idx as usize).ok_or(
+            InterpreterError::FunctionNotFound {
+                index: func_idx,
+                table_size: module.function_table.len() as u32,
+            },
+        )?;
+        arg_vals.truncate(func.arity as usize);
+
+        if self.call_stack.len() >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth: self.call_stack.len(),
+                max: self.config.max_call_depth,
+            });
+        }
+
+        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
+        let scope_depth = self.scope_chain.depth();
+        let captured_env_bytes = captured_env
+            .as_ref()
+            .map(|env| Self::estimate_scope_chain_bytes(env))
+            .unwrap_or(0);
+        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+        let saved_chain = if captured_env.is_some() {
+            Some(self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?)
+        } else {
+            None
+        };
+        self.call_stack.push(CallFrame {
+            return_ip,
+            return_reg,
+            register_base: self.register_base,
+            function_index: Some(func_idx),
+            this_value,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: self.pending_exception.take(),
+            saved_pending_return: self.pending_return.take(),
+            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_scope_depth: scope_depth,
+            saved_scope_chain: saved_chain,
+            closure_id,
+            captured_scope_depth,
+        });
+
+        if let Some(env) = captured_env {
+            self.scope_chain.frames = env;
+        }
+        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+
+        self.register_base += self.config.max_registers as usize;
+        let req_len = self.register_base + self.config.max_registers as usize;
+        if req_len > self.registers.len() {
+            self.registers.resize(req_len, Value::Undefined);
+        } else {
+            self.registers[self.register_base..req_len].fill(Value::Undefined);
+        }
+
+        for (i, val) in arg_vals.into_iter().enumerate() {
+            let reg = i as u32;
+            if reg < self.config.max_registers {
+                self.write_reg(reg, val)?;
+            }
+        }
+
+        self.ip = func.entry as usize;
+        Ok(())
     }
 
     fn run_pre_allocation_hook(
@@ -3652,7 +3788,7 @@ impl InterpreterCore {
 
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
-                                return_reg: dst,
+                                return_reg: Some(dst),
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
@@ -3793,7 +3929,7 @@ impl InterpreterCore {
                     };
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
-                        return_reg: dst,
+                        return_reg: Some(dst),
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val,
@@ -4344,7 +4480,7 @@ impl InterpreterCore {
                             };
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
-                                return_reg: dst,
+                                return_reg: Some(dst),
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
@@ -5595,32 +5731,186 @@ impl InterpreterCore {
         Ok(false)
     }
 
-    /// Walk the prototype chain to find a property value.
-    fn prototype_chain_get(
+    fn decode_accessor_definition_key(key: &str) -> Option<(AccessorKind, String)> {
+        key.strip_prefix(IR_ACCESSOR_GET_PREFIX)
+            .map(|name| (AccessorKind::Get, name.to_string()))
+            .or_else(|| {
+                key.strip_prefix(IR_ACCESSOR_SET_PREFIX)
+                    .map(|name| (AccessorKind::Set, name.to_string()))
+            })
+    }
+
+    fn prototype_chain_lookup_property(
         &self,
         object_id: ObjectId,
         key: &str,
-    ) -> Result<Value, InterpreterError> {
+    ) -> Result<Option<RuntimeProperty>, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
-                return Ok(Value::Undefined);
+                return Ok(None);
             }
             let object = self
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            if let Some(accessor) = object.accessors.get(key) {
+                return Ok(Some(RuntimeProperty::Accessor(accessor.clone())));
+            }
             if let Some(val) = object.properties.get(key) {
-                return Ok(val.clone());
+                return Ok(Some(RuntimeProperty::Data(val.clone())));
             }
             current = object.prototype;
             depth += 1;
         }
 
-        Ok(Value::Undefined)
+        Ok(None)
+    }
+
+    /// Walk the prototype chain to find a data property value.
+    fn prototype_chain_get(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let Some(property) = self.prototype_chain_lookup_property(object_id, key)? else {
+            return Ok(Value::Undefined);
+        };
+        match property {
+            RuntimeProperty::Data(value) => Ok(value),
+            RuntimeProperty::Accessor(accessor) => Ok(accessor.get.unwrap_or(Value::Undefined)),
+        }
+    }
+
+    fn load_runtime_property(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        property: Option<RuntimeProperty>,
+        dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        match property {
+            Some(RuntimeProperty::Data(value)) => {
+                self.write_reg(dst, value)?;
+                Ok(false)
+            }
+            Some(RuntimeProperty::Accessor(accessor)) => {
+                if let Some(getter) = accessor.get {
+                    self.enter_function_call(module, getter, receiver, Vec::new(), self.ip + 1, Some(dst))?;
+                    Ok(true)
+                } else {
+                    self.write_reg(dst, Value::Undefined)?;
+                    Ok(false)
+                }
+            }
+            None => {
+                self.write_reg(dst, Value::Undefined)?;
+                Ok(false)
+            }
+        }
+    }
+
+    fn load_object_property_or_call_accessor(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        object_id: ObjectId,
+        key: &str,
+        dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        self.run_pre_property_access_hook(module, object_id, key)?;
+        let property = self.prototype_chain_lookup_property(object_id, key)?;
+        self.load_runtime_property(module, receiver, property, dst)
+    }
+
+    fn set_object_property_or_call_accessor(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        object_id: ObjectId,
+        key: String,
+        value: Value,
+    ) -> Result<bool, InterpreterError> {
+        self.run_pre_property_access_hook(module, object_id, &key)?;
+        match self.prototype_chain_lookup_property(object_id, &key)? {
+            Some(RuntimeProperty::Accessor(accessor)) => {
+                if let Some(setter) = accessor.set {
+                    self.enter_function_call(
+                        module,
+                        setter,
+                        receiver,
+                        vec![value],
+                        self.ip + 1,
+                        None,
+                    )?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => {
+                self.set_object_property(object_id, key, value)?;
+                Ok(false)
+            }
+        }
+    }
+
+    fn load_function_like_property_or_call_accessor(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        key: &str,
+        dst: u32,
+    ) -> Result<bool, InterpreterError> {
+        if let Some(object_id) = self.function_object_id(&receiver) {
+            self.run_pre_property_access_hook(module, object_id, key)?;
+            if let Some(property) = self.prototype_chain_lookup_property(object_id, key)? {
+                return self.load_runtime_property(module, receiver, Some(property), dst);
+            }
+        }
+
+        if key == "prototype"
+            && let Some(prototype) = self.function_prototype_for_value(&receiver)?
+        {
+            self.write_reg(dst, Value::Object(prototype))?;
+            return Ok(false);
+        }
+
+        self.write_reg(dst, Value::Undefined)?;
+        Ok(false)
+    }
+
+    fn set_function_like_property_or_call_accessor(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Value,
+        key: &str,
+        value: Value,
+    ) -> Result<bool, InterpreterError> {
+        let Some(object_id) = self.ensure_function_object(&receiver)? else {
+            return Err(InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let called = self.set_object_property_or_call_accessor(
+            module,
+            receiver.clone(),
+            object_id,
+            key.to_string(),
+            value.clone(),
+        )?;
+        if !called
+            && key == "prototype"
+            && let Value::Object(prototype) = value
+            && let Some(func_idx) = self.function_index_for_value(&receiver)?
+        {
+            self.function_prototypes.insert(func_idx, prototype);
+        }
+        Ok(called)
     }
 
     fn prototype_chain_has_key(
@@ -5640,7 +5930,7 @@ impl InterpreterCore {
                 .heap
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if object.properties.contains_key(key) {
+            if object.properties.contains_key(key) || object.accessors.contains_key(key) {
                 return Ok(true);
             }
             current = object.prototype;
@@ -6505,7 +6795,7 @@ impl InterpreterCore {
 
         self.call_stack.push(CallFrame {
             return_ip: module.instructions.len(),
-            return_reg: 0,
+            return_reg: Some(0),
             register_base: self.register_base,
             function_index: Some(func_idx),
             this_value: Value::Undefined,

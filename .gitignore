@@ -28,6 +28,9 @@ crates/*/fuzz/target/
 # Editor/system noise
 .DS_Store
 Thumbs.db
+
+# git-stash-janitor skill scratch workspace
+.stash_janitor_workspace/
 .idea/
 .vscode/
 .ruff_cache/

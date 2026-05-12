@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 
 pub const PROOF_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-manifest.v1";
@@ -1026,11 +1026,20 @@ pub fn validate_events_jsonl_file(
     path: impl AsRef<Path>,
 ) -> Result<ProofEventsJsonlSummary, ProofArtifactError> {
     let file = File::open(path).map_err(|e| ProofArtifactError::Io(e.to_string()))?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
     let mut summary = ProofEventsJsonlSummary::empty();
-    for (line_num, line_result) in reader.lines().enumerate() {
-        let line = line_result.map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    let mut line = String::new();
+    let mut line_num = 0usize;
+    loop {
+        let has_line = read_limited_jsonl_line(&mut reader, &mut line).map_err(|e| {
+            ProofArtifactError::JsonMalformed(format!("line {}: {}", line_num + 1, e))
+        })?;
+        if !has_line {
+            break;
+        }
+
+        line_num += 1;
         summary.line_count += 1;
 
         if line.trim().is_empty() {
@@ -1049,14 +1058,63 @@ pub fn validate_events_jsonl_file(
             Err(e) => {
                 return Err(ProofArtifactError::JsonMalformed(format!(
                     "line {}: {}",
-                    line_num + 1,
-                    e
+                    line_num, e
                 )));
             }
         }
     }
 
     Ok(summary)
+}
+
+fn read_limited_jsonl_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut String,
+) -> Result<bool, ProofArtifactError> {
+    line.clear();
+    let mut bytes = Vec::new();
+
+    loop {
+        let (consume_len, reached_newline) = {
+            let available = reader
+                .fill_buf()
+                .map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+            if available.is_empty() {
+                if bytes.is_empty() {
+                    return Ok(false);
+                }
+                break;
+            }
+
+            let newline_index = available.iter().position(|byte| *byte == b'\n');
+            let content_len = newline_index.unwrap_or(available.len());
+            let line_size = bytes.len().saturating_add(content_len);
+            if line_size > MAX_JSON_VALUE_SIZE {
+                return Err(ProofArtifactError::JsonTooLarge {
+                    size: line_size,
+                    max: MAX_JSON_VALUE_SIZE,
+                });
+            }
+
+            bytes.extend_from_slice(&available[..content_len]);
+            (
+                newline_index.map_or(content_len, |index| index + 1),
+                newline_index.is_some(),
+            )
+        };
+
+        reader.consume(consume_len);
+        if reached_newline {
+            break;
+        }
+    }
+
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    *line = String::from_utf8(bytes)
+        .map_err(|error| ProofArtifactError::JsonMalformed(error.to_string()))?;
+    Ok(true)
 }
 
 /// Atomically writes multiple events to a JSONL file, creating or truncating the file
@@ -1120,21 +1178,44 @@ pub fn append_events_jsonl_atomic(
         return Ok(());
     }
 
-    // Join all lines with newlines and add final newline
-    let content = format!("{}\n", buffer.join("\n"));
-
-    // Use append mode with atomic write guarantees up to PIPE_BUF (typically 4KB on Linux)
-    // For larger writes, consider using file locking
+    // Use append mode so each write lands at the current end of file.
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)
         .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+
+    let mut content = String::new();
+    if file_needs_leading_newline(&mut file)? {
+        content.push('\n');
+    }
+    content.push_str(&buffer.join("\n"));
+    content.push('\n');
 
     file.write_all(content.as_bytes())
         .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
 
     Ok(())
+}
+
+fn file_needs_leading_newline(file: &mut File) -> Result<bool, ProofArtifactError> {
+    let len = file
+        .metadata()
+        .map_err(|error| ProofArtifactError::Io(error.to_string()))?
+        .len();
+    if len == 0 {
+        return Ok(false);
+    }
+
+    file.seek(SeekFrom::End(-1))
+        .map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+    let mut last_byte = [0u8; 1];
+    file.read_exact(&mut last_byte)
+        .map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+    file.seek(SeekFrom::End(0))
+        .map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+    Ok(last_byte[0] != b'\n')
 }
 
 /// Atomically emits a single event to a JSONL file via append (race-safe)
@@ -1728,6 +1809,27 @@ mod tests {
     }
 
     #[test]
+    fn validate_events_jsonl_file_rejects_oversized_line_with_line_number() {
+        use tempfile::NamedTempFile;
+
+        let oversized_file = NamedTempFile::new().expect("create oversized temp file");
+        std::fs::write(oversized_file.path(), "x".repeat(MAX_JSON_VALUE_SIZE + 1))
+            .expect("write oversized line");
+
+        let err =
+            validate_events_jsonl_file(oversized_file.path()).expect_err("oversized line fails");
+        let message = err.to_string();
+        assert!(
+            message.contains("line 1:"),
+            "expected line-numbered error, got {message}"
+        );
+        assert!(
+            message.contains("JSON too large"),
+            "expected bounded-line failure, got {message}"
+        );
+    }
+
+    #[test]
     fn write_events_jsonl_atomic_creates_valid_jsonl() {
         use tempfile::NamedTempFile;
 
@@ -1826,6 +1928,61 @@ mod tests {
         assert_eq!(summary.event_count, 2);
         assert_eq!(summary.first_event_name.as_deref(), Some("initial.event"));
         assert_eq!(summary.last_event_name.as_deref(), Some("appended.event"));
+    }
+
+    #[test]
+    fn append_events_jsonl_atomic_separates_existing_file_without_trailing_newline() {
+        use tempfile::NamedTempFile;
+
+        let initial_event = ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "initial.no-newline".to_string(),
+            severity: ProofEventSeverity::Info,
+            step_id: "step-000".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: None,
+            duration_ms: None,
+            decision: "initial".to_string(),
+            remediation: None,
+        };
+        let appended_event = ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "appended.after-separator".to_string(),
+            severity: ProofEventSeverity::Info,
+            step_id: "step-001".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: None,
+            duration_ms: None,
+            decision: "appended".to_string(),
+            remediation: None,
+        };
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = temp_file.path();
+        let initial_line = serde_json::to_string(&initial_event).expect("serialize initial");
+        std::fs::write(temp_path, initial_line).expect("write unterminated initial event");
+
+        append_events_jsonl_atomic(temp_path, &[appended_event]).expect("append event");
+
+        let content = std::fs::read_to_string(temp_path).expect("read appended content");
+        assert!(
+            content.contains("}\n{"),
+            "appended JSONL should insert a record separator: {content}"
+        );
+        let summary = validate_events_jsonl_file(temp_path).expect("validate appended events");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(
+            summary.first_event_name.as_deref(),
+            Some("initial.no-newline")
+        );
+        assert_eq!(
+            summary.last_event_name.as_deref(),
+            Some("appended.after-separator")
+        );
     }
 
     #[test]

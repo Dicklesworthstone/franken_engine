@@ -1573,6 +1573,7 @@ struct ExecutionSeed {
     registers: Vec<Value>,
     heap: Vec<HeapObject>,
     function_prototypes: BTreeMap<u32, ObjectId>,
+    function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
 }
 
 #[derive(Debug, Clone)]
@@ -1589,6 +1590,12 @@ struct ModuleExecutionSnapshot {
     scope_chain: ScopeChain,
     pending_captures: Vec<u32>,
     current_module_specifier: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FunctionObjectKey {
+    Function(u32),
+    Closure(u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -1643,6 +1650,8 @@ pub struct InterpreterCore {
     iterators: Vec<RuntimeIteratorState>,
     /// Lazily allocated prototype objects for constructor functions.
     function_prototypes: BTreeMap<u32, ObjectId>,
+    /// Heap-backed own-property storage for callable values.
+    function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
     /// Current instruction pointer.
     ip: usize,
     /// Instructions executed counter.
@@ -1746,6 +1755,7 @@ impl InterpreterCore {
             estimated_memory_bytes: 0,
             iterators: Vec::new(),
             function_prototypes: BTreeMap::new(),
+            function_objects: BTreeMap::new(),
             ip: 0,
             instructions_executed: 0,
             witness_events: Vec::new(),
@@ -1924,6 +1934,7 @@ impl InterpreterCore {
             registers,
             heap: self.heap.clone(),
             function_prototypes: self.function_prototypes.clone(),
+            function_objects: self.function_objects.clone(),
         }
     }
 
@@ -1934,6 +1945,7 @@ impl InterpreterCore {
         self.heap = seed.heap.clone();
         self.iterators.clear();
         self.function_prototypes = seed.function_prototypes.clone();
+        self.function_objects = seed.function_objects.clone();
         self.ip = 0;
         self.instructions_executed = 0;
         self.witness_events.clear();
@@ -3952,10 +3964,15 @@ impl InterpreterCore {
                     let key_val = self.read_reg(key)?;
                     let key_str = Self::property_key(&key_val);
 
-                    match obj_val {
+                    match &obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            let prop = self.prototype_chain_get(oid, &key_str)?;
+                            self.run_pre_property_access_hook(module, *oid, &key_str)?;
+                            let prop = self.prototype_chain_get(*oid, &key_str)?;
+                            self.write_reg(dst, prop)?;
+                        }
+                        _ if Self::function_object_key(&obj_val).is_some() => {
+                            let prop =
+                                self.get_function_like_property(module, &obj_val, &key_str)?;
                             self.write_reg(dst, prop)?;
                         }
                         _ => {
@@ -3973,10 +3990,13 @@ impl InterpreterCore {
                     let set_val = self.read_reg(val)?;
                     let key_str = Self::property_key(&key_val);
 
-                    match obj_val {
+                    match &obj_val {
                         Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            self.set_object_property(oid, key_str, set_val)?;
+                            self.run_pre_property_access_hook(module, *oid, &key_str)?;
+                            self.set_object_property(*oid, key_str, set_val)?;
+                        }
+                        _ if Self::function_object_key(&obj_val).is_some() => {
+                            self.set_function_like_property(module, &obj_val, &key_str, set_val)?;
                         }
                         _ => {
                             return Err(InterpreterError::TypeError {
@@ -7840,6 +7860,106 @@ impl InterpreterCore {
         }
     }
 
+    fn function_object_key(value: &Value) -> Option<FunctionObjectKey> {
+        match value {
+            Value::Function(idx) => Some(FunctionObjectKey::Function(*idx)),
+            Value::Closure(closure_id) => Some(FunctionObjectKey::Closure(*closure_id)),
+            _ => None,
+        }
+    }
+
+    fn function_index_for_value(&self, value: &Value) -> Result<Option<u32>, InterpreterError> {
+        match value {
+            Value::Function(idx) => Ok(Some(*idx)),
+            Value::Closure(closure_id) => {
+                let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    }
+                })?;
+                Ok(Some(closure.function_index))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn function_object_id(&self, value: &Value) -> Option<ObjectId> {
+        Self::function_object_key(value).and_then(|key| self.function_objects.get(&key).copied())
+    }
+
+    fn ensure_function_object(
+        &mut self,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Some(key) = Self::function_object_key(value) else {
+            return Ok(None);
+        };
+        if let Some(existing) = self.function_objects.get(&key) {
+            return Ok(Some(*existing));
+        }
+        let object_id = self.alloc_object_with_prototype(None)?;
+        self.function_objects.insert(key, object_id);
+        Ok(Some(object_id))
+    }
+
+    fn function_prototype_for_value(
+        &mut self,
+        value: &Value,
+    ) -> Result<Option<ObjectId>, InterpreterError> {
+        let Some(func_idx) = self.function_index_for_value(value)? else {
+            return Ok(None);
+        };
+        self.ensure_function_prototype(func_idx).map(Some)
+    }
+
+    fn get_function_like_property(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(object_id) = self.function_object_id(value) {
+            self.run_pre_property_access_hook(module, object_id, key)?;
+            let prop = self.prototype_chain_get(object_id, key)?;
+            if prop != Value::Undefined || key != "prototype" {
+                return Ok(prop);
+            }
+        }
+
+        if key == "prototype"
+            && let Some(prototype) = self.function_prototype_for_value(value)?
+        {
+            return Ok(Value::Object(prototype));
+        }
+
+        Ok(Value::Undefined)
+    }
+
+    fn set_function_like_property(
+        &mut self,
+        module: &Ir3Module,
+        value: &Value,
+        key: &str,
+        set_value: Value,
+    ) -> Result<(), InterpreterError> {
+        let Some(object_id) = self.ensure_function_object(value)? else {
+            return Err(InterpreterError::TypeError {
+                expected: "function".to_string(),
+                got: value.type_name().to_string(),
+            });
+        };
+        self.run_pre_property_access_hook(module, object_id, key)?;
+        self.set_object_property(object_id, key.to_string(), set_value.clone())?;
+        if key == "prototype"
+            && let Value::Object(prototype) = set_value
+            && let Some(func_idx) = self.function_index_for_value(value)?
+        {
+            self.function_prototypes.insert(func_idx, prototype);
+        }
+        Ok(())
+    }
+
     /// Get the number of objects on the heap.
     pub fn heap_size(&self) -> usize {
         self.heap.len()
@@ -11622,30 +11742,34 @@ mod tests {
 
     #[test]
     fn static_method_on_constructor() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "class Foo { static staticMethod() { return 123; } }\nFoo.staticMethod();",
+                ParseGoal::Script,
+            )
+            .expect("static class method source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-static-method-test.js");
+        let ctx = LoweringContext::new(
+            "trace-class-static-method",
+            "decision-class-static-method",
+            "policy-class-static-method",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("static class method should lower");
+        assert!(
+            output
+                .ir3
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::SetProperty { .. })),
+            "static method lowering should attach the method to the constructor value"
+        );
+
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Function(0);
-        core.registers[1] = Value::Function(1);
+        let result = core
+            .execute(&output.ir3)
+            .expect("constructor function object should carry static methods");
 
-        let err = core
-            .execute(&test_module_with_pool(
-                vec![
-                    Ir3Instruction::LoadStr {
-                        dst: 2,
-                        pool_index: 0,
-                    },
-                    Ir3Instruction::SetProperty {
-                        obj: 0,
-                        key: 2,
-                        val: 1,
-                    },
-                    Ir3Instruction::Halt,
-                ],
-                vec!["staticMethod".to_string()],
-            ))
-            .expect_err("bd-vwtlc.3 tracks property-bearing constructor support");
-
-        assert!(matches!(err, InterpreterError::TypeError { expected, got }
-                if expected == "object" && got == "function"));
+        assert_eq!(result.value, Value::Int(123));
     }
 
     #[test]

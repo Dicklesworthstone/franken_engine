@@ -2197,7 +2197,7 @@ fn lower_statement_to_ir1_with_flow(
                         .filter_map(|p| p.name().map(String::from))
                         .collect()
                 })
-                .unwrap();
+                .unwrap_or_default();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
@@ -2359,7 +2359,9 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static(method_name),
                 });
-                ops.push(Ir1Op::Pop);
+                // Do not emit Pop here: module-level Pop updates the script
+                // completion register and can clobber the class binding when
+                // the constructor lives in register 0.
             }
         }
         Statement::Import(_) | Statement::Export(_) => {

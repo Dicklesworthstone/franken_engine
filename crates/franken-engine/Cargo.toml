@@ -44,6 +44,126 @@ name = "comparative_bun"
 path = "benches/comparative_bun.rs"
 harness = false
 
+[[test]]
+name = "cancellation_lifecycle_integration"
+path = "tests/cancellation_lifecycle_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "control_plane_adapter"
+path = "tests/control_plane_adapter.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "control_plane_integration"
+path = "tests/control_plane_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "cx_threading_edge_cases"
+path = "tests/cx_threading_edge_cases.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "cx_threading_enrichment_integration"
+path = "tests/cx_threading_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "cx_threading_integration"
+path = "tests/cx_threading_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "evidence_emission_enrichment_integration"
+path = "tests/evidence_emission_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "evidence_emission_integration"
+path = "tests/evidence_emission_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "execution_cell_integration"
+path = "tests/execution_cell_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "extension_host_lifecycle_integration"
+path = "tests/extension_host_lifecycle_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "frankenlab_extension_lifecycle_enrichment_integration"
+path = "tests/frankenlab_extension_lifecycle_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "frankenlab_extension_lifecycle_integration"
+path = "tests/frankenlab_extension_lifecycle_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "frankenlab_release_gate_enrichment_integration"
+path = "tests/frankenlab_release_gate_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "frankenlab_release_gate_integration"
+path = "tests/frankenlab_release_gate_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "migration_compatibility_enrichment_integration"
+path = "tests/migration_compatibility_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "migration_compatibility_integration"
+path = "tests/migration_compatibility_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "obligation_integration_enrichment_integration"
+path = "tests/obligation_integration_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "obligation_integration_integration"
+path = "tests/obligation_integration_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "release_gate_edge_cases"
+path = "tests/release_gate_edge_cases.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "release_gate_enrichment_integration"
+path = "tests/release_gate_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "release_gate_integration"
+path = "tests/release_gate_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "safe_mode_fallback_enrichment_integration"
+path = "tests/safe_mode_fallback_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "safety_decision_router_enrichment_integration"
+path = "tests/safety_decision_router_enrichment_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
+[[test]]
+name = "safety_decision_router_integration"
+path = "tests/safety_decision_router_integration.rs"
+required-features = ["__moved_to_frankenengine_control_plane_integration_tests"]
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [
@@ -52,6 +172,11 @@ asupersync-integration = [
     "dep:franken-evidence",
 ]
 certified_rewrite_optimizer_integration = []
+# Do not enable this feature in normal engine validation. The listed
+# support-dependent integration tests are owned by the sibling
+# frankenengine-control-plane-integration-tests package, which supplies
+# frankenengine-test-support without making engine lib-unit tests compile it.
+__moved_to_frankenengine_control_plane_integration_tests = []
 # Opt-in re-enable of the baseline_interpreter in-source #[cfg(test)] module
 # that references a legacy lower-level API (`BaselineInterpreter::new`,
 # `Ir3Instruction::CallBuiltin{,Id}`, `execute_instruction`, `set_register`,
@@ -100,7 +225,6 @@ fp-index = { path = "/dp/frankenpandas/crates/fp-index" }
 fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
 
 [dev-dependencies]
-frankenengine-test-support = { path = "../franken-engine-test-support" }
 proptest = "1.6"
 regex = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }

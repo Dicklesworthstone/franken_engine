@@ -14,7 +14,7 @@
 )]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use frankenengine_engine::control_plane::*;
 use frankenengine_test_support::control_plane::{
@@ -25,6 +25,19 @@ use frankenengine_test_support::control_plane::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn engine_manifest_dir() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if manifest_dir.join("src/control_plane/mod.rs").is_file() {
+        manifest_dir
+    } else {
+        manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("repo root")
+            .join("crates/franken-engine")
+    }
+}
 
 fn make_request(seed: u64) -> DecisionRequest {
     DecisionRequest {
@@ -62,7 +75,7 @@ fn make_evidence(ts: u64, action: &str) -> EvidenceLedger {
 
 #[test]
 fn runtime_crate_keeps_mock_helpers_out_of_production_surface() {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/control_plane/mod.rs");
+    let source = engine_manifest_dir().join("src/control_plane/mod.rs");
     let content = fs::read_to_string(&source)
         .unwrap_or_else(|err| panic!("read {}: {err}", source.display()));
 
@@ -78,7 +91,7 @@ fn runtime_crate_keeps_mock_helpers_out_of_production_surface() {
 
 #[test]
 fn safety_router_uses_control_plane_decision_boundary() {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/safety_decision_router.rs");
+    let source = engine_manifest_dir().join("src/safety_decision_router.rs");
     let content = fs::read_to_string(&source)
         .unwrap_or_else(|err| panic!("read {}: {err}", source.display()));
 

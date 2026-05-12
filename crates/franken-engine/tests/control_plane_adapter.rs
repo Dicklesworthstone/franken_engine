@@ -21,6 +21,19 @@ use frankenengine_engine::control_plane::{
 };
 use frankenengine_test_support::control_plane as control_plane_mocks;
 
+fn engine_manifest_dir() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if manifest_dir.join("src/control_plane/mod.rs").is_file() {
+        manifest_dir
+    } else {
+        manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("repo root")
+            .join("crates/franken-engine")
+    }
+}
+
 fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
     if !root.exists() {
         return;
@@ -40,14 +53,14 @@ fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn control_plane_imports_are_isolated_to_adapter_module() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
+    let engine_manifest_dir = engine_manifest_dir();
+    let repo_root = engine_manifest_dir
         .parent()
         .and_then(Path::parent)
         .expect("repo root");
 
     let mut sources = Vec::new();
-    collect_rs_files(&manifest_dir.join("src"), &mut sources);
+    collect_rs_files(&engine_manifest_dir.join("src"), &mut sources);
     collect_rs_files(
         &repo_root.join("crates/franken-extension-host/src"),
         &mut sources,

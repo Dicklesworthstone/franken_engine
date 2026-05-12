@@ -1,0 +1,16 @@
+[package]
+name = "frankenengine-control-plane-integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+frankenengine-engine = { path = "../franken-engine" }
+frankenengine-test-support = { path = "../franken-engine-test-support" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

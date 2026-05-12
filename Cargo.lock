@@ -1432,6 +1432,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankenengine-control-plane-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "frankenengine-engine",
+ "frankenengine-test-support",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "frankenengine-engine"
 version = "0.1.0"
 dependencies = [
@@ -1449,7 +1459,6 @@ dependencies = [
  "franken-evidence",
  "franken-kernel",
  "frankenengine-extension-host",
- "frankenengine-test-support",
  "hex",
  "hmac 0.12.1",
  "proc-macro2",

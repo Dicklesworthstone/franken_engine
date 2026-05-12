@@ -3625,8 +3625,8 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
-                            // For plain calls, this_value is undefined.
-                            // Method calls set this via the CallMethod instruction (TODO).
+                            // Plain calls do not supply a receiver. Closures inherit the
+                            // defining frame's `this`; non-closure calls use `undefined`.
                             let frame_this = self
                                 .call_stack
                                 .last()
@@ -8735,6 +8735,69 @@ mod tests {
                 args: vec![Value::Int(5)],
             }]
         );
+    }
+
+    #[test]
+    fn call_method_binds_receiver_as_this() {
+        let mut core = quickjs_test_core();
+        let receiver_id = core.alloc_object_with_prototype(None).unwrap();
+        core.registers[1] = Value::Object(receiver_id);
+        core.registers[2] = Value::Function(0);
+
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::CallMethod {
+                        receiver: 1,
+                        callee: 2,
+                        args: RegRange { start: 3, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("return_this".to_string()),
+                    is_generator: false,
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Object(receiver_id));
+    }
+
+    #[test]
+    fn plain_call_load_this_is_undefined() {
+        let mut core = quickjs_test_core();
+        core.registers[1] = Value::Function(0);
+
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::Call {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("return_this".to_string()),
+                    is_generator: false,
+                }],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Undefined);
     }
 
     #[test]

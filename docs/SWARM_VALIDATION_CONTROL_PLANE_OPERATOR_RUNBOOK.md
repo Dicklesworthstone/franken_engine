@@ -22,6 +22,8 @@ Implementation surfaces:
 - `scripts/e2e/swarm_validation_control_plane_contract_smoke.sh`
 - `scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh`
 - `scripts/e2e/swarm_validation_control_plane_e2e.sh`
+- `scripts/e2e/source_local_rch_validation_admission_smoke.sh`
+- `scripts/e2e/source_local_rch_admission_no_mock_proof.sh`
 - `scripts/e2e/build_storm_qos_batch_planner_smoke.sh`
 - `scripts/e2e/swarm_operator_status_report_smoke.sh`
 - `scripts/e2e/swarm_predictive_orchestration_e2e.sh`
@@ -33,6 +35,7 @@ Implementation surfaces:
 - `scripts/build_storm_qos_batch_planner.sh`
 - `scripts/proof_freshness_decay_gate.sh`
 - `scripts/proof_reuse_cache_planner.sh`
+- `scripts/source_local_rch_validation_admission.sh`
 - `scripts/rch_incident_packet_gate.sh`
 - `scripts/staged_ownership_contamination_guard.sh`
 - `scripts/stale_lock_stalled_bead_recommender.sh`
@@ -151,12 +154,80 @@ If `safe_to_reopen` is non-empty, reopen only the listed bead IDs with the
 suggested commands. If `contact_first` is non-empty, send Agent Mail to the
 listed owner before changing tracker ownership.
 
+### Source-Local Lib-Unit Admission
+
+Use the source-local admission path when the proof is tied to a single package,
+target kind, test filter, and source file lane. The command identity must record
+`source_revision`, `source_hash`, `cargo_lock_hash`, `dependency_root_hash`,
+`package`, `target_kind`, `test_filter`, `rustflags`, `toolchain`,
+`cargo_target_dir`, and `command_fingerprint`.
+
+The cold-refresh command shape is intentionally narrow and copy/pasteable:
+
+```bash
+rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_bd_lnks9 RUSTFLAGS=-Clinker=cc cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture
+```
+
+Use compact `RUSTFLAGS=-Clinker=cc` in source-local proof commands so the
+preflight parser treats the linker flag as one environment value. Do not widen
+the command to `--tests`, `--all-targets`, or an unfiltered package test unless
+the admission report selects a cold refresh and the closeout says why the
+source-local proof no longer covers the requested lane.
+
+Generate advisory admission artifacts before any live proof:
+
+```bash
+./scripts/source_local_rch_validation_admission.sh --case-id bd-lnks9-live --request-json /tmp/source-local/request.json --preflight-json /tmp/source-local/preflight/preflight_report.json --proof-admission-json /tmp/source-local/proof_admission.json --sticky-plan-json /tmp/source-local/sticky_plan.json --output-dir /tmp/source-local/admission
+```
+
+The admission artifact schema is
+`franken-engine.source-local-rch-validation-admission.v1`.
+
+For a no-mock live proof, use the shipped runner:
+
+```bash
+SOURCE_LOCAL_RCH_PROOF_ARTIFACT_ROOT=/tmp/franken-engine-source-local-rch-proof ./scripts/e2e/source_local_rch_admission_no_mock_proof.sh
+```
+
+Future closeouts must cite these evidence files when present:
+
+- `request.json`
+- `preflight/preflight_report.json`
+- `admission/source_local_rch_validation_admission.json`
+- `rch-output.log`
+- `rch-output.plain.log`
+- `log_scan.json`
+- `run_manifest.json`
+- `events.jsonl`
+- `commands.txt`
+- `report.md`
+
+Operator status wording for source-local proof admission:
+
+| State | Machine value | Operator wording | Required action |
+| --- | --- | --- | --- |
+| Reusable | `admit_reuse` | reusable source-local proof | Reuse only the selected command and cite `source_local_rch_validation_admission.json`. |
+| Cold refresh | `cold_refresh_required` | cold refresh required | Run only `selected_command` or `suggested_cold_refresh_command`; do not claim warm reuse. |
+| Contaminated | `fail_closed` with `local_fallback_contamination` or `support_crate_contamination` | fail closed: contaminated proof | Discard the proof and rerun remote-only after removing fallback or support-crate compile contamination. |
+| Stale | `cold_refresh_required` with `source_revision_mismatch`, `source_hash_mismatch`, `cargo_lock_hash_mismatch`, `dependency_root_hash_mismatch`, `changed_path_overlap`, or `missing_freshness` | fail closed for reuse: stale warm-target proof | Refresh the proof for the current source/Cargo.lock/dependency root and exact filter. |
+| Remote blocked | `remote_blocker` in the no-mock proof manifest | remote fleet blocker | Keep the bead open or close with the worker/toolchain/timeout blocker and the preserved rch log. |
+
+Common remediation:
+
+- Bare Cargo: rerun through `rch exec -- env` with explicit `CARGO_TARGET_DIR=`.
+- Local fallback: fail closed; the log cannot be used as remote evidence.
+- Missing target dir: add an off-repo `CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_<bead>`.
+- Broadening to tests or all targets: return to the exact package, `--lib`, and test filter unless the admission report explicitly selects a cold refresh.
+- Missing freshness: regenerate proof-reuse admission rows with current source and dependency root hashes.
+- Stale source or `Cargo.lock` hash: refresh the proof; never relabel stale evidence as reusable.
+
 7. Execute only admitted proof commands. Shell and docs gates can run directly:
 
 ```bash
 ./scripts/e2e/swarm_validation_control_plane_contract_smoke.sh check
 ./scripts/e2e/swarm_validation_control_plane_docs_truth_gate.sh check
 ./scripts/e2e/swarm_validation_control_plane_e2e.sh check
+./scripts/e2e/source_local_rch_validation_admission_smoke.sh check
 ./scripts/e2e/proof_freshness_decay_gate_smoke.sh check
 ./scripts/e2e/proof_reuse_cache_planner_smoke.sh check
 ./scripts/e2e/rch_incident_packet_gate_smoke.sh check

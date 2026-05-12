@@ -838,6 +838,9 @@ struct CallFrame {
     /// calls, `undefined` for plain calls, or the newly allocated object for
     /// constructor calls.  Arrow functions inherit from the defining frame.
     this_value: Value,
+    /// The `new.target` value for this call frame. Constructor calls set this
+    /// to the invoked constructor value; non-constructor calls use undefined.
+    new_target_value: Value,
     /// The `super` value for this call frame. Set to the parent class constructor
     /// for class methods, `undefined` otherwise.
     super_value: Value,
@@ -3109,6 +3112,7 @@ impl InterpreterCore {
             register_base: self.register_base,
             function_index: Some(func_idx),
             this_value,
+            new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
@@ -3791,6 +3795,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: call_this,
+                                new_target_value: Value::Undefined,
                                 super_value: Value::Undefined,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
@@ -3932,6 +3937,7 @@ impl InterpreterCore {
                         register_base: self.register_base,
                         function_index: Some(func_idx),
                         this_value: receiver_val,
+                        new_target_value: Value::Undefined,
                         super_value: Value::Undefined,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
@@ -4498,6 +4504,7 @@ impl InterpreterCore {
                                 register_base: self.register_base,
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
+                                new_target_value: callee_val.clone(),
                                 super_value: Value::Undefined,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
@@ -4598,6 +4605,14 @@ impl InterpreterCore {
                         .last()
                         .map_or(Value::Undefined, |f| f.this_value.clone());
                     self.write_reg(dst, this_val)?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::LoadNewTarget { dst } => {
+                    let new_target = self
+                        .call_stack
+                        .last()
+                        .map_or(Value::Undefined, |f| f.new_target_value.clone());
+                    self.write_reg(dst, new_target)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadSuper { dst } => {
@@ -6820,6 +6835,7 @@ impl InterpreterCore {
             register_base: self.register_base,
             function_index: Some(func_idx),
             this_value: Value::Undefined,
+            new_target_value: Value::Undefined,
             super_value: Value::Undefined,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
@@ -7738,6 +7754,7 @@ impl InterpreterCore {
     fn estimate_call_frame_bytes(frame: &CallFrame) -> u64 {
         MEMORY_ESTIMATE_CALL_FRAME_BASE_BYTES
             .saturating_add(Self::estimate_value_bytes(&frame.this_value))
+            .saturating_add(Self::estimate_value_bytes(&frame.new_target_value))
             .saturating_add(
                 frame
                     .construct_this
@@ -12215,15 +12232,34 @@ mod tests {
 
     #[test]
     fn new_target_in_constructor() {
-        let err = CanonicalEs2020Parser
+        let tree = CanonicalEs2020Parser
             .parse(
-                "class C { constructor() { return new.target; } }",
+                "class C { constructor() { this.kind = typeof new.target; } }\nconst c = new C();\nc.kind;",
                 ParseGoal::Script,
-            )
-            .expect_err("bd-vwtlc.6 tracks new.target parser/lowering/interpreter support");
+        )
+        .expect("new.target should parse in class constructor bodies");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "new-target-class-test.js");
+        let ctx = LoweringContext::new(
+            "trace-new-target",
+            "decision-new-target",
+            "policy-new-target",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("new.target should lower");
+        assert!(
+            output
+                .ir3
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::LoadNewTarget { .. })),
+            "constructor body should load new.target explicitly"
+        );
 
-        assert_eq!(err.code, crate::parser::ParseErrorCode::UnsupportedSyntax);
-        assert_eq!(err.message, "new.target meta-property is not supported");
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("new.target should execute through constructor frames");
+
+        assert_eq!(result.value, Value::Str("function".to_string()));
     }
 
     // -----------------------------------------------------------------------

@@ -1564,6 +1564,8 @@ pub enum Expression {
         computed: bool,
     },
     This,
+    /// `new.target` meta-property.
+    NewTarget,
     ArrayLiteral(Vec<Option<Expression>>),
     ObjectLiteral(Vec<ObjectProperty>),
     ArrowFunction {
@@ -1797,6 +1799,12 @@ impl Expression {
                 );
                 map.insert("value".to_string(), CanonicalValue::Null);
             }
+            Self::NewTarget => {
+                map.insert(
+                    "kind".to_string(),
+                    CanonicalValue::String("new_target".to_string()),
+                );
+            }
             Self::ArrayLiteral(elements) => {
                 map.insert(
                     "kind".to_string(),
@@ -1967,6 +1975,7 @@ impl std::fmt::Display for Expression {
             Self::NullLiteral => write!(f, "null"),
             Self::UndefinedLiteral => write!(f, "undefined"),
             Self::This => write!(f, "this"),
+            Self::NewTarget => write!(f, "new.target"),
             Self::Raw(value) => write!(f, "{value}"),
             Self::RegExpLiteral { pattern, flags } => write!(f, "/{pattern}/{flags}"),
             Self::Super => write!(f, "super"),

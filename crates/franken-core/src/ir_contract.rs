@@ -472,6 +472,8 @@ pub enum Ir1Op {
     Throw,
     /// Load `this` binding.
     LoadThis,
+    /// Load `new.target` binding.
+    LoadNewTarget,
     /// Load `super` binding for accessing parent class.
     LoadSuper,
     /// Declare a function and bind it.  When `body_ops` is non-empty the
@@ -784,6 +786,12 @@ impl Ir1Op {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("load_this".to_string()),
+                );
+            }
+            Self::LoadNewTarget => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_new_target".to_string()),
                 );
             }
             Self::LoadSuper => {
@@ -1468,6 +1476,8 @@ pub enum Ir3Instruction {
     Halt,
     /// Load the current `this` binding into a register.
     LoadThis { dst: Reg },
+    /// Load the current `new.target` binding into a register.
+    LoadNewTarget { dst: Reg },
     /// Load the current `super` binding into a register.
     LoadSuper { dst: Reg },
 
@@ -1906,6 +1916,13 @@ impl Ir3Instruction {
                 map.insert(
                     "op".to_string(),
                     CanonicalValue::String("load_this".to_string()),
+                );
+                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
+            }
+            Self::LoadNewTarget { dst } => {
+                map.insert(
+                    "op".to_string(),
+                    CanonicalValue::String("load_new_target".to_string()),
                 );
                 map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
             }
@@ -4778,6 +4795,7 @@ mod tests {
                 args: RegRange { start: 1, count: 2 },
                 dst: 5,
             },
+            Ir3Instruction::LoadNewTarget { dst: 5 },
             // Exception handling
             Ir3Instruction::BeginTry {
                 catch_target: 10,

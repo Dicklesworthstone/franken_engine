@@ -5138,6 +5138,9 @@ fn try_parse_postfix(
                 context,
             )));
         }
+        if object_src == "new" && property_src == "target" {
+            return Some(Ok(Expression::NewTarget));
+        }
         if let Some(message) = unsupported_meta_property_message(object_src, property_src) {
             return Some(Err(unsupported_expression_syntax_error(
                 message, span, context,
@@ -5260,6 +5263,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         | Expression::NullLiteral
         | Expression::UndefinedLiteral
         | Expression::This
+        | Expression::NewTarget
         | Expression::Super
         | Expression::Function { .. }
         | Expression::Raw(_)

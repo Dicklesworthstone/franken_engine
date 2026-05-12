@@ -1687,6 +1687,7 @@ impl ExecutionOrchestrator {
             crate::ir_contract::Ir3Instruction::ImportModule { .. } => "import_module",
             crate::ir_contract::Ir3Instruction::ExportBinding { .. } => "export_binding",
             crate::ir_contract::Ir3Instruction::LoadThis { .. } => "load_this",
+            crate::ir_contract::Ir3Instruction::LoadNewTarget { .. } => "load_new_target",
             crate::ir_contract::Ir3Instruction::LoadSuper { .. } => "load_super",
             crate::ir_contract::Ir3Instruction::CallMethod { .. } => "call_method",
             &crate::ir_contract::Ir3Instruction::CreateGenerator { .. }

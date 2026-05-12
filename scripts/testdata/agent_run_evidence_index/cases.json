@@ -1,0 +1,101 @@
+{
+  "schema_version": "franken-engine.agent-run-evidence-index-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "complete_run",
+      "complete_run_expected": true,
+      "br_issue_id": "bd-run",
+      "include_agent_mail": true,
+      "include_commit": true,
+      "include_validation_command": true,
+      "rch_artifact_mode": "manifest",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0,
+        "edge_type": "rch_artifact_manifest",
+        "edge_status": "observed",
+        "reason_code": ""
+      }
+    },
+    {
+      "case_id": "mail_outage",
+      "complete_run_expected": false,
+      "br_issue_id": "bd-run",
+      "include_agent_mail": false,
+      "include_commit": true,
+      "include_validation_command": true,
+      "rch_artifact_mode": "manifest",
+      "expected": {
+        "decision": "degraded",
+        "exit_code": 0,
+        "edge_type": "agent_mail_thread",
+        "edge_status": "degraded",
+        "reason_code": "agent_mail_snapshot_missing"
+      }
+    },
+    {
+      "case_id": "missing_rch_manifest",
+      "complete_run_expected": true,
+      "br_issue_id": "bd-run",
+      "include_agent_mail": true,
+      "include_commit": true,
+      "include_validation_command": true,
+      "rch_artifact_mode": "none",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "edge_type": "rch_artifact_manifest",
+        "edge_status": "missing",
+        "reason_code": "complete_run_missing_artifact_manifest"
+      }
+    },
+    {
+      "case_id": "missing_bead",
+      "complete_run_expected": true,
+      "br_issue_id": "bd-other",
+      "include_agent_mail": true,
+      "include_commit": true,
+      "include_validation_command": true,
+      "rch_artifact_mode": "manifest",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "edge_type": "bead",
+        "edge_status": "missing",
+        "reason_code": "complete_run_missing_bead"
+      }
+    },
+    {
+      "case_id": "missing_commit",
+      "complete_run_expected": true,
+      "br_issue_id": "bd-run",
+      "include_agent_mail": true,
+      "include_commit": false,
+      "include_validation_command": true,
+      "rch_artifact_mode": "manifest",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "edge_type": "closeout_commit",
+        "edge_status": "missing",
+        "reason_code": "complete_run_missing_commit"
+      }
+    },
+    {
+      "case_id": "missing_command_transcript",
+      "complete_run_expected": true,
+      "br_issue_id": "bd-run",
+      "include_agent_mail": true,
+      "include_commit": true,
+      "include_validation_command": false,
+      "rch_artifact_mode": "manifest",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "edge_type": "validation_command_transcript",
+        "edge_status": "missing",
+        "reason_code": "complete_run_missing_command_transcript"
+      }
+    }
+  ]
+}

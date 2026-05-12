@@ -1,0 +1,53 @@
+{
+  "schema_version": "franken-engine.franken-core-staged-inclusion-rehearsal.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.6",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-staged-inclusion-rehearsal-v1",
+  "status": "active",
+  "purpose": "Model optional franken-core workspace membership through deterministic artifacts without mutating root Cargo.toml.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md",
+    "machine_contract": "docs/franken_core_staged_inclusion_rehearsal_v1.json",
+    "rehearsal": "scripts/franken_core_staged_inclusion_rehearsal.sh",
+    "smoke": "scripts/e2e/franken_core_staged_inclusion_rehearsal_smoke.sh"
+  },
+  "supported_modes": [
+    "current",
+    "included_artifact"
+  ],
+  "required_outputs": [
+    "staged_inclusion_rehearsal.json",
+    "simulated_workspace_patch.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "required_reason_codes": [
+    "missing_required_manifest",
+    "ambiguous_workspace_topology",
+    "artifact_mode_state_mismatch",
+    "package_name_conflict"
+  ],
+  "required_risks": [
+    "workspace_membership_blast_radius",
+    "feature_propagation",
+    "package_name_conflict",
+    "validation_runtime_cost",
+    "rollback_required"
+  ],
+  "non_mutation_attestation": {
+    "mutates_root_cargo_toml": false,
+    "creates_generated_manifest_file": false,
+    "runs_cargo": false,
+    "runs_rch": false
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_staged_inclusion_rehearsal_v1.json",
+    "bash -n scripts/franken_core_staged_inclusion_rehearsal.sh",
+    "bash -n scripts/e2e/franken_core_staged_inclusion_rehearsal_smoke.sh",
+    "bash scripts/e2e/franken_core_staged_inclusion_rehearsal_smoke.sh check",
+    "bash scripts/e2e/franken_core_staged_inclusion_rehearsal_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md docs/franken_core_staged_inclusion_rehearsal_v1.json scripts/franken_core_staged_inclusion_rehearsal.sh scripts/e2e/franken_core_staged_inclusion_rehearsal_smoke.sh"
+  ]
+}

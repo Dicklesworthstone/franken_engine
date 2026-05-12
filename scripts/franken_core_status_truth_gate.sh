@@ -86,6 +86,10 @@ if [[ "${#claim_files[@]}" -eq 0 ]]; then
     "${root_dir}/docs/franken_core_validation_impact_planner_v1.json"
     "${root_dir}/docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md"
     "${root_dir}/docs/franken_core_status_truth_gate_v1.json"
+    "${root_dir}/docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md"
+    "${root_dir}/docs/franken_core_no_mock_graduation_drill_v1.json"
+    "${root_dir}/docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md"
+    "${root_dir}/docs/franken_core_staged_inclusion_rehearsal_v1.json"
   )
 fi
 
@@ -243,6 +247,9 @@ line_negates_overclaim() {
      "$lower" == *"without claiming"* ||
      "$lower" == *"without claiming workspace"* ||
      "$lower" == *"over-eager claims"* ||
+     "$lower" == *"considered for"* ||
+     "$lower" == *"model"* ||
+     "$lower" == *"optional"* ||
      "$lower" == *"remains excluded"* ||
      "$lower" == *"separate follow-up"* ||
      "$lower" == *"not sufficient"* ||

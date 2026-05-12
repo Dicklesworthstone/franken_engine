@@ -1,0 +1,103 @@
+{
+  "schema_version": "franken-engine.franken-core-graduation-golden-reports.v1",
+  "bead_id": "bd-4w7h9.7",
+  "parent_bead_id": "bd-4w7h9",
+  "update_command": "UPDATE_FRANKEN_CORE_GRADUATION_GOLDENS=1 bash scripts/e2e/franken_core_graduation_golden_reports_smoke.sh update",
+  "dynamic_fields_scrubbed": [
+    "source_revision",
+    "artifact_paths",
+    "run_dir",
+    "temporary_paths",
+    "timestamps"
+  ],
+  "reports": [
+    {
+      "family": "graduation_contract",
+      "schema_version": "franken-engine.franken-core-graduation-contract.v1",
+      "current_workspace_state": "excluded",
+      "workspace_inclusion_complete": false,
+      "acceptance_suite_required": "bd-4w7h9.8",
+      "forbidden_shortcut_count": 6
+    },
+    {
+      "family": "api_parity_ledger",
+      "schema_version": "franken-engine.franken-core-api-parity-ledger.v1",
+      "decision_workspace_state": "excluded",
+      "workspace_inclusion_complete": false,
+      "core_module_count": 41,
+      "matching_engine_export_count": 41,
+      "unclassified_row_count": 0,
+      "row_count": 41
+    },
+    {
+      "family": "validation_impact_planner",
+      "schema_version": "franken-engine.franken-core-validation-impact-plan.v1",
+      "decision": "green",
+      "change_classes": [
+        "docs_only"
+      ],
+      "workspace_inclusion_claim_supported": false,
+      "recommended_command_ids": [
+        "api-parity-smoke",
+        "diff-check",
+        "graduation-contract-smoke",
+        "json-contracts"
+      ]
+    },
+    {
+      "family": "status_truth_gate",
+      "schema_version": "franken-engine.franken-core-status-truth-report.v1",
+      "decision": "pass",
+      "root_workspace_state": "excluded_standalone",
+      "violation_count": 0,
+      "evidence_bead_ids": [
+        "bd-ucemx",
+        "bd-zsais",
+        "bd-dymfz",
+        "bd-nwhcp",
+        "bd-4w7h9.8"
+      ]
+    },
+    {
+      "family": "no_mock_graduation_drill",
+      "schema_version": "franken-engine.franken-core-no-mock-graduation-drill-report.v1",
+      "decision": "pass",
+      "root_workspace_state": "excluded_standalone",
+      "workspace_inclusion_ready": false,
+      "selected_modules": [
+        "object_model",
+        "promise_model",
+        "profiling",
+        "control_plane",
+        "capability"
+      ],
+      "proof_count": 6
+    },
+    {
+      "family": "staged_inclusion_rehearsal",
+      "schema_version": "franken-engine.franken-core-staged-inclusion-rehearsal-report.v1",
+      "decision": "pass",
+      "simulation_mode": "current",
+      "root_workspace_state": "excluded_standalone",
+      "mutates_root_cargo_toml": false,
+      "risk_ids": [
+        "feature_propagation",
+        "package_name_conflict",
+        "rollback_required",
+        "validation_runtime_cost",
+        "workspace_membership_blast_radius"
+      ],
+      "validation_gate_count": 6,
+      "rollback_step_count": 4
+    },
+    {
+      "family": "negative_status_truth_gate_overclaim",
+      "schema_version": "franken-engine.franken-core-status-truth-report.v1",
+      "decision": "fail_closed",
+      "reason_codes": [
+        "workspace_inclusion_overclaim"
+      ],
+      "violation_count": 1
+    }
+  ]
+}

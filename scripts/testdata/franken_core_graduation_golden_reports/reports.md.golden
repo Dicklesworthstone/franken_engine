@@ -1,0 +1,16 @@
+# Franken-Core Graduation Golden Reports
+
+schema_version: `franken-engine.franken-core-graduation-golden-reports.v1`
+bead_id: `bd-4w7h9.7`
+
+## Reports
+- `graduation_contract` decision=`excluded` schema=`franken-engine.franken-core-graduation-contract.v1`
+- `api_parity_ledger` decision=`excluded` schema=`franken-engine.franken-core-api-parity-ledger.v1`
+- `validation_impact_planner` decision=`green` schema=`franken-engine.franken-core-validation-impact-plan.v1`
+- `status_truth_gate` decision=`pass` schema=`franken-engine.franken-core-status-truth-report.v1`
+- `no_mock_graduation_drill` decision=`pass` schema=`franken-engine.franken-core-no-mock-graduation-drill-report.v1`
+- `staged_inclusion_rehearsal` decision=`pass` schema=`franken-engine.franken-core-staged-inclusion-rehearsal-report.v1`
+- `negative_status_truth_gate_overclaim` decision=`fail_closed` schema=`franken-engine.franken-core-status-truth-report.v1`
+
+## Negative Coverage
+- `negative_status_truth_gate_overclaim` reason_codes=`workspace_inclusion_overclaim`

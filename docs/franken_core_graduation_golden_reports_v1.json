@@ -1,0 +1,45 @@
+{
+  "schema_version": "franken-engine.franken-core-graduation-golden-reports-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.7",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-graduation-golden-reports-v1",
+  "status": "active",
+  "purpose": "Freeze stable semantic JSON and Markdown golden outputs for franken-core graduation report families.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_GRADUATION_GOLDEN_REPORTS_V1.md",
+    "machine_contract": "docs/franken_core_graduation_golden_reports_v1.json",
+    "smoke": "scripts/e2e/franken_core_graduation_golden_reports_smoke.sh",
+    "golden_json": "scripts/testdata/franken_core_graduation_golden_reports/reports.json",
+    "golden_markdown": "scripts/testdata/franken_core_graduation_golden_reports/reports.md.golden"
+  },
+  "report_families": [
+    "graduation_contract",
+    "api_parity_ledger",
+    "validation_impact_planner",
+    "status_truth_gate",
+    "no_mock_graduation_drill",
+    "staged_inclusion_rehearsal",
+    "negative_status_truth_gate_overclaim"
+  ],
+  "scrubbed_fields": [
+    "source_revision",
+    "artifact_paths",
+    "run_dir",
+    "temporary_paths",
+    "timestamps"
+  ],
+  "required_update_command": "UPDATE_FRANKEN_CORE_GRADUATION_GOLDENS=1 bash scripts/e2e/franken_core_graduation_golden_reports_smoke.sh update",
+  "non_mutation_attestation": {
+    "runs_cargo": false,
+    "runs_rch": false,
+    "edits_root_cargo_toml": false,
+    "changes_workspace_membership": false
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_graduation_golden_reports_v1.json scripts/testdata/franken_core_graduation_golden_reports/reports.json",
+    "bash -n scripts/e2e/franken_core_graduation_golden_reports_smoke.sh",
+    "bash scripts/e2e/franken_core_graduation_golden_reports_smoke.sh check",
+    "git diff --check -- docs/FRANKEN_CORE_GRADUATION_GOLDEN_REPORTS_V1.md docs/franken_core_graduation_golden_reports_v1.json scripts/e2e/franken_core_graduation_golden_reports_smoke.sh scripts/testdata/franken_core_graduation_golden_reports/reports.json scripts/testdata/franken_core_graduation_golden_reports/reports.md.golden"
+  ]
+}

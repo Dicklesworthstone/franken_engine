@@ -28,7 +28,7 @@ EOF
 repo_relative_path() {
   local path="$1"
   if [[ "$path" = /* ]]; then
-    realpath --relative-to="$root_dir" "$path"
+    realpath -m --relative-to="$root_dir" "$path"
   else
     printf '%s\n' "${path#./}"
   fi

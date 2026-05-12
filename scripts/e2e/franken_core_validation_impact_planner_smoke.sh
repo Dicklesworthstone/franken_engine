@@ -106,6 +106,7 @@ run_check() {
   run_case "crate-cargo-topology" "fail_closed" "cargo_topology" "true" "crates/franken-core/Cargo.toml"
   run_case "mixed" "green" "franken_core_only" "true" "docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md" "crates/franken-core/src/parser.rs" "crates/franken-engine/src/parser.rs"
   run_case "unknown-path" "fail_closed" "unknown_path" "true" "examples/not-mapped.fixture"
+  run_case "absolute-missing-path" "fail_closed" "unknown_path" "true" "${root_dir}/deleted-or-renamed/franken-core.rs"
   git -C "$root_dir" diff --check -- \
     docs/FRANKEN_CORE_VALIDATION_IMPACT_PLANNER_V1.md \
     docs/franken_core_validation_impact_planner_v1.json \

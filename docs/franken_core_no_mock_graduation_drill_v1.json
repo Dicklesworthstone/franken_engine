@@ -1,0 +1,57 @@
+{
+  "schema_version": "franken-engine.franken-core-no-mock-graduation-drill.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.4",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-no-mock-graduation-drill-v1",
+  "status": "active",
+  "purpose": "Exercise real franken-core graduation manifests, docs, and selected source imports before any workspace-topology mutation.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md",
+    "machine_contract": "docs/franken_core_no_mock_graduation_drill_v1.json",
+    "drill": "scripts/franken_core_no_mock_graduation_drill.sh",
+    "smoke": "scripts/e2e/franken_core_no_mock_graduation_drill_smoke.sh"
+  },
+  "required_live_paths": [
+    "Cargo.toml",
+    "crates/franken-core/Cargo.toml",
+    "crates/franken-core/src/lib.rs",
+    "crates/franken-engine/src/lib.rs"
+  ],
+  "selected_modules": [
+    "object_model",
+    "promise_model",
+    "profiling",
+    "control_plane",
+    "capability"
+  ],
+  "required_reason_codes": [
+    "missing_required_manifest_or_source",
+    "root_manifest_state_contradicts_excluded_drill",
+    "doc_manifest_contradiction",
+    "bare_heavy_cargo_proof"
+  ],
+  "proofs_still_needed": [
+    "bd-4w7h9.3 validation impact planner remains green",
+    "bd-4w7h9.5 status truth gate remains green",
+    "bd-4w7h9.6 staged-inclusion rehearsal models topology blast radius",
+    "bd-4w7h9.7 golden artifacts cover graduation reports",
+    "bd-4w7h9.8 final acceptance suite passes",
+    "final Cargo check, clippy, and test gates run through rch with explicit CARGO_TARGET_DIR"
+  ],
+  "non_mutation_attestation": {
+    "rewrites_docs": false,
+    "edits_manifests": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_workspace_membership": false
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_no_mock_graduation_drill_v1.json",
+    "bash -n scripts/franken_core_no_mock_graduation_drill.sh",
+    "bash -n scripts/e2e/franken_core_no_mock_graduation_drill_smoke.sh",
+    "bash scripts/e2e/franken_core_no_mock_graduation_drill_smoke.sh check",
+    "bash scripts/e2e/franken_core_no_mock_graduation_drill_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md docs/franken_core_no_mock_graduation_drill_v1.json scripts/franken_core_no_mock_graduation_drill.sh scripts/e2e/franken_core_no_mock_graduation_drill_smoke.sh"
+  ]
+}

@@ -14,7 +14,7 @@ The following core modules are extracted from `frankenengine-engine` for standal
 2. **`promise_model`** - Promise infrastructure, handles, and settlement outcomes  
 3. **`profiling`** - Performance measurement and optimization telemetry
 4. **`control_plane`** - Execution control and coordination mechanisms
-5. **`trust_zone`** - Security boundaries and isolation primitives
+5. **`capability`** - Capability and permission primitives for constrained execution
 
 ## Workspace Integration
 

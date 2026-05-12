@@ -3823,12 +3823,16 @@ impl InterpreterCore {
                         let promise_handle = self.promise_store.create();
 
                         // Create the async function object
-                        let async_func_id = u32::try_from(self.async_functions.len()).map_err(|_| {
-                            InterpreterError::TypeError {
-                                expected: "async function table capacity".into(),
-                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
-                            }
-                        })?;
+                        let async_func_id =
+                            u32::try_from(self.async_functions.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async function table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_functions.len()
+                                    ),
+                                }
+                            })?;
 
                         // Initialize with function start state
                         self.async_functions.push(AsyncFunctionObject {
@@ -3890,15 +3894,18 @@ impl InterpreterCore {
                         self.register_base = self.registers.len();
 
                         // Expand registers for the new frame
-                        self.registers.resize(self.register_base + register_count, Value::Undefined);
+                        self.registers
+                            .resize(self.register_base + register_count, Value::Undefined);
 
                         // Copy arguments to the new frame
                         if args.count > 0 {
                             for i in 0..args.count.min(register_count as u32) {
-                                let arg_reg = args.start.checked_add(i).ok_or(InterpreterError::RegisterOutOfBounds {
-                                    register: args.start,
-                                    max: self.config.max_registers,
-                                })?;
+                                let arg_reg = args.start.checked_add(i).ok_or(
+                                    InterpreterError::RegisterOutOfBounds {
+                                        register: args.start,
+                                        max: self.config.max_registers,
+                                    },
+                                )?;
                                 let dest_reg = i as usize;
                                 let arg_value = self.read_reg_from_base(arg_reg, old_base)?;
                                 self.write_reg(dest_reg as u32, arg_value)?;
@@ -5211,12 +5218,13 @@ impl InterpreterCore {
                         }
                     } else {
                         // Promise is pending - suspend the async function execution
-                        let current_frame = self.call_stack.last().ok_or_else(|| {
-                            InterpreterError::TypeError {
-                                expected: "call frame during await".to_string(),
-                                got: "no call frame found".to_string(),
-                            }
-                        })?;
+                        let current_frame =
+                            self.call_stack
+                                .last()
+                                .ok_or_else(|| InterpreterError::TypeError {
+                                    expected: "call frame during await".to_string(),
+                                    got: "no call frame found".to_string(),
+                                })?;
 
                         let async_func_id = current_frame.async_function_id.ok_or_else(|| {
                             InterpreterError::TypeError {
@@ -5226,12 +5234,13 @@ impl InterpreterCore {
                         })?;
 
                         // Save the current execution state
-                        let async_func = self.async_functions.get_mut(async_func_id as usize).ok_or_else(|| {
-                            InterpreterError::TypeError {
+                        let async_func = self
+                            .async_functions
+                            .get_mut(async_func_id as usize)
+                            .ok_or_else(|| InterpreterError::TypeError {
                                 expected: "valid async function".to_string(),
                                 got: format!("async function #{async_func_id} not found"),
-                            }
-                        })?;
+                            })?;
 
                         // Save state for when the promise resolves
                         async_func.saved_ip = self.ip + 1; // Resume after the await instruction
@@ -5251,12 +5260,13 @@ impl InterpreterCore {
                     let return_value = self.read_reg(value_reg)?;
 
                     // Find the currently executing async function
-                    let current_frame = self.call_stack.last().ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "call frame during async return".to_string(),
-                            got: "no call frame found".to_string(),
-                        }
-                    })?;
+                    let current_frame =
+                        self.call_stack
+                            .last()
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "call frame during async return".to_string(),
+                                got: "no call frame found".to_string(),
+                            })?;
 
                     let async_func_id = current_frame.async_function_id.ok_or_else(|| {
                         InterpreterError::TypeError {
@@ -5266,14 +5276,16 @@ impl InterpreterCore {
                     })?;
 
                     // Get the async function object to find its promise
-                    let async_func = self.async_functions.get(async_func_id as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
+                    let async_func = self
+                        .async_functions
+                        .get(async_func_id as usize)
+                        .ok_or_else(|| InterpreterError::TypeError {
                             expected: "valid async function".to_string(),
                             got: format!("async function #{async_func_id} not found"),
-                        }
-                    })?;
+                        })?;
 
-                    let promise_handle = crate::promise_model::PromiseHandle(async_func.result_promise);
+                    let promise_handle =
+                        crate::promise_model::PromiseHandle(async_func.result_promise);
 
                     // Resolve the promise with the return value
                     let js_val = Self::value_to_js_value(&return_value);
@@ -5294,12 +5306,13 @@ impl InterpreterCore {
                     let error_value = self.read_reg(error_reg)?;
 
                     // Find the currently executing async function
-                    let current_frame = self.call_stack.last().ok_or_else(|| {
-                        InterpreterError::TypeError {
-                            expected: "call frame during async throw".to_string(),
-                            got: "no call frame found".to_string(),
-                        }
-                    })?;
+                    let current_frame =
+                        self.call_stack
+                            .last()
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "call frame during async throw".to_string(),
+                                got: "no call frame found".to_string(),
+                            })?;
 
                     let async_func_id = current_frame.async_function_id.ok_or_else(|| {
                         InterpreterError::TypeError {
@@ -5309,14 +5322,16 @@ impl InterpreterCore {
                     })?;
 
                     // Get the async function object to find its promise
-                    let async_func = self.async_functions.get(async_func_id as usize).ok_or_else(|| {
-                        InterpreterError::TypeError {
+                    let async_func = self
+                        .async_functions
+                        .get(async_func_id as usize)
+                        .ok_or_else(|| InterpreterError::TypeError {
                             expected: "valid async function".to_string(),
                             got: format!("async function #{async_func_id} not found"),
-                        }
-                    })?;
+                        })?;
 
-                    let promise_handle = crate::promise_model::PromiseHandle(async_func.result_promise);
+                    let promise_handle =
+                        crate::promise_model::PromiseHandle(async_func.result_promise);
 
                     // Reject the promise with the error value
                     let js_reason = Self::value_to_js_value(&error_value);
@@ -13703,7 +13718,10 @@ mod tests {
                 .expect("async generator execution should succeed");
 
             // Should return a promise
-            assert!(matches!(result, Value::Promise(_)), "should return a promise");
+            assert!(
+                matches!(result, Value::Promise(_)),
+                "should return a promise"
+            );
 
             // Check that the async generator state was updated to SuspendedYield
             assert!(matches!(
@@ -13738,7 +13756,7 @@ mod tests {
                 core.async_generators.push(AsyncGeneratorObject {
                     function_index: 0,
                     closure_index: None,
-                    saved_ip: 2,                                  // Resume after yield
+                    saved_ip: 2, // Resume after yield
                     saved_registers: vec![Value::Undefined],
                     saved_register_base: 0,
                     phase: AsyncGeneratorPhase::SuspendedYield,
@@ -13751,7 +13769,10 @@ mod tests {
                 .expect("async generator resume should succeed");
 
             // Should return a promise
-            assert!(matches!(result, Value::Promise(_)), "should return a promise");
+            assert!(
+                matches!(result, Value::Promise(_)),
+                "should return a promise"
+            );
 
             // Check that the async generator state was updated to Completed
             assert!(matches!(

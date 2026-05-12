@@ -9,6 +9,7 @@ bad_dir="${tmp_root}/bad"
 mkdir -p "$good_dir" "$bad_dir"
 
 cat >"${good_dir}/cargo-output.log" <<'GOOD_LOG'
+INFO rch::transfer: Syncing /data/projects/franken_engine/crates/franken-engine-test-support -> /data/projects/franken_engine/crates/franken-engine-test-support on worker
    Compiling frankenengine-extension-host v0.1.0 (/data/projects/franken_engine/crates/franken-extension-host)
    Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
 GOOD_LOG

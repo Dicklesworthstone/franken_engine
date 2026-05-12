@@ -65,8 +65,7 @@ scan_log_for_forbidden_support() {
   local candidate_log="$1"
   [[ -f "$candidate_log" ]] || fail "log_not_found path=${candidate_log}"
 
-  if grep -Eiq '(^|[[:space:]])(Compiling|Checking|Fresh|Dirty)[[:space:]]+frankenengine-test-support([[:space:]]|$)' "$candidate_log" ||
-     grep -Fq '/franken-engine-test-support' "$candidate_log"; then
+  if grep -Eiq '(^|[[:space:]])(Compiling|Checking|Fresh|Dirty)[[:space:]]+frankenengine-test-support([[:space:]]|$)' "$candidate_log"; then
     fail "forbidden_support_dependency package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
   fi
 

@@ -3855,6 +3855,13 @@ fn parse_primary_expression(
         return parse_function_expression(rest, span, context, recursion_depth);
     }
 
+    // Class expression: `class { ... }`, `class Name { ... }`, or
+    // `class extends Base { ... }`.
+    if expression == "class" || expression.starts_with("class ") || expression.starts_with("class{")
+    {
+        return parse_class_expression(expression, span, context);
+    }
+
     // Template literal: `text ${expr} text`
     if expression.starts_with('`') && expression.ends_with('`') {
         return parse_template_literal(expression, span, context, recursion_depth);
@@ -7632,10 +7639,41 @@ fn parse_class_declaration(
     span: SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Statement> {
-    let rest = statement
-        .strip_prefix("class")
-        .unwrap_or(statement)
-        .trim_start();
+    let (name, super_class, methods) = parse_class_parts(statement, &span, context)?;
+
+    Ok(Statement::ClassDeclaration(ClassDeclaration {
+        name,
+        super_class,
+        body: methods,
+        span,
+    }))
+}
+
+fn parse_class_expression(
+    expression: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    let (name, super_class, methods) = parse_class_parts(expression, span, context)?;
+    Ok(Expression::ClassExpression {
+        name,
+        super_class,
+        body: methods,
+    })
+}
+
+type ParsedClassParts = (
+    Option<String>,
+    Option<Box<Expression>>,
+    Vec<MethodDefinition>,
+);
+
+fn parse_class_parts(
+    source: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<ParsedClassParts> {
+    let rest = source.strip_prefix("class").unwrap_or(source).trim_start();
 
     // Parse optional class name and optional `extends` clause.
     let (name, rest) = if rest.starts_with('{') || rest.starts_with("extends ") {
@@ -7670,8 +7708,16 @@ fn parse_class_declaration(
             )
         })?;
         let super_name = after_extends[..brace].trim();
+        if super_name.is_empty() {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                "class extends clause requires a superclass expression",
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         (
-            Some(Box::new(Expression::Identifier(super_name.to_string()))),
+            Some(Box::new(parse_expression(super_name, span, context, 1)?)),
             &after_extends[brace..],
         )
     } else {
@@ -7688,14 +7734,9 @@ fn parse_class_declaration(
         )
     })?;
 
-    let methods = parse_class_body(body_src, &span, context)?;
+    let methods = parse_class_body(body_src, span, context)?;
 
-    Ok(Statement::ClassDeclaration(ClassDeclaration {
-        name,
-        super_class,
-        body: methods,
-        span,
-    }))
+    Ok((name, super_class, methods))
 }
 
 /// Parse the contents of a class body into a list of MethodDefinitions.

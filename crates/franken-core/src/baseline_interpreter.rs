@@ -8843,6 +8843,7 @@ impl LaneRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{Expression, Statement};
     use crate::ir_contract::{
         CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     };
@@ -12292,35 +12293,74 @@ mod tests {
         let parser = CanonicalEs2020Parser;
         let tree = parser
             .parse(
-                "const C = class { method() { return 1; } }",
+                "const C = class { method() { return 1; } };\nconst c = new C();\nc.method();",
                 ParseGoal::Script,
             )
-            .expect("parser currently accepts this source without class-expression semantics");
+            .expect("class expression should parse as structured AST");
+        match &tree.body[0] {
+            Statement::VariableDeclaration(decl) => {
+                assert!(matches!(
+                    decl.declarations[0].initializer.as_ref(),
+                    Some(Expression::ClassExpression { .. })
+                ));
+            }
+            other => panic!("expected class expression variable declaration, got {other:?}"),
+        }
         let ir0 = Ir0Module::from_syntax_tree(tree, "class-expression-test.js");
         let ctx = LoweringContext::new(
             "trace-class-expression",
             "decision-class-expression",
             "policy-class-expression",
         );
-        let output = lower_ir0_to_ir3(&ir0, &ctx)
-            .expect("bd-vwtlc.5 tracks replacing this non-semantic lowering");
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class expression should lower");
 
         assert!(
             output
                 .ir3
-                .constant_pool
-                .iter()
-                .any(|constant| constant.contains("class { method()")),
-            "current class expression path should be truth-labeled as non-semantic text lowering"
-        );
-        assert!(
-            !output
-                .ir3
                 .instructions
                 .iter()
                 .any(|instruction| matches!(instruction, Ir3Instruction::Construct { .. })),
-            "bd-vwtlc.5 tracks executable class expression constructor lowering"
+            "class expression should produce an executable constructor"
         );
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("class expression constructor and prototype method should execute");
+
+        assert_eq!(result.value, Value::Int(1));
+    }
+
+    #[test]
+    fn class_expression_extends_super_parse_lower_execute() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "class Base { constructor() { this.base = 40; } value() { return this.base + 2; } }\nconst Child = class extends Base { constructor() { super(); } value() { return super.value(); } };\nconst c = new Child();\nc.value();",
+                ParseGoal::Script,
+            )
+            .expect("class expression extends/super should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-expression-extends-super-test.js");
+        let ctx = LoweringContext::new(
+            "trace-class-expression-extends",
+            "decision-class-expression-extends",
+            "policy-class-expression-extends",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class expression extends should lower");
+        assert!(
+            output
+                .ir3
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::LoadSuper { .. })),
+            "derived class expression should lower super bindings"
+        );
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("class expression extends/super should execute");
+
+        assert_eq!(result.value, Value::Int(42));
     }
 
     #[test]

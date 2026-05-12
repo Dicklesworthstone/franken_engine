@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ImportClause, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
+    ImportClause, MethodDefinition, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
     VariableDeclarationKind,
 };
 use crate::flow_lattice::{
@@ -2411,9 +2411,11 @@ fn lower_statement_to_ir1_with_flow(
                         scope_id,
                         label_counter,
                     )?;
-                    ops.push(Ir1Op::GetProperty {
-                        key: Ir1PropertyKey::Static("prototype".to_string()),
-                    });
+                    if !method.is_static {
+                        ops.push(Ir1Op::GetProperty {
+                            key: Ir1PropertyKey::Static("prototype".to_string()),
+                        });
+                    }
                     ops.push(Ir1Op::SetProperty {
                         key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.to_string()),
                     });
@@ -5002,6 +5004,250 @@ fn alloc_internal_binding(
     .map_err(LoweringPipelineError::SemanticViolation)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lower_class_expression_to_ir1(
+    name: Option<&str>,
+    super_class: Option<&Expression>,
+    body: &[MethodDefinition],
+    ops: &mut Vec<Ir1Op>,
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope_id: ScopeId,
+    label_counter: &mut u32,
+) -> Result<(), LoweringPipelineError> {
+    let constructor = body
+        .iter()
+        .find(|method| method.kind == MethodKind::Constructor);
+    let param_names: Vec<String> = constructor
+        .map(|ctor| {
+            ctor.params
+                .iter()
+                .filter_map(|param| param.name().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut body_ops = Vec::new();
+    let mut body_bindings = Vec::new();
+    let mut body_lookup = BTreeMap::new();
+    let mut body_binding_index: BindingId = 0;
+    let body_scope = ScopeId { depth: 0, index: 0 };
+    let mut body_label_counter: u32 = 0;
+    for param_name in &param_names {
+        let _ = alloc_binding(
+            &mut body_bindings,
+            &mut body_lookup,
+            &mut body_binding_index,
+            body_scope,
+            param_name,
+            BindingKind::Parameter,
+        )
+        .map_err(LoweringPipelineError::SemanticViolation)?;
+    }
+    if let Some(ctor) = constructor {
+        for stmt in &ctor.body.body {
+            lower_statement_to_ir1(
+                stmt,
+                &mut body_ops,
+                &mut body_bindings,
+                &mut body_lookup,
+                &mut body_binding_index,
+                body_scope,
+                &mut body_label_counter,
+            )?;
+        }
+    }
+    if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+        body_ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Undefined,
+        });
+        body_ops.push(Ir1Op::Return);
+    }
+
+    let class_binding = alloc_internal_binding(
+        bindings,
+        binding_lookup,
+        binding_index,
+        scope_id,
+        "class_expression",
+    )?;
+    ops.push(Ir1Op::CreateFunction {
+        name: name.map(str::to_string),
+        param_names,
+        body_ops,
+        free_vars: Vec::new(),
+        is_generator: false,
+    });
+    ops.push(Ir1Op::StoreBinding {
+        binding_id: class_binding,
+    });
+    ops.push(Ir1Op::Nop);
+
+    if let Some(super_expr) = super_class {
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: class_binding,
+        });
+        lower_expression_to_ir1(
+            super_expr,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+        )?;
+        ops.push(Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.to_string()),
+        });
+        ops.push(Ir1Op::Nop);
+
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: class_binding,
+        });
+        ops.push(Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static("prototype".to_string()),
+        });
+        lower_expression_to_ir1(
+            super_expr,
+            ops,
+            bindings,
+            binding_lookup,
+            binding_index,
+            scope_id,
+            label_counter,
+        )?;
+        ops.push(Ir1Op::GetProperty {
+            key: Ir1PropertyKey::Static("prototype".to_string()),
+        });
+        ops.push(Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static("__proto__".to_string()),
+        });
+        ops.push(Ir1Op::Nop);
+    }
+
+    for method in body
+        .iter()
+        .filter(|method| method.kind != MethodKind::Constructor)
+    {
+        let method_name = match &method.key {
+            Expression::Identifier(name) => name.clone(),
+            Expression::StringLiteral(name) => name.clone(),
+            _ => "anonymous_method".to_string(),
+        };
+        let method_param_names: Vec<String> = method
+            .params
+            .iter()
+            .filter_map(|param| param.name().map(String::from))
+            .collect();
+        let mut method_body_ops = Vec::new();
+        let mut method_bindings = Vec::new();
+        let mut method_lookup = BTreeMap::new();
+        let mut method_binding_index: BindingId = 0;
+        let method_scope = ScopeId { depth: 0, index: 0 };
+        let mut method_label_counter: u32 = 0;
+        for param_name in &method_param_names {
+            let _ = alloc_binding(
+                &mut method_bindings,
+                &mut method_lookup,
+                &mut method_binding_index,
+                method_scope,
+                param_name,
+                BindingKind::Parameter,
+            )
+            .map_err(LoweringPipelineError::SemanticViolation)?;
+        }
+        for stmt in &method.body.body {
+            lower_statement_to_ir1(
+                stmt,
+                &mut method_body_ops,
+                &mut method_bindings,
+                &mut method_lookup,
+                &mut method_binding_index,
+                method_scope,
+                &mut method_label_counter,
+            )?;
+        }
+        if !matches!(method_body_ops.last(), Some(Ir1Op::Return)) {
+            method_body_ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::Undefined,
+            });
+            method_body_ops.push(Ir1Op::Return);
+        }
+
+        let method_super_binding = if super_class.is_some() {
+            Some(alloc_internal_binding(
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                "class_expression_method_super",
+            )?)
+        } else {
+            None
+        };
+
+        ops.push(Ir1Op::LoadBinding {
+            binding_id: class_binding,
+        });
+        if !method.is_static {
+            ops.push(Ir1Op::GetProperty {
+                key: Ir1PropertyKey::Static("prototype".to_string()),
+            });
+        }
+        ops.push(Ir1Op::CreateFunction {
+            name: Some(method_name.clone()),
+            param_names: method_param_names,
+            body_ops: method_body_ops,
+            free_vars: Vec::new(),
+            is_generator: false,
+        });
+        if let Some(method_binding) = method_super_binding {
+            ops.push(Ir1Op::StoreBinding {
+                binding_id: method_binding,
+            });
+        }
+
+        let property_key = match method.kind {
+            MethodKind::Get => format!("{IR_ACCESSOR_GET_PREFIX}{method_name}"),
+            MethodKind::Set => format!("{IR_ACCESSOR_SET_PREFIX}{method_name}"),
+            MethodKind::Method | MethodKind::Constructor => method_name,
+        };
+        ops.push(Ir1Op::SetProperty {
+            key: Ir1PropertyKey::Static(property_key),
+        });
+        ops.push(Ir1Op::Nop);
+
+        if let (Some(super_expr), Some(method_binding)) = (super_class, method_super_binding) {
+            ops.push(Ir1Op::LoadBinding {
+                binding_id: method_binding,
+            });
+            lower_expression_to_ir1(
+                super_expr,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                scope_id,
+                label_counter,
+            )?;
+            if !method.is_static {
+                ops.push(Ir1Op::GetProperty {
+                    key: Ir1PropertyKey::Static("prototype".to_string()),
+                });
+            }
+            ops.push(Ir1Op::SetProperty {
+                key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.to_string()),
+            });
+            ops.push(Ir1Op::Nop);
+        }
+    }
+
+    ops.push(Ir1Op::LoadBinding {
+        binding_id: class_binding,
+    });
+    Ok(())
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -6399,14 +6645,22 @@ fn lower_expression_to_ir1(
                 quasi_count: quasis.len() as u32,
             });
         }
-        Expression::ClassExpression { .. } => {
-            return Err(unsupported_frontier_expression_error(
-                "class_expression",
-                "FE-LOWER-CLASS-EXPR-0001",
-                "lower_ir0_to_ir1.class_expression",
-                "class expression lowering is not implemented; fail-closed contract rejected placeholder constructor synthesis",
-                None,
-            ));
+        Expression::ClassExpression {
+            name,
+            super_class,
+            body,
+        } => {
+            lower_class_expression_to_ir1(
+                name.as_deref(),
+                super_class.as_deref(),
+                body,
+                ops,
+                bindings,
+                binding_lookup,
+                binding_index,
+                root_scope_id,
+                label_counter,
+            )?;
         }
     }
     Ok(())
@@ -9039,23 +9293,18 @@ mod tests {
         }
     }
 
-    fn assert_class_expression_fail_closed(expression: Expression) {
-        let err = lower_ir0_to_ir1(&expr_ir0(expression))
-            .expect_err("class expression lowering should fail closed");
-        let diagnostic = match err {
-            LoweringPipelineError::UnsupportedSyntax(diagnostic) => *diagnostic,
-            other => panic!("expected UnsupportedSyntax, got {other:?}"),
-        };
-        assert_eq!(diagnostic.feature_family, "class_expression");
-        assert_eq!(diagnostic.diagnostic_code, "FE-LOWER-CLASS-EXPR-0001");
-        assert_eq!(diagnostic.site_id, "lower_ir0_to_ir1.class_expression");
-        assert_eq!(diagnostic.api_surface, "lower_ir0_to_ir1");
-        assert_eq!(diagnostic.source_label, "ir0");
-        assert_eq!(diagnostic.owner, COMPONENT);
-        assert_eq!(
-            diagnostic.message_template,
-            "class expression lowering is not implemented; fail-closed contract rejected placeholder constructor synthesis"
+    fn assert_class_expression_lowers(expression: Expression) -> Ir1Module {
+        let result = lower_ir0_to_ir1(&expr_ir0(expression))
+            .expect("class expression should lower to executable constructor IR");
+        assert!(
+            result
+                .module
+                .ops
+                .iter()
+                .any(|op| matches!(op, Ir1Op::CreateFunction { .. })),
+            "class expression lowering should create a constructor function"
         );
+        result.module
     }
 
     #[test]
@@ -9075,18 +9324,18 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_class_expression_fails_closed() {
-        assert_class_expression_fail_closed(basic_class_expression(None));
+    fn anonymous_class_expression_lowers() {
+        assert_class_expression_lowers(basic_class_expression(None));
     }
 
     #[test]
-    fn named_class_expression_fails_closed() {
-        assert_class_expression_fail_closed(basic_class_expression(Some("NamedClass")));
+    fn named_class_expression_lowers() {
+        assert_class_expression_lowers(basic_class_expression(Some("NamedClass")));
     }
 
     #[test]
-    fn class_expression_in_assignment_rhs_fails_closed() {
-        assert_class_expression_fail_closed(Expression::Assignment {
+    fn class_expression_in_assignment_rhs_lowers() {
+        assert_class_expression_lowers(Expression::Assignment {
             operator: AssignmentOperator::Assign,
             left: Box::new(Expression::Identifier("target".to_string())),
             right: Box::new(basic_class_expression(Some("AssignedClass"))),
@@ -9094,16 +9343,34 @@ mod tests {
     }
 
     #[test]
-    fn class_expression_in_call_argument_fails_closed() {
-        assert_class_expression_fail_closed(Expression::Call {
+    fn class_expression_in_call_argument_lowers() {
+        assert_class_expression_lowers(Expression::Call {
             callee: Box::new(Expression::Identifier("consume".to_string())),
             arguments: vec![basic_class_expression(None)],
         });
     }
 
     #[test]
-    fn class_expression_with_extends_and_methods_fails_closed() {
-        assert_class_expression_fail_closed(complex_class_expression());
+    fn class_expression_with_extends_and_methods_lowers_super_metadata() {
+        let module = assert_class_expression_lowers(complex_class_expression());
+        assert!(
+            module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::SetProperty {
+                    key: Ir1PropertyKey::Static(key)
+                } if key == IR_SUPER_CONSTRUCTOR_PROPERTY
+            )),
+            "derived class expression should record parent constructor metadata"
+        );
+        assert!(
+            module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::SetProperty {
+                    key: Ir1PropertyKey::Static(key)
+                } if key == IR_SUPER_PROTOTYPE_PROPERTY
+            )),
+            "derived class expression should record parent prototype metadata"
+        );
     }
 
     #[test]

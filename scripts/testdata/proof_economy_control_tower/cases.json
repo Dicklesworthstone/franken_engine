@@ -1,0 +1,35 @@
+{
+  "schema_version": "franken-engine.proof-economy-control-tower-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "pass_all_components",
+      "proof_reuse_decision": "admit_reuse",
+      "tail_latency_decision": "healthy",
+      "agent_evidence_decision": "pass",
+      "expected": {
+        "decision": "pass",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "degraded_refresh_advisory",
+      "proof_reuse_decision": "refresh_required",
+      "tail_latency_decision": "advisory",
+      "agent_evidence_decision": "degraded",
+      "expected": {
+        "decision": "degraded",
+        "exit_code": 0
+      }
+    },
+    {
+      "case_id": "fail_closed_component",
+      "proof_reuse_decision": "fail_closed",
+      "tail_latency_decision": "healthy",
+      "agent_evidence_decision": "pass",
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42
+      }
+    }
+  ]
+}

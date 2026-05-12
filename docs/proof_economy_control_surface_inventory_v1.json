@@ -1,0 +1,649 @@
+{
+  "schema_version": "franken-engine.proof-economy-control-surface-inventory.v1",
+  "bead_id": "bd-nil8a",
+  "purpose": "Inventory existing swarm, proof, rch, and operator control surfaces before integrating an operator proof-economy control tower.",
+  "source_basis": {
+    "method": "source-only inspection",
+    "inspected_on": "2026-05-12",
+    "cargo_required": false
+  },
+  "global_policy": {
+    "diagnostic_paths_default_to": "advisory_read_only",
+    "heavy_rust_validation_policy": "all Cargo build, check, test, clippy, bench, and run commands must be wrapped by rch",
+    "agent_mail_outages": "must be represented as degraded or blocked evidence, never silently ignored"
+  },
+  "surfaces": [
+    {
+      "surface_id": "proof_reuse_cache_planner",
+      "owner": "scripts/proof_reuse_cache_planner.sh",
+      "supporting_docs": [
+        "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md",
+        "docs/remote_proof_retention_class_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.proof-evidence-query.v1",
+        "franken-engine.proof-freshness-decay-report.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.proof-reuse-cache-plan.v1"
+      ],
+      "expected_artifacts": [
+        "proof_cache_plan.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md",
+        "proof_index_rows.json",
+        "freshness_reports.json",
+        "cache_hits.jsonl",
+        "required_refreshes.jsonl",
+        "invalid_artifacts.jsonl",
+        "invalidated_paths.jsonl"
+      ],
+      "replay_command": "./scripts/proof_reuse_cache_planner.sh --proof-index-json <proof_index.json> --freshness-report <freshness_report.json> --expected-source-revision <rev> --changed-path <path> --output-dir <dir>",
+      "mutation_policy": {
+        "classifier_only": true,
+        "runs_proof_commands": false,
+        "mutates_remote_workers": false,
+        "mutates_tracker": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/proof_reuse_cache_planner_smoke.sh"
+      ],
+      "known_gaps": [
+        "Planner classifies reuse and refresh work but is not yet an admission gate in the rch proof path.",
+        "No shared tower-level run_manifest.json is emitted by this script."
+      ]
+    },
+    {
+      "surface_id": "proof_economy_replay_trace_normalizer",
+      "owner": "scripts/proof_economy_replay_trace_normalizer.sh",
+      "supporting_docs": [
+        "docs/proof_economy_replay_trace_contract_v1.json"
+      ],
+      "input_schemas": [
+        "br ready JSON",
+        "br in-progress JSON",
+        "optional Agent Mail reservations JSON",
+        "optional proof reuse cache plan JSON",
+        "optional resident bundle report JSON",
+        "optional no-mock drill report JSON"
+      ],
+      "output_schemas": [
+        "franken-engine.proof-economy-replay-trace.v1"
+      ],
+      "expected_artifacts": [
+        "replay_trace.normalized.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/proof_economy_replay_trace_normalizer.sh --br-ready-json <ready.json> --br-in-progress-json <in_progress.json> --output-dir <dir>",
+      "mutation_policy": {
+        "fixture_snapshot_input": true,
+        "mutates_tracker": false,
+        "sends_agent_mail": false,
+        "runs_cargo": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/proof_economy_replay_trace_normalizer_smoke.sh"
+      ],
+      "known_gaps": [
+        "Acts as proof-economy input glue but is not exposed as part of one operator command."
+      ]
+    },
+    {
+      "surface_id": "proof_queue_brownout_starvation_detector",
+      "owner": "scripts/proof_queue_brownout_starvation_detector.sh",
+      "supporting_docs": [
+        "docs/PROOF_QUEUE_BROWNOUT_STARVATION_DETECTOR.md",
+        "docs/proof_queue_brownout_detector_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.proof-economy-replay-trace.v1",
+        "franken-engine.proof-economy-counterfactual-replay-report.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.proof-queue-brownout-report.v1"
+      ],
+      "expected_artifacts": [
+        "brownout_report.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/proof_queue_brownout_starvation_detector.sh --replay-trace-json <replay_trace.json> --counterfactual-report-json <counterfactual.json> --output-dir <dir>",
+      "mutation_policy": {
+        "fixture_replay_only": true,
+        "queries_live_workers": false,
+        "runs_proof_commands": false,
+        "mutates_tracker": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/proof_queue_brownout_starvation_detector_smoke.sh"
+      ],
+      "known_gaps": [
+        "Detector emits brownout findings but does not itself emit bounded rescue actions; that belongs to the starvation rescue planner and conformance gate."
+      ]
+    },
+    {
+      "surface_id": "swarm_starvation_rescue_planner",
+      "owner": "scripts/swarm_starvation_rescue_planner.sh",
+      "supporting_docs": [
+        "docs/swarm_starvation_rescue_planner_contract_v1.json",
+        "docs/swarm_starvation_rescue_input_contract_v1.json",
+        "docs/swarm_starvation_rescue_scenario_matrix_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.swarm-starvation-rescue-input.v1",
+        "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-starvation-rescue-plan.v1"
+      ],
+      "expected_artifacts": [
+        "swarm_starvation_rescue_plan.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/swarm_starvation_rescue_planner.sh --starvation-rescue-input-json <input.json> --scenario-matrix-report-json <matrix.json> --output-dir <dir>",
+      "mutation_policy": {
+        "policy_only": true,
+        "mutates_live_worker_or_tracker_state": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/swarm_starvation_rescue_no_mock_drill.sh",
+        "scripts/e2e/swarm_starvation_rescue_input_normalizer_smoke.sh"
+      ],
+      "known_gaps": [
+        "Planner output requires the conformance gate before a downstream operator should trust it."
+      ]
+    },
+    {
+      "surface_id": "swarm_starvation_rescue_conformance_gate",
+      "owner": "scripts/swarm_starvation_rescue_conformance_gate.sh",
+      "supporting_docs": [
+        "docs/SWARM_STARVATION_RESCUE_CONFORMANCE_GATE.md",
+        "docs/swarm_starvation_rescue_conformance_gate_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.swarm-starvation-rescue-plan.v1",
+        "franken-engine.swarm-starvation-rescue-input.v1",
+        "franken-engine.swarm-starvation-rescue-scenario-matrix-report.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-starvation-rescue-conformance-report.v1"
+      ],
+      "expected_artifacts": [
+        "swarm_starvation_rescue_conformance_report.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md",
+        "gate_failures.jsonl",
+        "invariants.jsonl",
+        "checked_commands.jsonl"
+      ],
+      "replay_command": "./scripts/swarm_starvation_rescue_conformance_gate.sh --starvation-rescue-plan-json <plan.json> --output-dir <dir>",
+      "mutation_policy": {
+        "report_only": true,
+        "mutates_beads": false,
+        "releases_reservations": false,
+        "mutates_worker_state": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/swarm_starvation_rescue_conformance_gate_smoke.sh"
+      ],
+      "known_gaps": [
+        "Gate validates one planner receipt; no single no-mock drill currently composes it with proof reuse, Agent Mail continuity, and evidence indexing."
+      ]
+    },
+    {
+      "surface_id": "agent_mail_outage_continuity_bridge",
+      "owner": "scripts/swarm_agent_mail_outage_continuity_bridge.sh",
+      "supporting_docs": [
+        "docs/agent_mail_outage_continuity_bridge_contract_v1.json",
+        "docs/IDEA_WIZARD_IV_COORDINATION_HEALTH_PACKET.md"
+      ],
+      "input_schemas": [
+        "br in-progress JSON",
+        "optional Agent Mail health JSON",
+        "optional Agent Mail bootstrap JSON",
+        "optional Agent Mail profiles JSON",
+        "optional git status JSON",
+        "optional file reservations JSON"
+      ],
+      "output_schemas": [
+        "franken-engine.agent-mail-outage-continuity-bridge.v1",
+        "franken-engine.agent-mail-outage-continuity-event.v1"
+      ],
+      "expected_artifacts": [
+        "mail_outage_continuity_bridge.json",
+        "soft_lock_receipts.jsonl",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/swarm_agent_mail_outage_continuity_bridge.sh --br-in-progress-json <in_progress.json> --mail-health-json <mail_health.json> --output-dir <dir>",
+      "mutation_policy": {
+        "sends_agent_mail": false,
+        "repairs_agent_mail_db": false,
+        "mutates_br": false,
+        "releases_reservations": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false
+      },
+      "current_test_coverage": [
+        "scripts/testdata/swarm_agent_mail_outage_continuity_bridge/cases.json"
+      ],
+      "known_gaps": [
+        "No dedicated e2e smoke script was found in the named surface family; downstream work should either add one or route this through the unified continuity doctor."
+      ]
+    },
+    {
+      "surface_id": "swarm_ops_state_snapshot_capture",
+      "owner": "scripts/swarm_ops_state_snapshot_capture.sh",
+      "supporting_docs": [
+        "docs/swarm_ops_state_contract_v1.json",
+        "docs/SWARM_LIVE_READONLY_CAPTURE_PROFILE.md"
+      ],
+      "input_schemas": [
+        "optional br ready JSON",
+        "optional br in-progress JSON",
+        "optional bv plan text",
+        "optional Agent Mail agents JSON",
+        "optional Agent Mail inbox JSON",
+        "optional rch status JSON",
+        "optional rch queue JSON",
+        "optional git status text"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-ops-state-snapshot.v1",
+        "franken-engine.swarm-ops-state-event.v1"
+      ],
+      "expected_artifacts": [
+        "swarm_ops_state_snapshot.json",
+        "raw/",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/swarm_ops_state_snapshot_capture.sh --br-ready-json <ready.json> --br-in-progress-json <in_progress.json> --rch-status-json <rch_status.json> --git-status-txt <git_status.txt> --output-dir <dir>",
+      "mutation_policy": {
+        "read_only_capture": true,
+        "mutates_tracker": false,
+        "runs_cargo": false,
+        "mutates_remote_workers": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/swarm_ops_state_contract_smoke.sh"
+      ],
+      "known_gaps": [
+        "Script supports live local CLI capture when fixtures are omitted, while the contract language is fixture-fed/proof-only. The control tower should prefer explicit snapshot inputs and document live-capture boundaries."
+      ]
+    },
+    {
+      "surface_id": "swarm_agent_causal_trace_graph",
+      "owner": "scripts/swarm_agent_causal_trace_graph.sh",
+      "supporting_docs": [
+        "docs/SWARM_AGENT_CAUSAL_TRACE_SPINE.md",
+        "docs/swarm_agent_causal_trace_spine_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.swarm-agent-causal-trace-event-set.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-agent-causal-trace-graph.v1",
+        "franken-engine.swarm-agent-causal-trace-anomaly-report.v1",
+        "franken-engine.swarm-agent-causal-trace-graph-producer-event.v1"
+      ],
+      "expected_artifacts": [
+        "swarm_agent_causal_trace_graph.json",
+        "swarm_agent_causal_trace_anomalies.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/swarm_agent_causal_trace_graph.sh --normalized-events-json <events.json> --output-dir <dir>",
+      "mutation_policy": {
+        "fixture_fed_only": true,
+        "queries_live_br": false,
+        "queries_live_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/swarm_agent_causal_trace_graph_smoke.sh",
+        "scripts/e2e/swarm_agent_causal_trace_no_mock_drill.sh",
+        "scripts/e2e/swarm_agent_causal_trace_runbook_truth_gate.sh"
+      ],
+      "known_gaps": [
+        "Graph is scoped to a normalized event set; it does not yet index all bead, mail, commit, rch, and artifact edges for an entire agent run."
+      ]
+    },
+    {
+      "surface_id": "swarm_execution_queue_runner",
+      "owner": "crates/franken-engine/src/swarm_execution_queue_runner.rs",
+      "operator_entrypoint": "crates/franken-engine/src/bin/franken_swarm_execution_queue.rs",
+      "supporting_docs": [
+        "docs/SWARM_EXECUTION_QUEUE_RUNNER.md",
+        "docs/swarm_execution_queue_runner_contract_v1.json",
+        "docs/swarm_execution_queue_input_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.swarm-execution-queue-input.v1"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-execution-queue-runner.v1",
+        "franken-engine.swarm-execution-queue-artifact.v1",
+        "franken-engine.swarm-execution-risk-budget-receipt.v1",
+        "franken-engine.swarm-execution-bottleneck-report.v1"
+      ],
+      "expected_artifacts": [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "execution_queue_artifact.json",
+        "risk_budget_receipt.json",
+        "bottleneck_report.json",
+        "operator_summary.md"
+      ],
+      "replay_command": "rch exec -- env CARGO_TARGET_DIR=<target-dir> cargo run -p frankenengine-engine --bin franken_swarm_execution_queue -- --normalized-input-json <normalized_input.json> --output-dir <dir>",
+      "mutation_policy": {
+        "advisory_only": true,
+        "mutates_beads": false,
+        "mutates_reservations": false,
+        "sends_agent_mail": false,
+        "mutates_worker_state": false
+      },
+      "current_test_coverage": [
+        "crates/franken-engine/tests/swarm_execution_queue_runner_integration.rs",
+        "scripts/e2e/swarm_execution_queue_conformance_gate.sh"
+      ],
+      "known_gaps": [
+        "This runner owns queue recompute artifacts but does not summarize proof reuse, rch pressure, Agent Mail outage continuity, or causal trace evidence."
+      ]
+    },
+    {
+      "surface_id": "workload_preflight_doctor",
+      "owner": "crates/franken-engine/src/workload_preflight_doctor.rs",
+      "supporting_docs": [
+        "docs/ARCHITECTURE_INVENTORY.md"
+      ],
+      "input_schemas": [
+        "WorkloadPreflightDoctorInput Rust struct"
+      ],
+      "output_schemas": [
+        "franken-engine.workload-preflight-doctor.v1"
+      ],
+      "expected_artifacts": [
+        "WorkloadPreflightDoctorReport JSON when serialized",
+        "operator summary text via render_workload_preflight_summary"
+      ],
+      "replay_command": "rch exec -- env CARGO_TARGET_DIR=<target-dir> cargo test -p frankenengine-engine workload_preflight_doctor",
+      "mutation_policy": {
+        "pure_evaluator": true,
+        "mutates_external_state": false
+      },
+      "current_test_coverage": [
+        "unit tests in crates/franken-engine/src/workload_preflight_doctor.rs"
+      ],
+      "known_gaps": [
+        "No dedicated operator CLI or checked-in artifact contract was found for this doctor."
+      ]
+    },
+    {
+      "surface_id": "tail_latency_control_plane",
+      "owner": "crates/franken-engine/src/tail_latency_control_plane.rs",
+      "operator_entrypoint": "crates/franken-engine/src/bin/franken_tail_latency_control_plane.rs",
+      "supporting_docs": [
+        "docs/RGC_TAIL_LATENCY_CONTROL_PLANE_V1.md",
+        "docs/rgc_swarm_responsiveness_claim_map_v1.json"
+      ],
+      "input_schemas": [
+        "StressProfile CLI enum",
+        "epoch"
+      ],
+      "output_schemas": [
+        "franken-engine.tail-latency-control-plane.v1",
+        "franken-engine.tail-latency-control-plane-trace-ids.v1",
+        "franken-engine.tail-latency-control-plane-run-manifest.v1",
+        "franken-engine.tail-latency-control-plane-event.v1",
+        "franken-engine.admission-publication-bundle.v1"
+      ],
+      "expected_artifacts": [
+        "run_manifest.json",
+        "events.jsonl",
+        "commands.txt",
+        "trace_ids.json",
+        "latency_control_plane_report.json",
+        "admission_publication_bundle.json",
+        "summary.md",
+        "env.json",
+        "repro.lock",
+        "step_logs/"
+      ],
+      "replay_command": "rch exec -- env CARGO_TARGET_DIR=<target-dir> cargo run -p frankenengine-engine --bin franken_tail_latency_control_plane -- --out-dir <dir> --profile synthetic-contention --epoch <n> --emit-artifact-stream",
+      "mutation_policy": {
+        "artifact_bundle_writer": true,
+        "mutates_live_queue_policy": false,
+        "mutates_remote_workers": false
+      },
+      "current_test_coverage": [
+        "crates/franken-engine/tests/tail_latency_control_plane_integration.rs",
+        "scripts/run_rgc_tail_latency_control_plane.sh",
+        "scripts/e2e/rgc_tail_latency_control_plane_replay.sh"
+      ],
+      "known_gaps": [
+        "Tail-latency artifacts are not linked to proof queue brownout findings or Agent Mail continuity state."
+      ]
+    },
+    {
+      "surface_id": "promotion_gate_runner",
+      "owner": "crates/franken-engine/src/promotion_gate_runner.rs",
+      "supporting_docs": [
+        "docs/ARCHITECTURE_INVENTORY.md"
+      ],
+      "input_schemas": [
+        "GateRunnerConfig Rust struct",
+        "GateRunnerInput Rust struct"
+      ],
+      "output_schemas": [
+        "GateRunnerOutput Rust struct",
+        "EvidenceArtifactBundle Rust struct",
+        "GateRunnerLogEvent Rust struct"
+      ],
+      "expected_artifacts": [
+        "serialized gate runner output when embedded by a caller",
+        "evidence artifact bundle records"
+      ],
+      "replay_command": "rch exec -- env CARGO_TARGET_DIR=<target-dir> cargo test -p frankenengine-engine promotion_gate_runner",
+      "mutation_policy": {
+        "pure_gate_evaluator": true,
+        "mutates_external_state": false
+      },
+      "current_test_coverage": [
+        "unit tests in crates/franken-engine/src/promotion_gate_runner.rs",
+        "crates/franken-engine/tests/promotion_gate_runner_enrichment_integration.rs"
+      ],
+      "known_gaps": [
+        "No proof-economy operator entry point was found that feeds promotion-gate evidence into the swarm control tower."
+      ]
+    },
+    {
+      "surface_id": "remote_proof_control_surface_catalog",
+      "owner": "scripts/swarm_control_surface_catalog_normalizer.sh",
+      "supporting_docs": [
+        "docs/SWARM_REMOTE_PROOF_CONTROL_SURFACE_OPERATOR_RUNBOOK.md",
+        "docs/swarm_control_surface_catalog_contract_v1.json",
+        "docs/remote_proof_surface_manifest_v1.json",
+        "docs/swarm_remote_proof_control_surface_runbook_truth_contract_v1.json"
+      ],
+      "input_schemas": [
+        "franken-engine.remote-proof-contract-catalog-manifest.v1",
+        "source_inventory or surfaces array"
+      ],
+      "output_schemas": [
+        "franken-engine.swarm-control-surface-catalog.event.v1"
+      ],
+      "expected_artifacts": [
+        "swarm_control_surface_catalog.json",
+        "catalog_findings.json",
+        "events.jsonl",
+        "commands.txt",
+        "report.md"
+      ],
+      "replay_command": "./scripts/swarm_control_surface_catalog_normalizer.sh --source-manifest-json <manifest.json> --output-dir <dir>",
+      "mutation_policy": {
+        "fixture_fed_only": true,
+        "queries_live_br": false,
+        "queries_live_agent_mail": false,
+        "runs_cargo": false,
+        "runs_rch": false,
+        "mutates_remote_workers": false
+      },
+      "current_test_coverage": [
+        "scripts/e2e/swarm_remote_proof_control_surface_no_mock_drill.sh",
+        "scripts/e2e/swarm_remote_proof_control_surface_truth_gate.sh"
+      ],
+      "known_gaps": [
+        "Existing catalog covers the remote-proof family, but the named proof-economy control-tower surfaces are not yet unified behind one operator report."
+      ]
+    }
+  ],
+  "overlaps": [
+    {
+      "overlap_id": "coordination_health",
+      "surfaces": [
+        "agent_mail_outage_continuity_bridge",
+        "swarm_ops_state_snapshot_capture"
+      ],
+      "resolution": "Use swarm_ops_state_snapshot_capture for broad state snapshots and agent_mail_outage_continuity_bridge for fail-closed mail outage continuity receipts."
+    },
+    {
+      "overlap_id": "proof_queue_rescue_chain",
+      "surfaces": [
+        "proof_economy_replay_trace_normalizer",
+        "proof_queue_brownout_starvation_detector",
+        "swarm_starvation_rescue_planner",
+        "swarm_starvation_rescue_conformance_gate"
+      ],
+      "resolution": "Treat these as a pipeline: normalize scheduler evidence, detect brownout, plan bounded rescue, then gate the receipt."
+    },
+    {
+      "overlap_id": "evidence_graph_scope",
+      "surfaces": [
+        "swarm_agent_causal_trace_graph",
+        "remote_proof_control_surface_catalog"
+      ],
+      "resolution": "Catalog validates surface metadata; causal trace graph explains a single event-set run. A future evidence index should join bead, mail, commit, rch, and artifact edges."
+    },
+    {
+      "overlap_id": "operator_artifact_envelopes",
+      "surfaces": [
+        "swarm_execution_queue_runner",
+        "tail_latency_control_plane",
+        "proof_reuse_cache_planner",
+        "proof_queue_brownout_starvation_detector"
+      ],
+      "resolution": "Later control tower work should normalize artifact envelopes because only some surfaces emit run_manifest.json and trace_ids.json."
+    }
+  ],
+  "gap_table": [
+    {
+      "gap_id": "G1",
+      "category": "missing_cli_exposure",
+      "description": "No single existing operator entry point composes swarm health, proof reuse, rch pressure, Agent Mail continuity, causal trace, and rescue recommendations.",
+      "feeds_beads": [
+        "bd-bahyn",
+        "bd-i36b4"
+      ]
+    },
+    {
+      "gap_id": "G2",
+      "category": "missing_no_mock_drill",
+      "description": "Existing smoke/no-mock coverage is per-surface or per-family; there is no drill that runs the whole proof-economy control tower from real preserved snapshots.",
+      "feeds_beads": [
+        "bd-ksuqm"
+      ]
+    },
+    {
+      "gap_id": "G3",
+      "category": "weak_replay_proof",
+      "description": "Artifact envelopes differ across scripts. Several emit events.jsonl, commands.txt, and report.md but no run_manifest.json or trace_ids.json.",
+      "feeds_beads": [
+        "bd-bahyn",
+        "bd-es4nn"
+      ]
+    },
+    {
+      "gap_id": "G4",
+      "category": "missing_admission_integration",
+      "description": "Proof reuse planning is classifier-only and is not yet wired into rch proof admission.",
+      "feeds_beads": [
+        "bd-yb8kk"
+      ]
+    },
+    {
+      "gap_id": "G5",
+      "category": "mail_degraded_state",
+      "description": "Agent Mail corruption can still leave partial reads available; operator surfaces must report red/corrupt health explicitly rather than treating partial reads as success.",
+      "feeds_beads": [
+        "bd-bahyn",
+        "bd-es4nn"
+      ]
+    },
+    {
+      "gap_id": "G6",
+      "category": "library_only_surface",
+      "description": "workload_preflight_doctor and promotion_gate_runner have strong Rust tests but no dedicated proof-economy operator artifact bridge.",
+      "feeds_beads": [
+        "bd-i36b4"
+      ]
+    },
+    {
+      "gap_id": "G7",
+      "category": "evidence_index_scope",
+      "description": "The causal trace graph is event-set scoped; it does not yet produce a run-wide index across beads, mail, commits, rch commands, manifests, and artifact bundles.",
+      "feeds_beads": [
+        "bd-es4nn"
+      ]
+    },
+    {
+      "gap_id": "G8",
+      "category": "live_capture_boundary",
+      "description": "swarm_ops_state_snapshot_capture supports live CLI capture when fixture paths are omitted, while the downstream continuity tower should be replay-first and explicit about live read-only capture boundaries.",
+      "feeds_beads": [
+        "bd-bahyn",
+        "bd-ksuqm"
+      ]
+    }
+  ],
+  "recommended_next_work": [
+    {
+      "bead_id": "bd-bahyn",
+      "action": "Build the unified continuity doctor from these surfaces using preserved snapshots and explicit red/degraded mail states."
+    },
+    {
+      "bead_id": "bd-yb8kk",
+      "action": "Integrate proof_reuse_cache_planner classifications into the rch proof admission path."
+    },
+    {
+      "bead_id": "bd-es4nn",
+      "action": "Promote the causal trace graph into a run-wide evidence index."
+    },
+    {
+      "bead_id": "bd-i36b4",
+      "action": "Expose the integrated workflow through an existing operator script or CLI without adding a parallel control plane."
+    },
+    {
+      "bead_id": "bd-ksuqm",
+      "action": "Add the cross-surface no-mock drill once the component surfaces are integrated."
+    }
+  ],
+  "validation_commands": [
+    "jq empty docs/proof_economy_control_surface_inventory_v1.json",
+    "git diff --check -- docs/proof_economy_control_surface_inventory_v1.json docs/PROOF_ECONOMY_CONTROL_SURFACE_INVENTORY.md"
+  ]
+}

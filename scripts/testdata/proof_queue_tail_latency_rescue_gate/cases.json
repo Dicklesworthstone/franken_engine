@@ -1,0 +1,275 @@
+{
+  "schema_version": "franken-engine.proof-queue-tail-latency-rescue-gate-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy",
+      "max_agent_share_millionths": 500000,
+      "sources": {
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-healthy",
+          "command_rows": [
+            {
+              "agent_id": "AgentA",
+              "bead_id": "bd-p1",
+              "priority": 1,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentB",
+              "bead_id": "bd-p2",
+              "priority": 2,
+              "lease_decision": "granted"
+            }
+          ]
+        },
+        "counterfactual_report_json": {
+          "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+          "counterfactual_id": "cf-healthy",
+          "policy_outcomes": [
+            {
+              "policy_name": "fair_share",
+              "scheduled_count": 2,
+              "policy_decision": "pass",
+              "deferred_commands": []
+            }
+          ]
+        },
+        "tail_latency_report_json": {
+          "schema_version": "franken-engine.tail-latency-control-plane.v1",
+          "guardrails": {
+            "state": "nominal",
+            "fallback_activated": false,
+            "violated_stage_count": 0
+          }
+        }
+      },
+      "expected": {
+        "decision": "healthy",
+        "exit_code": 0,
+        "required_code": null
+      }
+    },
+    {
+      "case_id": "all_workers_busy",
+      "max_agent_share_millionths": 900000,
+      "sources": {
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-all-busy",
+          "command_rows": [
+            {
+              "agent_id": "AgentA",
+              "bead_id": "bd-busy-a",
+              "priority": 1,
+              "lease_decision": "busy"
+            },
+            {
+              "agent_id": "AgentB",
+              "bead_id": "bd-busy-b",
+              "priority": 2,
+              "lease_decision": "queued"
+            }
+          ]
+        },
+        "counterfactual_report_json": {
+          "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+          "counterfactual_id": "cf-all-busy",
+          "policy_outcomes": [
+            {
+              "policy_name": "baseline",
+              "scheduled_count": 1,
+              "policy_decision": "pass",
+              "deferred_commands": []
+            }
+          ]
+        },
+        "tail_latency_report_json": {
+          "schema_version": "franken-engine.tail-latency-control-plane.v1",
+          "guardrails": {
+            "state": "near_limit",
+            "fallback_activated": false,
+            "violated_stage_count": 1
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed_advisory",
+        "exit_code": 42,
+        "required_code": "queue_brownout_all_workers_busy"
+      }
+    },
+    {
+      "case_id": "unfair_agent_slot_share",
+      "max_agent_share_millionths": 500000,
+      "sources": {
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-unfair-share",
+          "command_rows": [
+            {
+              "agent_id": "AgentNoisy",
+              "bead_id": "bd-noisy-1",
+              "priority": 2,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentNoisy",
+              "bead_id": "bd-noisy-2",
+              "priority": 2,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentNoisy",
+              "bead_id": "bd-noisy-3",
+              "priority": 2,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentQuiet",
+              "bead_id": "bd-quiet",
+              "priority": 2,
+              "lease_decision": "granted"
+            }
+          ]
+        },
+        "counterfactual_report_json": {
+          "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+          "counterfactual_id": "cf-unfair-share",
+          "policy_outcomes": [
+            {
+              "policy_name": "fair_share",
+              "scheduled_count": 4,
+              "policy_decision": "pass",
+              "deferred_commands": []
+            }
+          ]
+        },
+        "tail_latency_report_json": {
+          "schema_version": "franken-engine.tail-latency-control-plane.v1",
+          "guardrails": {
+            "state": "near_limit",
+            "fallback_activated": false,
+            "violated_stage_count": 1
+          }
+        }
+      },
+      "expected": {
+        "decision": "advisory",
+        "exit_code": 0,
+        "required_code": "unfair_agent_slot_share"
+      }
+    },
+    {
+      "case_id": "low_priority_starvation",
+      "max_agent_share_millionths": 900000,
+      "sources": {
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-low-priority",
+          "command_rows": [
+            {
+              "agent_id": "AgentA",
+              "bead_id": "bd-p1",
+              "priority": 1,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentB",
+              "bead_id": "bd-p3-broad",
+              "priority": 3,
+              "lease_decision": "granted"
+            }
+          ]
+        },
+        "counterfactual_report_json": {
+          "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+          "counterfactual_id": "cf-low-priority",
+          "policy_outcomes": [
+            {
+              "policy_name": "high_pressure",
+              "scheduled_count": 1,
+              "policy_decision": "pass",
+              "deferred_commands": [
+                {
+                  "agent_id": "AgentB",
+                  "bead_id": "bd-p3-broad",
+                  "priority": 3,
+                  "fairness_reason": "P3 broad proof deferred behind protected P1 lane"
+                }
+              ]
+            }
+          ]
+        },
+        "tail_latency_report_json": {
+          "schema_version": "franken-engine.tail-latency-control-plane.v1",
+          "guardrails": {
+            "state": "near_limit",
+            "fallback_activated": false,
+            "violated_stage_count": 1
+          }
+        }
+      },
+      "expected": {
+        "decision": "advisory",
+        "exit_code": 0,
+        "required_code": "low_priority_starvation"
+      }
+    },
+    {
+      "case_id": "counterfactual_all_policies_brownout",
+      "max_agent_share_millionths": 900000,
+      "sources": {
+        "replay_trace_json": {
+          "schema_version": "franken-engine.proof-economy-replay-trace.v1",
+          "trace_id": "trace-counterfactual-brownout",
+          "command_rows": [
+            {
+              "agent_id": "AgentA",
+              "bead_id": "bd-cf-a",
+              "priority": 1,
+              "lease_decision": "granted"
+            },
+            {
+              "agent_id": "AgentB",
+              "bead_id": "bd-cf-b",
+              "priority": 2,
+              "lease_decision": "granted"
+            }
+          ]
+        },
+        "counterfactual_report_json": {
+          "schema_version": "franken-engine.proof-economy-counterfactual-replay-report.v1",
+          "counterfactual_id": "cf-all-policies-brownout",
+          "policy_outcomes": [
+            {
+              "policy_name": "baseline",
+              "scheduled_count": 0,
+              "policy_decision": "fail_closed",
+              "deferred_commands": []
+            },
+            {
+              "policy_name": "fair_share",
+              "scheduled_count": 0,
+              "policy_decision": "fail_closed",
+              "deferred_commands": []
+            }
+          ]
+        },
+        "tail_latency_report_json": {
+          "schema_version": "franken-engine.tail-latency-control-plane.v1",
+          "guardrails": {
+            "state": "fallback_engaged",
+            "fallback_activated": true,
+            "violated_stage_count": 2
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed_advisory",
+        "exit_code": 42,
+        "required_code": "counterfactual_all_policies_brownout"
+      }
+    }
+  ]
+}

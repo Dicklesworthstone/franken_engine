@@ -231,15 +231,6 @@ jq -n \
             }
           }
         else empty end,
-        $low_priority_deferred[]? as $deferred
-        | {
-            finding_id: stable_id("low_priority_starvation"; ($deferred.bead_id // "p3")),
-            severity: "warning",
-            code: "low_priority_starvation",
-            message: "Low-priority proof work is deferred by counterfactual policy and needs bounded remediation.",
-            remediation: remediation("low_priority_starvation"),
-            evidence: $deferred
-          },
         if $all_policy_brownout then
           {
             finding_id: stable_id("counterfactual_all_policies_brownout"; ($cf.counterfactual_id // "counterfactual")),
@@ -252,6 +243,17 @@ jq -n \
             }
           }
         else empty end
+      ]
+      + [
+        $low_priority_deferred[]? as $deferred
+        | {
+            finding_id: stable_id("low_priority_starvation"; ($deferred.bead_id // "p3")),
+            severity: "warning",
+            code: "low_priority_starvation",
+            message: "Low-priority proof work is deferred by counterfactual policy and needs bounded remediation.",
+            remediation: remediation("low_priority_starvation"),
+            evidence: $deferred
+          }
       ]
       | unique_by(.finding_id)
       | sort_by(.severity, .code, .finding_id)

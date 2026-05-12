@@ -1,0 +1,79 @@
+{
+  "schema_version": "franken-engine.franken-core-status-truth-gate.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.5",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-status-truth-gate-v1",
+  "status": "active",
+  "purpose": "Keep franken-core docs and manifests aligned with the excluded-but-standalone-compileable graduation state.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md",
+    "machine_contract": "docs/franken_core_status_truth_gate_v1.json",
+    "gate": "scripts/franken_core_status_truth_gate.sh",
+    "smoke": "scripts/e2e/franken_core_status_truth_gate_smoke.sh"
+  },
+  "canonical_state": {
+    "root_workspace_state": "excluded_standalone",
+    "root_cargo_exclude": "crates/franken-core",
+    "core_manifest_path": "crates/franken-core/Cargo.toml",
+    "core_package_name": "frankenengine-core",
+    "workspace_graduation_complete": false,
+    "workspace_acceptance_required": "bd-4w7h9.8"
+  },
+  "historical_evidence": [
+    {
+      "bead_id": "bd-ucemx",
+      "role": "historical missing-module/reference-only context",
+      "current_use": "context only; not proof that the current crate is non-compileable"
+    },
+    {
+      "bead_id": "bd-zsais",
+      "role": "standalone manifest compileability restored",
+      "current_use": "supersedes stale missing-module underclaims"
+    },
+    {
+      "bead_id": "bd-dymfz",
+      "role": "standalone franken-core test baseline restored",
+      "current_use": "supersedes stale reference-only underclaims"
+    },
+    {
+      "bead_id": "bd-nwhcp",
+      "role": "timer placeholder regressions became executable",
+      "current_use": "supports the standalone compileable nuance"
+    },
+    {
+      "bead_id": "bd-4w7h9.8",
+      "role": "final graduation acceptance suite",
+      "current_use": "required before workspace inclusion can be claimed"
+    }
+  ],
+  "required_reason_codes": [
+    "root_manifest_state_contradicts_excluded_contract",
+    "core_manifest_missing_or_malformed",
+    "stale_reference_only_claim",
+    "workspace_inclusion_overclaim",
+    "missing_excluded_status_claim",
+    "missing_standalone_compileability_claim"
+  ],
+  "required_outputs": [
+    "truth_report.json",
+    "events.jsonl",
+    "commands.txt",
+    "report.md"
+  ],
+  "non_mutation_attestation": {
+    "rewrites_docs": false,
+    "edits_manifests": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "creates_beads": false
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_status_truth_gate_v1.json",
+    "bash -n scripts/franken_core_status_truth_gate.sh",
+    "bash -n scripts/e2e/franken_core_status_truth_gate_smoke.sh",
+    "bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check",
+    "bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md docs/franken_core_status_truth_gate_v1.json scripts/franken_core_status_truth_gate.sh scripts/e2e/franken_core_status_truth_gate_smoke.sh"
+  ]
+}

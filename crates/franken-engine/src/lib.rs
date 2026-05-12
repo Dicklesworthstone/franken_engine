@@ -68,12 +68,7 @@ pub mod causal_regret_evidence_gate;
 pub mod causal_replay;
 pub mod causal_uplift_evidence_gate;
 pub mod certified_optimization_governance;
-// Temporarily disabled: module landed in 381f935e with broken imports
-// (TranslationValidator, ValidationResult, ValidationReceipt, RewriteRule,
-// RewriteRuleId, OptimizationTier::Conservative, GovernanceState::new(),
-// RollbackRecord::new, OptimizationCertificate::new) that do not exist in
-// their referenced source modules. Re-enable once the dependent APIs land.
-// pub mod certified_rewrite_optimizer;
+pub mod certified_rewrite_optimizer;
 pub mod checkpoint;
 pub mod checkpoint_frontier;
 pub mod claim_atom_lattice;

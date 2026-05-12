@@ -796,7 +796,11 @@ impl CertifiedRewriteOptimizer {
                 break;
             }
 
-            step = step.with_validation_receipt(validation_result.receipt().expect("serde deserialization should succeed"));
+            step = step.with_validation_receipt(
+                validation_result
+                    .receipt()
+                    .expect("serde deserialization should succeed"),
+            );
 
             // Generate optimization certificate if required
             if request.require_formal_proofs {
@@ -943,7 +947,8 @@ impl CertifiedRewriteOptimizer {
 
         let expected = self.apply_rewrite_rule(before, rule_id)?;
         if expected != after {
-            let reason = format!("candidate output differs from rule application: expected '{expected}'");
+            let reason =
+                format!("candidate output differs from rule application: expected '{expected}'");
             let receipt = ValidationReceipt::from_verdict(
                 receipt_id,
                 ValidationVerdict::Fail {
@@ -1092,7 +1097,7 @@ mod tests {
     fn test_certificate(rule_id: &str, epoch: SecurityEpoch) -> OptimizationCertificate {
         OptimizationCertificate {
             cert_id: format!("test-cert:{rule_id}"),
-            tier: OptimizationTier::Conservative,
+            tier: OptimizationTier::Standard,
             function_id: format!("test-function:{rule_id}"),
             rewrite_count: 1,
             proof_hash: ContentHash::compute(rule_id.as_bytes()),
@@ -1379,7 +1384,9 @@ mod tests {
             "call_with_side_effects(x)".to_string(),
         );
 
-        let result = optimizer.optimize(request).expect("serde deserialization should succeed");
+        let result = optimizer
+            .optimize(request)
+            .expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(
@@ -1404,11 +1411,18 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert!(!result.is_valid());
-        assert!(result
-            .error_message()
-            .expect("serde deserialization should succeed")
-            .contains("no-op"));
-        assert!(!result.receipt().expect("serde deserialization should succeed").validation_passed());
+        assert!(
+            result
+                .error_message()
+                .expect("serde deserialization should succeed")
+                .contains("no-op")
+        );
+        assert!(
+            !result
+                .receipt()
+                .expect("serde deserialization should succeed")
+                .validation_passed()
+        );
     }
 
     #[test]
@@ -1416,8 +1430,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let optimizer = CertifiedRewriteOptimizer::new(epoch);
 
-        let result =
-            optimizer.generate_certificate(&"unsupported_rule".to_string(), "x + 0", "x");
+        let result = optimizer.generate_certificate(&"unsupported_rule".to_string(), "x + 0", "x");
 
         assert!(result.is_err());
     }
@@ -1464,9 +1477,9 @@ mod tests {
         );
 
         match optimizer.optimize(request) {
-            Ok(result) if result.success => {
-                result.optimized_program.unwrap_or_else(|| program.to_string())
-            }
+            Ok(result) if result.success => result
+                .optimized_program
+                .unwrap_or_else(|| program.to_string()),
             Ok(_) | Err(_) => program.to_string(), // Return input unchanged if optimization fails
         }
     }
@@ -1478,23 +1491,33 @@ mod tests {
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
 
         let test_cases = [
-            "x + 0",           // Identity addition
-            "x * 1",           // Identity multiplication
-            "x - 0",           // Identity subtraction
-            "0 + x",           // Commutative identity
-            "1 * x",           // Commutative identity
-            "x + x",           // Common subexpression
-            "func(x, y)",      // Function call
-            "x",               // Single variable
-            "(x + 0) * 1",     // Nested identities
+            "x + 0",       // Identity addition
+            "x * 1",       // Identity multiplication
+            "x - 0",       // Identity subtraction
+            "0 + x",       // Commutative identity
+            "1 * x",       // Commutative identity
+            "x + x",       // Common subexpression
+            "func(x, y)",  // Function call
+            "x",           // Single variable
+            "(x + 0) * 1", // Nested identities
         ];
 
         for (i, program) in test_cases.iter().enumerate() {
             // First optimization pass
-            let first_pass = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("idem1_{}", i));
+            let first_pass = run_optimization(
+                &mut optimizer,
+                program,
+                OptimizationTier::Standard,
+                &format!("idem1_{}", i),
+            );
 
             // Second optimization pass on the result
-            let second_pass = run_optimization(&mut optimizer, &first_pass, OptimizationTier::Standard, &format!("idem2_{}", i));
+            let second_pass = run_optimization(
+                &mut optimizer,
+                &first_pass,
+                OptimizationTier::Standard,
+                &format!("idem2_{}", i),
+            );
 
             // Metamorphic property: P(P(x)) == P(x) (idempotency)
             assert_eq!(
@@ -1506,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn metamorphic_idempotency_conservative_vs_standard_tiers() {
+    fn metamorphic_idempotency_baseline_vs_standard_tiers() {
         // Test idempotency across different optimization tiers
         let epoch = SecurityEpoch::from_raw(1);
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
@@ -1518,12 +1541,22 @@ mod tests {
             "complex_expr(x + 0, y * 1)",
         ];
 
-        let tiers = [OptimizationTier::Conservative, OptimizationTier::Standard];
+        let tiers = [OptimizationTier::Baseline, OptimizationTier::Standard];
 
         for (i, program) in test_cases.iter().enumerate() {
             for (j, tier) in tiers.iter().enumerate() {
-                let first_pass = run_optimization(&mut optimizer, program, *tier, &format!("tier1_{}_{}", i, j));
-                let second_pass = run_optimization(&mut optimizer, &first_pass, *tier, &format!("tier2_{}_{}", i, j));
+                let first_pass = run_optimization(
+                    &mut optimizer,
+                    program,
+                    *tier,
+                    &format!("tier1_{}_{}", i, j),
+                );
+                let second_pass = run_optimization(
+                    &mut optimizer,
+                    &first_pass,
+                    *tier,
+                    &format!("tier2_{}_{}", i, j),
+                );
 
                 assert_eq!(
                     first_pass, second_pass,
@@ -1536,34 +1569,54 @@ mod tests {
 
     #[test]
     fn metamorphic_confluence_different_tiers() {
-        // Test confluence: Conservative(Standard(X)) vs Standard(Conservative(X))
+        // Test confluence: Baseline(Standard(X)) vs Standard(Baseline(X))
         // Both should converge to the same result when applied in different orders
         let epoch = SecurityEpoch::from_raw(1);
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
 
         let test_cases = [
-            "x + 0 * 1",       // Mixed identity operations
-            "func(x + 0)",     // Function with optimizable argument
-            "x * 1 + y * 1",   // Multiple identity operations
+            "x + 0 * 1",         // Mixed identity operations
+            "func(x + 0)",       // Function with optimizable argument
+            "x * 1 + y * 1",     // Multiple identity operations
             "(x + 0) + (y - 0)", // Nested expressions
         ];
 
         for (i, program) in test_cases.iter().enumerate() {
-            // Path A: Conservative -> Standard
-            let conservative_first = run_optimization(&mut optimizer, program, OptimizationTier::Conservative, &format!("conf_c1_{}", i));
-            let standard_after_conservative = run_optimization(&mut optimizer, &conservative_first, OptimizationTier::Standard, &format!("conf_s2_{}", i));
+            // Path A: Baseline -> Standard
+            let baseline_first = run_optimization(
+                &mut optimizer,
+                program,
+                OptimizationTier::Baseline,
+                &format!("conf_b1_{}", i),
+            );
+            let standard_after_baseline = run_optimization(
+                &mut optimizer,
+                &baseline_first,
+                OptimizationTier::Standard,
+                &format!("conf_s2_{}", i),
+            );
 
-            // Path B: Standard -> Conservative
-            let standard_first = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("conf_s1_{}", i));
-            let conservative_after_standard = run_optimization(&mut optimizer, &standard_first, OptimizationTier::Conservative, &format!("conf_c2_{}", i));
+            // Path B: Standard -> Baseline
+            let standard_first = run_optimization(
+                &mut optimizer,
+                program,
+                OptimizationTier::Standard,
+                &format!("conf_s1_{}", i),
+            );
+            let baseline_after_standard = run_optimization(
+                &mut optimizer,
+                &standard_first,
+                OptimizationTier::Baseline,
+                &format!("conf_b2_{}", i),
+            );
 
             // Confluence property: A(B(x)) should be equivalent to B(A(x))
             // Note: Due to the nature of optimization tiers, we expect both paths to converge
-            // to the same level of optimization (likely Standard level, since Conservative is less aggressive)
+            // to the same level of optimization for the current rewrite set.
             assert_eq!(
-                standard_after_conservative, conservative_after_standard,
-                "Confluence violated for program '{}': Conservative->Standard produced '{}', Standard->Conservative produced '{}'",
-                program, standard_after_conservative, conservative_after_standard
+                standard_after_baseline, baseline_after_standard,
+                "Confluence violated for program '{}': Baseline->Standard produced '{}', Standard->Baseline produced '{}'",
+                program, standard_after_baseline, baseline_after_standard
             );
         }
     }
@@ -1575,15 +1628,25 @@ mod tests {
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
 
         let test_cases = [
-            "x + 0 + 0 + 0",     // Multiple identity additions
-            "x * 1 * 1 * 1",     // Multiple identity multiplications
+            "x + 0 + 0 + 0",                      // Multiple identity additions
+            "x * 1 * 1 * 1",                      // Multiple identity multiplications
             "nested(func(x + 0), y * 1)", // Nested function calls with optimizable expressions
             "complex_chain(a + 0, b - 0, c * 1)", // Multiple arguments
         ];
 
         for (i, program) in test_cases.iter().enumerate() {
-            let first_pass = run_optimization(&mut optimizer, program, OptimizationTier::Aggressive, &format!("aggr1_{}", i));
-            let second_pass = run_optimization(&mut optimizer, &first_pass, OptimizationTier::Aggressive, &format!("aggr2_{}", i));
+            let first_pass = run_optimization(
+                &mut optimizer,
+                program,
+                OptimizationTier::Aggressive,
+                &format!("aggr1_{}", i),
+            );
+            let second_pass = run_optimization(
+                &mut optimizer,
+                &first_pass,
+                OptimizationTier::Aggressive,
+                &format!("aggr2_{}", i),
+            );
 
             assert_eq!(
                 first_pass, second_pass,
@@ -1614,7 +1677,12 @@ mod tests {
             // Apply optimization repeatedly until convergence or max iterations
             loop {
                 previous = current.clone();
-                current = run_optimization(&mut optimizer, &current, OptimizationTier::Standard, &format!("fixpt_{}_iter{}", i, iteration));
+                current = run_optimization(
+                    &mut optimizer,
+                    &current,
+                    OptimizationTier::Standard,
+                    &format!("fixpt_{}_iter{}", i, iteration),
+                );
                 iteration += 1;
 
                 // Check if we've reached a fixpoint
@@ -1632,7 +1700,12 @@ mod tests {
             }
 
             // After convergence, one more optimization should not change the result (idempotency at fixpoint)
-            let final_check = run_optimization(&mut optimizer, &current, OptimizationTier::Standard, &format!("fixpt_{}_final", i));
+            let final_check = run_optimization(
+                &mut optimizer,
+                &current,
+                OptimizationTier::Standard,
+                &format!("fixpt_{}_final", i),
+            );
             assert_eq!(
                 current, final_check,
                 "Fixpoint idempotency violated for program '{}': fixpoint='{}', after-fixpoint='{}'",
@@ -1643,27 +1716,64 @@ mod tests {
 
     #[test]
     fn metamorphic_commutativity_with_order_independence() {
-        // Test that optimization preserves or properly handles commutative operations
-        // This is a specialized confluence test for operations that should be order-independent
+        // Test that top-level identity rewrites canonicalize commutative operations.
         let epoch = SecurityEpoch::from_raw(1);
         let mut optimizer = CertifiedRewriteOptimizer::new(epoch);
 
-        // Programs that should optimize to equivalent results regardless of internal operation order
+        // Programs that should optimize to equivalent results regardless of operand order.
         let commutative_pairs = [
-            ("x + 0", "0 + x"),         // Additive identity commutativity
-            ("x * 1", "1 * x"),         // Multiplicative identity commutativity
-            ("func(x + 0, y)", "func(0 + x, y)"), // Commutativity within arguments
+            ("x + 0", "0 + x"), // Additive identity commutativity
+            ("x * 1", "1 * x"), // Multiplicative identity commutativity
         ];
 
         for (i, (prog_a, prog_b)) in commutative_pairs.iter().enumerate() {
-            let result_a = run_optimization(&mut optimizer, prog_a, OptimizationTier::Standard, &format!("comm_a_{}", i));
-            let result_b = run_optimization(&mut optimizer, prog_b, OptimizationTier::Standard, &format!("comm_b_{}", i));
+            let result_a = run_optimization(
+                &mut optimizer,
+                prog_a,
+                OptimizationTier::Standard,
+                &format!("comm_a_{}", i),
+            );
+            let result_b = run_optimization(
+                &mut optimizer,
+                prog_b,
+                OptimizationTier::Standard,
+                &format!("comm_b_{}", i),
+            );
 
             // Both should optimize to the same canonical form
             assert_eq!(
                 result_a, result_b,
                 "Commutativity not preserved: '{}' optimized to '{}', '{}' optimized to '{}'",
                 prog_a, result_a, prog_b, result_b
+            );
+        }
+
+        // The current rewrite set intentionally operates on top-level expressions only.
+        // Nested function arguments remain stable rather than being recursively canonicalized.
+        let nested_pairs = [("func(x + 0, y)", "func(0 + x, y)")];
+        for (i, (prog_a, prog_b)) in nested_pairs.iter().enumerate() {
+            let result_a = run_optimization(
+                &mut optimizer,
+                prog_a,
+                OptimizationTier::Standard,
+                &format!("comm_nested_a_{}", i),
+            );
+            let result_b = run_optimization(
+                &mut optimizer,
+                prog_b,
+                OptimizationTier::Standard,
+                &format!("comm_nested_b_{}", i),
+            );
+
+            assert_eq!(
+                *prog_a, result_a,
+                "Nested expression '{}' should remain unchanged, optimized to '{}'",
+                prog_a, result_a
+            );
+            assert_eq!(
+                *prog_b, result_b,
+                "Nested expression '{}' should remain unchanged, optimized to '{}'",
+                prog_b, result_b
             );
         }
     }
@@ -1676,14 +1786,19 @@ mod tests {
 
         // Programs that should already be in optimal form
         let already_optimal = [
-            "x",               // Single variable
-            "func(x)",        // Simple function call
-            "complex_expr",   // Expression that likely can't be optimized further
-            "variable_name",  // Variable that shouldn't be modified
+            "x",             // Single variable
+            "func(x)",       // Simple function call
+            "complex_expr",  // Expression that likely can't be optimized further
+            "variable_name", // Variable that shouldn't be modified
         ];
 
         for (i, program) in already_optimal.iter().enumerate() {
-            let optimized = run_optimization(&mut optimizer, program, OptimizationTier::Standard, &format!("ident_{}", i));
+            let optimized = run_optimization(
+                &mut optimizer,
+                program,
+                OptimizationTier::Standard,
+                &format!("ident_{}", i),
+            );
 
             // Already optimal programs should not change
             assert_eq!(

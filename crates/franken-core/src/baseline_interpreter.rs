@@ -869,6 +869,8 @@ struct CallFrame {
     /// Number of frames from the active scope chain that belong to the
     /// closure capture. Callee-local frames are not written back.
     captured_scope_depth: usize,
+    /// Async function ID if this frame is executing an async function.
+    async_function_id: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1726,6 +1728,8 @@ pub struct InterpreterCore {
     generators: Vec<GeneratorObject>,
     /// Async generator object store.
     async_generators: Vec<AsyncGeneratorObject>,
+    /// Async function object store.
+    async_functions: Vec<AsyncFunctionObject>,
     /// Promise store for ES2020 Promise semantics.
     promise_store: crate::promise_model::PromiseStore,
     /// Deterministic event loop state (microtasks + macrotasks + virtual clock).
@@ -1804,6 +1808,7 @@ impl InterpreterCore {
             pending_captures: Vec::new(),
             generators: Vec::new(),
             async_generators: Vec::new(),
+            async_functions: Vec::new(),
             promise_store: crate::promise_model::PromiseStore::new(),
             event_loop: crate::promise_model::EventLoop::new(),
             promise_combinators: BTreeMap::new(),
@@ -3125,6 +3130,7 @@ impl InterpreterCore {
             saved_scope_chain: saved_chain,
             closure_id,
             captured_scope_depth,
+            async_function_id: None,
         });
 
         if let Some(env) = captured_env {
@@ -3397,10 +3403,188 @@ impl InterpreterCore {
             | AsyncGeneratorPhase::SuspendedAwait => {}
         }
 
-        Err(InterpreterError::TypeError {
-            expected: "implemented async generator body execution".into(),
-            got: "async generator .next() body execution is not implemented".into(),
-        })
+        // Save caller execution context
+        let caller_ip = self.ip;
+        let caller_register_base = self.register_base;
+        let caller_scope = self.snapshot_scope_chain()?;
+        let caller_scope_bytes = Self::estimate_scope_chain_bytes(&caller_scope);
+
+        // Create promise for the async generator result
+        let result_promise = self.promise_store.create().0;
+
+        let (is_start, func_idx, closure_idx) = {
+            let async_gen = &mut self.async_generators[gen_id as usize];
+            let is_start = async_gen.phase == AsyncGeneratorPhase::SuspendedStart;
+            let func_idx = async_gen.function_index;
+            let closure_idx = async_gen.closure_index;
+            async_gen.phase = AsyncGeneratorPhase::Executing;
+            (is_start, func_idx, closure_idx)
+        };
+
+        // Set up execution context
+        if is_start {
+            let start_result = (|| -> Result<(), InterpreterError> {
+                let func = _module.function_table.get(func_idx as usize).ok_or(
+                    InterpreterError::FunctionNotFound {
+                        index: func_idx,
+                        table_size: _module.function_table.len() as u32,
+                    },
+                )?;
+
+                if let Some(cid) = closure_idx {
+                    let closure = self.closures.get(cid as usize).ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "valid closure".into(),
+                            got: format!("closure#{cid} not found"),
+                        }
+                    })?;
+                    self.scope_chain.frames = self.clone_scope_frames_with_temporary_budget(
+                        &closure.captured_env,
+                        caller_scope_bytes,
+                    )?;
+                }
+                self.scope_chain.push(self.config.max_scope_depth)?;
+                self.sync_estimated_memory_bytes()?;
+
+                self.register_base = self.registers.len();
+                let req_len = self.register_base + self.config.max_registers as usize;
+                self.registers.resize(req_len, Value::Undefined);
+
+                self.ip = func.entry as usize;
+                Ok(())
+            })();
+
+            if let Err(err) = start_result {
+                // Restore caller context on error
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                async_gen.phase = AsyncGeneratorPhase::SuspendedStart;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+
+                // Reject the promise with the error
+                let js_val = crate::object_model::JsValue::String(format!("{err:?}"));
+                let label = crate::ifc_artifacts::Label::Public;
+                self.promise_store
+                    .reject(
+                        crate::promise_model::PromiseHandle(result_promise),
+                        js_val,
+                        label,
+                        &mut self.event_loop.microtasks,
+                    )
+                    .map_err(|e| InterpreterError::TypeError {
+                        expected: "promise rejection".into(),
+                        got: format!("failed to reject promise: {e:?}"),
+                    })?;
+                return Ok(Value::Promise(result_promise));
+            }
+        } else {
+            // Resume from saved state (SuspendedYield/SuspendedAwait)
+            let (saved_ip, saved_regs, saved_base) = {
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                (
+                    async_gen.saved_ip,
+                    std::mem::take(&mut async_gen.saved_registers),
+                    async_gen.saved_register_base,
+                )
+            };
+
+            self.ip = saved_ip;
+            self.register_base = saved_base;
+            let req_len = saved_base + saved_regs.len();
+            if req_len > self.registers.len() {
+                self.registers.resize(req_len, Value::Undefined);
+            }
+            for (i, val) in saved_regs.into_iter().enumerate() {
+                self.registers[saved_base + i] = val;
+            }
+        }
+
+        // Execute until yield/return/throw
+        let execution_result = self.run_loop(_module);
+
+        // Handle execution result and fulfill promise accordingly
+        let promise_result = match &execution_result {
+            Ok(yielded_val) => {
+                // Save execution state for next resume
+                let max_regs = self.config.max_registers as usize;
+                let saved_regs: Vec<Value> =
+                    self.registers[self.register_base..self.register_base + max_regs].to_vec();
+
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                async_gen.saved_ip = self.ip;
+                async_gen.saved_registers = saved_regs;
+                async_gen.saved_register_base = self.register_base;
+                async_gen.phase = AsyncGeneratorPhase::SuspendedYield;
+
+                // Create {value, done: false} object
+                let result_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(result_id, "value".to_string(), yielded_val.clone())?;
+                self.set_object_property(result_id, "done".to_string(), Value::Bool(false))?;
+
+                let js_val = crate::object_model::JsValue::Object(
+                    crate::object_model::ObjectHandle(result_id.0),
+                );
+                let label = crate::ifc_artifacts::Label::Public;
+                self.promise_store.fulfill(
+                    crate::promise_model::PromiseHandle(result_promise),
+                    js_val,
+                    label,
+                    &mut self.event_loop.microtasks,
+                )
+            }
+            Err(InterpreterError::Halted) => {
+                // Generator completed
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                async_gen.phase = AsyncGeneratorPhase::Completed;
+
+                // Create {value: undefined, done: true} object
+                let result_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(result_id, "value".to_string(), Value::Undefined)?;
+                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+
+                let js_val = crate::object_model::JsValue::Object(
+                    crate::object_model::ObjectHandle(result_id.0),
+                );
+                let label = crate::ifc_artifacts::Label::Public;
+                self.promise_store.fulfill(
+                    crate::promise_model::PromiseHandle(result_promise),
+                    js_val,
+                    label,
+                    &mut self.event_loop.microtasks,
+                )
+            }
+            Err(err) => {
+                // Generator threw an error
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                async_gen.phase = AsyncGeneratorPhase::Completed;
+
+                // Reject the promise with the error
+                let js_val = crate::object_model::JsValue::String(format!("{err:?}"));
+                let label = crate::ifc_artifacts::Label::Public;
+                self.promise_store.reject(
+                    crate::promise_model::PromiseHandle(result_promise),
+                    js_val,
+                    label,
+                    &mut self.event_loop.microtasks,
+                )
+            }
+        };
+
+        // Restore caller execution context
+        self.ip = caller_ip;
+        self.register_base = caller_register_base;
+        self.scope_chain.frames = caller_scope;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+
+        // Handle promise operation result
+        promise_result.map_err(|e| InterpreterError::TypeError {
+            expected: "promise operation".into(),
+            got: format!("failed promise operation: {e:?}"),
+        })?;
+
+        Ok(Value::Promise(result_promise))
     }
 
     fn run_loop(&mut self, module: &Ir3Module) -> Result<Value, InterpreterError> {
@@ -3633,11 +3817,97 @@ impl InterpreterCore {
                         continue;
                     }
 
+                    // Async function call: create an AsyncFunctionObject and start execution.
                     if let Value::AsyncFunction(_) = &callee_val {
-                        return Err(InterpreterError::TypeError {
-                            expected: "implemented async function body execution".to_string(),
-                            got: "async function call execution is not implemented".to_string(),
+                        // Create a new promise that will be resolved when the async function completes
+                        let promise_handle = self.promise_store.create();
+
+                        // Create the async function object
+                        let async_func_id = u32::try_from(self.async_functions.len()).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: "async function table capacity".into(),
+                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+                            }
+                        })?;
+
+                        // Initialize with function start state
+                        self.async_functions.push(AsyncFunctionObject {
+                            function_index: func_idx,
+                            closure_index: closure_id,
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: AsyncFunctionPhase::Start,
+                            result_promise: promise_handle.0,
                         });
+
+                        // Store the promise as the result of this call
+                        self.write_reg(dst, Value::Promise(promise_handle.0))?;
+
+                        // Set up a normal function call but mark the frame as async
+                        // This will allow the async function to execute normally until await
+                        let return_ip = self.ip + 1;
+                        let return_reg = None; // Async functions don't return normally
+
+                        let scope_depth = self.scope_chain.frames.len();
+                        let (saved_chain, captured_env_bytes) = if let Some(env) = &captured_env {
+                            let bytes = Self::estimate_scope_chain_bytes(env);
+                            let saved = self.snapshot_scope_chain_with_temporary_budget(bytes)?;
+                            (Some(saved), bytes)
+                        } else {
+                            (None, 0)
+                        };
+
+                        self.call_stack.push(CallFrame {
+                            return_ip,
+                            return_reg,
+                            register_base: self.register_base,
+                            function_index: Some(func_idx),
+                            this_value: Value::Undefined,
+                            new_target_value: Value::Undefined,
+                            super_value: Value::Undefined,
+                            construct_this: None,
+                            saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_return: self.pending_return.take(),
+                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                            saved_finally_mode_depth: self.finally_modes.len(),
+                            saved_scope_depth: scope_depth,
+                            saved_scope_chain: saved_chain,
+                            closure_id,
+                            captured_scope_depth: captured_env.as_ref().map_or(0, |env| env.len()),
+                            async_function_id: Some(async_func_id),
+                        });
+
+                        // Set up the captured environment if present
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+
+                        // Set up the register frame and arguments
+                        let module = self.module_state.get_module(func_idx)?;
+                        let register_count = module.metadata.register_count as usize;
+                        let old_base = self.register_base;
+                        self.register_base = self.registers.len();
+
+                        // Expand registers for the new frame
+                        self.registers.resize(self.register_base + register_count, Value::Undefined);
+
+                        // Copy arguments to the new frame
+                        if args.count > 0 {
+                            for i in 0..args.count.min(register_count as u32) {
+                                let arg_reg = args.start.checked_add(i).ok_or(InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                })?;
+                                let dest_reg = i as usize;
+                                let arg_value = self.read_reg_from_base(arg_reg, old_base)?;
+                                self.write_reg(dest_reg as u32, arg_value)?;
+                            }
+                        }
+
+                        // Jump to the function
+                        self.ip = 0;
+                        continue;
                     }
 
                     // Resolve function index and optional captured environment.
@@ -3812,6 +4082,7 @@ impl InterpreterCore {
                                 saved_scope_chain: saved_chain,
                                 closure_id,
                                 captured_scope_depth,
+                                async_function_id: None,
                             });
 
                             // If calling a closure, restore its captured environment.
@@ -3953,6 +4224,7 @@ impl InterpreterCore {
                         saved_scope_chain: saved_chain,
                         closure_id,
                         captured_scope_depth,
+                        async_function_id: None,
                     });
 
                     if let Some(env) = captured_env {
@@ -4526,6 +4798,7 @@ impl InterpreterCore {
                                 saved_scope_chain: saved_chain,
                                 closure_id,
                                 captured_scope_depth,
+                                async_function_id: None,
                             });
 
                             // If calling a closure, restore its captured environment.
@@ -4937,48 +5210,128 @@ impl InterpreterCore {
                             }
                         }
                     } else {
-                        // Promise is pending - suspend execution
-                        // TODO: Implement async function suspension and microtask registration
-                        // This requires identifying which async function we're in and saving its state
+                        // Promise is pending - suspend the async function execution
+                        let current_frame = self.call_stack.last().ok_or_else(|| {
+                            InterpreterError::TypeError {
+                                expected: "call frame during await".to_string(),
+                                got: "no call frame found".to_string(),
+                            }
+                        })?;
+
+                        let async_func_id = current_frame.async_function_id.ok_or_else(|| {
+                            InterpreterError::TypeError {
+                                expected: "await only in async function".to_string(),
+                                got: "await outside async function context".to_string(),
+                            }
+                        })?;
+
+                        // Save the current execution state
+                        let async_func = self.async_functions.get_mut(async_func_id as usize).ok_or_else(|| {
+                            InterpreterError::TypeError {
+                                expected: "valid async function".to_string(),
+                                got: format!("async function #{async_func_id} not found"),
+                            }
+                        })?;
+
+                        // Save state for when the promise resolves
+                        async_func.saved_ip = self.ip + 1; // Resume after the await instruction
+                        async_func.saved_registers = self.registers[self.register_base..].to_vec();
+                        async_func.saved_register_base = self.register_base;
+                        async_func.phase = AsyncFunctionPhase::Suspended;
+
+                        // For this basic implementation, we'll treat pending promises as an error
+                        // A full implementation would need microtask scheduling and async resumption
                         return Err(InterpreterError::TypeError {
-                            expected: "async function suspension".to_string(),
-                            got: "await pending promise (not fully implemented)".to_string(),
+                            expected: "resolved promise for await".to_string(),
+                            got: "pending promise requires full async scheduling (not yet implemented)".to_string(),
                         });
                     }
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
 
-                    // Find the currently executing async function to get its result promise
-                    // TODO: We need a way to track which async function is currently executing
-                    // For now, we'll implement a basic version that assumes we're in an async context
+                    // Find the currently executing async function
+                    let current_frame = self.call_stack.last().ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "call frame during async return".to_string(),
+                            got: "no call frame found".to_string(),
+                        }
+                    })?;
 
-                    // This is a simplified implementation - in a full implementation, we'd need
-                    // to track the current async function context and resolve its result promise
-                    let _js_val = Self::value_to_js_value(&return_value);
+                    let async_func_id = current_frame.async_function_id.ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "async return only in async function".to_string(),
+                            got: "async return outside async function context".to_string(),
+                        }
+                    })?;
 
-                    // For now, return an error indicating this needs more context tracking
-                    return Err(InterpreterError::TypeError {
-                        expected: "async function context tracking".to_string(),
-                        got: "async return without context (partially implemented)".to_string(),
-                    });
+                    // Get the async function object to find its promise
+                    let async_func = self.async_functions.get(async_func_id as usize).ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "valid async function".to_string(),
+                            got: format!("async function #{async_func_id} not found"),
+                        }
+                    })?;
+
+                    let promise_handle = crate::promise_model::PromiseHandle(async_func.result_promise);
+
+                    // Resolve the promise with the return value
+                    let js_val = Self::value_to_js_value(&return_value);
+                    self.promise_store.resolve(promise_handle, js_val);
+
+                    // Update the async function phase to completed
+                    if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
+                        func.phase = AsyncFunctionPhase::Completed;
+                    }
+
+                    // Return from the async function by simulating a normal return
+                    // This will unwind the call stack and return to the caller
+                    self.pending_return = Some(Value::Undefined); // Async functions don't return values directly
+                    self.ip += 1;
+                    continue;
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
 
-                    // Find the currently executing async function to get its result promise
-                    // TODO: We need a way to track which async function is currently executing
-                    // For now, we'll implement a basic version that assumes we're in an async context
+                    // Find the currently executing async function
+                    let current_frame = self.call_stack.last().ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "call frame during async throw".to_string(),
+                            got: "no call frame found".to_string(),
+                        }
+                    })?;
 
-                    // This is a simplified implementation - in a full implementation, we'd need
-                    // to track the current async function context and reject its result promise
-                    let _js_reason = Self::value_to_js_value(&error_value);
+                    let async_func_id = current_frame.async_function_id.ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "async throw only in async function".to_string(),
+                            got: "async throw outside async function context".to_string(),
+                        }
+                    })?;
 
-                    // For now, return an error indicating this needs more context tracking
-                    return Err(InterpreterError::TypeError {
-                        expected: "async function context tracking".to_string(),
-                        got: "async throw without context (partially implemented)".to_string(),
-                    });
+                    // Get the async function object to find its promise
+                    let async_func = self.async_functions.get(async_func_id as usize).ok_or_else(|| {
+                        InterpreterError::TypeError {
+                            expected: "valid async function".to_string(),
+                            got: format!("async function #{async_func_id} not found"),
+                        }
+                    })?;
+
+                    let promise_handle = crate::promise_model::PromiseHandle(async_func.result_promise);
+
+                    // Reject the promise with the error value
+                    let js_reason = Self::value_to_js_value(&error_value);
+                    self.promise_store.reject(promise_handle, js_reason);
+
+                    // Update the async function phase to completed
+                    if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
+                        func.phase = AsyncFunctionPhase::Completed;
+                    }
+
+                    // Return from the async function by simulating a normal return
+                    // The promise rejection has already been handled
+                    self.pending_return = Some(Value::Undefined); // Async functions don't return values directly
+                    self.ip += 1;
+                    continue;
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {
                     self.pending_captures.push(name_pool_index);
@@ -6870,6 +7223,7 @@ impl InterpreterCore {
             saved_scope_chain: Some(saved_chain),
             closure_id: Some(closure_id),
             captured_scope_depth,
+            async_function_id: None,
         });
 
         self.scope_chain.frames = captured_env;
@@ -7740,6 +8094,23 @@ impl InterpreterCore {
             return Err(err);
         }
         Ok(())
+    }
+
+    /// Read a register value from a specific register base.
+    /// Used when setting up async function arguments from a different frame.
+    fn read_reg_from_base(&self, reg: u32, base: usize) -> Result<Value, InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = base + reg as usize;
+        if actual_reg < self.registers.len() {
+            Ok(self.registers[actual_reg].clone())
+        } else {
+            Ok(Value::Undefined)
+        }
     }
 
     // -- Heap operations ---------------------------------------------------
@@ -13294,8 +13665,26 @@ mod tests {
         }
 
         #[test]
-        fn async_generator_next_suspended_start_fails_closed() {
+        fn async_generator_next_suspended_start_executes() {
             let mut core = test_interpreter();
+
+            // Create a simple async generator function that yields then returns
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::LoadConst { dst: 0, idx: 0 }, // Load "hello"
+                    Ir3Instruction::Yield { value: 0 },           // Yield "hello"
+                    Ir3Instruction::LoadConst { dst: 0, idx: 1 }, // Load "world"
+                    Ir3Instruction::Return { value: 0 },          // Return "world"
+                ],
+                vec!["hello".to_string(), "world".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: true,
+                }],
+            );
 
             let async_gen_id = {
                 core.async_generators.push(AsyncGeneratorObject {
@@ -13309,23 +13698,65 @@ mod tests {
                 (core.async_generators.len() - 1) as u32
             };
 
-            let error = core
-                .async_generator_next(&test_module(vec![]), async_gen_id, Value::Undefined)
-                .expect_err("unsupported async generator body execution must fail closed");
+            let result = core
+                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .expect("async generator execution should succeed");
 
-            match error {
-                InterpreterError::TypeError { expected, got } => {
-                    assert_eq!(expected, "implemented async generator body execution");
-                    assert_eq!(
-                        got,
-                        "async generator .next() body execution is not implemented"
-                    );
-                }
-                other => panic!("expected TypeError, got {other:?}"),
-            }
+            // Should return a promise
+            assert!(matches!(result, Value::Promise(_)), "should return a promise");
+
+            // Check that the async generator state was updated to SuspendedYield
             assert!(matches!(
                 core.async_generators[async_gen_id as usize].phase,
-                AsyncGeneratorPhase::SuspendedStart
+                AsyncGeneratorPhase::SuspendedYield
+            ));
+        }
+
+        #[test]
+        fn async_generator_next_suspended_yield_resumes() {
+            let mut core = test_interpreter();
+
+            // Create a simple async generator function that yields then returns
+            let module = test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::LoadConst { dst: 0, idx: 0 }, // Load "hello"
+                    Ir3Instruction::Yield { value: 0 },           // Yield "hello"
+                    Ir3Instruction::LoadConst { dst: 0, idx: 1 }, // Load "world"
+                    Ir3Instruction::Return { value: 0 },          // Return "world"
+                ],
+                vec!["hello".to_string(), "world".to_string()],
+                vec![Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("test_async_gen".to_string()),
+                    is_generator: true,
+                }],
+            );
+
+            let async_gen_id = {
+                core.async_generators.push(AsyncGeneratorObject {
+                    function_index: 0,
+                    closure_index: None,
+                    saved_ip: 2,                                  // Resume after yield
+                    saved_registers: vec![Value::Undefined],
+                    saved_register_base: 0,
+                    phase: AsyncGeneratorPhase::SuspendedYield,
+                });
+                (core.async_generators.len() - 1) as u32
+            };
+
+            let result = core
+                .async_generator_next(&module, async_gen_id, Value::Undefined)
+                .expect("async generator resume should succeed");
+
+            // Should return a promise
+            assert!(matches!(result, Value::Promise(_)), "should return a promise");
+
+            // Check that the async generator state was updated to Completed
+            assert!(matches!(
+                core.async_generators[async_gen_id as usize].phase,
+                AsyncGeneratorPhase::Completed
             ));
         }
 

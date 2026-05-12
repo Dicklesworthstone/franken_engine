@@ -42,8 +42,8 @@ use crate::checkpoint::{
 };
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
-    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, WitnessEvent, WitnessEventKind,
+    HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, Ir0Module,
+    Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -3055,13 +3055,12 @@ impl InterpreterCore {
         let (func_idx, captured_env, closure_id) = match &callee_val {
             Value::Function(idx) => (*idx, None, None),
             Value::Closure(closure_id) => {
-                let closure =
-                    self.closures
-                        .get(*closure_id as usize)
-                        .ok_or_else(|| InterpreterError::TypeError {
-                            expected: "valid closure".to_string(),
-                            got: format!("closure#{closure_id} not found"),
-                        })?;
+                let closure = self.closures.get(*closure_id as usize).ok_or_else(|| {
+                    InterpreterError::TypeError {
+                        expected: "valid closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    }
+                })?;
                 (
                     closure.function_index,
                     Some(self.clone_scope_frames_with_budget(&closure.captured_env)?),
@@ -4100,25 +4099,31 @@ impl InterpreterCore {
                     let key_val = self.read_reg(key)?;
                     let key_str = Self::property_key(&key_val);
 
-                    match &obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, *oid, &key_str)?;
-                            let prop = self.prototype_chain_get(*oid, &key_str)?;
-                            self.write_reg(dst, prop)?;
-                        }
-                        _ if Self::function_object_key(&obj_val).is_some() => {
-                            let prop =
-                                self.get_function_like_property(module, &obj_val, &key_str)?;
-                            self.write_reg(dst, prop)?;
-                        }
+                    let called_accessor = match &obj_val {
+                        Value::Object(oid) => self.load_object_property_or_call_accessor(
+                            module,
+                            obj_val.clone(),
+                            *oid,
+                            &key_str,
+                            dst,
+                        )?,
+                        _ if Self::function_object_key(&obj_val).is_some() => self
+                            .load_function_like_property_or_call_accessor(
+                                module,
+                                obj_val.clone(),
+                                &key_str,
+                                dst,
+                            )?,
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
                                 got: obj_val.type_name().to_string(),
                             });
                         }
+                    };
+                    if !called_accessor {
+                        self.ip += 1;
                     }
-                    self.ip += 1;
                 }
                 Ir3Instruction::SetProperty { obj, key, val } => {
                     let obj_val = self.read_reg(obj)?;
@@ -4126,22 +4131,31 @@ impl InterpreterCore {
                     let set_val = self.read_reg(val)?;
                     let key_str = Self::property_key(&key_val);
 
-                    match &obj_val {
-                        Value::Object(oid) => {
-                            self.run_pre_property_access_hook(module, *oid, &key_str)?;
-                            self.set_object_property(*oid, key_str, set_val)?;
-                        }
-                        _ if Self::function_object_key(&obj_val).is_some() => {
-                            self.set_function_like_property(module, &obj_val, &key_str, set_val)?;
-                        }
+                    let called_accessor = match &obj_val {
+                        Value::Object(oid) => self.set_object_property_or_call_accessor(
+                            module,
+                            obj_val.clone(),
+                            *oid,
+                            key_str,
+                            set_val,
+                        )?,
+                        _ if Self::function_object_key(&obj_val).is_some() => self
+                            .set_function_like_property_or_call_accessor(
+                                module,
+                                obj_val.clone(),
+                                &key_str,
+                                set_val,
+                            )?,
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
                                 got: obj_val.type_name().to_string(),
                             });
                         }
+                    };
+                    if !called_accessor {
+                        self.ip += 1;
                     }
-                    self.ip += 1;
                 }
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
@@ -5799,7 +5813,14 @@ impl InterpreterCore {
             }
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(getter) = accessor.get {
-                    self.enter_function_call(module, getter, receiver, Vec::new(), self.ip + 1, Some(dst))?;
+                    self.enter_function_call(
+                        module,
+                        getter,
+                        receiver,
+                        Vec::new(),
+                        self.ip + 1,
+                        Some(dst),
+                    )?;
                     Ok(true)
                 } else {
                     self.write_reg(dst, Value::Undefined)?;
@@ -7756,7 +7777,31 @@ impl InterpreterCore {
                     .saturating_add(Self::estimate_value_bytes(value))
             })
             .sum::<u64>();
-        MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES.saturating_add(properties)
+        let accessors = object
+            .accessors
+            .iter()
+            .map(|(key, accessor)| {
+                MEMORY_ESTIMATE_MAP_ENTRY_BYTES
+                    .saturating_add(Self::estimate_string_bytes(key))
+                    .saturating_add(
+                        accessor
+                            .get
+                            .as_ref()
+                            .map(Self::estimate_value_bytes)
+                            .unwrap_or(0),
+                    )
+                    .saturating_add(
+                        accessor
+                            .set
+                            .as_ref()
+                            .map(Self::estimate_value_bytes)
+                            .unwrap_or(0),
+                    )
+            })
+            .sum::<u64>();
+        MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES
+            .saturating_add(properties)
+            .saturating_add(accessors)
     }
 
     fn estimate_iterator_bytes(iterator: &RuntimeIteratorState) -> u64 {
@@ -8047,6 +8092,11 @@ impl InterpreterCore {
                     keys.push(key.clone());
                 }
             }
+            for key in object.accessors.keys() {
+                if seen.insert(key.clone()) {
+                    keys.push(key.clone());
+                }
+            }
             current = object.prototype;
             depth += 1;
         }
@@ -8102,22 +8152,40 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let previous = {
+        let (previous_data, previous_accessor, property_key) = {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            object.properties.insert(key.clone(), value)
+            if let Some((kind, property_key)) = Self::decode_accessor_definition_key(&key) {
+                let previous_data = object.properties.remove(&property_key);
+                let previous_accessor = object.accessors.get(&property_key).cloned();
+                let accessor = object.accessors.entry(property_key.clone()).or_default();
+                match kind {
+                    AccessorKind::Get => accessor.get = Some(value),
+                    AccessorKind::Set => accessor.set = Some(value),
+                }
+                (previous_data, previous_accessor, property_key)
+            } else {
+                let previous_accessor = object.accessors.remove(&key);
+                let previous_data = object.properties.insert(key.clone(), value);
+                (previous_data, previous_accessor, key.clone())
+            }
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
             let object = self
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            if let Some(previous) = previous {
-                object.properties.insert(key, previous);
+            if let Some(previous) = previous_data {
+                object.properties.insert(property_key.clone(), previous);
             } else {
-                object.properties.remove(&key);
+                object.properties.remove(&property_key);
+            }
+            if let Some(previous) = previous_accessor {
+                object.accessors.insert(property_key.clone(), previous);
+            } else {
+                object.accessors.remove(&property_key);
             }
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
@@ -8136,8 +8204,14 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
             .properties
             .remove(key);
+        let removed_accessor = self
+            .heap
+            .get_mut(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .accessors
+            .remove(key);
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        Ok(removed.is_some())
+        Ok(removed.is_some() || removed_accessor.is_some())
     }
 
     fn ensure_function_prototype(&mut self, func_idx: u32) -> Result<ObjectId, InterpreterError> {
@@ -8201,53 +8275,6 @@ impl InterpreterCore {
             return Ok(None);
         };
         self.ensure_function_prototype(func_idx).map(Some)
-    }
-
-    fn get_function_like_property(
-        &mut self,
-        module: &Ir3Module,
-        value: &Value,
-        key: &str,
-    ) -> Result<Value, InterpreterError> {
-        if let Some(object_id) = self.function_object_id(value) {
-            self.run_pre_property_access_hook(module, object_id, key)?;
-            let prop = self.prototype_chain_get(object_id, key)?;
-            if prop != Value::Undefined || key != "prototype" {
-                return Ok(prop);
-            }
-        }
-
-        if key == "prototype"
-            && let Some(prototype) = self.function_prototype_for_value(value)?
-        {
-            return Ok(Value::Object(prototype));
-        }
-
-        Ok(Value::Undefined)
-    }
-
-    fn set_function_like_property(
-        &mut self,
-        module: &Ir3Module,
-        value: &Value,
-        key: &str,
-        set_value: Value,
-    ) -> Result<(), InterpreterError> {
-        let Some(object_id) = self.ensure_function_object(value)? else {
-            return Err(InterpreterError::TypeError {
-                expected: "function".to_string(),
-                got: value.type_name().to_string(),
-            });
-        };
-        self.run_pre_property_access_hook(module, object_id, key)?;
-        self.set_object_property(object_id, key.to_string(), set_value.clone())?;
-        if key == "prototype"
-            && let Value::Object(prototype) = set_value
-            && let Some(func_idx) = self.function_index_for_value(value)?
-        {
-            self.function_prototypes.insert(func_idx, prototype);
-        }
-        Ok(())
     }
 
     /// Get the number of objects on the heap.
@@ -12112,35 +12139,42 @@ mod tests {
 
     #[test]
     fn getter_setter() {
-        let mut core = quickjs_test_core();
-        let object = core.alloc_object_with_prototype(None).unwrap();
-        core.set_object_property(object, "value".to_string(), Value::Function(0))
-            .unwrap();
-        core.registers[0] = Value::Object(object);
-
-        let result = core
-            .execute(&test_module_with_pool(
-                vec![
-                    Ir3Instruction::LoadStr {
-                        dst: 1,
-                        pool_index: 0,
-                    },
-                    Ir3Instruction::GetProperty {
-                        obj: 0,
-                        key: 1,
-                        dst: 0,
-                    },
-                    Ir3Instruction::Halt,
-                ],
-                vec!["value".to_string()],
-            ))
-            .unwrap();
-
-        assert_eq!(
-            result.value,
-            Value::Function(0),
-            "bd-vwtlc.4 tracks real accessor invocation for getter/setter methods"
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "class Box { set value(v) { this.stored = v; } get value() { return this.stored; } }\nconst box = new Box();\nbox.value = 321;\nbox.value;",
+                ParseGoal::Script,
+            )
+            .expect("class accessor source should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-accessor-test.js");
+        let ctx = LoweringContext::new(
+            "trace-class-accessor",
+            "decision-class-accessor",
+            "policy-class-accessor",
         );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class accessors should lower");
+        assert!(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .any(|key| key.starts_with(IR_ACCESSOR_GET_PREFIX)),
+            "getter lowering should define an accessor descriptor"
+        );
+        assert!(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .any(|key| key.starts_with(IR_ACCESSOR_SET_PREFIX)),
+            "setter lowering should define an accessor descriptor"
+        );
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("getter/setter accessors should execute through descriptor calls");
+
+        assert_eq!(result.value, Value::Int(321));
     }
 
     #[test]

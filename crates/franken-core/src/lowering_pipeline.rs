@@ -17,9 +17,9 @@ use crate::flow_lattice::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
-    BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal,
-    Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
-    IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, IrError, IrLevel, IteratorCloseReason, Reg,
+    BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
+    IR_ACCESSOR_SET_PREFIX, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module,
+    Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
     RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
     verify_ir3_specialization,
 };

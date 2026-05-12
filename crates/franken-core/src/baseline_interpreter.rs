@@ -2754,6 +2754,21 @@ impl InterpreterCore {
         }
     }
 
+    fn current_containment_extension_id(&self) -> ExtensionId {
+        self.config
+            .extension_id
+            .as_ref()
+            .filter(|extension_id| !extension_id.is_empty())
+            .cloned()
+            .or_else(|| {
+                self.current_module_specifier
+                    .as_ref()
+                    .filter(|specifier| !specifier.is_empty())
+                    .cloned()
+            })
+            .unwrap_or_else(|| self.trace_id.clone())
+    }
+
     fn function_ref(&self, module: &Ir3Module, callee: &Value, function_index: u32) -> FunctionRef {
         let name = module
             .function_table
@@ -2875,9 +2890,11 @@ impl InterpreterCore {
             ),
         };
 
+        let extension_id = self.current_containment_extension_id();
+
         // Add decision receipt to the evidence chain
         self.decision_receipts.add_receipt(
-            "extension:current".to_string(), // TODO: Get actual extension ID from context
+            extension_id,
             operation_type,
             risk_score,
             action_taken,
@@ -11328,7 +11345,9 @@ mod tests {
         use super::*;
 
         pub(super) fn test_interpreter() -> InterpreterCore {
-            InterpreterCore::new(test_quickjs_config(), "test-containment")
+            let mut config = test_quickjs_config();
+            config.extension_id = Some("extension://containment-test".to_string());
+            InterpreterCore::new(config, "test-containment")
         }
 
         #[test]
@@ -11461,7 +11480,7 @@ mod tests {
             assert_eq!(receipts.len(), 1);
 
             let receipt = &receipts[0];
-            assert_eq!(receipt.extension_id, "extension:current");
+            assert_eq!(receipt.extension_id, "extension://containment-test");
             assert_eq!(receipt.operation_type, "terminate");
             assert_eq!(receipt.risk_score, 900_000);
             assert!(receipt.action_taken.contains("terminate"));
@@ -11469,6 +11488,22 @@ mod tests {
             assert_eq!(receipt.instruction_pointer, 0);
             assert!(!receipt.register_state_hash.is_empty());
             assert!(!receipt.signature.is_empty());
+        }
+
+        #[test]
+        fn receipt_uses_current_module_specifier_when_config_extension_id_absent() {
+            let mut config = test_quickjs_config();
+            config.extension_id = None;
+            let mut interpreter = InterpreterCore::new(config, "test-containment");
+            interpreter.current_module_specifier = Some("extension://module-source".to_string());
+
+            interpreter
+                .handle_containment_action(HookAction::Sandbox)
+                .ok();
+
+            let receipts = interpreter.decision_receipts().receipts();
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(receipts[0].extension_id, "extension://module-source");
         }
 
         #[test]

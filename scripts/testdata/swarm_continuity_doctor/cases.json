@@ -1,0 +1,167 @@
+{
+  "schema_version": "franken-engine.swarm-continuity-doctor-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "healthy",
+      "sources": {
+        "br_ready_json": [
+          {
+            "id": "bd-next",
+            "title": "Next useful bead",
+            "status": "open",
+            "priority": 2
+          }
+        ],
+        "br_in_progress_json": {
+          "issues": []
+        },
+        "mail_health_json": {
+          "status": "green",
+          "health_level": "green",
+          "healthy": true
+        },
+        "mail_bootstrap_json": {
+          "status": "success",
+          "agent_name": "CreamRobin"
+        },
+        "agent_profiles_json": {
+          "agents": [
+            {
+              "name": "CreamRobin",
+              "last_active_ts": "2026-05-12T05:00:00Z"
+            }
+          ]
+        },
+        "git_status_json": {
+          "dirty_paths": []
+        },
+        "file_reservations_json": {
+          "reservations": []
+        },
+        "rch_status_json": {
+          "status": "healthy",
+          "workers": [
+            {
+              "name": "worker-a",
+              "state": "healthy"
+            }
+          ]
+        },
+        "rch_queue_json": {
+          "jobs": []
+        }
+      },
+      "expected": {
+        "decision": "healthy",
+        "required_reason_code": null,
+        "mail_health": "healthy",
+        "rch_state": "healthy"
+      }
+    },
+    {
+      "case_id": "degraded_read_only",
+      "sources": {
+        "br_ready_json": [],
+        "br_in_progress_json": {
+          "issues": [
+            {
+              "id": "bd-bahyn",
+              "title": "Continuity doctor",
+              "status": "in_progress",
+              "assignee": "CreamRobin",
+              "updated_at": "2026-05-12T05:00:00Z"
+            }
+          ]
+        },
+        "mail_health_json": {
+          "status": "degraded_read_only",
+          "health_level": "yellow",
+          "healthy": false
+        },
+        "mail_bootstrap_json": {
+          "status": "error",
+          "error": "A database error occurred. This may be a transient issue - try again."
+        },
+        "agent_profiles_json": null,
+        "git_status_json": {
+          "dirty_paths": [
+            "docs/SWARM_CONTINUITY_DOCTOR.md"
+          ]
+        },
+        "file_reservations_json": {
+          "reservations": []
+        },
+        "rch_status_json": {
+          "status": "healthy"
+        },
+        "rch_queue_json": {
+          "jobs": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "required_reason_code": "FE-SWARM-CONTINUITY-MAIL-DEGRADED",
+        "mail_health": "degraded_read_only",
+        "rch_state": "healthy"
+      }
+    },
+    {
+      "case_id": "corrupt_mail_partial_read",
+      "sources": {
+        "br_ready_json": [],
+        "br_in_progress_json": {
+          "issues": [
+            {
+              "id": "bd-mail",
+              "title": "Mail-degraded work",
+              "status": "in_progress",
+              "assignee": "BlueLake",
+              "updated_at": "2026-05-12T05:00:00Z"
+            }
+          ]
+        },
+        "mail_health_json": {
+          "status": "error",
+          "health_level": "red",
+          "healthy": false,
+          "semantic_readiness": {
+            "status": "fail",
+            "detail": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients"
+          },
+          "recovery": {
+            "mode": "corrupt"
+          }
+        },
+        "mail_bootstrap_json": {
+          "status": "error",
+          "error": "A database error occurred. This may be a transient issue - try again."
+        },
+        "agent_profiles_json": {
+          "agents": [
+            {
+              "name": "RainyBadger",
+              "last_active_ts": "2026-05-12T05:00:00Z"
+            }
+          ]
+        },
+        "git_status_json": {
+          "dirty_paths": []
+        },
+        "file_reservations_json": null,
+        "rch_status_json": {
+          "status": "healthy"
+        },
+        "rch_queue_json": {
+          "jobs": []
+        }
+      },
+      "expected": {
+        "decision": "degraded",
+        "required_reason_code": "FE-SWARM-CONTINUITY-MAIL-CORRUPT",
+        "also_requires_reason_code": "FE-SWARM-CONTINUITY-PARTIAL-MAIL-READ",
+        "mail_health": "corrupt",
+        "rch_state": "healthy"
+      }
+    }
+  ]
+}

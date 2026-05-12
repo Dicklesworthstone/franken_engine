@@ -133,6 +133,7 @@ run_case() {
   local input_dir="$2"
   local output_dir="$3"
   local expected_decision expected_truth_state expected_exit_code expected_rank_bias_mode expected_required_reason_code expected_feedback_reason_code
+  local expected_additional_reason_codes
   local optional_input_id=""
   local optional_path=""
   local -a cmd
@@ -143,6 +144,7 @@ run_case() {
   expected_rank_bias_mode="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_rank_bias_mode' "$fixture_bundle_path")"
   expected_required_reason_code="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_required_reason_code' "$fixture_bundle_path")"
   expected_feedback_reason_code="$(jq -r --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | .expected_feedback_reason_code' "$fixture_bundle_path")"
+  expected_additional_reason_codes="$(jq -c --arg scenario "$scenario" '.scenarios[] | select(.scenario_id == $scenario) | (.expected_additional_reason_codes // [])' "$fixture_bundle_path")"
 
   mkdir -p "$output_dir"
   cmd=(
@@ -194,13 +196,15 @@ run_case() {
     --arg truth_state "$expected_truth_state" \
     --arg rank_bias_mode "$expected_rank_bias_mode" \
     --arg required_reason_code "$expected_required_reason_code" \
-    --arg feedback_reason_code "$expected_feedback_reason_code" '
+    --arg feedback_reason_code "$expected_feedback_reason_code" \
+    --argjson additional_reason_codes "$expected_additional_reason_codes" '
     .decision == $decision
     and .truth_state == $truth_state
     and .admission_decision == (if $decision == "pass" then "admit" elif $decision == "degraded" then "narrow" elif $decision == "blocked" then "defer" else "fail_closed" end)
     and .locality_bias_summary.rank_bias_mode == $rank_bias_mode
     and (.reason_codes | index($required_reason_code) != null)
     and (.reason_codes | index($feedback_reason_code) != null)
+    and (($additional_reason_codes - .reason_codes) | length == 0)
     and .mutation_policy.advisory_only == true
     and .mutation_policy.runs_cargo == false
     and .mutation_policy.runs_rch == false

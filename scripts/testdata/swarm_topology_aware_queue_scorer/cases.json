@@ -482,6 +482,9 @@
       "expected_rank_bias_mode": "fail_closed",
       "expected_required_reason_code": "local_fallback_contaminated",
       "expected_feedback_reason_code": "local_fallback_contaminated",
+      "expected_additional_reason_codes": [
+        "unsafe_command_broadening"
+      ],
       "expected_excluded_worker_ids": [],
       "inputs": {
         "topology_queue_signal_input_json": {
@@ -492,7 +495,10 @@
           "decision": "fail_closed",
           "queue_context": {
             "task_count": 1,
-            "proof_transport_state": "local_fallback_detected"
+            "proof_transport_state": "local_fallback_detected",
+            "validation_commands": [
+              "cargo test -p frankenengine-engine --lib"
+            ]
           },
           "locality_context": {
             "recommended_topology_class": "portable_fallback",
@@ -644,6 +650,9 @@
       "expected_rank_bias_mode": "portable_fallback",
       "expected_required_reason_code": "drained_worker_excluded",
       "expected_feedback_reason_code": "drained_worker_excluded",
+      "expected_additional_reason_codes": [
+        "missing_target_dir_evidence"
+      ],
       "expected_excluded_worker_ids": ["rch-e"],
       "inputs": {
         "topology_queue_signal_input_json": {

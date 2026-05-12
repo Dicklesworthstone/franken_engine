@@ -116,6 +116,11 @@ impl fmt::Display for ContentHash {
 pub struct AuthenticityHash(pub [u8; 32]);
 
 impl AuthenticityHash {
+    /// Zero authenticity hash for initializing structures before signing.
+    pub const fn zeroed() -> Self {
+        Self([0; 32])
+    }
+
     /// Compute a keyed authenticity hash (HMAC-SHA256) over the given bytes.
     pub fn compute_keyed(key: &[u8], data: &[u8]) -> Self {
         Self(keyed_hash(key, data))
@@ -1048,6 +1053,11 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 1
         ])));
+    }
+
+    #[test]
+    fn authenticity_hash_zeroed_is_all_zeroes() {
+        assert_eq!(AuthenticityHash::zeroed(), AuthenticityHash([0u8; 32]));
     }
 
     #[test]

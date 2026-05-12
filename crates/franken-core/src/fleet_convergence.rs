@@ -638,7 +638,7 @@ impl ConvergenceEngine {
             timestamp_ns,
             degraded_mode: degraded,
             escalation_depth,
-            signature: AuthenticityHash::compute_keyed(b"placeholder", b"placeholder"),
+            signature: AuthenticityHash::zeroed(),
         };
 
         // Sign the receipt.
@@ -1425,7 +1425,7 @@ mod tests {
             timestamp_ns: 1_000_000_000,
             degraded_mode: false,
             escalation_depth: 0,
-            signature: AuthenticityHash::compute_keyed(b"placeholder", b"placeholder"),
+            signature: AuthenticityHash::zeroed(),
         };
 
         receipt.signature = AuthenticityHash::compute_keyed(key, &receipt.signing_preimage());

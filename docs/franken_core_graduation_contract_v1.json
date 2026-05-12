@@ -1,0 +1,213 @@
+{
+  "schema_version": "franken-engine.franken-core-graduation-contract.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.1",
+  "parent_bead_id": "bd-4w7h9",
+  "acceptance_suite_bead_id": "bd-4w7h9.8",
+  "policy_id": "policy-franken-core-graduation-v1",
+  "status": "active",
+  "purpose": "Define the fail-closed evidence and mutation boundary for deciding whether crates/franken-core may graduate toward intentional workspace participation.",
+  "docs": {
+    "operator_contract": "docs/FRANKEN_CORE_GRADUATION_CONTRACT_V1.md",
+    "machine_contract": "docs/franken_core_graduation_contract_v1.json",
+    "smoke_script": "scripts/e2e/franken_core_graduation_contract_smoke.sh"
+  },
+  "source_inputs": [
+    "AGENTS.md",
+    "README.md",
+    "Cargo.toml",
+    "crates/franken-core/Cargo.toml",
+    "crates/franken-core/src/lib.rs",
+    "crates/franken-engine/src/lib.rs",
+    ".beads/issues.jsonl"
+  ],
+  "decision": {
+    "current_workspace_state": "excluded",
+    "current_state_rationale": "Root Cargo.toml excludes crates/franken-core while later beads restored standalone compileability and tests.",
+    "green_state_requires_acceptance_suite": true,
+    "workspace_inclusion_complete": false,
+    "next_allowed_decision": "ready_for_separate_explicit_workspace_membership_bead"
+  },
+  "canonical_owners": [
+    {
+      "surface": "root_workspace_topology",
+      "owner_path": "Cargo.toml",
+      "policy": "Root workspace members and exclude entries are the source of truth for workspace participation."
+    },
+    {
+      "surface": "native_runtime_engine",
+      "owner_path": "crates/franken-engine",
+      "policy": "The engine crate remains the shipped runtime package until a separate inclusion bead changes topology."
+    },
+    {
+      "surface": "extracted_core_candidate",
+      "owner_path": "crates/franken-core",
+      "policy": "The core crate may provide standalone evidence but cannot imply root workspace membership by itself."
+    },
+    {
+      "surface": "compatibility_product_repo",
+      "owner_path": "/data/projects/franken_node",
+      "policy": "Dependency direction remains franken_node to franken_engine only."
+    },
+    {
+      "surface": "typed_persistence_policy",
+      "owner_path": "/dp/frankensqlite and /dp/sqlmodel_rust",
+      "policy": "Typed-heavy persistence must reuse sibling policy rather than grow local replacements."
+    }
+  ],
+  "historical_inputs": [
+    {
+      "bead_id": "bd-ucemx",
+      "role": "earlier_exclusion_documented",
+      "evidence_state": "superseded_by_later_compileability_work",
+      "rationale": "Earlier work chose documentation-only exclusion when required modules were missing."
+    },
+    {
+      "bead_id": "bd-zsais",
+      "role": "standalone_manifest_compileability_restored",
+      "evidence_state": "input_only",
+      "rationale": "Standalone compileability is required evidence but not workspace membership approval."
+    },
+    {
+      "bead_id": "bd-dymfz",
+      "role": "standalone_test_baseline_restored",
+      "evidence_state": "input_only",
+      "rationale": "A restored standalone test baseline narrows risk but does not prove workspace topology readiness."
+    },
+    {
+      "bead_id": "bd-nwhcp",
+      "role": "timer_placeholder_regressions_replaced",
+      "evidence_state": "input_only",
+      "rationale": "Executable regressions reduce placeholder risk in one surface only."
+    }
+  ],
+  "mutation_boundary": {
+    "mutates_workspace_membership": false,
+    "edits_root_workspace_members": false,
+    "edits_root_workspace_exclude": false,
+    "mutates_franken_node": false,
+    "introduces_core_to_node_dependency": false,
+    "introduces_node_engine_fork": false,
+    "runs_heavy_cargo_locally": false,
+    "requires_separate_change_bead_for_membership": true
+  },
+  "workspace_membership_policy": {
+    "current_root_cargo_exclude": "crates/franken-core",
+    "allowed_change_requires_separate_bead": true,
+    "allowed_change_requires_acceptance_suite": "bd-4w7h9.8",
+    "required_pre_change_outputs": [
+      "franken_core_api_parity_ledger",
+      "franken_core_validation_impact_plan",
+      "franken_core_no_mock_graduation_drill",
+      "franken_core_stale_exclusion_truth_gate",
+      "franken_core_staged_inclusion_rehearsal",
+      "franken_core_golden_report_coverage",
+      "franken_core_graduation_acceptance_suite"
+    ],
+    "default_when_missing_evidence": "remain_excluded"
+  },
+  "allowed_proof_states": [
+    "workspace_excluded",
+    "standalone_compileable",
+    "standalone_tests_restored",
+    "placeholder_surface_reduced",
+    "graduation_readiness_pending",
+    "ready_for_explicit_change"
+  ],
+  "accepted_evidence": [
+    {
+      "evidence_id": "root_workspace_exclusion",
+      "proof_state": "workspace_excluded",
+      "source": "Cargo.toml",
+      "required": true
+    },
+    {
+      "evidence_id": "standalone_manifest_compileability",
+      "proof_state": "standalone_compileable",
+      "source": "bd-zsais",
+      "required": true
+    },
+    {
+      "evidence_id": "standalone_test_baseline",
+      "proof_state": "standalone_tests_restored",
+      "source": "bd-dymfz",
+      "required": true
+    },
+    {
+      "evidence_id": "timer_placeholder_regressions",
+      "proof_state": "placeholder_surface_reduced",
+      "source": "bd-nwhcp",
+      "required": true
+    },
+    {
+      "evidence_id": "idea_wizard_v_acceptance_suite",
+      "proof_state": "graduation_readiness_pending",
+      "source": "bd-4w7h9.8",
+      "required": true
+    }
+  ],
+  "forbidden_shortcuts": [
+    "add crates/franken-core to root workspace before bd-4w7h9.8",
+    "claim standalone compileability means workspace inclusion is complete",
+    "introduce a franken_engine to franken_node dependency",
+    "create forked engine crates inside franken_node",
+    "replace sibling persistence policy with local typed-heavy stores",
+    "run heavy Cargo locally for graduation proof"
+  ],
+  "fail_closed_conditions": [
+    "missing_contract_doc",
+    "missing_contract_json",
+    "missing_required_doc_section",
+    "unknown_proof_state",
+    "workspace_inclusion_claim_before_acceptance",
+    "root_cargo_exclude_mismatch",
+    "missing_rch_target_dir_guidance",
+    "bare_heavy_cargo_example"
+  ],
+  "required_doc_sections": [
+    "## Scope",
+    "## Contract Version",
+    "## Current Decision",
+    "## Historical Inputs",
+    "## Canonical Owners",
+    "## Mutation Boundary",
+    "## Accepted Evidence",
+    "## RCH Policy",
+    "## Fail-Closed Conditions",
+    "## Validation"
+  ],
+  "rch_policy": {
+    "heavy_cargo_examples_allowed_only_when_wrapped": true,
+    "required_heavy_cargo_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+    "canonical_heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_franken_core_graduation CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets",
+    "bare_heavy_cargo_is_fail_closed": true,
+    "missing_target_dir_is_fail_closed": true,
+    "local_fallback_contaminates_green_proof": true,
+    "accepted_lightweight_local_validation": [
+      "jq empty",
+      "jq -e",
+      "bash -n",
+      "rg",
+      "git diff --check"
+    ]
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_graduation_contract_v1.json",
+    "bash -n scripts/e2e/franken_core_graduation_contract_smoke.sh",
+    "bash scripts/e2e/franken_core_graduation_contract_smoke.sh check",
+    "bash scripts/e2e/franken_core_graduation_contract_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_GRADUATION_CONTRACT_V1.md docs/franken_core_graduation_contract_v1.json scripts/e2e/franken_core_graduation_contract_smoke.sh"
+  ],
+  "required_report_fields": [
+    "schema_version",
+    "source_revision",
+    "generated_at_utc",
+    "decision",
+    "workspace_state",
+    "mutation_boundary",
+    "rch_policy",
+    "accepted_evidence",
+    "fail_closed_reasons",
+    "next_allowed_action"
+  ]
+}

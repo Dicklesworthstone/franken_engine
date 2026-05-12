@@ -1795,6 +1795,21 @@ impl InterpreterCore {
         self.hook = None;
     }
 
+    /// Enable profiling with the specified configuration.
+    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
+        self.profiling_data = Some(crate::profiling::Profiler::new(config));
+    }
+
+    /// Disable profiling and return collected data.
+    pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
+        self.profiling_data.take()
+    }
+
+    /// Get reference to current profiling data.
+    pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
+        self.profiling_data.as_ref()
+    }
+
     fn take_execution_result(
         &mut self,
         value: Value,
@@ -3314,9 +3329,8 @@ impl InterpreterCore {
                 None
             };
 
-            // Get instruction name for profiling
-            let instruction_name = if self.profiling_data.is_some() {
-                Some(crate::profiling::instruction_name(&instr))
+            let profiling_instruction = if self.profiling_data.is_some() {
+                Some(instr.clone())
             } else {
                 None
             };
@@ -4917,9 +4931,14 @@ impl InterpreterCore {
                 }
             }
 
-            // Record profiling data for this instruction
-            // TODO: Add profiling integration when needed
-            let _ = (profile_start, instruction_name);
+            if let (Some(profiler), Some(profile_start), Some(instruction)) = (
+                &mut self.profiling_data,
+                profile_start,
+                profiling_instruction.as_ref(),
+            ) {
+                profiler.record_instruction(instruction);
+                profiler.record_instruction_time(instruction, profile_start.elapsed());
+            }
         }
     }
 
@@ -7890,20 +7909,35 @@ impl QuickJsLane {
         trace_id: &str,
         hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionResult, InterpreterError> {
+        let (result, _) = self.execute_with_hook_and_profiling(module, trace_id, hook, None)?;
+        Ok(result)
+    }
+
+    fn execute_with_hook_and_profiling(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+        profiling_config: Option<crate::profiling::ProfilingConfig>,
+    ) -> Result<(ExecutionResult, Option<crate::profiling::Profiler>), InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
         }
-        match core.execute(module) {
-            Ok(result) => Ok(result),
+        if let Some(config) = profiling_config {
+            core.enable_profiling(config);
+        }
+        let result = match core.execute(module) {
+            Ok(result) => result,
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
             }
-            Err(err) => Err(err),
-        }
+            Err(err) => return Err(err),
+        };
+        Ok((result, core.disable_profiling()))
     }
 }
 
@@ -7943,20 +7977,35 @@ impl V8Lane {
         trace_id: &str,
         hook: Option<Arc<dyn InterpreterHook>>,
     ) -> Result<ExecutionResult, InterpreterError> {
+        let (result, _) = self.execute_with_hook_and_profiling(module, trace_id, hook, None)?;
+        Ok(result)
+    }
+
+    fn execute_with_hook_and_profiling(
+        &self,
+        module: &Ir3Module,
+        trace_id: &str,
+        hook: Option<Arc<dyn InterpreterHook>>,
+        profiling_config: Option<crate::profiling::ProfilingConfig>,
+    ) -> Result<(ExecutionResult, Option<crate::profiling::Profiler>), InterpreterError> {
         let mut core = InterpreterCore::new(self.config.clone(), trace_id);
         if let Some(hook) = hook {
             core.set_hook(hook);
         }
-        match core.execute(module) {
-            Ok(result) => Ok(result),
+        if let Some(config) = profiling_config {
+            core.enable_profiling(config);
+        }
+        let result = match core.execute(module) {
+            Ok(result) => result,
             Err(InterpreterError::ContainmentActionRequested { action, reason }) => {
                 let requested_hook_action =
                     requested_hook_action_from_error(action.as_str(), reason.clone())
                         .ok_or(InterpreterError::ContainmentActionRequested { action, reason })?;
-                Ok(core.take_execution_result(Value::Undefined, Some(requested_hook_action)))
+                core.take_execution_result(Value::Undefined, Some(requested_hook_action))
             }
-            Err(err) => Err(err),
-        }
+            Err(err) => return Err(err),
+        };
+        Ok((result, core.disable_profiling()))
     }
 }
 
@@ -8124,6 +8173,8 @@ pub struct RoutedResult {
 pub struct LaneRouter {
     quickjs: QuickJsLane,
     v8: V8Lane,
+    profiling_config: Option<crate::profiling::ProfilingConfig>,
+    profiling_data: Option<crate::profiling::Profiler>,
 }
 
 impl Default for LaneRouter {
@@ -8131,6 +8182,8 @@ impl Default for LaneRouter {
         Self {
             quickjs: QuickJsLane::new(),
             v8: V8Lane::new(),
+            profiling_config: None,
+            profiling_data: None,
         }
     }
 }
@@ -8144,12 +8197,14 @@ impl LaneRouter {
         Self {
             quickjs: QuickJsLane::with_config(quickjs_config),
             v8: V8Lane::with_config(v8_config),
+            profiling_config: None,
+            profiling_data: None,
         }
     }
 
     /// Route and execute the module.
     pub fn execute(
-        &self,
+        &mut self,
         module: &Ir3Module,
         trace_id: &str,
         force_lane: Option<LaneChoice>,
@@ -8158,7 +8213,7 @@ impl LaneRouter {
     }
 
     pub fn execute_with_hook(
-        &self,
+        &mut self,
         module: &Ir3Module,
         trace_id: &str,
         force_lane: Option<LaneChoice>,
@@ -8170,10 +8225,21 @@ impl LaneRouter {
             self.select_lane(module)
         };
 
-        let result = match lane {
-            LaneChoice::QuickJs => self.quickjs.execute_with_hook(module, trace_id, hook)?,
-            LaneChoice::V8 => self.v8.execute_with_hook(module, trace_id, hook)?,
+        self.profiling_data = None;
+        let profiling_config = self.profiling_config.clone();
+        let (result, profiling_data) = match lane {
+            LaneChoice::QuickJs => self.quickjs.execute_with_hook_and_profiling(
+                module,
+                trace_id,
+                hook,
+                profiling_config,
+            )?,
+            LaneChoice::V8 => {
+                self.v8
+                    .execute_with_hook_and_profiling(module, trace_id, hook, profiling_config)?
+            }
         };
+        self.profiling_data = profiling_data;
 
         Ok(RoutedResult {
             lane,
@@ -8198,20 +8264,20 @@ impl LaneRouter {
     }
 
     /// Enable profiling with the specified configuration.
-    pub fn enable_profiling(&mut self, _config: crate::profiling::ProfilingConfig) {
-        // TODO: Implement profiling integration
+    pub fn enable_profiling(&mut self, config: crate::profiling::ProfilingConfig) {
+        self.profiling_config = Some(config);
+        self.profiling_data = None;
     }
 
     /// Disable profiling and return collected data.
     pub fn disable_profiling(&mut self) -> Option<crate::profiling::Profiler> {
-        // TODO: Implement profiling integration
-        None
+        self.profiling_config = None;
+        self.profiling_data.take()
     }
 
     /// Get reference to current profiling data.
     pub fn profiling_data(&self) -> Option<&crate::profiling::Profiler> {
-        // TODO: Implement profiling integration
-        None
+        self.profiling_data.as_ref()
     }
 }
 
@@ -8304,6 +8370,108 @@ mod tests {
 
     fn quickjs_test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    #[test]
+    fn profiling_lifecycle_records_executed_instructions() {
+        let mut core = quickjs_test_core();
+        assert!(core.profiling_data().is_none());
+
+        core.enable_profiling(crate::profiling::ProfilingConfig::default());
+        assert!(core.profiling_data().is_some());
+
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 2 },
+            Ir3Instruction::LoadInt { dst: 2, value: 3 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let result = core.execute(&module).unwrap();
+        assert_eq!(result.value, Value::Int(5));
+
+        let profiler = core
+            .disable_profiling()
+            .expect("profiling should return collected profiler");
+        assert!(core.profiling_data().is_none());
+
+        let report = profiler.generate_report("franken-core-baseline".to_string());
+        assert_eq!(
+            report
+                .instruction_stats
+                .get("LoadInt")
+                .expect("LoadInt should be counted")
+                .count,
+            2
+        );
+        assert_eq!(
+            report
+                .instruction_stats
+                .get("Add")
+                .expect("Add should be counted")
+                .count,
+            1
+        );
+        assert!(
+            report
+                .hotspots
+                .iter()
+                .any(|hotspot| hotspot.name == "LoadInt")
+        );
+        assert!(report.hotspots.iter().any(|hotspot| hotspot.name == "Add"));
+    }
+
+    #[test]
+    fn router_profiling_returns_last_routed_execution_profiler() {
+        let mut router = test_router();
+        assert!(router.profiling_data().is_none());
+
+        router.enable_profiling(crate::profiling::ProfilingConfig::default());
+
+        let module = test_module(vec![
+            Ir3Instruction::LoadInt { dst: 1, value: 8 },
+            Ir3Instruction::LoadInt { dst: 2, value: 13 },
+            Ir3Instruction::Add {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let result = router.execute(&module, "router-profile", None).unwrap();
+        assert_eq!(result.lane, LaneChoice::QuickJs);
+        assert_eq!(result.result.value, Value::Int(21));
+
+        let live_report = router
+            .profiling_data()
+            .expect("router should retain latest profiler")
+            .generate_report("router-profile-live".to_string());
+        assert_eq!(
+            live_report
+                .instruction_stats
+                .get("LoadInt")
+                .expect("LoadInt should be counted")
+                .count,
+            2
+        );
+
+        let profiler = router
+            .disable_profiling()
+            .expect("router should return collected profiler");
+        assert!(router.profiling_data().is_none());
+
+        let report = profiler.generate_report("router-profile-final".to_string());
+        assert_eq!(
+            report
+                .instruction_stats
+                .get("Add")
+                .expect("Add should be counted")
+                .count,
+            1
+        );
     }
 
     fn test_quickjs_config_with(
@@ -9447,7 +9615,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = test_router();
+        let mut router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::DefaultFallback);
@@ -9457,7 +9625,7 @@ mod tests {
     fn router_selects_quickjs_for_capability_module() {
         let mut m = test_module(vec![Ir3Instruction::Halt]);
         m.required_capabilities = vec![CapabilityTag("net".to_string())];
-        let router = test_router();
+        let mut router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::SecuritySensitive);
@@ -9470,7 +9638,7 @@ mod tests {
             .chain(std::iter::once(Ir3Instruction::Halt))
             .collect();
         let m = test_module(instrs);
-        let router = test_router();
+        let mut router = test_router();
         let result = router.execute(&m, "test", None).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);
@@ -9482,7 +9650,7 @@ mod tests {
             Ir3Instruction::LoadInt { dst: 0, value: 1 },
             Ir3Instruction::Halt,
         ]);
-        let router = test_router();
+        let mut router = test_router();
         let result = router.execute(&m, "test", Some(LaneChoice::V8)).unwrap();
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::PolicyDirective);
@@ -10128,7 +10296,7 @@ mod tests {
         }
         instrs.push(Ir3Instruction::Halt);
         let m = test_module(instrs);
-        let router = test_router();
+        let mut router = test_router();
         // SAFETY: router.execute() with valid test module and valid parameters
         // cannot fail under normal test conditions.
         let result = router.execute(&m, "test", None).unwrap();

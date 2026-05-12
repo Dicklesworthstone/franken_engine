@@ -9,6 +9,7 @@
   "smoke_script": "scripts/e2e/swarm_topology_placement_normalizer_smoke.sh",
   "docs": "docs/SWARM_TOPOLOGY_AWARE_PLACEMENT_NORMALIZER.md",
   "parent_contract": "docs/swarm_topology_aware_placement_contract_v1.json",
+  "reuse_inventory": "docs/SWARM_TOPOLOGY_ADMISSION_REUSE_INVENTORY.md",
   "fixture_bundle": "scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json",
   "input_schema_version": "franken-engine.swarm-topology-placement-input.v1",
   "source_schema_version": "franken-engine.swarm-topology-placement-sources.v1",
@@ -64,6 +65,8 @@
     "truth_state",
     "decision",
     "host_identity",
+    "cache_topology",
+    "memory_pressure",
     "numa_summary",
     "worker_inventory",
     "warm_cache_residency",
@@ -86,6 +89,20 @@
     "freshness_state",
     "trust_state"
   ],
+  "host_topology_required_fields": [
+    "host_id",
+    "topology_id",
+    "architecture",
+    "cpu_logical_cores",
+    "cpu_physical_cores",
+    "numa_nodes",
+    "smt_threads_per_core",
+    "llc_groups",
+    "memory_total_bytes",
+    "memory_available_bytes",
+    "memory_by_numa_node",
+    "observed_at"
+  ],
   "truth_states": [
     "confirmed",
     "degraded",
@@ -101,6 +118,8 @@
   "fail_closed_rules": [
     "required topology snapshots must be present, parseable, and fresh",
     "worker inventory NUMA nodes must stay within the declared host NUMA count",
+    "host topology memory capacity and per-NUMA memory headroom must be present and internally consistent",
+    "resource-envelope memory totals must not contradict host topology totals when provided",
     "hot-cache claims without current residency evidence fail closed",
     "local fallback contamination fails closed",
     "malformed optional context snapshots fail closed when provided"
@@ -139,7 +158,10 @@
     "degraded_missing_cache_residency",
     "blocked_contradictory_locality",
     "contaminated_local_fallback",
-    "fail_closed_malformed_topology"
+    "fail_closed_malformed_topology",
+    "single_node_small_host",
+    "stale_required_topology",
+    "contradictory_memory_pressure"
   ],
   "validation_commands": [
     "bash -n scripts/swarm_topology_placement_normalizer.sh",

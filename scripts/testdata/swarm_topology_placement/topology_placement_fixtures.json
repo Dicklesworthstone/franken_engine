@@ -17,6 +17,45 @@
           "cpu_logical_cores": 128,
           "cpu_physical_cores": 64,
           "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "numa_evidence_json": {
@@ -72,6 +111,10 @@
           "host_identity": {
             "host_id": "host-scale-a"
           },
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "execution_queue_input_json": {
@@ -103,6 +146,45 @@
           "cpu_logical_cores": 128,
           "cpu_physical_cores": 64,
           "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "numa_evidence_json": {
@@ -141,6 +223,10 @@
           "host_identity": {
             "host_id": "host-scale-a"
           },
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "execution_queue_input_json": {
@@ -172,6 +258,45 @@
           "cpu_logical_cores": 128,
           "cpu_physical_cores": 64,
           "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "numa_evidence_json": {
@@ -220,6 +345,10 @@
           "host_identity": {
             "host_id": "host-scale-a"
           },
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "execution_queue_input_json": {
@@ -251,6 +380,45 @@
           "cpu_logical_cores": 128,
           "cpu_physical_cores": 64,
           "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "numa_evidence_json": {
@@ -291,6 +459,10 @@
           "host_identity": {
             "host_id": "host-scale-a"
           },
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 206158430208
+          },
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "execution_queue_input_json": {
@@ -322,6 +494,45 @@
           "cpu_logical_cores": 128,
           "cpu_physical_cores": 64,
           "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "numa_evidence_json": {
@@ -357,6 +568,289 @@
           "observed_at": "2026-05-06T20:00:00Z"
         },
         "resource_envelope_json": null,
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": null
+      }
+    },
+    {
+      "scenario_id": "single_node_small_host",
+      "expected_decision": "degraded",
+      "expected_truth_state": "degraded",
+      "expected_exit_code": 0,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-small-a",
+          "topology_id": "laptop-1n-8c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 16,
+          "cpu_physical_cores": 8,
+          "numa_nodes": 1,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 25165824
+            }
+          ],
+          "memory_total_bytes": 34359738368,
+          "memory_available_bytes": 12884901888,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 34359738368,
+              "available_bytes": 12884901888
+            }
+          ],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-small-a",
+          "node_count": 1,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 1000000,
+          "latency_penalty_millionths": 0,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-small-a",
+          "workers": [
+            {
+              "worker_id": "rch-small-a",
+              "numa_node": 0,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": null,
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-small-a"
+          },
+          "memory_pressure": {
+            "total_bytes": 34359738368,
+            "available_bytes": 12884901888
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": null
+      }
+    },
+    {
+      "scenario_id": "stale_required_topology",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 42,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
+          "observed_at": "2026-05-06T18:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 955000,
+          "latency_penalty_millionths": 80000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": null,
+        "resource_envelope_json": null,
+        "execution_queue_input_json": {
+          "schema_version": "franken-engine.swarm-execution-queue-input.v1",
+          "decision": "pass",
+          "generated_epoch_seconds": 1778097600,
+          "proof_transport_state": "remote_only_ok"
+        },
+        "tail_latency_evidence_json": null
+      }
+    },
+    {
+      "scenario_id": "contradictory_memory_pressure",
+      "expected_decision": "fail_closed",
+      "expected_truth_state": "blocked",
+      "expected_exit_code": 42,
+      "inputs": {
+        "host_topology_json": {
+          "schema_version": "franken-engine.host-topology-snapshot.v1",
+          "host_id": "host-scale-a",
+          "topology_id": "epyc-2n-64c",
+          "architecture": "x86_64",
+          "cpu_logical_cores": 128,
+          "cpu_physical_cores": 64,
+          "numa_nodes": 2,
+          "smt_threads_per_core": 2,
+          "llc_groups": [
+            {
+              "group_id": "llc-0",
+              "numa_node": 0,
+              "cpu_logical_cores": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "size_bytes": 134217728
+            },
+            {
+              "group_id": "llc-1",
+              "numa_node": 1,
+              "cpu_logical_cores": [
+                64,
+                65,
+                66,
+                67
+              ],
+              "size_bytes": 134217728
+            }
+          ],
+          "memory_total_bytes": 274877906944,
+          "memory_available_bytes": 206158430208,
+          "memory_by_numa_node": [
+            {
+              "node_id": 0,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            },
+            {
+              "node_id": 1,
+              "total_bytes": 137438953472,
+              "available_bytes": 103079215104
+            }
+          ],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "numa_evidence_json": {
+          "schema_version": "franken-engine.numa-evidence-snapshot.v1",
+          "host_id": "host-scale-a",
+          "node_count": 2,
+          "preferred_numa_nodes": [
+            0
+          ],
+          "local_access_fraction_millionths": 955000,
+          "latency_penalty_millionths": 80000,
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "worker_inventory_json": {
+          "schema_version": "franken-engine.worker-topology-inventory.v1",
+          "host_id": "host-scale-a",
+          "workers": [
+            {
+              "worker_id": "rch-a",
+              "numa_node": 0,
+              "state": "ready"
+            }
+          ],
+          "claimed_hot_cache_workers": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "cache_residency_json": {
+          "schema_version": "franken-engine.cache-residency-snapshot.v1",
+          "host_id": "host-scale-a",
+          "truth_state": "confirmed",
+          "hot_worker_ids": [],
+          "target_dirs": [],
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
+        "resource_envelope_json": {
+          "schema_version": "franken-engine.swarm-resource-envelope.v1",
+          "decision": "pass",
+          "host_identity": {
+            "host_id": "host-scale-a"
+          },
+          "memory_pressure": {
+            "total_bytes": 274877906944,
+            "available_bytes": 412316860416
+          },
+          "observed_at": "2026-05-06T20:00:00Z"
+        },
         "execution_queue_input_json": {
           "schema_version": "franken-engine.swarm-execution-queue-input.v1",
           "decision": "pass",

@@ -345,8 +345,13 @@ check_shape "$host_topology_normalized" '
   and ((.cpu_logical_cores // null) | type == "number")
   and ((.cpu_physical_cores // null) | type == "number")
   and ((.numa_nodes // null) | type == "number")
+  and ((.smt_threads_per_core // null) | type == "number")
+  and ((.llc_groups // null) | type == "array")
+  and ((.memory_total_bytes // null) | type == "number")
+  and ((.memory_available_bytes // null) | type == "number")
+  and ((.memory_by_numa_node // null) | type == "array")
   and ((.observed_at // "") | type == "string" and length > 0)
-' "host_topology_json" "malformed_topology_snapshot" "host topology lacks required fields"
+' "host_topology_json" "malformed_topology_snapshot" "host topology lacks required CPU, cache, memory, or freshness fields"
 
 check_shape "$numa_evidence_normalized" '
   type == "object"
@@ -407,6 +412,11 @@ architecture="$(jq -r '.architecture // ""' "$host_topology_normalized")"
 cpu_logical_cores="$(jq -r '.cpu_logical_cores // 0' "$host_topology_normalized")"
 cpu_physical_cores="$(jq -r '.cpu_physical_cores // 0' "$host_topology_normalized")"
 numa_nodes="$(jq -r '.numa_nodes // 0' "$host_topology_normalized")"
+smt_threads_per_core="$(jq -r '.smt_threads_per_core // 0' "$host_topology_normalized")"
+llc_groups_json="$(jq -c '.llc_groups // []' "$host_topology_normalized")"
+memory_total_bytes="$(jq -r '.memory_total_bytes // 0' "$host_topology_normalized")"
+memory_available_bytes="$(jq -r '.memory_available_bytes // 0' "$host_topology_normalized")"
+memory_by_numa_node_json="$(jq -c '.memory_by_numa_node // []' "$host_topology_normalized")"
 
 numa_host_id="$(jq -r '.host_id // ""' "$numa_evidence_normalized")"
 node_count="$(jq -r '.node_count // 0' "$numa_evidence_normalized")"
@@ -435,9 +445,13 @@ fi
 
 resource_envelope_host_id=""
 resource_envelope_decision="missing_optional"
+resource_envelope_memory_total_bytes=""
+resource_envelope_memory_available_bytes=""
 if [[ "$resource_envelope_status" == "provided" ]]; then
   resource_envelope_host_id="$(jq -r '.host_identity.host_id // ""' "$resource_envelope_normalized")"
   resource_envelope_decision="$(jq -r '.decision // "unknown"' "$resource_envelope_normalized")"
+  resource_envelope_memory_total_bytes="$(jq -r '.memory_pressure.total_bytes // empty' "$resource_envelope_normalized")"
+  resource_envelope_memory_available_bytes="$(jq -r '.memory_pressure.available_bytes // empty' "$resource_envelope_normalized")"
 fi
 
 execution_queue_decision="missing_optional"
@@ -498,6 +512,28 @@ if [[ ! ( "$host_id" == "$numa_host_id" && "$host_id" == "$worker_host_id" ) ]];
 fi
 if [[ "$numa_nodes" != "$node_count" ]]; then
   append_reason "$blocked_reasons_jsonl" "contradictory_locality_evidence" "required_topology" "host topology NUMA count disagrees with NUMA evidence node count"
+fi
+if (( memory_total_bytes <= 0 || memory_available_bytes < 0 || memory_available_bytes > memory_total_bytes )); then
+  append_reason "$fail_closed_reasons_jsonl" "contradictory_cpu_or_memory_capacity" "host_topology_json" "host topology memory capacity or headroom is contradictory"
+fi
+if jq -e --argjson numa_nodes "$numa_nodes" '
+  (.memory_by_numa_node // []) as $rows
+  | ($rows | length) != $numa_nodes
+    or any($rows[]?;
+      ((.node_id // null) | type != "number")
+      or ((.total_bytes // null) | type != "number")
+      or ((.available_bytes // null) | type != "number")
+      or (.available_bytes < 0)
+      or (.available_bytes > .total_bytes)
+    )
+' "$host_topology_normalized" >/dev/null 2>&1; then
+  append_reason "$fail_closed_reasons_jsonl" "contradictory_cpu_or_memory_capacity" "host_topology_json" "per-NUMA memory capacity or headroom is missing or contradictory"
+fi
+if [[ -n "$resource_envelope_memory_total_bytes" && "$resource_envelope_memory_total_bytes" != "$memory_total_bytes" ]]; then
+  append_reason "$fail_closed_reasons_jsonl" "contradictory_cpu_or_memory_capacity" "resource_envelope_json" "resource envelope memory total disagrees with host topology"
+fi
+if [[ -n "$resource_envelope_memory_available_bytes" && "$resource_envelope_memory_available_bytes" -gt "$memory_total_bytes" ]]; then
+  append_reason "$fail_closed_reasons_jsonl" "contradictory_cpu_or_memory_capacity" "resource_envelope_json" "resource envelope available memory exceeds host topology total memory"
 fi
 if [[ "$cache_residency_status" == "provided" && "$cache_host_id" != "$host_id" ]]; then
   append_reason "$blocked_reasons_jsonl" "contradictory_locality_evidence" "cache_residency_json" "cache residency snapshot host does not match required topology host"
@@ -671,6 +707,11 @@ jq -n \
   --argjson cpu_logical_cores "$cpu_logical_cores" \
   --argjson cpu_physical_cores "$cpu_physical_cores" \
   --argjson numa_nodes "$numa_nodes" \
+  --argjson smt_threads_per_core "$smt_threads_per_core" \
+  --argjson llc_groups "$llc_groups_json" \
+  --argjson memory_total_bytes "$memory_total_bytes" \
+  --argjson memory_available_bytes "$memory_available_bytes" \
+  --argjson memory_by_numa_node "$memory_by_numa_node_json" \
   --argjson node_count "$node_count" \
   --argjson local_access_fraction_millionths "$local_access_fraction_millionths" \
   --argjson latency_penalty_millionths "$latency_penalty_millionths" \
@@ -699,7 +740,17 @@ jq -n \
       architecture:$architecture,
       cpu_logical_cores:$cpu_logical_cores,
       cpu_physical_cores:$cpu_physical_cores,
-      numa_nodes:$numa_nodes
+      numa_nodes:$numa_nodes,
+      smt_threads_per_core:$smt_threads_per_core
+    },
+    cache_topology:{
+      llc_groups:$llc_groups
+    },
+    memory_pressure:{
+      total_bytes:$memory_total_bytes,
+      available_bytes:$memory_available_bytes,
+      available_ratio_millionths:(if $memory_total_bytes > 0 then (($memory_available_bytes * 1000000 / $memory_total_bytes) | floor) else 0 end),
+      by_numa_node:$memory_by_numa_node
     },
     numa_summary:{
       node_count:$node_count,

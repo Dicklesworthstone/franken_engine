@@ -12,6 +12,9 @@ workers, pin workers automatically, or rebind hosts automatically.
 Machine-readable child contract:
 `docs/swarm_topology_aware_placement_input_contract_v1.json`.
 
+Reuse inventory:
+`docs/SWARM_TOPOLOGY_ADMISSION_REUSE_INVENTORY.md`.
+
 Checked-in fixture bundle:
 `scripts/testdata/swarm_topology_placement/topology_placement_fixtures.json`.
 
@@ -37,7 +40,10 @@ Missing optional snapshots remain visible degraded evidence. Required topology
 or worker evidence that is malformed, missing a parseable observed timestamp,
 or stale beyond the accepted window fails closed. Contradictory host/NUMA/cache
 identity stays blocked instead of silently promoting a confident placement
-claim.
+claim. Host topology snapshots must also preserve CPU, SMT, LLC group, total
+memory, available-memory, and per-NUMA memory headroom fields so downstream
+admission can distinguish large-host capacity from stale or contradictory
+memory pressure.
 
 ## Artifacts
 
@@ -54,6 +60,8 @@ The normalized input records:
 - `truth_state`: `confirmed`, `degraded`, `blocked`, or `contaminated`
 - `decision`: `pass`, `degraded`, `blocked`, or `fail_closed`
 - host identity and topology summary
+- LLC/cache-sharing groups
+- memory pressure and per-NUMA memory headroom
 - NUMA locality summary and preferred nodes
 - worker inventory summary
 - warm-cache residency state and hot-worker hints
@@ -84,10 +92,17 @@ The checked-in fixtures cover the required SWARM-SCALE-II-B proof categories:
 - `blocked_contradictory_locality`
 - `contaminated_local_fallback`
 - `fail_closed_malformed_topology`
+- `single_node_small_host`
+- `stale_required_topology`
+- `contradictory_memory_pressure`
 
 `blocked_contradictory_locality` proves the blocked truth path without mutating
 anything live. `contaminated_local_fallback` proves that local fallback
 contamination fails closed instead of masquerading as healthy locality proof.
+`contradictory_memory_pressure` proves that the resource envelope cannot
+overstate available memory relative to host topology. `single_node_small_host`
+keeps the same contract replayable on small hosts. `stale_required_topology`
+keeps required topology freshness fail-closed.
 
 ## Validation
 

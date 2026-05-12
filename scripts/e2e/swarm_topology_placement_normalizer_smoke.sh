@@ -164,6 +164,8 @@ contract_shape_ok() {
     and .source_schema_version == "franken-engine.swarm-topology-placement-sources.v1"
     and (.required_inputs | length == 3)
     and (.optional_inputs | length == 4)
+    and (.normalized_input_fields | index("cache_topology") != null)
+    and (.normalized_input_fields | index("memory_pressure") != null)
     and (.normalized_input_fields | index("placement_hints") != null)
     and (.normalized_input_fields | index("fail_closed_reasons") != null)
     and (.required_source_fields | index("freshness_state") != null)
@@ -181,6 +183,9 @@ contract_shape_ok() {
     and .mutation_policy.rebinds_hosts_automatically == false
     and (.selftest_scenarios | index("healthy_confirmed") != null)
     and (.selftest_scenarios | index("fail_closed_malformed_topology") != null)
+    and (.selftest_scenarios | index("single_node_small_host") != null)
+    and (.selftest_scenarios | index("stale_required_topology") != null)
+    and (.selftest_scenarios | index("contradictory_memory_pressure") != null)
   ' "$contract_path" >/dev/null
 }
 
@@ -193,7 +198,13 @@ fixture_bundle_shape_ok() {
     and any(.scenarios[]; .scenario_id == "blocked_contradictory_locality" and .expected_exit_code == 75)
     and any(.scenarios[]; .scenario_id == "contaminated_local_fallback" and .expected_truth_state == "contaminated")
     and any(.scenarios[]; .scenario_id == "fail_closed_malformed_topology" and .expected_exit_code == 42)
+    and any(.scenarios[]; .scenario_id == "single_node_small_host" and .expected_decision == "degraded")
+    and any(.scenarios[]; .scenario_id == "stale_required_topology" and .expected_exit_code == 42)
+    and any(.scenarios[]; .scenario_id == "contradictory_memory_pressure" and .expected_exit_code == 42)
     and all(.scenarios[]; .inputs.host_topology_json.host_id | length > 0)
+    and all(.scenarios[]; .inputs.host_topology_json.memory_total_bytes >= .inputs.host_topology_json.memory_available_bytes)
+    and all(.scenarios[]; (.inputs.host_topology_json.memory_by_numa_node | length) == .inputs.host_topology_json.numa_nodes)
+    and all(.scenarios[]; (.inputs.host_topology_json.llc_groups | length) >= 1)
     and all(.scenarios[]; .inputs.numa_evidence_json.node_count >= 1)
     and all(.scenarios[]; (.inputs.worker_inventory_json.workers | length) >= 1)
   ' "$fixture_bundle_path" >/dev/null
@@ -283,6 +294,27 @@ run_selftest() {
           any(.fail_closed_reasons[]?; .code == "malformed_topology_snapshot")
         ' "${output_dir}/swarm_topology_placement_input.json" >/dev/null \
           || record_failure "malformed topology fixture must fail closed"
+        ;;
+      single_node_small_host)
+        jq -e '
+          .host_identity.numa_nodes == 1
+          and .memory_pressure.total_bytes == 34359738368
+          and .memory_pressure.available_bytes == 12884901888
+          and .warm_cache_residency.state == "missing_optional"
+        ' "${output_dir}/swarm_topology_placement_input.json" >/dev/null \
+          || record_failure "single-node fixture must preserve small-host memory and topology"
+        ;;
+      stale_required_topology)
+        jq -e '
+          any(.fail_closed_reasons[]?; .code == "stale_required_topology_snapshot")
+        ' "${output_dir}/swarm_topology_placement_input.json" >/dev/null \
+          || record_failure "stale topology fixture must fail closed on required freshness"
+        ;;
+      contradictory_memory_pressure)
+        jq -e '
+          any(.fail_closed_reasons[]?; .code == "contradictory_cpu_or_memory_capacity")
+        ' "${output_dir}/swarm_topology_placement_input.json" >/dev/null \
+          || record_failure "contradictory memory fixture must fail closed"
         ;;
     esac
   done < <(jq -r '.scenarios[].scenario_id' "$fixture_bundle_path")

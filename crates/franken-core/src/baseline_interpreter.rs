@@ -7613,6 +7613,14 @@ impl InterpreterCore {
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
+        self.alloc_heap_object_with_prototype(prototype, false)
+    }
+
+    fn alloc_heap_object_with_prototype(
+        &mut self,
+        prototype: Option<ObjectId>,
+        is_array: bool,
+    ) -> Result<ObjectId, InterpreterError> {
         // Check HeapAllocate capability before allocating objects
         if !self
             .config
@@ -7639,19 +7647,23 @@ impl InterpreterCore {
             );
         let mut object = HeapObject::new();
         object.prototype = prototype;
-        let requested_bytes = self
-            .estimated_memory_bytes
-            .saturating_add(Self::estimate_heap_object_bytes(&object));
+        object.is_array = is_array;
+        let allocation_bytes = Self::estimate_heap_object_bytes(&object);
+        let requested_bytes = self.estimated_memory_bytes.saturating_add(allocation_bytes);
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
 
-        // TODO: Add GC pressure profiling when needed
-        let _ = requested_bytes;
         self.heap.push(object);
         self.estimated_memory_bytes = requested_bytes;
 
-        // TODO: Add allocation profiling when needed
+        if let Some(profiler) = &mut self.profiling_data {
+            if is_array {
+                profiler.record_array_allocation(allocation_bytes);
+            } else {
+                profiler.record_object_allocation(allocation_bytes);
+            }
+        }
 
         Ok(id)
     }
@@ -7660,11 +7672,7 @@ impl InterpreterCore {
         &mut self,
         prototype: Option<ObjectId>,
     ) -> Result<ObjectId, InterpreterError> {
-        let id = self.alloc_object_with_prototype(prototype)?;
-        if let Some(object) = self.heap.get_mut(id.0 as usize) {
-            object.is_array = true;
-        }
-        Ok(id)
+        self.alloc_heap_object_with_prototype(prototype, true)
     }
 
     /// Allocate a new object on the heap and return its ID.
@@ -8471,6 +8479,30 @@ mod tests {
                 .expect("Add should be counted")
                 .count,
             1
+        );
+    }
+
+    #[test]
+    fn profiling_memory_stats_record_object_and_array_allocations() {
+        let mut core = quickjs_test_core();
+        core.enable_profiling(crate::profiling::ProfilingConfig::default());
+
+        let object_id = core.alloc_object_with_prototype(None).unwrap();
+        let array_id = core.alloc_array_with_prototype(None).unwrap();
+
+        assert!(!core.heap[object_id.0 as usize].is_array);
+        assert!(core.heap[array_id.0 as usize].is_array);
+
+        let profiler = core
+            .disable_profiling()
+            .expect("profiling should return collected profiler");
+        let report = profiler.generate_report("allocation-profile".to_string());
+
+        assert_eq!(report.memory_stats.objects_allocated, 1);
+        assert_eq!(report.memory_stats.arrays_allocated, 1);
+        assert_eq!(
+            report.memory_stats.total_bytes_allocated,
+            MEMORY_ESTIMATE_HEAP_OBJECT_BASE_BYTES * 2
         );
     }
 

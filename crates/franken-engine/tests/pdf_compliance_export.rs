@@ -1,7 +1,6 @@
 use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::governance_hooks::{
-    AuditExportFormat, AuditExportRequest, AuditExportResult, EvidenceEntry, GovernanceError,
-    export_audit_evidence,
+    AuditExportFormat, AuditExportRequest, AuditExportResult, EvidenceEntry, export_audit_evidence,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
@@ -50,14 +49,45 @@ fn create_pdf_export_request() -> AuditExportRequest {
 /// Helper function to test PDF export with given entries
 fn test_pdf_export_with_entries(
     entries: Vec<EvidenceEntry>,
-) -> Result<AuditExportResult, GovernanceError> {
+) -> Result<AuditExportResult, frankenengine_engine::governance_hooks::GovernanceError> {
     let request = create_pdf_export_request();
     let now = DeterministicTimestamp(1640995200); // 2022-01-01
     export_audit_evidence(request, entries, now)
 }
 
+fn assert_real_pdf_payload(payload: &[u8]) {
+    assert!(
+        payload.starts_with(b"%PDF-1.4"),
+        "PDF output must start with a real PDF header"
+    );
+    assert!(
+        payload.ends_with(b"%%EOF"),
+        "PDF output must end with an EOF marker"
+    );
+
+    let output = String::from_utf8_lossy(payload);
+    for required in [
+        "/Type /Catalog",
+        "/Type /Pages",
+        "/Type /Page",
+        "/Type /Font",
+        "xref",
+        "trailer",
+        "startxref",
+    ] {
+        assert!(
+            output.contains(required),
+            "PDF output should contain {required}: {output}"
+        );
+    }
+    assert!(
+        !output.contains("FRANKEN_COMPLIANCE_REPORT_V1"),
+        "PDF output must not contain the old fake report marker: {output}"
+    );
+}
+
 #[test]
-fn test_pdf_compliance_export_returns_not_implemented_error() {
+fn test_pdf_compliance_export_generates_real_pdf() {
     // Create a simple evidence entry
     let entry = create_test_evidence_entry(
         "test-001",
@@ -68,39 +98,21 @@ fn test_pdf_compliance_export_returns_not_implemented_error() {
 
     let entries = vec![entry];
 
-    // Attempt to export as CompliancePdf - should fail with ExportError
-    let result = test_pdf_export_with_entries(entries);
+    let output = test_pdf_export_with_entries(entries)
+        .expect("CompliancePdf export should generate a real PDF");
 
-    assert!(
-        result.is_err(),
-        "CompliancePdf export should return an error"
-    );
+    assert_eq!(output.format, AuditExportFormat::CompliancePdf);
+    assert_eq!(output.format.file_extension(), "pdf");
+    assert_real_pdf_payload(&output.payload_bytes);
 
-    match result.unwrap_err() {
-        GovernanceError::ExportError { message } => {
-            assert!(
-                message.contains("CompliancePdf format is not yet implemented"),
-                "Error message should indicate PDF format is not implemented, got: {}",
-                message
-            );
-            assert!(
-                message.contains("Real PDF generation requires external PDF library"),
-                "Error message should mention PDF library requirement, got: {}",
-                message
-            );
-            assert!(
-                message.contains("Use JsonLines or Csv formats as alternatives"),
-                "Error message should suggest alternatives, got: {}",
-                message
-            );
-        }
-        other => panic!("Expected ExportError variant, got: {:?}", other),
-    }
+    let output_text = String::from_utf8_lossy(&output.payload_bytes);
+    assert!(output_text.contains("access_control"));
+    assert!(output_text.contains("User authentication logged"));
 }
 
 #[test]
-fn test_pdf_export_error_deterministic() {
-    // Test that the error is deterministic across multiple calls
+fn test_pdf_export_is_deterministic() {
+    // Test that the generated PDF is deterministic across multiple calls
     let entry1 = create_test_evidence_entry(
         "det-001",
         "compliance_check",
@@ -115,47 +127,34 @@ fn test_pdf_export_error_deterministic() {
     let entries_clone3 = vec![entry1, entry2];
 
     // Call export multiple times
-    let result1 = test_pdf_export_with_entries(entries_clone1);
-    let result2 = test_pdf_export_with_entries(entries_clone2);
-    let result3 = test_pdf_export_with_entries(entries_clone3);
+    let result1 = test_pdf_export_with_entries(entries_clone1).expect("first PDF export succeeds");
+    let result2 = test_pdf_export_with_entries(entries_clone2).expect("second PDF export succeeds");
+    let result3 = test_pdf_export_with_entries(entries_clone3).expect("third PDF export succeeds");
 
-    // All should return the same error
-    assert!(result1.is_err());
-    assert!(result2.is_err());
-    assert!(result3.is_err());
-
-    // Extract error messages
-    let error1 = result1.unwrap_err();
-    let error2 = result2.unwrap_err();
-    let error3 = result3.unwrap_err();
-
-    assert_eq!(error1, error2, "Error should be deterministic");
-    assert_eq!(error2, error3, "Error should be deterministic");
+    assert_eq!(
+        result1.payload_bytes, result2.payload_bytes,
+        "PDF output should be deterministic"
+    );
+    assert_eq!(
+        result2.payload_bytes, result3.payload_bytes,
+        "PDF output should be deterministic"
+    );
 }
 
 #[test]
-fn test_pdf_export_error_with_empty_entries() {
-    // Test that even with empty entries, we still get the not implemented error
+fn test_pdf_export_with_empty_entries_generates_valid_pdf() {
+    // Even empty compliance exports should produce a structurally valid report.
     let entries: Vec<EvidenceEntry> = vec![];
 
-    let result = test_pdf_export_with_entries(entries);
+    let output = test_pdf_export_with_entries(entries)
+        .expect("CompliancePdf export should succeed with empty entries");
 
-    assert!(
-        result.is_err(),
-        "CompliancePdf export should fail even with empty entries"
-    );
-
-    match result.unwrap_err() {
-        GovernanceError::ExportError { .. } => {
-            // Expected error type
-        }
-        other => panic!("Expected ExportError for empty entries, got: {:?}", other),
-    }
+    assert_real_pdf_payload(&output.payload_bytes);
 }
 
 #[test]
-fn test_pdf_export_error_with_large_entries() {
-    // Test with multiple entries to ensure error is independent of entry count
+fn test_pdf_export_with_large_entries_embeds_content() {
+    // Test with multiple entries to ensure PDF generation is independent of entry count.
     let entries: Vec<EvidenceEntry> = (0..10)
         .map(|i| {
             create_test_evidence_entry(
@@ -167,22 +166,14 @@ fn test_pdf_export_error_with_large_entries() {
         })
         .collect();
 
-    let result = test_pdf_export_with_entries(entries);
+    let output = test_pdf_export_with_entries(entries)
+        .expect("CompliancePdf export should succeed regardless of entry count");
 
-    assert!(
-        result.is_err(),
-        "CompliancePdf export should fail regardless of entry count"
-    );
-
-    match result.unwrap_err() {
-        GovernanceError::ExportError { message } => {
-            assert!(
-                message.contains("not yet implemented"),
-                "Error message should be consistent regardless of entry count"
-            );
-        }
-        other => panic!("Expected ExportError for large entries, got: {:?}", other),
-    }
+    assert_real_pdf_payload(&output.payload_bytes);
+    let output_text = String::from_utf8_lossy(&output.payload_bytes);
+    assert!(output_text.contains("data_processing"));
+    assert!(output_text.contains("Processed batch 0"));
+    assert!(output_text.contains("Processed batch 9"));
 }
 
 #[test]
@@ -245,8 +236,8 @@ fn test_other_formats_still_work() {
 }
 
 #[test]
-fn test_pdf_error_message_content_quality() {
-    // Test that the error message provides sufficient information for users
+fn test_pdf_contains_required_content_and_metadata() {
+    // Test that the PDF content provides sufficient information for users.
     let entry = create_test_evidence_entry(
         "msg-001",
         "message_test",
@@ -255,55 +246,22 @@ fn test_pdf_error_message_content_quality() {
     );
 
     let entries = vec![entry];
-    let result = test_pdf_export_with_entries(entries);
+    let output = test_pdf_export_with_entries(entries)
+        .expect("CompliancePdf export should generate a real PDF");
 
-    match result.unwrap_err() {
-        GovernanceError::ExportError { message } => {
-            // Check for key information in error message
-            assert!(
-                message.contains("CompliancePdf"),
-                "Error should mention the specific format: {}",
-                message
-            );
-            assert!(
-                message.contains("not yet implemented") || message.contains("not implemented"),
-                "Error should clearly state implementation status: {}",
-                message
-            );
-            assert!(
-                message.contains("PDF"),
-                "Error should mention PDF specifically: {}",
-                message
-            );
-            assert!(
-                message.contains("JsonLines") || message.contains("Csv"),
-                "Error should suggest working alternatives: {}",
-                message
-            );
+    assert_eq!(output.format, AuditExportFormat::CompliancePdf);
+    assert_eq!(output.request.format.file_extension(), "pdf");
+    assert_real_pdf_payload(&output.payload_bytes);
 
-            // Ensure message is reasonably concise but informative
-            assert!(
-                message.len() > 50,
-                "Error message should be informative (>50 chars): {}",
-                message
-            );
-            assert!(
-                message.len() < 300,
-                "Error message should be concise (<300 chars): {}",
-                message
-            );
-        }
-        other => panic!(
-            "Expected ExportError for message content test, got: {:?}",
-            other
-        ),
-    }
+    let output_text = String::from_utf8_lossy(&output.payload_bytes);
+    assert!(output_text.contains("message_test"));
+    assert!(output_text.contains("Error message content verification"));
 }
 
 #[test]
 fn test_compliance_pdf_vs_fake_pdf_behavior() {
-    // This test documents the OLD vs NEW behavior to ensure we're actually
-    // fixing the problem (no longer emitting fake PDF content)
+    // This test documents the old fake report marker to ensure real PDF output
+    // never regresses to FRANKEN_COMPLIANCE_REPORT_V1 text content.
     let entry = create_test_evidence_entry(
         "behavior-001",
         "behavioral_test",
@@ -312,37 +270,11 @@ fn test_compliance_pdf_vs_fake_pdf_behavior() {
     );
 
     let entries = vec![entry];
-    let result = test_pdf_export_with_entries(entries);
+    let output = test_pdf_export_with_entries(entries)
+        .expect("CompliancePdf export should generate real PDF content");
 
-    // NEW behavior: should fail with ExportError
-    assert!(
-        result.is_err(),
-        "Should fail instead of returning fake content"
-    );
-
-    match result {
-        Ok(output) => {
-            // If it somehow succeeds, it MUST NOT contain the old fake content
-            let output_str = String::from_utf8_lossy(&output.payload_bytes);
-            assert!(
-                !output_str.contains("FRANKEN_COMPLIANCE_REPORT_V1"),
-                "Output should not contain fake header: {}",
-                output_str
-            );
-            assert!(
-                output_str.starts_with("%PDF-") && output_str.ends_with("%%EOF"),
-                "If PDF generation succeeds, it must be valid PDF format: {}",
-                output_str
-            );
-        }
-        Err(err) => {
-            // Expected: error case
-            match err {
-                GovernanceError::ExportError { .. } => {
-                    // This is the expected behavior - fail loud instead of fake
-                }
-                other => panic!("If PDF fails, it should be ExportError, got: {:?}", other),
-            }
-        }
-    }
+    assert_real_pdf_payload(&output.payload_bytes);
+    let output_text = String::from_utf8_lossy(&output.payload_bytes);
+    assert!(output_text.contains("behavioral_test"));
+    assert!(output_text.contains("Old vs new behavior validation"));
 }

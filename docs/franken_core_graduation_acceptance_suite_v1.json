@@ -1,0 +1,69 @@
+{
+  "schema_version": "franken-engine.franken-core-graduation-acceptance-suite.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.8",
+  "parent_bead_id": "bd-4w7h9",
+  "policy_id": "policy-franken-core-graduation-acceptance-suite-v1",
+  "status": "active",
+  "purpose": "Compose franken-core graduation artifacts into one fail-closed operator decision without changing workspace membership.",
+  "docs": {
+    "operator_runbook": "docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md",
+    "machine_contract": "docs/franken_core_graduation_acceptance_suite_v1.json",
+    "suite": "scripts/franken_core_graduation_acceptance_suite.sh",
+    "smoke": "scripts/e2e/franken_core_graduation_acceptance_suite_smoke.sh"
+  },
+  "required_artifacts": [
+    "docs/franken_core_graduation_contract_v1.json",
+    "docs/franken_core_api_parity_ledger_v1.json",
+    "docs/franken_core_validation_impact_planner_v1.json",
+    "docs/franken_core_status_truth_gate_v1.json",
+    "docs/franken_core_no_mock_graduation_drill_v1.json",
+    "docs/franken_core_staged_inclusion_rehearsal_v1.json",
+    "scripts/testdata/franken_core_graduation_golden_reports/reports.json"
+  ],
+  "required_report_families": [
+    "graduation_contract",
+    "api_parity_ledger",
+    "validation_impact_planner",
+    "status_truth_gate",
+    "no_mock_graduation_drill",
+    "staged_inclusion_rehearsal",
+    "negative_status_truth_gate_overclaim"
+  ],
+  "required_validation_classes": [
+    "docs_only",
+    "script_only",
+    "franken_core_only",
+    "franken_engine_api_adjacent",
+    "extension_host_adjacent",
+    "cargo_topology",
+    "unknown_path"
+  ],
+  "decision_vocabulary": [
+    "ready_for_explicit_workspace_membership_bead",
+    "remain_excluded"
+  ],
+  "required_reason_codes": [
+    "missing_child_artifact",
+    "child_smoke_failed",
+    "stale_docs_or_manifest_claim",
+    "unclassified_api_rows",
+    "unknown_validation_class",
+    "missing_golden_coverage",
+    "workspace_already_changed"
+  ],
+  "non_mutation_attestation": {
+    "mutates_root_cargo_toml": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "changes_workspace_membership": false
+  },
+  "validation_commands": [
+    "jq empty docs/franken_core_graduation_acceptance_suite_v1.json",
+    "bash -n scripts/franken_core_graduation_acceptance_suite.sh",
+    "bash -n scripts/e2e/franken_core_graduation_acceptance_suite_smoke.sh",
+    "bash scripts/e2e/franken_core_graduation_acceptance_suite_smoke.sh check",
+    "bash scripts/e2e/franken_core_graduation_acceptance_suite_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md docs/franken_core_graduation_acceptance_suite_v1.json scripts/franken_core_graduation_acceptance_suite.sh scripts/e2e/franken_core_graduation_acceptance_suite_smoke.sh"
+  ]
+}

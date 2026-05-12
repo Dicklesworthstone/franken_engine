@@ -90,6 +90,10 @@ if [[ "${#claim_files[@]}" -eq 0 ]]; then
     "${root_dir}/docs/franken_core_no_mock_graduation_drill_v1.json"
     "${root_dir}/docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md"
     "${root_dir}/docs/franken_core_staged_inclusion_rehearsal_v1.json"
+    "${root_dir}/docs/FRANKEN_CORE_GRADUATION_GOLDEN_REPORTS_V1.md"
+    "${root_dir}/docs/franken_core_graduation_golden_reports_v1.json"
+    "${root_dir}/docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md"
+    "${root_dir}/docs/franken_core_graduation_acceptance_suite_v1.json"
   )
 fi
 
@@ -244,6 +248,7 @@ line_negates_overclaim() {
      "$lower" == *"until"* ||
      "$lower" == *"do not"* ||
      "$lower" == *"does not"* ||
+     "$lower" == *"without changing"* ||
      "$lower" == *"without claiming"* ||
      "$lower" == *"without claiming workspace"* ||
      "$lower" == *"over-eager claims"* ||

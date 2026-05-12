@@ -1,0 +1,297 @@
+{
+  "schema_version": "franken-engine.proof-reuse-admission-bundle-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "exact_hit",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 1,
+              "bead_id": "bd-proof-hit",
+              "source_revision": "current-rev",
+              "artifact_id": "artifact-hit",
+              "artifact_path": "artifacts/proofs/hit.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-hit",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": "{\"source_hash\":\"hash-current\",\"command_fingerprint\":\"cmd-hit\",\"cargo_target_dir\":\"/tmp/rch_target_hit\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_hit cargo test -p frankenengine-engine --test proof_hit -- --nocapture\",\"covered_paths\":[\"crates/franken-engine/src/lib.rs\"],\"local_fallback_observed\":false}"
+            }
+          ]
+        },
+        "freshness_reports": [
+          {
+            "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+            "proof_artifact_id": "artifact-hit",
+            "artifact_path": "artifacts/proofs/hit.json",
+            "source_revision": "current-rev",
+            "expected_source_revision": "current-rev",
+            "source_hash": "hash-current",
+            "expected_source_hash": "hash-current",
+            "freshness_state": "fresh",
+            "reusable": true,
+            "reason": "state=fresh",
+            "covered_paths": [
+              "crates/franken-engine/src/lib.rs"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "admit_reuse",
+        "exit_code": 0,
+        "artifact_id": "artifact-hit",
+        "classification": "reusable",
+        "required_reason": "freshness report allows reuse"
+      }
+    },
+    {
+      "case_id": "stale_source_revision",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 2,
+              "bead_id": "bd-proof-stale-source",
+              "source_revision": "old-rev",
+              "artifact_id": "artifact-stale-source",
+              "artifact_path": "artifacts/proofs/stale-source.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-stale-source",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": "{\"source_hash\":\"hash-old\",\"command_fingerprint\":\"cmd-stale-source\",\"cargo_target_dir\":\"/tmp/rch_target_stale_source\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_stale_source cargo test -p frankenengine-engine --test proof_stale_source -- --nocapture\",\"covered_paths\":[\"crates/franken-engine/src/lib.rs\"]}"
+            }
+          ]
+        },
+        "freshness_reports": [
+          {
+            "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+            "proof_artifact_id": "artifact-stale-source",
+            "artifact_path": "artifacts/proofs/stale-source.json",
+            "source_revision": "old-rev",
+            "expected_source_revision": "current-rev",
+            "source_hash": "hash-old",
+            "expected_source_hash": "hash-current",
+            "freshness_state": "stale_by_source_revision",
+            "reusable": false,
+            "reason": "state=stale_by_source_revision",
+            "covered_paths": [
+              "crates/franken-engine/src/lib.rs"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "refresh_required",
+        "exit_code": 0,
+        "artifact_id": "artifact-stale-source",
+        "classification": "refresh_required",
+        "required_reason": "artifact source revision does not match the requested revision"
+      }
+    },
+    {
+      "case_id": "changed_path_invalidation",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [
+        "crates/franken-engine/src/lib.rs"
+      ],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 3,
+              "bead_id": "bd-proof-path",
+              "source_revision": "current-rev",
+              "artifact_id": "artifact-path",
+              "artifact_path": "artifacts/proofs/path.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-path",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": "{\"source_hash\":\"hash-current\",\"command_fingerprint\":\"cmd-path\",\"cargo_target_dir\":\"/tmp/rch_target_path\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_path cargo test -p frankenengine-engine --test proof_path -- --nocapture\",\"covered_paths\":[\"crates/franken-engine/src/lib.rs\"]}"
+            }
+          ]
+        },
+        "freshness_reports": [
+          {
+            "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+            "proof_artifact_id": "artifact-path",
+            "artifact_path": "artifacts/proofs/path.json",
+            "source_revision": "current-rev",
+            "expected_source_revision": "current-rev",
+            "source_hash": "hash-current",
+            "expected_source_hash": "hash-current",
+            "freshness_state": "fresh",
+            "reusable": true,
+            "reason": "state=fresh",
+            "covered_paths": [
+              "crates/franken-engine/src/lib.rs"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "refresh_required",
+        "exit_code": 0,
+        "artifact_id": "artifact-path",
+        "classification": "refresh_required",
+        "required_reason": "changed paths invalidate the proof artifact coverage set"
+      }
+    },
+    {
+      "case_id": "missing_metadata",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 4,
+              "bead_id": "bd-proof-metadata",
+              "source_revision": "current-rev",
+              "artifact_id": "artifact-metadata",
+              "artifact_path": "artifacts/proofs/metadata.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-metadata",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": ""
+            }
+          ]
+        },
+        "freshness_reports": [
+          {
+            "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+            "proof_artifact_id": "artifact-metadata",
+            "artifact_path": "artifacts/proofs/metadata.json",
+            "source_revision": "current-rev",
+            "expected_source_revision": "current-rev",
+            "source_hash": "hash-current",
+            "expected_source_hash": "hash-current",
+            "freshness_state": "fresh",
+            "reusable": true,
+            "reason": "state=fresh",
+            "covered_paths": [
+              "crates/franken-engine/src/lib.rs"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "refresh_required",
+        "exit_code": 0,
+        "artifact_id": "artifact-metadata",
+        "classification": "refresh_required",
+        "required_reason": "command_fingerprint_unproven"
+      }
+    },
+    {
+      "case_id": "direct_cargo_command_rejection",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 5,
+              "bead_id": "bd-proof-direct-cargo",
+              "source_revision": "current-rev",
+              "artifact_id": "artifact-direct-cargo",
+              "artifact_path": "artifacts/proofs/direct-cargo.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-direct-cargo",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": "{\"source_hash\":\"hash-current\",\"command_fingerprint\":\"cmd-direct-cargo\",\"refresh_command\":\"cargo test -p frankenengine-engine --test proof_direct -- --nocapture\",\"covered_paths\":[\"crates/franken-engine/src/lib.rs\"]}"
+            }
+          ]
+        },
+        "freshness_reports": [
+          {
+            "schema_version": "franken-engine.proof-freshness-decay-report.v1",
+            "proof_artifact_id": "artifact-direct-cargo",
+            "artifact_path": "artifacts/proofs/direct-cargo.json",
+            "source_revision": "current-rev",
+            "expected_source_revision": "current-rev",
+            "source_hash": "hash-current",
+            "expected_source_hash": "hash-current",
+            "freshness_state": "fresh",
+            "reusable": true,
+            "reason": "state=fresh",
+            "covered_paths": [
+              "crates/franken-engine/src/lib.rs"
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "artifact_id": "artifact-direct-cargo",
+        "classification": "invalid",
+        "required_reason": "direct_cargo_command_rejected"
+      }
+    },
+    {
+      "case_id": "unknown_missing_freshness",
+      "expected_source_revision": "current-rev",
+      "changed_paths": [],
+      "sources": {
+        "proof_index_json": {
+          "schema_version": "franken-engine.proof-evidence-query.v1",
+          "query_kind": "by_bead",
+          "rows": [
+            {
+              "evidence_id": 6,
+              "bead_id": "bd-proof-unknown",
+              "source_revision": "current-rev",
+              "artifact_id": "artifact-unknown",
+              "artifact_path": "artifacts/proofs/unknown.json",
+              "artifact_role": "proof_manifest",
+              "artifact_sha256": "sha-unknown",
+              "receipt_kind": "proof_artifact",
+              "gate_status": "pass",
+              "generated_timestamp_ms": 1700000000000,
+              "freshness_deadline_ms": 1700000100000,
+              "metadata_json": "{\"source_hash\":\"hash-current\",\"command_fingerprint\":\"cmd-unknown\",\"cargo_target_dir\":\"/tmp/rch_target_unknown\",\"refresh_command\":\"rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_unknown cargo test -p frankenengine-engine --test proof_unknown -- --nocapture\",\"covered_paths\":[\"crates/franken-engine/src/lib.rs\"]}"
+            }
+          ]
+        },
+        "freshness_reports": []
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "exit_code": 42,
+        "artifact_id": "artifact-unknown",
+        "classification": "unknown",
+        "required_reason": "matching freshness report is missing"
+      }
+    }
+  ]
+}

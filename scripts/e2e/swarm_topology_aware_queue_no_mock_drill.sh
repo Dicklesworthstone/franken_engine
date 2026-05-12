@@ -23,6 +23,8 @@ fidelity_fixture_bundle="${root_dir}/scripts/testdata/swarm_topology_aware_queue
 
 events_path=""
 commands_path=""
+run_manifest_path=""
+trace_ids_path=""
 report_json=""
 report_md=""
 case_results_jsonl=""
@@ -105,6 +107,8 @@ record_failure() {
 refresh_paths() {
   events_path="${run_dir}/events.jsonl"
   commands_path="${run_dir}/commands.txt"
+  run_manifest_path="${run_dir}/run_manifest.json"
+  trace_ids_path="${run_dir}/trace_ids.json"
   report_json="${run_dir}/swarm_topology_aware_queue_no_mock_drill_report.json"
   report_md="${run_dir}/report.md"
   case_results_jsonl="${run_dir}/case_results.jsonl"
@@ -537,10 +541,12 @@ append_case_result() {
     --slurpfile signal_doc "$signal_path" \
     --slurpfile advisory_doc "$advisory_path" \
     --slurpfile fidelity_doc "$fidelity_receipt_path" \
+    --slurpfile drift_doc "$drift_ledger_path" \
     --slurpfile status_doc "$status_path" '
     ($signal_doc[0]) as $sig
     | ($advisory_doc[0]) as $adv
     | ($fidelity_doc[0]) as $fid
+    | ($drift_doc[0]) as $drift
     | ($status_doc[0].predictive_dashboard.swarm_topology_aware_queue_advisory) as $status
     | {
         scenario_id:$scenario_id,
@@ -567,6 +573,14 @@ append_case_result() {
           operator_truth_state:$status.truth_state,
           operator_rank_bias_mode:$status.rank_bias_mode,
           operator_reason_codes:$status.reason_codes
+        },
+        trace_ids:{
+          queue_signal_input_id:$sig.queue_signal_input_id,
+          queue_advisory_id:$adv.queue_advisory_id,
+          admission_decision:$adv.admission_decision,
+          fidelity_receipt_id:$fid.fidelity_receipt_id,
+          drift_ledger_id:$drift.drift_ledger_id,
+          operator_queue_advisory_id:$status.queue_advisory_id
         },
         artifact_paths:{
           swarm_topology_queue_signal_input_json:$signal_path,
@@ -603,6 +617,42 @@ write_primary_artifacts() {
   cp "${case_dir}/operator-status/status.json" "${run_dir}/status.json"
 }
 
+write_trace_ids() {
+  local trace_tmp
+
+  trace_tmp="${trace_ids_path}.tmp"
+  jq -s \
+    --arg run_id "$run_id" \
+    --arg source_revision "$drill_source_revision" \
+    --arg case_results_jsonl "$case_results_jsonl" \
+    --arg report_json "$report_json" '
+    {
+      schema_version:"franken-engine.swarm-topology-aware-queue-no-mock-trace-ids.v1",
+      run_id:$run_id,
+      source_revision:$source_revision,
+      case_count:length,
+      generated_from:"case_results.jsonl",
+      scenario_trace_ids:map({
+        scenario_id,
+        decisions:{
+          signal:.actual.signal_decision,
+          scorer:.actual.scorer_decision,
+          admission:.trace_ids.admission_decision,
+          fidelity:.actual.fidelity_decision,
+          operator_readiness:.actual.operator_readiness
+        },
+        trace_ids:.trace_ids,
+        artifact_paths:.artifact_paths
+      }),
+      artifact_paths:{
+        case_results_jsonl:$case_results_jsonl,
+        swarm_topology_aware_queue_no_mock_drill_report_json:$report_json
+      }
+    }
+  ' "$case_results_jsonl" >"$trace_tmp"
+  mv "$trace_tmp" "$trace_ids_path"
+}
+
 write_report() {
   local report_tmp
 
@@ -611,6 +661,8 @@ write_report() {
     --arg report_json "$report_json" \
     --arg events_path "$events_path" \
     --arg commands_path "$commands_path" \
+    --arg run_manifest_path "$run_manifest_path" \
+    --arg trace_ids_path "$trace_ids_path" \
     --arg report_md "$report_md" \
     --arg primary_scenario_id "$(primary_scenario_id)" \
     --arg signal_path "${run_dir}/swarm_topology_queue_signal_input.json" \
@@ -665,6 +717,8 @@ write_report() {
         status_json:$status_path,
         events_jsonl:$events_path,
         commands_txt:$commands_path,
+        run_manifest_json:$run_manifest_path,
+        trace_ids_json:$trace_ids_path,
         report_md:$report_md
       }
     }
@@ -672,10 +726,93 @@ write_report() {
   mv "$report_tmp" "$report_json"
 }
 
+write_run_manifest() {
+  local manifest_tmp
+
+  manifest_tmp="${run_manifest_path}.tmp"
+  jq -n \
+    --arg run_id "$run_id" \
+    --arg run_dir "$run_dir" \
+    --arg source_revision "$drill_source_revision" \
+    --arg contract_path "$contract_path" \
+    --arg case_bundle "$case_bundle" \
+    --arg signal_fixture_bundle "$signal_fixture_bundle" \
+    --arg scorer_fixture_bundle "$scorer_fixture_bundle" \
+    --arg fidelity_fixture_bundle "$fidelity_fixture_bundle" \
+    --arg events_path "$events_path" \
+    --arg commands_path "$commands_path" \
+    --arg run_manifest_path "$run_manifest_path" \
+    --arg trace_ids_path "$trace_ids_path" \
+    --arg report_json "$report_json" \
+    --arg report_md "$report_md" \
+    --arg case_results_jsonl "$case_results_jsonl" \
+    --slurpfile report_doc "$report_json" \
+    --slurpfile trace_doc "$trace_ids_path" \
+    --slurpfile events_doc "$events_path" \
+    --rawfile commands_doc "$commands_path" '
+    ($report_doc[0]) as $report
+    | ($trace_doc[0]) as $trace
+    | {
+        schema_version:"franken-engine.swarm-topology-aware-queue-no-mock-run-manifest.v1",
+        run_id:$run_id,
+        run_dir:$run_dir,
+        source_revision:$source_revision,
+        decision:$report.decision,
+        case_count:$report.case_count,
+        passed_count:$report.passed_count,
+        failed_count:$report.failed_count,
+        scenario_ids:($trace.scenario_trace_ids | map(.scenario_id)),
+        producer_chain:$report.producer_chain,
+        replay_inputs:{
+          contract_path:$contract_path,
+          case_bundle:$case_bundle,
+          fixture_bundles:[
+            $signal_fixture_bundle,
+            $scorer_fixture_bundle,
+            $fidelity_fixture_bundle
+          ]
+        },
+        admission_decision_mapping:{
+          pass:"admit",
+          degraded:"narrow",
+          blocked:"defer",
+          fail_closed:"fail_closed"
+        },
+        mutation_policy:$report.mutation_policy,
+        artifact_paths:{
+          run_manifest_json:$run_manifest_path,
+          trace_ids_json:$trace_ids_path,
+          events_jsonl:$events_path,
+          commands_txt:$commands_path,
+          case_results_jsonl:$case_results_jsonl,
+          swarm_topology_aware_queue_no_mock_drill_report_json:$report_json,
+          report_md:$report_md,
+          primary_artifacts:$report.artifact_paths
+        },
+        artifact_counts:{
+          event_count:($events_doc | length),
+          command_line_count:($commands_doc | split("\n") | map(select(length > 0)) | length),
+          scenario_trace_count:($trace.scenario_trace_ids | length)
+        },
+        proof_scope:{
+          fixture_fed_only:true,
+          advisory_only:true,
+          live_mutation:false,
+          command_execution:false,
+          br_mutation:false,
+          agent_mail_mutation:false
+        }
+      }
+  ' >"$manifest_tmp"
+  mv "$manifest_tmp" "$run_manifest_path"
+}
+
 write_report_md() {
   {
     printf '# Topology-Aware Queue No-Mock Drill\n'
     printf '\n'
+    printf -- "- run_manifest: \`%s\`\n" "$run_manifest_path"
+    printf -- "- trace_ids: \`%s\`\n" "$trace_ids_path"
     printf -- "- report: \`%s\`\n" "$report_json"
     printf -- "- primary_scenario_id: \`%s\`\n" "$(primary_scenario_id)"
     printf -- "- case_count: \`%s\`\n" "$(jq -r '.case_count' "$report_json")"
@@ -687,6 +824,9 @@ write_report_md() {
 }
 
 validate_report() {
+  require_json "$run_manifest_path"
+  require_json "$trace_ids_path"
+
   jq -e '
     .schema_version == "franken-engine.swarm-topology-aware-queue-no-mock-drill-report.v1"
     and .decision == "pass"
@@ -710,7 +850,43 @@ validate_report() {
     and .mutation_policy.mutates_live_workers == false
     and .mutation_policy.changes_live_queue_policy == false
     and .mutation_policy.reroutes_tasks_automatically == false
+    and (.artifact_paths.run_manifest_json | endswith("/run_manifest.json"))
+    and (.artifact_paths.trace_ids_json | endswith("/trace_ids.json"))
   ' "$report_json" >/dev/null
+
+  jq -e '
+    .schema_version == "franken-engine.swarm-topology-aware-queue-no-mock-trace-ids.v1"
+    and .case_count == 6
+    and (.scenario_trace_ids | length) == 6
+    and all(.scenario_trace_ids[]; .trace_ids.queue_signal_input_id != null)
+    and all(.scenario_trace_ids[]; .trace_ids.queue_advisory_id != null)
+    and all(.scenario_trace_ids[]; .trace_ids.fidelity_receipt_id != null)
+    and all(.scenario_trace_ids[]; .trace_ids.drift_ledger_id != null)
+    and any(.scenario_trace_ids[]; .scenario_id == "healthy_hot_cache_reuse" and .decisions.admission == "admit")
+    and any(.scenario_trace_ids[]; .scenario_id == "degraded_missing_locality_adoption" and .decisions.admission == "narrow")
+    and any(.scenario_trace_ids[]; .scenario_id == "blocked_contradictory_locality" and .decisions.admission == "defer")
+    and any(.scenario_trace_ids[]; .scenario_id == "contaminated_local_fallback" and .decisions.admission == "fail_closed")
+  ' "$trace_ids_path" >/dev/null
+
+  jq -e '
+    .schema_version == "franken-engine.swarm-topology-aware-queue-no-mock-run-manifest.v1"
+    and .decision == "pass"
+    and .case_count == 6
+    and .artifact_counts.scenario_trace_count == 6
+    and .admission_decision_mapping.pass == "admit"
+    and .admission_decision_mapping.degraded == "narrow"
+    and .admission_decision_mapping.blocked == "defer"
+    and .admission_decision_mapping.fail_closed == "fail_closed"
+    and .mutation_policy.advisory_only == true
+    and .mutation_policy.runs_cargo == false
+    and .mutation_policy.runs_rch == false
+    and .mutation_policy.edits_br == false
+    and .mutation_policy.sends_agent_mail == false
+    and .proof_scope.live_mutation == false
+    and .proof_scope.command_execution == false
+    and (.artifact_paths.run_manifest_json | endswith("/run_manifest.json"))
+    and (.artifact_paths.trace_ids_json | endswith("/trace_ids.json"))
+  ' "$run_manifest_path" >/dev/null
 }
 
 run_check() {
@@ -742,8 +918,10 @@ run_mode() {
   done < <(jq -r '.scenarios[].scenario_id' "$case_bundle")
 
   write_primary_artifacts
+  write_trace_ids
   write_report
   write_report_md
+  write_run_manifest
   record_pass "composed drill report"
 }
 

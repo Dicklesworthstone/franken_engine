@@ -39,5 +39,9 @@ bash scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh selftest
 ```
 
 The selftest emits `swarm_topology_aware_queue_no_mock_drill_report.json`,
-`events.jsonl`, `commands.txt`, `report.md`, and one case directory per
-scenario under the selected output directory.
+`run_manifest.json`, `events.jsonl`, `commands.txt`, `trace_ids.json`,
+`report.md`, and one case directory per scenario under the selected output
+directory. The manifest records replay inputs, command/event counts, admission
+decision mapping, and mutation policy; trace IDs bind each scenario to the
+signal, advisory, fidelity, drift-ledger, and operator advisory artifacts used
+by the report.

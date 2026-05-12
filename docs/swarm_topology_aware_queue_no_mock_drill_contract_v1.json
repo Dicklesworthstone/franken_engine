@@ -91,11 +91,14 @@
     "swarm_topology_aware_queue_no_mock_drill_report.json",
     "events.jsonl",
     "commands.txt",
+    "run_manifest.json",
+    "trace_ids.json",
     "report.md"
   ],
   "operator_truth_claims": [
     "The drill is fixture-fed, proof-only, and advisory-only.",
     "The drill runs the real topology queue signal normalizer, queue scorer, fidelity ledger, and operator-status reporter against checked-in fixtures.",
+    "The drill emits run_manifest.json and trace_ids.json so parent closeout can cite replay inputs, scenario trace identifiers, and admission decisions without implying warm automation.",
     "The drill does not run Cargo or RCH work.",
     "The drill does not mutate live workers, pin workers automatically, change live queue policy, reroute tasks automatically, edit br, release reservations, or send Agent Mail.",
     "Missing locality or adoption evidence must stay degraded instead of healthy by default.",
@@ -146,6 +149,8 @@
   "artifact_retention_notes": [
     "The drill emits one scenario directory per proof case under the selected output directory.",
     "Each scenario retains normalizer, scorer, fidelity-ledger, and operator-status stdout and stderr logs.",
+    "The top-level run_manifest.json records replay inputs, command/event counts, mutation policy, and admission decision mapping.",
+    "The top-level trace_ids.json records each scenario's signal, advisory, fidelity, drift-ledger, and operator advisory identifiers.",
     "The top-level report records stable artifact paths for the primary healthy case plus every scenario result."
   ]
 }

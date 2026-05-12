@@ -1,0 +1,242 @@
+{
+  "schema_version": "franken-engine.source-local-rch-validation-admission-fixtures.v1",
+  "cases": [
+    {
+      "case_id": "exact_reusable",
+      "expected_decision": "admit_reuse",
+      "expected_exit": 0,
+      "expected_reason": "",
+      "request": {
+        "schema_version": "franken-engine.source-local-rch-validation-request.v1",
+        "case_id": "exact_reusable",
+        "source_revision": "rev-current",
+        "source_hash": "src-hash-current",
+        "cargo_lock_hash": "lock-hash-current",
+        "package": "frankenengine-engine",
+        "target_kind": "lib",
+        "test_filter": "shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release",
+        "cargo_command": "cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture",
+        "rustflags": "-C linker=cc",
+        "toolchain": "nightly",
+        "cargo_target_dir": "/tmp/rch_target_franken_engine_source_local_shadow",
+        "command_fingerprint": "cmd-shadow-current",
+        "changed_paths": [],
+        "covered_paths": [
+          "crates/franken-engine/src/shadow_decision_composer.rs"
+        ],
+        "cold_refresh_command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_shadow RUSTFLAGS=-C\\ linker=cc RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture",
+        "reusable_rch_command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_shadow RUSTFLAGS=-C\\ linker=cc RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture"
+      },
+      "preflight": {
+        "schema_version": "franken-engine.swarm-proof-command-preflight.v1",
+        "decision": "proof_safe",
+        "reason_code": "direct_rch_cargo_proof",
+        "pasteable_command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_shadow RUSTFLAGS=-C\\ linker=cc RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture",
+        "command": {
+          "command_kind": "cargo_test",
+          "transport": "rch_direct_env",
+          "has_target_dir": true,
+          "target_dir": "/tmp/rch_target_franken_engine_source_local_shadow",
+          "unsupported_env": []
+        }
+      },
+      "proof_admission": {
+        "schema_version": "franken-engine.proof-reuse-admission-bundle.v1",
+        "admission_decision": "admit_reuse",
+        "admission_rows": [
+          {
+            "artifact_id": "proof-shadow-current",
+            "classification": "reusable",
+            "request_identity": {
+              "source_revision": "rev-current",
+              "source_hash": "src-hash-current",
+              "cargo_lock_hash": "lock-hash-current",
+              "package": "frankenengine-engine",
+              "target_kind": "lib",
+              "test_filter": "shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release",
+              "rustflags": "-C linker=cc",
+              "toolchain": "nightly",
+              "cargo_target_dir": "/tmp/rch_target_franken_engine_source_local_shadow",
+              "command_fingerprint": "cmd-shadow-current"
+            },
+            "covered_paths": [
+              "crates/franken-engine/src/shadow_decision_composer.rs"
+            ],
+            "compatibility": {
+              "local_fallback_observed": false,
+              "support_crate_contamination_observed": false
+            }
+          }
+        ]
+      },
+      "sticky_plan": {
+        "schema_version": "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+        "plan_decision": "admit_sticky",
+        "assigned_worker_id": "worker-a",
+        "assigned_target_dir": "/tmp/rch_target_franken_engine_source_local_shadow",
+        "local_fallback_marker_count": 0,
+        "phase_plans": [
+          {
+            "phase": "test",
+            "requested_command": "rch exec -- env CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_local_shadow RUSTFLAGS=-C\\ linker=cc RUSTUP_TOOLCHAIN=nightly cargo test -p frankenengine-engine --lib shadow_decision_composer::tests::output_dir_file_lock_blocks_second_writer_until_release -- --exact --nocapture"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "source_drift",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "source_revision_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "source_revision": "rev-old"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "cargo_lock_drift",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "cargo_lock_hash_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "cargo_lock_hash": "lock-hash-old"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "target_filter_drift",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "test_filter_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "test_filter": "different::test",
+              "command_fingerprint": "cmd-different"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "rustflags_toolchain_drift",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "rustflags_mismatch",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "request_identity": {
+              "rustflags": "-C opt-level=0",
+              "toolchain": "stable"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "changed_path_overlap",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "changed_path_overlap",
+      "inherit": "exact_reusable",
+      "request_patch": {
+        "changed_paths": [
+          "crates/franken-engine/src/shadow_decision_composer.rs"
+        ]
+      }
+    },
+    {
+      "case_id": "local_fallback_contamination",
+      "expected_decision": "fail_closed",
+      "expected_exit": 42,
+      "expected_reason": "local_fallback_contamination",
+      "inherit": "exact_reusable",
+      "proof_patch": {
+        "admission_rows": [
+          {
+            "compatibility": {
+              "local_fallback_observed": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "unknown_worker",
+      "expected_decision": "cold_refresh_required",
+      "expected_exit": 75,
+      "expected_reason": "unknown_worker_evidence",
+      "inherit": "exact_reusable",
+      "sticky_plan": {
+        "schema_version": "franken-engine.sticky-worker-warm-target-lease-plan.v1",
+        "plan_decision": "defer_worker_unavailable",
+        "assigned_worker_id": null,
+        "assigned_target_dir": null,
+        "local_fallback_marker_count": 0,
+        "phase_plans": []
+      }
+    },
+    {
+      "case_id": "missing_target_dir_policy",
+      "expected_decision": "fail_closed",
+      "expected_exit": 42,
+      "expected_reason": "preflight_missing_target_dir_policy",
+      "inherit": "exact_reusable",
+      "preflight_patch": {
+        "decision": "proof_unsafe",
+        "reason_code": "missing_target_dir_policy",
+        "command": {
+          "has_target_dir": false,
+          "target_dir": null
+        }
+      }
+    },
+    {
+      "case_id": "bare_cargo_preflight",
+      "expected_decision": "fail_closed",
+      "expected_exit": 42,
+      "expected_reason": "preflight_bare_cargo_not_allowed",
+      "inherit": "exact_reusable",
+      "preflight_patch": {
+        "decision": "proof_unsafe",
+        "reason_code": "bare_cargo_not_allowed",
+        "command": {
+          "transport": "local_bare",
+          "has_target_dir": false,
+          "target_dir": null
+        }
+      }
+    },
+    {
+      "case_id": "shell_wrapper_preflight",
+      "expected_decision": "fail_closed",
+      "expected_exit": 42,
+      "expected_reason": "preflight_shell_wrapper_fallback_risk",
+      "inherit": "exact_reusable",
+      "preflight_patch": {
+        "decision": "proof_unsafe",
+        "reason_code": "shell_wrapper_fallback_risk",
+        "command": {
+          "transport": "shell_wrapper",
+          "has_target_dir": true
+        }
+      }
+    }
+  ]
+}

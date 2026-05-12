@@ -17881,6 +17881,59 @@ impl InterpreterCore {
                 Ok(Value::Int(timer_id as i64))
             }
 
+            "builtin:SetInterval" => {
+                // setInterval() implementation - route through deterministic timer state
+                if args.count < 2 {
+                    return Ok(Value::Int(0)); // Invalid timer ID
+                }
+
+                let callback_val = self.read_reg(args.start + 1)?;
+                if !matches!(callback_val, Value::Function(_) | Value::Closure(_)) {
+                    return Ok(Value::Int(0)); // Callback is not a function
+                }
+
+                let delay_ms = if args.count >= 3 {
+                    let delay_val = self.read_reg(args.start + 2)?;
+                    match delay_val {
+                        Value::Int(n) => n.max(0) as u64,
+                        Value::Float(f) => f.inner().max(0.0) as u64,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                let timer_id = self.next_timer_id;
+                self.next_timer_id = self.next_timer_id.wrapping_add(1);
+
+                let handler_id = match callback_val {
+                    Value::Closure(id) => Some(id),
+                    _ => None,
+                };
+
+                self.active_timers.insert(
+                    timer_id,
+                    ActiveTimer {
+                        handler: handler_id,
+                        delay_ms,
+                        repeating: true,
+                    },
+                );
+
+                if let Some(closure_id) = handler_id {
+                    let closure_handle = crate::closure_model::ClosureHandle(closure_id);
+                    let label = crate::ifc_artifacts::Label::Public;
+                    self.event_loop.set_timeout(closure_handle, delay_ms, label);
+                }
+
+                self.emit_witness(
+                    WitnessEventKind::HostcallDispatched,
+                    Some(&format!("builtin:setInterval:{}", timer_id)),
+                );
+
+                Ok(Value::Int(timer_id as i64))
+            }
+
             "builtin:ClearTimeout" => {
                 // clearTimeout() implementation - cancel timer through deterministic state
                 if args.count < 2 {
@@ -17901,6 +17954,30 @@ impl InterpreterCore {
                     self.emit_witness(
                         WitnessEventKind::HostcallDispatched,
                         Some(&format!("builtin:clearTimeout:{}", timer_id)),
+                    );
+                }
+
+                Ok(Value::Undefined)
+            }
+
+            "builtin:ClearInterval" => {
+                // clearInterval() implementation - cancel timer through deterministic state
+                if args.count < 2 {
+                    return Ok(Value::Undefined);
+                }
+
+                let timer_id_val = self.read_reg(args.start + 1)?;
+                let timer_id = match timer_id_val {
+                    Value::Int(i) => i as u32,
+                    _ => return Ok(Value::Undefined), // Invalid timer ID type
+                };
+
+                let was_active = self.active_timers.remove(&timer_id).is_some();
+
+                if was_active {
+                    self.emit_witness(
+                        WitnessEventKind::HostcallDispatched,
+                        Some(&format!("builtin:clearInterval:{}", timer_id)),
                     );
                 }
 
@@ -27288,8 +27365,7 @@ mod tests {
     }
 
     #[test]
-    fn set_interval_repeats() {
-        // Test that setInterval creates a repeating timer
+    fn set_interval_builtin_registers_repeating_timer() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
             .granted_capabilities
@@ -27310,49 +27386,85 @@ mod tests {
         );
         let callback_val = Value::Function(function_id);
 
-        // Call setInterval (Note: we need to implement setInterval hostcall first)
-        // For now, test the timer registration infrastructure
-        let timer_id = core.next_timer_id;
-        core.next_timer_id += 1;
+        let timer_id_val = core
+            .execute_builtin_call(
+                "builtin:SetInterval",
+                vec![Value::Undefined, callback_val, Value::Int(1000)],
+            )
+            .expect("setInterval should succeed");
 
-        // Manually create an interval timer to test the infrastructure
-        core.active_timers.insert(
-            timer_id,
-            crate::baseline_interpreter::ActiveTimer {
-                handler: if let Value::Function(id) = callback_val {
-                    Some(id)
-                } else {
-                    None
-                },
-                delay_ms: 1000,
-                repeating: true, // This is the key difference from setTimeout
-            },
-        );
+        let timer_id = match timer_id_val {
+            Value::Int(id) => id as u32,
+            _ => panic!("setInterval should return integer timer ID"),
+        };
 
-        // Verify interval timer was created with repeating flag
         let timer = core
             .active_timers
             .get(&timer_id)
-            .expect("Timer should exist");
+            .expect("interval timer should exist");
         assert!(timer.repeating, "setInterval timer should be repeating");
         assert_eq!(timer.delay_ms, 1000, "Timer should have correct interval");
-
-        // Run the event loop
-        core.run_event_loop_until_idle();
-
-        // The interval timer framework is now in place
-        // Full setInterval support requires re-scheduling after each execution
     }
 
     #[test]
-    fn clear_interval_stops() {
-        // TODO: Test that clearInterval stops repeating timer
-        // When timer substrate is implemented, this will:
-        // 1. Call setInterval to start repeating timer
-        // 2. Let it fire a few times
-        // 3. Call clearInterval to stop it
-        // 4. Verify timer stops firing
-        // Placeholder until implementation.
+    fn clear_interval_builtin_removes_repeating_timer() {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+
+        let mut core = InterpreterCore::new(config, "clearInterval-test");
+
+        let function_id = core.allocate_function(
+            "interval_callback",
+            vec![],
+            vec![Ir3Instruction::Halt],
+            0,
+            std::collections::BTreeMap::new(),
+        );
+        let callback_val = Value::Function(function_id);
+
+        let timer_id = core
+            .execute_builtin_call(
+                "builtin:SetInterval",
+                vec![Value::Undefined, callback_val, Value::Int(250)],
+            )
+            .expect("setInterval should succeed");
+
+        assert_eq!(core.active_timers.len(), 1);
+
+        let clear_result = core
+            .execute_builtin_call(
+                "builtin:ClearInterval",
+                vec![Value::Undefined, timer_id.clone()],
+            )
+            .expect("clearInterval should succeed");
+
+        assert_eq!(
+            clear_result,
+            Value::Undefined,
+            "clearInterval returns undefined"
+        );
+        assert!(
+            core.active_timers.is_empty(),
+            "clearInterval should remove active interval"
+        );
+
+        let clear_invalid = core
+            .execute_builtin_call(
+                "builtin:ClearInterval",
+                vec![Value::Undefined, Value::Int(99999)],
+            )
+            .expect("clearInterval with invalid ID should succeed");
+
+        assert_eq!(
+            clear_invalid,
+            Value::Undefined,
+            "clearing invalid interval returns undefined"
+        );
     }
 
     #[test]

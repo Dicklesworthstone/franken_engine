@@ -11318,40 +11318,112 @@ mod tests {
 
     #[test]
     fn class_declaration_creates_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "class-constructor-test");
+        let mut core = InterpreterCore::new(test_quickjs_config(), "class-constructor-test");
+        core.registers[1] = Value::Function(0);
 
-        // Test basic constructor functionality
-        // This should work with current implementation since it just creates a function
-        let module = test_module(vec![
-            // Test that new Foo() creates an object
-            Ir3Instruction::Halt, // TODO: implement proper test
-        ]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_functions(
+                vec![
+                    Ir3Instruction::Construct {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("Foo".to_string()),
+                    is_generator: false,
+                }],
+            ))
+            .unwrap();
+
+        let instance_id = match result.value {
+            Value::Object(id) => id,
+            other => panic!("new Foo() should return an object, got {other:?}"),
+        };
+        let prototype_id = *core
+            .function_prototypes
+            .get(&0)
+            .expect("constructor prototype should be allocated");
+        let instance = core
+            .heap
+            .get(instance_id.0 as usize)
+            .expect("constructed instance should remain in the heap");
+        assert_eq!(instance.constructor_function, Some(0));
+        assert_eq!(instance.prototype, Some(prototype_id));
     }
 
     #[test]
     fn class_method_on_prototype() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "class-method-test");
+        let mut core = InterpreterCore::new(test_quickjs_config(), "class-method-test");
+        let prototype_id = core.ensure_function_prototype(0).unwrap();
+        core.set_object_property(prototype_id, "method".to_string(), Value::Function(1))
+            .unwrap();
+        core.registers[1] = Value::Function(0);
 
-        // TODO: implement test for method on prototype
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::Construct {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 3,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 3,
+                        dst: 4,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 0,
+                        callee: 4,
+                        args: RegRange { start: 5, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["method".to_string()],
+                vec![
+                    Ir3FunctionDesc {
+                        entry: 5,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("Foo".to_string()),
+                        is_generator: false,
+                    },
+                    Ir3FunctionDesc {
+                        entry: 6,
+                        arity: 0,
+                        frame_size: 1,
+                        name: Some("method".to_string()),
+                        is_generator: false,
+                    },
+                ],
+            ))
+            .unwrap();
+
+        let constructed = match core.registers[0].clone() {
+            Value::Object(id) => id,
+            other => panic!("constructed receiver should stay in r0, got {other:?}"),
+        };
+        assert_eq!(result.value, Value::Object(constructed));
+        assert_eq!(
+            core.prototype_chain_get(constructed, "method").unwrap(),
+            Value::Function(1)
+        );
     }
 
     #[test]

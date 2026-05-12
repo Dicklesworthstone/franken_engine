@@ -16,6 +16,18 @@ fn hash(label: &str) -> [u8; 32] {
     *ContentHash::compute(label.as_bytes()).as_bytes()
 }
 
+fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn cas_uri(root: &[u8; 32]) -> String {
+    format!("cas://{}/proof-chain/compile-0001", to_hex(root))
+}
+
 fn ok_artifact(pass_name: &str) -> OptimizationProofArtifact {
     OptimizationProofArtifact {
         optimization_pass: pass_name.to_string(),
@@ -53,6 +65,7 @@ fn base_input() -> ReleaseGateInput {
     let mut expected = BTreeSet::new();
     expected.insert("inline".to_string());
     expected.insert("dce".to_string());
+    let archive_root = hash("archive-root");
     ReleaseGateInput {
         trace_id: "trace-gate-1".to_string(),
         policy_id: "policy-opt-gate".to_string(),
@@ -62,8 +75,8 @@ fn base_input() -> ReleaseGateInput {
             compilation_id: "compile-0001".to_string(),
             original_compile_time_ns: 50_000_000,
             replay_time_ns: 200_000_000,
-            archive_root: hash("archive-root"),
-            archive_uri: "cas://proof-chain/compile-0001".to_string(),
+            archive_root,
+            archive_uri: cas_uri(&archive_root),
             artifacts: vec![ok_artifact("inline"), ok_artifact("dce")],
         },
         test_evidence: Some(good_test_evidence()),

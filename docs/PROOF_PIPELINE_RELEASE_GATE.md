@@ -26,7 +26,8 @@ All conditions must pass:
    non-empty fallback receipt ID.
 4. Independent replay verification must succeed for verified proofs.
 5. Replay-time multiplier must be <= `5.0x` (`5_000_000` millionths).
-6. Artifact bundle must be content-addressed (`cas://...`) with non-zero root.
+6. Artifact bundle must be content-addressed (`cas://<archive_root_hex>/...`) with
+   a non-zero root, and the URI root component must match `archive_root`.
 7. Comprehensive test/e2e/logging evidence must be present and pass fail-closed
    quality thresholds:
    - unit coverage >= `900_000` millionths

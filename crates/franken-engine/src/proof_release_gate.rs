@@ -316,7 +316,19 @@ pub struct PromotionDecisionArtifact {
 }
 
 fn is_content_addressed_archive(uri: &str, root: &[u8; 32]) -> bool {
-    uri.starts_with("cas://") && *root != [0u8; 32]
+    if *root == [0u8; 32] {
+        return false;
+    }
+
+    let Some(address) = uri.strip_prefix("cas://") else {
+        return false;
+    };
+    let root_hex = to_hex(root);
+    let archive_id = address
+        .split(&['/', '?', '#'][..])
+        .next()
+        .unwrap_or_default();
+    archive_id == root_hex
 }
 
 fn compute_replay_multiplier_millionths(replay_ns: u64, compile_ns: u64) -> u64 {
@@ -542,7 +554,7 @@ pub fn evaluate_release_gate(
         findings.push(GateFinding {
             code: GateFailureCode::ArchiveNotContentAddressed,
             optimization_pass: None,
-            detail: "artifact archive must be content-addressed (`cas://`) with non-zero root"
+            detail: "artifact archive must use `cas://<archive_root_hex>/...` with matching non-zero root"
                 .to_string(),
         });
     }
@@ -746,6 +758,7 @@ mod tests {
         let mut expected = BTreeSet::new();
         expected.insert("inline".to_string());
         expected.insert("dce".to_string());
+        let archive_root = hash("archive-root");
 
         ReleaseGateInput {
             trace_id: "trace-gate-1".to_string(),
@@ -756,8 +769,8 @@ mod tests {
                 compilation_id: "compile-0001".to_string(),
                 original_compile_time_ns: 50_000_000,
                 replay_time_ns: 200_000_000,
-                archive_root: hash("archive-root"),
-                archive_uri: "cas://proof-chain/compile-0001".to_string(),
+                archive_root,
+                archive_uri: format!("cas://{}/proof-chain/compile-0001", to_hex(&archive_root)),
                 artifacts: vec![ok_artifact("inline"), ok_artifact("dce")],
             },
             test_evidence: Some(TestEvidenceBundle {
@@ -992,17 +1005,42 @@ mod tests {
 
     #[test]
     fn content_addressed_archive_valid() {
-        assert!(is_content_addressed_archive("cas://foo", &hash("x")));
+        let root = hash("x");
+        assert!(is_content_addressed_archive(
+            &format!("cas://{}", to_hex(&root)),
+            &root
+        ));
+        assert!(is_content_addressed_archive(
+            &format!("cas://{}/proof-chain/compile-0001", to_hex(&root)),
+            &root
+        ));
+    }
+
+    #[test]
+    fn content_addressed_archive_mismatched_root() {
+        let root = hash("x");
+        let other = hash("other");
+        assert!(!is_content_addressed_archive(
+            &format!("cas://{}", to_hex(&other)),
+            &root
+        ));
     }
 
     #[test]
     fn content_addressed_archive_wrong_scheme() {
-        assert!(!is_content_addressed_archive("https://foo", &hash("x")));
+        let root = hash("x");
+        assert!(!is_content_addressed_archive(
+            &format!("https://{}", to_hex(&root)),
+            &root
+        ));
     }
 
     #[test]
     fn content_addressed_archive_zero_root() {
-        assert!(!is_content_addressed_archive("cas://foo", &[0u8; 32]));
+        assert!(!is_content_addressed_archive(
+            &format!("cas://{}", to_hex(&hash("x"))),
+            &[0u8; 32]
+        ));
     }
 
     // ── artifact validation ─────────────────────────────────────────

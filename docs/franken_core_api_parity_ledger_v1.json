@@ -1,0 +1,634 @@
+{
+  "schema_version": "franken-engine.franken-core-api-parity-ledger.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-4w7h9.2",
+  "parent_bead_id": "bd-4w7h9",
+  "graduation_contract_bead_id": "bd-4w7h9.1",
+  "acceptance_suite_bead_id": "bd-4w7h9.8",
+  "policy_id": "policy-franken-core-api-parity-ledger-v1",
+  "status": "active",
+  "purpose": "Inventory every franken-core public module export and match it to the corresponding franken-engine public module export before any workspace graduation decision.",
+  "docs": {
+    "operator_ledger": "docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md",
+    "machine_ledger": "docs/franken_core_api_parity_ledger_v1.json",
+    "graduation_contract": "docs/franken_core_graduation_contract_v1.json",
+    "smoke_script": "scripts/e2e/franken_core_api_parity_ledger_smoke.sh"
+  },
+  "decision": {
+    "current_workspace_state": "excluded",
+    "workspace_inclusion_complete": false,
+    "default_row_status": "pending_graduation",
+    "next_required_beads": [
+      "bd-4w7h9.3",
+      "bd-4w7h9.4",
+      "bd-4w7h9.5",
+      "bd-4w7h9.6",
+      "bd-4w7h9.7",
+      "bd-4w7h9.8"
+    ]
+  },
+  "allowed_statuses": [
+    "canonical_core",
+    "canonical_engine",
+    "intentionally_divergent",
+    "pending_graduation",
+    "not_comparable"
+  ],
+  "allowed_file_relations": [
+    "identical",
+    "different"
+  ],
+  "required_row_fields": [
+    "module",
+    "status",
+    "canonical_owner",
+    "core_path",
+    "engine_path",
+    "engine_export_present",
+    "file_relation",
+    "owner_rationale",
+    "test_expectation",
+    "known_beads"
+  ],
+  "summary": {
+    "core_module_count": 41,
+    "matching_engine_export_count": 41,
+    "missing_engine_export_count": 0,
+    "identical_file_count": 3,
+    "different_file_count": 38,
+    "unclassified_row_count": 0,
+    "workspace_inclusion_complete": false
+  },
+  "historical_inputs": [
+    {
+      "bead_id": "bd-ucemx",
+      "role": "earlier exclusion documentation",
+      "rationale": "Superseded as a compileability blocker by later franken-core restoration work, but still proves why workspace inclusion was not previously complete."
+    },
+    {
+      "bead_id": "bd-zsais",
+      "role": "standalone compileability restoration",
+      "rationale": "Restored modules and standalone manifest compileability needed before parity work could be meaningful."
+    },
+    {
+      "bead_id": "bd-dymfz",
+      "role": "standalone test baseline restoration",
+      "rationale": "Restored the standalone franken-core test baseline after compileability work."
+    },
+    {
+      "bead_id": "bd-yqpka",
+      "role": "async generator fail-closed franken-core fix",
+      "rationale": "Reduced a known placeholder-success divergence risk in baseline_interpreter."
+    },
+    {
+      "bead_id": "bd-la2e0",
+      "role": "async function fail-closed franken-core fix",
+      "rationale": "Reduced a known unsupported async function placeholder risk in baseline_interpreter."
+    },
+    {
+      "bead_id": "bd-nwhcp",
+      "role": "timer placeholder regression replacement",
+      "rationale": "Added executable timer regressions in franken-core baseline_interpreter."
+    }
+  ],
+  "rows": [
+    {
+      "module": "ast",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/ast.rs",
+      "engine_path": "crates/franken-engine/src/ast.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Both crates export ast, but the source files differ and workspace membership is not accepted.",
+      "test_expectation": "Future parity work must prove AST compatibility before claiming canonical ownership.",
+      "known_beads": []
+    },
+    {
+      "module": "baseline_interpreter",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/baseline_interpreter.rs",
+      "engine_path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "This is a high-risk runtime surface with known franken-core follow-up fixes; ownership needs dedicated proof.",
+      "test_expectation": "Future parity work must compare fail-closed async, timer, capability, and execution semantics before owner promotion.",
+      "known_beads": [
+        "bd-yqpka",
+        "bd-la2e0",
+        "bd-nwhcp",
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "bayesian_posterior",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/bayesian_posterior.rs",
+      "engine_path": "crates/franken-engine/src/bayesian_posterior.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Both crates export the module, but divergence must be classified before owner assignment.",
+      "test_expectation": "Future parity work must document whether this is runtime-core or engine-governance evidence.",
+      "known_beads": []
+    },
+    {
+      "module": "capability",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/capability.rs",
+      "engine_path": "crates/franken-engine/src/capability.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Capability and trust-zone extraction was part of standalone compileability restoration but remains topology-sensitive.",
+      "test_expectation": "Future parity work must prove capability defaults and trust_zone exports are aligned.",
+      "known_beads": [
+        "bd-zsais",
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "checkpoint",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/checkpoint.rs",
+      "engine_path": "crates/franken-engine/src/checkpoint.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Checkpoint semantics affect deterministic replay and cancellation evidence; matching exports are not enough.",
+      "test_expectation": "Future parity work must prove checkpoint and cancellation evidence compatibility.",
+      "known_beads": []
+    },
+    {
+      "module": "closure_model",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/closure_model.rs",
+      "engine_path": "crates/franken-engine/src/closure_model.rs",
+      "engine_export_present": true,
+      "file_relation": "identical",
+      "owner_rationale": "The files are currently identical, but the ledger does not promote ownership before the acceptance suite.",
+      "test_expectation": "Future parity work may use the identical file relation as evidence for a canonical_core candidate.",
+      "known_beads": [
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "containment_executor",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/containment_executor.rs",
+      "engine_path": "crates/franken-engine/src/containment_executor.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Containment execution affects runtime safety claims; divergence needs explicit proof.",
+      "test_expectation": "Future parity work must compare containment decisions and evidence output.",
+      "known_beads": [
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "control_plane",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/control_plane.rs",
+      "engine_path": "crates/franken-engine/src/control_plane/mod.rs",
+      "engine_export_present": true,
+      "file_relation": "identical",
+      "owner_rationale": "control_plane was restored for standalone compileability after earlier missing-module exclusion.",
+      "test_expectation": "Future parity work must decide whether this belongs in core or remains engine-level control surface.",
+      "known_beads": [
+        "bd-ucemx",
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "cx_threading",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/cx_threading.rs",
+      "engine_path": "crates/franken-engine/src/cx_threading.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Threading context is runtime-adjacent but exported by both crates with divergent files.",
+      "test_expectation": "Future parity work must pin context/threading invariants under both crate surfaces.",
+      "known_beads": [
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "deterministic_serde",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/deterministic_serde.rs",
+      "engine_path": "crates/franken-engine/src/deterministic_serde.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Deterministic serialization is shared evidence infrastructure and needs exact compatibility proof.",
+      "test_expectation": "Future parity work must compare serialized outputs or golden fixtures.",
+      "known_beads": []
+    },
+    {
+      "module": "engine_object_id",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/engine_object_id.rs",
+      "engine_path": "crates/franken-engine/src/engine_object_id.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Object identity is a core runtime primitive but source divergence must be explained.",
+      "test_expectation": "Future parity work must prove object id allocation and serialization compatibility.",
+      "known_beads": []
+    },
+    {
+      "module": "entropy_evidence_compressor",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/entropy_evidence_compressor.rs",
+      "engine_path": "crates/franken-engine/src/entropy_evidence_compressor.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Evidence compression may be core evidence substrate or engine-level reporting; ownership is unsettled.",
+      "test_expectation": "Future parity work must compare deterministic compressed evidence artifacts.",
+      "known_beads": []
+    },
+    {
+      "module": "evidence_ledger",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/evidence_ledger.rs",
+      "engine_path": "crates/franken-engine/src/evidence_ledger.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Evidence ledger semantics are graduation-critical and cannot be inferred from matching exports.",
+      "test_expectation": "Future parity work must compare ledger event schemas and replay behavior.",
+      "known_beads": [
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "execution_cell",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/execution_cell.rs",
+      "engine_path": "crates/franken-engine/src/execution_cell.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Execution cell behavior is a core runtime candidate but still requires parity proof.",
+      "test_expectation": "Future parity work must compare lifecycle, capability, and evidence behavior.",
+      "known_beads": [
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "execution_orchestrator",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/execution_orchestrator.rs",
+      "engine_path": "crates/franken-engine/src/execution_orchestrator.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "The orchestrator is central to runtime execution and was part of standalone restoration.",
+      "test_expectation": "Future parity work must compare orchestration outcomes for representative programs.",
+      "known_beads": [
+        "bd-zsais",
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "expected_loss_selector",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/expected_loss_selector.rs",
+      "engine_path": "crates/franken-engine/src/expected_loss_selector.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Adaptive selection policy must keep deterministic fallback guarantees before promotion.",
+      "test_expectation": "Future parity work must prove deterministic safe-mode behavior and policy compatibility.",
+      "known_beads": []
+    },
+    {
+      "module": "fleet_convergence",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/fleet_convergence.rs",
+      "engine_path": "crates/franken-engine/src/fleet_convergence.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Fleet convergence may be higher-level engine policy rather than core runtime substrate.",
+      "test_expectation": "Future parity work must decide whether this remains canonical_engine.",
+      "known_beads": []
+    },
+    {
+      "module": "fleet_immune_protocol",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/fleet_immune_protocol.rs",
+      "engine_path": "crates/franken-engine/src/fleet_immune_protocol.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Fleet immune protocol is exported by both crates but needs owner separation from product/operator policy.",
+      "test_expectation": "Future parity work must classify this as core runtime or engine policy before topology change.",
+      "known_beads": []
+    },
+    {
+      "module": "flow_lattice",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/flow_lattice.rs",
+      "engine_path": "crates/franken-engine/src/flow_lattice.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "IFC flow lattice semantics are core security substrate candidates but require parity proof.",
+      "test_expectation": "Future parity work must compare lattice ordering and join/meet behavior.",
+      "known_beads": []
+    },
+    {
+      "module": "guardplane_adapter",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/guardplane_adapter.rs",
+      "engine_path": "crates/franken-engine/src/guardplane_adapter.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Guardplane adapter ownership depends on the final split between core runtime and engine policy.",
+      "test_expectation": "Future parity work must classify adapter boundaries before owner promotion.",
+      "known_beads": []
+    },
+    {
+      "module": "hash_tiers",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/hash_tiers.rs",
+      "engine_path": "crates/franken-engine/src/hash_tiers.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Hash-tier behavior is shared infrastructure with security and performance consequences.",
+      "test_expectation": "Future parity work must compare deterministic hashing tiers and security-sensitive outputs.",
+      "known_beads": []
+    },
+    {
+      "module": "hindsight_boundary_capture",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/hindsight_boundary_capture.rs",
+      "engine_path": "crates/franken-engine/src/hindsight_boundary_capture.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Boundary capture is evidence-adjacent and must not be promoted without artifact parity.",
+      "test_expectation": "Future parity work must compare emitted boundary evidence.",
+      "known_beads": []
+    },
+    {
+      "module": "ifc_artifacts",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/ifc_artifacts.rs",
+      "engine_path": "crates/franken-engine/src/ifc_artifacts.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "IFC artifacts are security-proof surfaces and need schema parity before owner changes.",
+      "test_expectation": "Future parity work must compare IFC artifact schemas and validation behavior.",
+      "known_beads": []
+    },
+    {
+      "module": "ir_contract",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/ir_contract.rs",
+      "engine_path": "crates/franken-engine/src/ir_contract.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "IR contract is central to parser/lowering/runtime compatibility and needs explicit parity.",
+      "test_expectation": "Future parity work must compare IR schema and lowering expectations.",
+      "known_beads": []
+    },
+    {
+      "module": "lowering_pipeline",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/lowering_pipeline.rs",
+      "engine_path": "crates/franken-engine/src/lowering_pipeline.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Lowering behavior directly affects executable runtime semantics and must be compared.",
+      "test_expectation": "Future parity work must compare representative AST-to-IR lowering outputs.",
+      "known_beads": [
+        "bd-1vih6"
+      ]
+    },
+    {
+      "module": "object_model",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/object_model.rs",
+      "engine_path": "crates/franken-engine/src/object_model.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "object_model was one of the missing modules behind earlier workspace exclusion.",
+      "test_expectation": "Future parity work must compare object invariants and serde behavior before promotion.",
+      "known_beads": [
+        "bd-ucemx",
+        "bd-zsais",
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "optimal_stopping",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/optimal_stopping.rs",
+      "engine_path": "crates/franken-engine/src/optimal_stopping.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Decision policy ownership is unsettled until runtime-core versus engine-policy boundaries are proven.",
+      "test_expectation": "Future parity work must compare deterministic decision outputs or classify as engine policy.",
+      "known_beads": []
+    },
+    {
+      "module": "parser",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/parser.rs",
+      "engine_path": "crates/franken-engine/src/parser.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Parser behavior is core runtime input semantics and requires exact compatibility evidence.",
+      "test_expectation": "Future parity work must compare parse outputs and diagnostics for representative fixtures.",
+      "known_beads": []
+    },
+    {
+      "module": "parser_gap_inventory",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/parser_gap_inventory.rs",
+      "engine_path": "crates/franken-engine/src/parser_gap_inventory.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Gap inventory may be evidence/reporting rather than core runtime; ownership remains unsettled.",
+      "test_expectation": "Future parity work must classify inventory authority and schema compatibility.",
+      "known_beads": []
+    },
+    {
+      "module": "profiling",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/profiling.rs",
+      "engine_path": "crates/franken-engine/src/profiling.rs",
+      "engine_export_present": true,
+      "file_relation": "identical",
+      "owner_rationale": "The files are currently identical after standalone restoration, but ownership remains pending.",
+      "test_expectation": "Future parity work may use the identical file relation as evidence for a canonical owner recommendation.",
+      "known_beads": [
+        "bd-ucemx",
+        "bd-zsais"
+      ]
+    },
+    {
+      "module": "promise_model",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/promise_model.rs",
+      "engine_path": "crates/franken-engine/src/promise_model.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "promise_model was one of the missing modules behind earlier workspace exclusion.",
+      "test_expectation": "Future parity work must compare promise state and handler-count behavior before promotion.",
+      "known_beads": [
+        "bd-ucemx",
+        "bd-zsais",
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "region_lifecycle",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/region_lifecycle.rs",
+      "engine_path": "crates/franken-engine/src/region_lifecycle.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Region lifecycle is runtime resource policy and needs compatibility evidence.",
+      "test_expectation": "Future parity work must compare lifecycle transitions and fail-closed behavior.",
+      "known_beads": []
+    },
+    {
+      "module": "regret_bounded_router",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/regret_bounded_router.rs",
+      "engine_path": "crates/franken-engine/src/regret_bounded_router.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Adaptive routing must keep deterministic fallback semantics before graduation.",
+      "test_expectation": "Future parity work must compare safe-mode fallback and bounded-regret outputs.",
+      "known_beads": []
+    },
+    {
+      "module": "runtime_config",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/runtime_config.rs",
+      "engine_path": "crates/franken-engine/src/runtime_config.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Runtime configuration is a boundary surface and must not drift silently.",
+      "test_expectation": "Future parity work must compare defaults, feature flags, and fail-closed config handling.",
+      "known_beads": []
+    },
+    {
+      "module": "saga_orchestrator",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/saga_orchestrator.rs",
+      "engine_path": "crates/franken-engine/src/saga_orchestrator.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Saga orchestration may be engine-level workflow policy rather than core runtime substrate.",
+      "test_expectation": "Future parity work must classify owner boundary and compare deterministic orchestration behavior.",
+      "known_beads": []
+    },
+    {
+      "module": "security_epoch",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/security_epoch.rs",
+      "engine_path": "crates/franken-engine/src/security_epoch.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Security epoch semantics are security-critical and require explicit parity evidence.",
+      "test_expectation": "Future parity work must compare epoch invalidation and proof artifacts.",
+      "known_beads": []
+    },
+    {
+      "module": "signature_preimage",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/signature_preimage.rs",
+      "engine_path": "crates/franken-engine/src/signature_preimage.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Signature preimage behavior is security-sensitive and must be proven before owner changes.",
+      "test_expectation": "Future parity work must compare signing preimage canonicalization and verification behavior.",
+      "known_beads": [
+        "bd-dymfz"
+      ]
+    },
+    {
+      "module": "spectral_fleet_convergence",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/spectral_fleet_convergence.rs",
+      "engine_path": "crates/franken-engine/src/spectral_fleet_convergence.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Fleet-level convergence may remain engine policy rather than core runtime.",
+      "test_expectation": "Future parity work must decide owner classification before workspace inclusion.",
+      "known_beads": []
+    },
+    {
+      "module": "tropical_semiring",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/tropical_semiring.rs",
+      "engine_path": "crates/franken-engine/src/tropical_semiring.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Shared mathematical substrate must be checked for deterministic semantic parity.",
+      "test_expectation": "Future parity work must compare semiring operations and edge cases.",
+      "known_beads": []
+    },
+    {
+      "module": "trust_economics",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/trust_economics.rs",
+      "engine_path": "crates/franken-engine/src/trust_economics.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "Trust economics may be engine policy rather than core runtime and needs owner classification.",
+      "test_expectation": "Future parity work must classify policy boundary and compare deterministic outputs.",
+      "known_beads": []
+    },
+    {
+      "module": "ts_normalization",
+      "status": "pending_graduation",
+      "canonical_owner": "unsettled_until_acceptance",
+      "core_path": "crates/franken-core/src/ts_normalization.rs",
+      "engine_path": "crates/franken-engine/src/ts_normalization.rs",
+      "engine_export_present": true,
+      "file_relation": "different",
+      "owner_rationale": "TypeScript normalization is exported by both crates and must stay aligned with parser/lowering policy.",
+      "test_expectation": "Future parity work must compare normalization outputs and evidence artifacts.",
+      "known_beads": []
+    }
+  ],
+  "validation_commands": [
+    "jq empty docs/franken_core_api_parity_ledger_v1.json",
+    "bash -n scripts/e2e/franken_core_api_parity_ledger_smoke.sh",
+    "bash scripts/e2e/franken_core_api_parity_ledger_smoke.sh check",
+    "bash scripts/e2e/franken_core_api_parity_ledger_smoke.sh negative",
+    "git diff --check -- docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md docs/franken_core_api_parity_ledger_v1.json scripts/e2e/franken_core_api_parity_ledger_smoke.sh"
+  ]
+}

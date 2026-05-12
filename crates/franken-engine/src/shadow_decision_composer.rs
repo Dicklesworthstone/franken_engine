@@ -705,6 +705,7 @@ fn acquire_output_dir_file_lock(
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)?;
     flock(&file, operation).map_err(|error| {
         ShadowDecisionError::Io(format!(

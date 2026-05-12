@@ -5,9 +5,109 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 publish = false
+autotests = false
 
 [lib]
 path = "src/lib.rs"
+
+# Compile the moved support-heavy integration tests from their original
+# crate-root files. The local tests/ shims use include! for discoverability, but
+# include! cannot preserve crate-root inner attributes from the source files.
+[[test]]
+name = "cancellation_lifecycle_integration"
+path = "../franken-engine/tests/cancellation_lifecycle_integration.rs"
+
+[[test]]
+name = "control_plane_adapter"
+path = "../franken-engine/tests/control_plane_adapter.rs"
+
+[[test]]
+name = "control_plane_integration"
+path = "../franken-engine/tests/control_plane_integration.rs"
+
+[[test]]
+name = "cx_threading_edge_cases"
+path = "../franken-engine/tests/cx_threading_edge_cases.rs"
+
+[[test]]
+name = "cx_threading_enrichment_integration"
+path = "../franken-engine/tests/cx_threading_enrichment_integration.rs"
+
+[[test]]
+name = "cx_threading_integration"
+path = "../franken-engine/tests/cx_threading_integration.rs"
+
+[[test]]
+name = "evidence_emission_enrichment_integration"
+path = "../franken-engine/tests/evidence_emission_enrichment_integration.rs"
+
+[[test]]
+name = "evidence_emission_integration"
+path = "../franken-engine/tests/evidence_emission_integration.rs"
+
+[[test]]
+name = "execution_cell_integration"
+path = "../franken-engine/tests/execution_cell_integration.rs"
+
+[[test]]
+name = "extension_host_lifecycle_integration"
+path = "../franken-engine/tests/extension_host_lifecycle_integration.rs"
+
+[[test]]
+name = "frankenlab_extension_lifecycle_enrichment_integration"
+path = "../franken-engine/tests/frankenlab_extension_lifecycle_enrichment_integration.rs"
+
+[[test]]
+name = "frankenlab_extension_lifecycle_integration"
+path = "../franken-engine/tests/frankenlab_extension_lifecycle_integration.rs"
+
+[[test]]
+name = "frankenlab_release_gate_enrichment_integration"
+path = "../franken-engine/tests/frankenlab_release_gate_enrichment_integration.rs"
+
+[[test]]
+name = "frankenlab_release_gate_integration"
+path = "../franken-engine/tests/frankenlab_release_gate_integration.rs"
+
+[[test]]
+name = "migration_compatibility_enrichment_integration"
+path = "../franken-engine/tests/migration_compatibility_enrichment_integration.rs"
+
+[[test]]
+name = "migration_compatibility_integration"
+path = "../franken-engine/tests/migration_compatibility_integration.rs"
+
+[[test]]
+name = "obligation_integration_enrichment_integration"
+path = "../franken-engine/tests/obligation_integration_enrichment_integration.rs"
+
+[[test]]
+name = "obligation_integration_integration"
+path = "../franken-engine/tests/obligation_integration_integration.rs"
+
+[[test]]
+name = "release_gate_edge_cases"
+path = "../franken-engine/tests/release_gate_edge_cases.rs"
+
+[[test]]
+name = "release_gate_enrichment_integration"
+path = "../franken-engine/tests/release_gate_enrichment_integration.rs"
+
+[[test]]
+name = "release_gate_integration"
+path = "../franken-engine/tests/release_gate_integration.rs"
+
+[[test]]
+name = "safe_mode_fallback_enrichment_integration"
+path = "../franken-engine/tests/safe_mode_fallback_enrichment_integration.rs"
+
+[[test]]
+name = "safety_decision_router_enrichment_integration"
+path = "../franken-engine/tests/safety_decision_router_enrichment_integration.rs"
+
+[[test]]
+name = "safety_decision_router_integration"
+path = "../franken-engine/tests/safety_decision_router_integration.rs"
 
 [dev-dependencies]
 frankenengine-engine = { path = "../franken-engine" }

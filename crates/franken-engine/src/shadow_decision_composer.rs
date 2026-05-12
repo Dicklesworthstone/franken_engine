@@ -10,11 +10,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt, fs,
+    fmt,
+    fs::{self, File, OpenOptions},
     path::{Component, Path, PathBuf},
     sync::Mutex,
 };
 
+use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,6 +47,8 @@ pub const DEFAULT_SHADOW_DECISION_FRESHNESS_WINDOW_SECONDS: i64 = 300;
 
 /// Default bounded recommendation count.
 pub const DEFAULT_SHADOW_DECISION_MAX_RECOMMENDATIONS: usize = 16;
+
+const SHADOW_DECISION_BUNDLE_LOCK_FILE: &str = ".shadow_decision_composer.lock";
 
 /// Input envelope for one deterministic advisory decision composition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -664,7 +668,18 @@ pub fn normalize_journal_event(
 static OUTPUT_DIR_LOCKS: std::sync::LazyLock<Mutex<BTreeMap<PathBuf, std::sync::Arc<Mutex<()>>>>> =
     std::sync::LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-/// Acquire a lock for the given output directory to ensure atomic artifact bundle writes.
+/// Advisory filesystem lock held for one output-dir artifact bundle write.
+struct OutputDirFileLock {
+    file: File,
+}
+
+impl Drop for OutputDirFileLock {
+    fn drop(&mut self) {
+        let _ = flock(&self.file, FlockOperation::Unlock);
+    }
+}
+
+/// Acquire a process-local lock for the given output directory.
 fn acquire_output_dir_lock(output_dir: &Path) -> std::sync::Arc<Mutex<()>> {
     let canonical_path = output_dir
         .canonicalize()
@@ -674,6 +689,30 @@ fn acquire_output_dir_lock(output_dir: &Path) -> std::sync::Arc<Mutex<()>> {
         .entry(canonical_path)
         .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
         .clone()
+}
+
+/// Acquire an advisory filesystem lock for the output directory.
+///
+/// The persistent lock file is intentionally not deleted on release: the
+/// advisory lock is tied to the open file descriptor and is released on drop.
+/// Keeping the file avoids unlink races between independent writer processes.
+fn acquire_output_dir_file_lock(
+    output_dir: &Path,
+    operation: FlockOperation,
+) -> Result<OutputDirFileLock, ShadowDecisionError> {
+    let lock_path = output_dir.join(SHADOW_DECISION_BUNDLE_LOCK_FILE);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&lock_path)?;
+    flock(&file, operation).map_err(|error| {
+        ShadowDecisionError::Io(format!(
+            "failed to acquire shadow decision bundle lock `{}`: {error}",
+            lock_path.display()
+        ))
+    })?;
+    Ok(OutputDirFileLock { file })
 }
 
 /// Write content to a file atomically using temp file + rename.
@@ -709,9 +748,13 @@ pub fn write_shadow_decision_artifacts(
     ensure_artifact_paths_under(output_dir, &artifacts.shadow_status.artifact_paths)?;
     fs::create_dir_all(output_dir)?;
 
-    // Acquire per-directory lock to prevent concurrent writers from creating mixed bundles
+    // Acquire per-directory locks to prevent concurrent writers from creating mixed bundles.
+    // The in-process mutex keeps local threads ordered; the filesystem lock
+    // serializes independent frankenctl/script processes targeting the same
+    // output directory.
     let lock_arc = acquire_output_dir_lock(output_dir);
-    let _lock = lock_arc.lock().unwrap();
+    let _process_lock = lock_arc.lock().unwrap();
+    let _file_lock = acquire_output_dir_file_lock(output_dir, FlockOperation::LockExclusive)?;
 
     // Write non-critical files first with atomic writes
     write_file_atomic(
@@ -1359,6 +1402,39 @@ mod tests {
         assert!(
             err.to_string().contains("parent-directory traversal"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn output_dir_file_lock_blocks_second_writer_until_release() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "franken-shadow-lock-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&output_dir).expect("lock test output dir should be created");
+
+        let first = acquire_output_dir_file_lock(&output_dir, FlockOperation::LockExclusive)
+            .expect("first lock holder should acquire exclusive lock");
+        let second =
+            acquire_output_dir_file_lock(&output_dir, FlockOperation::NonBlockingLockExclusive);
+        assert!(
+            second.is_err(),
+            "second writer must not acquire the bundle lock while first writer holds it"
+        );
+
+        drop(first);
+        let third =
+            acquire_output_dir_file_lock(&output_dir, FlockOperation::NonBlockingLockExclusive)
+                .expect("bundle lock should be acquirable after the first holder drops");
+        drop(third);
+
+        assert!(
+            output_dir.join(SHADOW_DECISION_BUNDLE_LOCK_FILE).is_file(),
+            "persistent advisory lock file should remain for future writers"
         );
     }
 

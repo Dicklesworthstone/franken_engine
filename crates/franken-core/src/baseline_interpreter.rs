@@ -8299,6 +8299,7 @@ mod tests {
     use crate::ir_contract::{
         CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
     };
+    use crate::parser::Es2020Parser;
     use std::sync::{Arc, Mutex};
 
     // -- helpers --------------------------------------------------------
@@ -8378,6 +8379,51 @@ mod tests {
 
     fn quickjs_test_core() -> InterpreterCore {
         InterpreterCore::new(test_quickjs_config(), "test-trace")
+    }
+
+    fn class_test_function(entry: u32, name: &str) -> Ir3FunctionDesc {
+        Ir3FunctionDesc {
+            entry,
+            arity: 0,
+            frame_size: 4,
+            name: Some(name.to_string()),
+            is_generator: false,
+        }
+    }
+
+    fn object_id_from_value(value: &Value, context: &str) -> ObjectId {
+        match value {
+            Value::Object(id) => *id,
+            other => panic!("{context} should be an object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn class_semantic_tests_reject_halt_only_todo_smokes() {
+        let source = include_str!("baseline_interpreter.rs");
+        let section_start = source
+            .find("// -- ES2015 Class Semantics Tests")
+            .expect("class semantics section should exist");
+        let section = &source[section_start..];
+        let section_end = section
+            .find("// -----------------------------------------------------------------------")
+            .expect("timer section separator should follow class semantics tests");
+        let section = &section[..section_end];
+
+        for block in section.split("#[test]").skip(1) {
+            let has_todo = block.contains("TODO");
+            let has_halt_only = block.contains("test_module(vec![Ir3Instruction::Halt])");
+            let has_bare_success = block.contains("assert!(result.is_ok())");
+            assert!(
+                !(has_todo && has_halt_only && has_bare_success),
+                "class semantic test remains a halt-only placeholder: {}",
+                block
+                    .lines()
+                    .find(|line| line.trim_start().starts_with("fn "))
+                    .unwrap_or("<unknown>")
+                    .trim()
+            );
+        }
     }
 
     #[test]
@@ -11428,138 +11474,308 @@ mod tests {
 
     #[test]
     fn class_extends_sets_prototype_chain() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "class-extends-test");
+        let mut core = quickjs_test_core();
+        let base_prototype = core.ensure_function_prototype(0).unwrap();
+        core.set_object_property(base_prototype, "inherited".to_string(), Value::Int(42))
+            .unwrap();
+        let derived_prototype = core.ensure_function_prototype(1).unwrap();
+        core.heap[derived_prototype.0 as usize].prototype = Some(base_prototype);
+        core.registers[1] = Value::Function(1);
 
-        // TODO: implement test for inheritance
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::Construct {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 4,
+                        key: 2,
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["inherited".to_string()],
+                vec![
+                    class_test_function(4, "Base"),
+                    class_test_function(6, "Derived"),
+                ],
+            ))
+            .unwrap();
+
+        let instance = object_id_from_value(&core.registers[4], "derived instance");
+        assert_eq!(
+            core.heap[instance.0 as usize].prototype,
+            Some(derived_prototype)
+        );
+        assert_eq!(result.value, Value::Int(42));
     }
 
     #[test]
     fn super_call_invokes_parent_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "super-constructor-test");
+        let mut core = quickjs_test_core();
+        core.registers[1] = Value::Function(0);
 
-        // TODO: implement test for super() calls
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        core.execute(&test_module_with_pool_and_functions(
+            vec![
+                Ir3Instruction::NewObject { dst: 0 },
+                Ir3Instruction::CallMethod {
+                    receiver: 0,
+                    callee: 1,
+                    args: RegRange { start: 3, count: 0 },
+                    dst: 2,
+                },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 3,
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::LoadBool {
+                    dst: 2,
+                    value: true,
+                },
+                Ir3Instruction::SetProperty {
+                    obj: 0,
+                    key: 1,
+                    val: 2,
+                },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec!["parentInitialized".to_string()],
+            vec![class_test_function(5, "Parent")],
+        ))
+        .unwrap();
+
+        assert_eq!(core.registers[0], Value::Bool(true));
     }
 
     #[test]
     fn super_method_calls_parent_method() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "super-method-test");
+        let mut core = quickjs_test_core();
+        let derived_prototype = core.ensure_function_prototype(0).unwrap();
+        let base_prototype = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(base_prototype, "describe".to_string(), Value::Function(1))
+            .unwrap();
+        core.heap[derived_prototype.0 as usize].prototype = Some(base_prototype);
+        core.registers[1] = Value::Function(0);
 
-        // TODO: implement test for super.method() calls
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::Construct {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 4,
+                        key: 2,
+                        dst: 3,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 4,
+                        callee: 3,
+                        args: RegRange { start: 5, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadInt { dst: 0, value: 7 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["describe".to_string()],
+                vec![
+                    class_test_function(5, "Derived"),
+                    class_test_function(7, "Base.describe"),
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(7));
     }
 
     #[test]
     fn static_method_on_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "static-method-test");
+        let mut core = quickjs_test_core();
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Function(1);
 
-        // TODO: implement test for static methods - this should work with current implementation
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let err = core
+            .execute(&test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::SetProperty {
+                        obj: 0,
+                        key: 2,
+                        val: 1,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                vec!["staticMethod".to_string()],
+            ))
+            .expect_err("bd-vwtlc.3 tracks property-bearing constructor support");
+
+        assert!(matches!(err, InterpreterError::TypeError { expected, got }
+                if expected == "object" && got == "function"));
     }
 
     #[test]
     fn computed_method_name() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "computed-method-test");
+        let mut core = quickjs_test_core();
+        let prototype = core.ensure_function_prototype(0).unwrap();
+        core.set_object_property(prototype, "dynamicName".to_string(), Value::Function(1))
+            .unwrap();
+        core.registers[1] = Value::Function(0);
 
-        // TODO: implement test for computed method names like [expr]()
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                vec![
+                    Ir3Instruction::Construct {
+                        callee: 1,
+                        args: RegRange { start: 2, count: 0 },
+                        dst: 4,
+                    },
+                    Ir3Instruction::LoadStr {
+                        dst: 2,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 4,
+                        key: 2,
+                        dst: 3,
+                    },
+                    Ir3Instruction::CallMethod {
+                        receiver: 4,
+                        callee: 3,
+                        args: RegRange { start: 5, count: 0 },
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadThis { dst: 0 },
+                    Ir3Instruction::Return { value: 0 },
+                    Ir3Instruction::LoadInt { dst: 0, value: 99 },
+                    Ir3Instruction::Return { value: 0 },
+                ],
+                vec!["dynamicName".to_string()],
+                vec![
+                    class_test_function(5, "ComputedHost"),
+                    class_test_function(7, "dynamicName"),
+                ],
+            ))
+            .unwrap();
+
+        assert_eq!(result.value, Value::Int(99));
     }
 
     #[test]
     fn getter_setter() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "getter-setter-test");
+        let mut core = quickjs_test_core();
+        let object = core.alloc_object_with_prototype(None).unwrap();
+        core.set_object_property(object, "value".to_string(), Value::Function(0))
+            .unwrap();
+        core.registers[0] = Value::Object(object);
 
-        // TODO: implement test for getter/setter methods
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        let result = core
+            .execute(&test_module_with_pool(
+                vec![
+                    Ir3Instruction::LoadStr {
+                        dst: 1,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::GetProperty {
+                        obj: 0,
+                        key: 1,
+                        dst: 0,
+                    },
+                    Ir3Instruction::Halt,
+                ],
+                vec!["value".to_string()],
+            ))
+            .unwrap();
+
+        assert_eq!(
+            result.value,
+            Value::Function(0),
+            "bd-vwtlc.4 tracks real accessor invocation for getter/setter methods"
+        );
     }
 
     #[test]
     fn class_expression() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "class-expression-test");
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "const C = class { method() { return 1; } }",
+                ParseGoal::Script,
+            )
+            .expect("parser currently accepts this source without class-expression semantics");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-expression-test.js");
+        let ctx = LoweringContext::new(
+            "trace-class-expression",
+            "decision-class-expression",
+            "policy-class-expression",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx)
+            .expect("bd-vwtlc.5 tracks replacing this non-semantic lowering");
 
-        // TODO: implement test for class expressions
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        assert!(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .any(|constant| constant.contains("class { method()")),
+            "current class expression path should be truth-labeled as non-semantic text lowering"
+        );
+        assert!(
+            !output
+                .ir3
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::Construct { .. })),
+            "bd-vwtlc.5 tracks executable class expression constructor lowering"
+        );
     }
 
     #[test]
     fn new_target_in_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "new-target-test");
+        let err = CanonicalEs2020Parser
+            .parse(
+                "class C { constructor() { return new.target; } }",
+                ParseGoal::Script,
+            )
+            .expect_err("bd-vwtlc.6 tracks new.target parser/lowering/interpreter support");
 
-        // TODO: implement test for new.target meta-property
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
+        assert_eq!(err.code, crate::parser::ParseErrorCode::UnsupportedSyntax);
+        assert_eq!(err.message, "new.target meta-property is not supported");
     }
 
     // -----------------------------------------------------------------------

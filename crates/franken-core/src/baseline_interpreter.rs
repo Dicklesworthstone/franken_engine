@@ -122,6 +122,8 @@ pub struct ActiveTimer {
     pub delay_ms: u64,
     /// For setInterval, whether this timer repeats.
     pub repeating: bool,
+    /// Event-loop registration sequence for matching queued macrotasks.
+    pub registration_seq: Option<u64>,
 }
 
 /// Wrapper around f64 that provides Eq/Ord using total_cmp for determinism.
@@ -1840,15 +1842,20 @@ impl InterpreterCore {
 
         self.push_event("execution_started", "ok", None);
 
-        let result = self.run_loop(module);
+        let mut result = self.run_loop(module);
 
         // Drain any pending microtasks enqueued during execution
         // (promise reactions, thenable resolutions, etc.).
         self.drain_microtasks();
 
-        // Run the event loop until all pending work is complete
-        // (macrotasks like timers, with microtask draining after each).
-        self.run_event_loop_until_idle();
+        // Run the event loop until all pending work is complete after normal
+        // top-level termination.  A failed script should not run timer
+        // callbacks after the failure path has been selected.
+        if matches!(result, Ok(_) | Err(InterpreterError::Halted))
+            && let Err(err) = self.run_event_loop_until_idle(module)
+        {
+            result = Err(err);
+        }
 
         if let Some(record) = self.module_state.modules.get_mut(&entry_specifier) {
             record.status = match &result {
@@ -6365,7 +6372,7 @@ impl InterpreterCore {
     ///
     /// This is called after top-level script evaluation to handle any
     /// pending timers or other async work before the interpreter exits.
-    fn run_event_loop_until_idle(&mut self) {
+    fn run_event_loop_until_idle(&mut self, module: &Ir3Module) -> Result<(), InterpreterError> {
         const MAX_TURNS: u32 = 10_000; // Safety limit to prevent infinite loops
         let mut turns = 0;
 
@@ -6374,14 +6381,139 @@ impl InterpreterCore {
 
             // Phase 1: Execute one macrotask (if ready)
             let turn_result = self.event_loop.turn();
-            if let Some(_macrotask) = turn_result.macrotask {
-                // TODO: Execute the macrotask's handler closure
-                // This requires timer callback execution, which comes in RC-2.7
-                // For now, we just mark the task as executed (it's already dequeued)
+            if let Some(macrotask) = turn_result.macrotask {
+                self.execute_macrotask_callback(module, &macrotask)?;
             }
 
             // Phase 2: Drain all microtasks enqueued during macrotask execution
             self.drain_microtasks();
+        }
+
+        Ok(())
+    }
+
+    fn execute_macrotask_callback(
+        &mut self,
+        module: &Ir3Module,
+        macrotask: &crate::promise_model::Macrotask,
+    ) -> Result<(), InterpreterError> {
+        if macrotask.source != crate::promise_model::MacrotaskSource::Timer {
+            return Ok(());
+        }
+
+        let Some((timer_id, timer)) = self
+            .active_timers
+            .iter()
+            .find(|(_, timer)| timer.registration_seq == Some(macrotask.registration_seq))
+            .map(|(timer_id, timer)| (*timer_id, timer.clone()))
+        else {
+            return Ok(());
+        };
+
+        if timer.handler != Some(macrotask.handler.0) {
+            return Ok(());
+        }
+
+        if !timer.repeating {
+            self.active_timers.remove(&timer_id);
+        }
+
+        if let Some(handler) = timer.handler {
+            self.execute_timer_closure(module, handler)?;
+        }
+
+        Ok(())
+    }
+
+    fn execute_timer_closure(
+        &mut self,
+        module: &Ir3Module,
+        closure_id: u32,
+    ) -> Result<(), InterpreterError> {
+        let closure =
+            self.closures
+                .get(closure_id as usize)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "valid closure".to_string(),
+                    got: format!("closure#{closure_id} not found"),
+                })?;
+        let func_idx = closure.function_index;
+        let captured_env = self.clone_scope_frames_with_budget(&closure.captured_env)?;
+        let func = module.function_table.get(func_idx as usize).ok_or(
+            InterpreterError::FunctionNotFound {
+                index: func_idx,
+                table_size: module.function_table.len() as u32,
+            },
+        )?;
+
+        if self.call_stack.len() >= self.config.max_call_depth {
+            return Err(InterpreterError::StackOverflow {
+                depth: self.call_stack.len(),
+                max: self.config.max_call_depth,
+            });
+        }
+
+        let callee = Value::Closure(closure_id);
+        self.run_pre_call_hook(module, &callee, func_idx, &[])?;
+
+        let initial_call_depth = self.call_stack.len();
+        let saved_ip = self.ip;
+        let saved_return_reg = self.read_reg(0).unwrap_or(Value::Undefined);
+        let scope_depth = self.scope_chain.depth();
+        let captured_env_bytes = Self::estimate_scope_chain_bytes(&captured_env);
+        let captured_scope_depth = captured_env.len();
+        let saved_chain = self.snapshot_scope_chain_with_temporary_budget(captured_env_bytes)?;
+
+        self.call_stack.push(CallFrame {
+            return_ip: module.instructions.len(),
+            return_reg: 0,
+            register_base: self.register_base,
+            function_index: Some(func_idx),
+            this_value: Value::Undefined,
+            super_value: Value::Undefined,
+            construct_this: None,
+            saved_pending_exception: self.pending_exception.take(),
+            saved_pending_return: self.pending_return.take(),
+            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+            saved_finally_mode_depth: self.finally_modes.len(),
+            saved_scope_depth: scope_depth,
+            saved_scope_chain: Some(saved_chain),
+            closure_id: Some(closure_id),
+            captured_scope_depth,
+        });
+
+        self.scope_chain.frames = captured_env;
+        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            self.rollback_call_setup();
+            return Err(err);
+        }
+
+        self.register_base += self.config.max_registers as usize;
+        let req_len = self.register_base + self.config.max_registers as usize;
+        if req_len > self.registers.len() {
+            self.registers.resize(req_len, Value::Undefined);
+        } else {
+            self.registers[self.register_base..req_len].fill(Value::Undefined);
+        }
+
+        self.ip = func.entry as usize;
+        let result = self.run_loop(module);
+        if self.call_stack.len() > initial_call_depth {
+            let (restored_pending_exception, restored_pending_return) =
+                self.unwind_call_stack_to(initial_call_depth);
+            self.pending_exception = restored_pending_exception;
+            self.pending_return = restored_pending_return;
+        }
+        self.ip = saved_ip;
+        self.write_reg(0, saved_return_reg)?;
+
+        match result {
+            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
+            Err(err) => Err(err),
         }
     }
 
@@ -6763,6 +6895,13 @@ impl InterpreterCore {
                         handler: handler_id,
                         delay_ms,
                         repeating: false,
+                        registration_seq: handler_id.map(|handler| {
+                            self.event_loop.set_timeout(
+                                crate::closure_model::ClosureHandle(handler),
+                                delay_ms,
+                                crate::ifc_artifacts::Label::Public,
+                            )
+                        }),
                     },
                 );
 
@@ -6811,6 +6950,7 @@ impl InterpreterCore {
                         handler: handler_id,
                         delay_ms,
                         repeating: true,
+                        registration_seq: None,
                     },
                 );
 
@@ -8116,6 +8256,16 @@ mod tests {
         functions: Vec<Ir3FunctionDesc>,
     ) -> Ir3Module {
         let mut m = test_module(instructions);
+        m.function_table = functions;
+        m
+    }
+
+    fn test_module_with_pool_and_functions(
+        instructions: Vec<Ir3Instruction>,
+        pool: Vec<String>,
+        functions: Vec<Ir3FunctionDesc>,
+    ) -> Ir3Module {
+        let mut m = test_module_with_pool(instructions, pool);
         m.function_table = functions;
         m
     }
@@ -11081,12 +11231,12 @@ mod tests {
     // Timer substrate tests
     // -----------------------------------------------------------------------
 
-    fn timer_callback_desc() -> Ir3FunctionDesc {
+    fn timer_callback_desc(entry: u32, name: &str) -> Ir3FunctionDesc {
         Ir3FunctionDesc {
-            entry: 0,
+            entry,
             arity: 0,
             frame_size: 1,
-            name: Some("timer_callback".to_string()),
+            name: Some(name.to_string()),
             is_generator: false,
         }
     }
@@ -11106,11 +11256,32 @@ mod tests {
         }
     }
 
+    fn timer_callback_body(pool_index: u32) -> Vec<Ir3Instruction> {
+        vec![
+            Ir3Instruction::LoadStr { dst: 0, pool_index },
+            timer_hostcall("console:log", RegRange { start: 0, count: 1 }, 1),
+            Ir3Instruction::Return { value: 1 },
+        ]
+    }
+
+    fn test_module_with_timer_callback(
+        mut top_level: Vec<Ir3Instruction>,
+        message: &str,
+    ) -> Ir3Module {
+        let callback_entry = top_level.len() as u32;
+        top_level.extend(timer_callback_body(0));
+        test_module_with_pool_and_functions(
+            top_level,
+            vec![message.to_string()],
+            vec![timer_callback_desc(callback_entry, "timer_callback")],
+        )
+    }
+
     #[test]
     fn set_timeout_fires_after_delay() {
         let mut core = quickjs_test_core();
         let result = core
-            .execute(&test_module_with_functions(
+            .execute(&test_module_with_timer_callback(
                 vec![
                     Ir3Instruction::CreateClosure {
                         dst: 0,
@@ -11121,15 +11292,14 @@ mod tests {
                     timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
                     Ir3Instruction::Halt,
                 ],
-                vec![timer_callback_desc()],
+                "timer fired after delay",
             ))
             .unwrap();
 
         assert_eq!(core.read_reg(2).unwrap(), Value::Int(0));
-        let timer = core.active_timers.get(&0).expect("timer should be active");
-        assert_eq!(timer.handler, Some(0));
-        assert_eq!(timer.delay_ms, 25);
-        assert!(!timer.repeating);
+        assert!(core.active_timers.is_empty());
+        assert_eq!(result.console_output.len(), 1);
+        assert_eq!(result.console_output[0].message, "timer fired after delay");
         assert!(
             result
                 .witness_events
@@ -11141,51 +11311,53 @@ mod tests {
     #[test]
     fn set_timeout_returns_id() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 10 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
-                Ir3Instruction::LoadInt { dst: 1, value: 20 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
-                Ir3Instruction::Halt,
-            ],
-            vec![timer_callback_desc()],
-        ))
-        .unwrap();
+        let result = core
+            .execute(&test_module_with_timer_callback(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 10 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                    Ir3Instruction::LoadInt { dst: 1, value: 20 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+                    Ir3Instruction::Halt,
+                ],
+                "timer callback",
+            ))
+            .unwrap();
 
         assert_eq!(core.read_reg(2).unwrap(), Value::Int(0));
         assert_eq!(core.read_reg(3).unwrap(), Value::Int(1));
-        assert_eq!(core.active_timers.len(), 2);
-        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 10);
-        assert_eq!(core.active_timers.get(&1).unwrap().delay_ms, 20);
+        assert!(core.active_timers.is_empty());
+        assert_eq!(result.console_output.len(), 2);
     }
 
     #[test]
     fn clear_timeout_cancels() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 30 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
-                timer_hostcall("timer:clearTimeout", RegRange { start: 2, count: 1 }, 3),
-                Ir3Instruction::Halt,
-            ],
-            vec![timer_callback_desc()],
-        ))
-        .unwrap();
+        let result = core
+            .execute(&test_module_with_timer_callback(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 30 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                    timer_hostcall("timer:clearTimeout", RegRange { start: 2, count: 1 }, 3),
+                    Ir3Instruction::Halt,
+                ],
+                "cancelled timer should not fire",
+            ))
+            .unwrap();
 
         assert_eq!(core.read_reg(3).unwrap(), Value::Undefined);
         assert!(core.active_timers.is_empty());
+        assert!(result.console_output.is_empty());
     }
 
     #[test]
@@ -11202,7 +11374,7 @@ mod tests {
                 timer_hostcall("timer:setInterval", RegRange { start: 0, count: 2 }, 2),
                 Ir3Instruction::Halt,
             ],
-            vec![timer_callback_desc()],
+            vec![timer_callback_desc(0, "timer_callback")],
         ))
         .unwrap();
 
@@ -11213,6 +11385,7 @@ mod tests {
         assert_eq!(timer.handler, Some(0));
         assert_eq!(timer.delay_ms, 40);
         assert!(timer.repeating);
+        assert_eq!(timer.registration_seq, None);
     }
 
     #[test]
@@ -11230,7 +11403,7 @@ mod tests {
                 timer_hostcall("timer:clearInterval", RegRange { start: 2, count: 1 }, 3),
                 Ir3Instruction::Halt,
             ],
-            vec![timer_callback_desc()],
+            vec![timer_callback_desc(0, "timer_callback")],
         ))
         .unwrap();
 
@@ -11241,30 +11414,56 @@ mod tests {
     #[test]
     fn timer_ordering() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 30 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
-                Ir3Instruction::LoadInt { dst: 1, value: 10 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
-                Ir3Instruction::LoadInt { dst: 1, value: 20 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 4),
-                Ir3Instruction::Halt,
-            ],
-            vec![timer_callback_desc()],
-        ))
-        .unwrap();
+        let mut instructions = vec![
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 0,
+                capture_count: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 30 },
+            timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 1,
+                capture_count: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 10 },
+            timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+            Ir3Instruction::CreateClosure {
+                dst: 0,
+                function_index: 2,
+                capture_count: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 1, value: 20 },
+            timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 4),
+            Ir3Instruction::Halt,
+        ];
+        let first_entry = instructions.len() as u32;
+        instructions.extend(timer_callback_body(0));
+        let second_entry = instructions.len() as u32;
+        instructions.extend(timer_callback_body(1));
+        let third_entry = instructions.len() as u32;
+        instructions.extend(timer_callback_body(2));
 
-        let ids = core.active_timers.keys().copied().collect::<Vec<_>>();
-        assert_eq!(ids, vec![0, 1, 2]);
-        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 30);
-        assert_eq!(core.active_timers.get(&1).unwrap().delay_ms, 10);
-        assert_eq!(core.active_timers.get(&2).unwrap().delay_ms, 20);
+        let result = core
+            .execute(&test_module_with_pool_and_functions(
+                instructions,
+                vec!["delay-30".into(), "delay-10".into(), "delay-20".into()],
+                vec![
+                    timer_callback_desc(first_entry, "delay_30"),
+                    timer_callback_desc(second_entry, "delay_10"),
+                    timer_callback_desc(third_entry, "delay_20"),
+                ],
+            ))
+            .unwrap();
+
+        let messages = result
+            .console_output
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(messages, vec!["delay-10", "delay-20", "delay-30"]);
+        assert!(core.active_timers.is_empty());
     }
 
     #[test]
@@ -11296,48 +11495,52 @@ mod tests {
     #[test]
     fn nested_set_timeout() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: 5 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
-                Ir3Instruction::LoadInt { dst: 1, value: 0 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
-                Ir3Instruction::Halt,
-            ],
-            vec![timer_callback_desc()],
-        ))
-        .unwrap();
+        let result = core
+            .execute(&test_module_with_timer_callback(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: 5 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                    Ir3Instruction::LoadInt { dst: 1, value: 0 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 3),
+                    Ir3Instruction::Halt,
+                ],
+                "nested timer callback",
+            ))
+            .unwrap();
 
         assert_eq!(timer_id(core.read_reg(2).unwrap()), 0);
         assert_eq!(timer_id(core.read_reg(3).unwrap()), 1);
-        assert_eq!(core.active_timers.len(), 2);
+        assert!(core.active_timers.is_empty());
+        assert_eq!(result.console_output.len(), 2);
     }
 
     #[test]
     fn zero_delay_timeout() {
         let mut core = quickjs_test_core();
-        core.execute(&test_module_with_functions(
-            vec![
-                Ir3Instruction::CreateClosure {
-                    dst: 0,
-                    function_index: 0,
-                    capture_count: 0,
-                },
-                Ir3Instruction::LoadInt { dst: 1, value: -1 },
-                timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
-                Ir3Instruction::Halt,
-            ],
-            vec![timer_callback_desc()],
-        ))
-        .unwrap();
+        let result = core
+            .execute(&test_module_with_timer_callback(
+                vec![
+                    Ir3Instruction::CreateClosure {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::LoadInt { dst: 1, value: -1 },
+                    timer_hostcall("timer:setTimeout", RegRange { start: 0, count: 2 }, 2),
+                    Ir3Instruction::Halt,
+                ],
+                "zero delay timer",
+            ))
+            .unwrap();
 
         assert_eq!(timer_id(core.read_reg(2).unwrap()), 0);
-        assert_eq!(core.active_timers.get(&0).unwrap().delay_ms, 0);
+        assert!(core.active_timers.is_empty());
+        assert_eq!(result.console_output[0].message, "zero delay timer");
     }
 
     // RC-4.3 Containment Action Enforcement Tests

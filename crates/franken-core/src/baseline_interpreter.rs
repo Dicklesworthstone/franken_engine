@@ -42,8 +42,9 @@ use crate::checkpoint::{
 };
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
-    HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX, Ir0Module,
-    Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
+    HostcallDecisionRecord, IR_ACCESSOR_GET_PREFIX, IR_ACCESSOR_SET_PREFIX,
+    IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module, Ir3Instruction,
+    Ir3Module, IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -841,8 +842,8 @@ struct CallFrame {
     /// The `new.target` value for this call frame. Constructor calls set this
     /// to the invoked constructor value; non-constructor calls use undefined.
     new_target_value: Value,
-    /// The `super` value for this call frame. Set to the parent class constructor
-    /// for class methods, `undefined` otherwise.
+    /// The `super` value for this call frame. Constructors receive the parent
+    /// constructor; methods receive the parent prototype.
     super_value: Value,
     /// For constructor calls (`new`): the `this` object allocated before
     /// entering the constructor body. If the constructor returns a non-object,
@@ -3106,6 +3107,7 @@ impl InterpreterCore {
         } else {
             None
         };
+        let super_value = self.method_super_value(&callee_val, &this_value)?;
         self.call_stack.push(CallFrame {
             return_ip,
             return_reg,
@@ -3113,7 +3115,7 @@ impl InterpreterCore {
             function_index: Some(func_idx),
             this_value,
             new_target_value: Value::Undefined,
-            super_value: Value::Undefined,
+            super_value,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -3788,6 +3790,8 @@ impl InterpreterCore {
                             } else {
                                 Value::Undefined
                             };
+                            let super_value = self
+                                .function_super_value(&callee_val, IR_SUPER_PROTOTYPE_PROPERTY)?;
 
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
@@ -3796,7 +3800,7 @@ impl InterpreterCore {
                                 function_index: Some(func_idx),
                                 this_value: call_this,
                                 new_target_value: Value::Undefined,
-                                super_value: Value::Undefined,
+                                super_value,
                                 construct_this: None,
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -3931,6 +3935,7 @@ impl InterpreterCore {
                     } else {
                         None
                     };
+                    let super_value = self.method_super_value(&callee_val, &receiver_val)?;
                     self.call_stack.push(CallFrame {
                         return_ip: self.ip + 1,
                         return_reg: Some(dst),
@@ -3938,7 +3943,7 @@ impl InterpreterCore {
                         function_index: Some(func_idx),
                         this_value: receiver_val,
                         new_target_value: Value::Undefined,
-                        super_value: Value::Undefined,
+                        super_value,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
                         saved_pending_return: self.pending_return.take(),
@@ -4498,6 +4503,10 @@ impl InterpreterCore {
                             } else {
                                 None
                             };
+                            let super_value = self.function_metadata_property(
+                                &callee_val,
+                                IR_SUPER_CONSTRUCTOR_PROPERTY,
+                            )?;
                             self.call_stack.push(CallFrame {
                                 return_ip: self.ip + 1,
                                 return_reg: Some(dst),
@@ -4505,7 +4514,7 @@ impl InterpreterCore {
                                 function_index: Some(func_idx),
                                 this_value: this_val.clone(),
                                 new_target_value: callee_val.clone(),
-                                super_value: Value::Undefined,
+                                super_value,
                                 construct_this: Some(this_val.clone()),
                                 saved_pending_exception: self.pending_exception.take(),
                                 saved_pending_return: self.pending_return.take(),
@@ -5871,6 +5880,21 @@ impl InterpreterCore {
         value: Value,
     ) -> Result<bool, InterpreterError> {
         self.run_pre_property_access_hook(module, object_id, &key)?;
+        if key == "__proto__" {
+            let prototype = match value {
+                Value::Object(id) => Some(id),
+                Value::Null => None,
+                _ => {
+                    return Ok(false);
+                }
+            };
+            self.heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+                .prototype = prototype;
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Ok(false);
+        }
         match self.prototype_chain_lookup_property(object_id, &key)? {
             Some(RuntimeProperty::Accessor(accessor)) => {
                 if let Some(setter) = accessor.set {
@@ -6836,7 +6860,7 @@ impl InterpreterCore {
             function_index: Some(func_idx),
             this_value: Value::Undefined,
             new_target_value: Value::Undefined,
-            super_value: Value::Undefined,
+            super_value: self.function_super_value(&callee, IR_SUPER_PROTOTYPE_PROPERTY)?,
             construct_this: None,
             saved_pending_exception: self.pending_exception.take(),
             saved_pending_return: self.pending_return.take(),
@@ -8267,6 +8291,75 @@ impl InterpreterCore {
 
     fn function_object_id(&self, value: &Value) -> Option<ObjectId> {
         Self::function_object_key(value).and_then(|key| self.function_objects.get(&key).copied())
+    }
+
+    fn function_metadata_property(
+        &self,
+        value: &Value,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let Some(object_id) = self.function_object_id(value) else {
+            return Ok(Value::Undefined);
+        };
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        Ok(object
+            .properties
+            .get(key)
+            .cloned()
+            .unwrap_or(Value::Undefined))
+    }
+
+    fn function_super_value(
+        &self,
+        value: &Value,
+        primary_key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let primary = self.function_metadata_property(value, primary_key)?;
+        if primary != Value::Undefined {
+            return Ok(primary);
+        }
+        self.function_metadata_property(value, IR_SUPER_CONSTRUCTOR_PROPERTY)
+    }
+
+    fn method_super_value(
+        &self,
+        callee: &Value,
+        receiver: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let from_method = self.function_metadata_property(callee, IR_SUPER_PROTOTYPE_PROPERTY)?;
+        if from_method != Value::Undefined {
+            return Ok(from_method);
+        }
+
+        let from_constructor =
+            self.function_metadata_property(callee, IR_SUPER_CONSTRUCTOR_PROPERTY)?;
+        if from_constructor != Value::Undefined {
+            return Ok(from_constructor);
+        }
+
+        let Value::Object(receiver_id) = receiver else {
+            return Ok(Value::Undefined);
+        };
+        let Some(prototype_id) = self
+            .heap
+            .get(receiver_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: receiver_id.0 })?
+            .prototype
+        else {
+            return Ok(Value::Undefined);
+        };
+        let parent_prototype = self
+            .heap
+            .get(prototype_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: prototype_id.0 })?
+            .prototype;
+
+        Ok(parent_prototype
+            .map(Value::Object)
+            .unwrap_or(Value::Undefined))
     }
 
     fn ensure_function_object(
@@ -12260,6 +12353,54 @@ mod tests {
             .expect("new.target should execute through constructor frames");
 
         assert_eq!(result.value, Value::Str("function".to_string()));
+    }
+
+    #[test]
+    fn class_extends_super_parse_lower_execute() {
+        let tree = CanonicalEs2020Parser
+            .parse(
+                "class Base { constructor() { this.base = 41; } describe() { return this.base + 1; } }\nclass Child extends Base { constructor() { super(); } describe() { return super.describe(); } }\nconst c = new Child();\nc.describe();",
+                ParseGoal::Script,
+            )
+            .expect("class extends with super constructor and method calls should parse");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-extends-super-test.js");
+        let ctx = LoweringContext::new(
+            "trace-class-extends-super",
+            "decision-class-extends-super",
+            "policy-class-extends-super",
+        );
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("class extends and super should lower");
+        assert!(
+            output
+                .ir3
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::LoadSuper { .. })),
+            "constructor and method bodies should load a frame super binding"
+        );
+        assert!(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .any(|constant| constant == IR_SUPER_CONSTRUCTOR_PROPERTY),
+            "derived constructor lowering should record its parent constructor"
+        );
+        assert!(
+            output
+                .ir3
+                .constant_pool
+                .iter()
+                .any(|constant| constant == IR_SUPER_PROTOTYPE_PROPERTY),
+            "derived method lowering should record its parent prototype"
+        );
+
+        let mut core = quickjs_test_core();
+        let result = core
+            .execute(&output.ir3)
+            .expect("class extends and super should execute through parser/lowering path");
+
+        assert_eq!(result.value, Value::Int(42));
     }
 
     // -----------------------------------------------------------------------

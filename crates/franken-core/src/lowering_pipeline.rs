@@ -18,10 +18,10 @@ use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
     BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, IR_ACCESSOR_GET_PREFIX,
-    IR_ACCESSOR_SET_PREFIX, Ir0Module, Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module,
-    Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg,
-    RegRange, ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source,
-    verify_ir3_specialization,
+    IR_ACCESSOR_SET_PREFIX, IR_SUPER_CONSTRUCTOR_PROPERTY, IR_SUPER_PROTOTYPE_PROPERTY, Ir0Module,
+    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
+    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
+    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -2252,10 +2252,24 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
                 is_generator: false,
             });
-            ops.push(Ir1Op::Pop);
 
             // Set up inheritance if this class extends another
             if let Some(super_class) = &cls.super_class {
+                // Record parent constructor for constructor-frame `super()`.
+                ops.push(Ir1Op::LoadBinding { binding_id: bid });
+                lower_expression_to_ir1(
+                    super_class,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::SetProperty {
+                    key: Ir1PropertyKey::Static(IR_SUPER_CONSTRUCTOR_PROPERTY.to_string()),
+                });
+
                 // Load child constructor (our class)
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });
                 ops.push(Ir1Op::GetProperty {
@@ -2336,6 +2350,17 @@ fn lower_statement_to_ir1_with_flow(
                     });
                     m_body_ops.push(Ir1Op::Return);
                 }
+                let method_super_binding = if cls.super_class.is_some() {
+                    Some(alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        "class_method_super",
+                    )?)
+                } else {
+                    None
+                };
 
                 // Push target object: prototype for instance methods,
                 // constructor for static methods.
@@ -2354,6 +2379,11 @@ fn lower_statement_to_ir1_with_flow(
                     free_vars: Vec::new(),
                     is_generator: false,
                 });
+                if let Some(method_binding) = method_super_binding {
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: method_binding,
+                    });
+                }
 
                 let property_key = match method.kind {
                     MethodKind::Get => format!("{IR_ACCESSOR_GET_PREFIX}{method_name}"),
@@ -2366,6 +2396,28 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static(property_key),
                 });
+                if let (Some(super_class), Some(method_binding)) =
+                    (&cls.super_class, method_super_binding)
+                {
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: method_binding,
+                    });
+                    lower_expression_to_ir1(
+                        super_class,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::GetProperty {
+                        key: Ir1PropertyKey::Static("prototype".to_string()),
+                    });
+                    ops.push(Ir1Op::SetProperty {
+                        key: Ir1PropertyKey::Static(IR_SUPER_PROTOTYPE_PROPERTY.to_string()),
+                    });
+                }
                 // Do not emit Pop here: module-level Pop updates the script
                 // completion register and can clobber the class binding when
                 // the constructor lives in register 0.
@@ -5605,6 +5657,61 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
+            if matches!(callee.as_ref(), Expression::Super) {
+                ops.push(Ir1Op::LoadSuper);
+                ops.push(Ir1Op::LoadThis);
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::CallMethod {
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
+            if let Expression::Member {
+                object,
+                property,
+                computed,
+            } = callee.as_ref()
+                && matches!(object.as_ref(), Expression::Super)
+            {
+                ops.push(Ir1Op::LoadSuper);
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                ops.push(Ir1Op::LoadThis);
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::CallMethod {
+                    arg_count: arguments.len() as u32,
+                });
+                return Ok(());
+            }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "require"
                 && !binding_lookup.contains_key(name.as_str())

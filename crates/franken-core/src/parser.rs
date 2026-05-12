@@ -5037,13 +5037,6 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if callee_src == "super" {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
-                span,
-                context,
-            )));
-        }
         let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
@@ -5085,13 +5078,6 @@ fn try_parse_postfix(
                 context,
             )));
         }
-        if object_src == "super" {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
-                span,
-                context,
-            )));
-        }
         let object = match parse_expression(object_src, span, context, recursion_depth + 1) {
             Ok(e) => e,
             Err(e) => return Some(Err(e)),
@@ -5127,13 +5113,6 @@ fn try_parse_postfix(
         if optional && !is_identifier(property_src) {
             return Some(Err(optional_chaining_syntax_error(
                 "optional chaining property access requires an identifier after `?.`",
-                span,
-                context,
-            )));
-        }
-        if object_src == "super" {
-            return Some(Err(unsupported_expression_syntax_error(
-                "super expressions are not supported",
                 span,
                 context,
             )));

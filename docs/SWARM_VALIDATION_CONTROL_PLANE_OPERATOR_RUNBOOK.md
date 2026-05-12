@@ -221,6 +221,41 @@ Common remediation:
 - Missing freshness: regenerate proof-reuse admission rows with current source and dependency root hashes.
 - Stale source or `Cargo.lock` hash: refresh the proof; never relabel stale evidence as reusable.
 
+### Topology-Aware Queue Admission
+
+Use the topology admission path only after the placement/resource envelope and
+topology queue-signal artifacts exist. It is advisory-only and does not run
+Cargo, run RCH, edit `br`, send Agent Mail, pin workers, or change live queue
+policy.
+
+```bash
+./scripts/swarm_topology_aware_queue_scorer.sh --source-revision smoke-rev --topology-queue-signal-input-json /tmp/topology/swarm_topology_queue_signal_input.json --proof-cache-locality-plan-json /tmp/topology/swarm_proof_cache_locality_plan.json --queue-artifact-json /tmp/topology/execution_queue_artifact.json --bottleneck-report-json /tmp/topology/bottleneck_report.json --locality-outcome-samples-json /tmp/topology/locality_outcome_samples.json --resource-envelope-json /tmp/topology/swarm_resource_envelope.json --operator-status-snapshot-json /tmp/topology/status.json --output-dir /tmp/franken-engine-topology-queue-admission
+cat /tmp/franken-engine-topology-queue-admission/queue_advisory_bundle.json
+cat /tmp/franken-engine-topology-queue-admission/commands.txt
+cat /tmp/franken-engine-topology-queue-admission/summary.md
+```
+
+The advisory bundle schema is
+`franken-engine.swarm-topology-aware-queue-advisory.v1`.
+Read the machine value from `admission_decision`.
+
+Operator wording for `queue_advisory_bundle.json`:
+
+| Admission decision | Source decision | Operator wording | Required action |
+| --- | --- | --- | --- |
+| `admit` | `pass` | topology admission: admit | Use only commands already preserved by the validation planner or queue signal. Do not claim the scorer executed them. |
+| `narrow` | `degraded` | topology admission: narrow | Keep the proof set narrow; refresh missing target-dir, optional telemetry, or adoption evidence before widening. |
+| `defer` | `blocked` | topology admission: defer | Do not start the proof wave. Resolve contradictory locality, low memory headroom, or blocking resource evidence first. |
+| `fail_closed` | `fail_closed` | topology admission: fail closed | Discard contaminated admission evidence and rerun only after local fallback, unsafe command broadening, or malformed evidence is removed. |
+
+The scorer preserves selected command text under
+`selected_command_policy.selected_commands`. Any provided command that drops
+`rch exec --` or an explicit `CARGO_TARGET_DIR=...` is
+`unsafe_command_broadening` and fails closed. Missing selected target-dir
+evidence produces `missing_target_dir_evidence` and narrows advice. Resource
+envelope memory headroom below the topology admission floor produces
+`memory_headroom_too_low` and defers proof admission.
+
 7. Execute only admitted proof commands. Shell and docs gates can run directly:
 
 ```bash

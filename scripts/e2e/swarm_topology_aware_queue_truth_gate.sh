@@ -29,6 +29,7 @@ assert_contract_shape() {
     and .track_contract_path == "docs/swarm_topology_aware_queue_advisory_contract_v1.json"
     and .drill_script == "scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh"
     and .truth_gate_script == "scripts/e2e/swarm_topology_aware_queue_truth_gate.sh"
+    and .operator_runbook_path == "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md"
     and (.depends_on | index("bd-utk1x") != null)
     and (.depends_on | index("bd-q1zfn") != null)
     and (.depends_on | index("bd-zvd0e") != null)
@@ -141,6 +142,36 @@ assert_verification_commands_are_lightweight() {
   done < <(jq -r '.verification_commands[]?' "$contract_path")
 }
 
+assert_operator_runbook_handoff() {
+  local runbook_path
+  local required
+
+  runbook_path="${root_dir}/$(jq -r '.operator_runbook_path' "$contract_path")"
+
+  for required in \
+    "scripts/swarm_topology_aware_queue_scorer.sh" \
+    "franken-engine.swarm-topology-aware-queue-advisory.v1" \
+    "queue_advisory_bundle.json" \
+    "admission_decision" \
+    "admit" \
+    "narrow" \
+    "defer" \
+    "fail_closed" \
+    "selected_command_policy.selected_commands" \
+    "unsafe_command_broadening" \
+    "missing_target_dir_evidence" \
+    "memory_headroom_too_low"
+  do
+    if ! grep -Fq "$required" "$runbook_path"; then
+      record_failure "operator runbook missing topology admission reference: ${required}"
+    fi
+  done
+
+  if grep -Eiq 'topology.*(mutates live|changes live queue policy|pins workers automatically|runs Cargo|runs RCH)' "$runbook_path"; then
+    record_failure "operator runbook overclaims topology admission live mutation or execution"
+  fi
+}
+
 run_check() {
   bash -n "${BASH_SOURCE[0]}"
   bash -n "$drill_path"
@@ -154,6 +185,7 @@ run_check() {
   assert_required_paths
   assert_truth_claims
   assert_verification_commands_are_lightweight
+  assert_operator_runbook_handoff
 
   if [[ "$failures" -eq 0 ]]; then
     record_pass "truth claims and artifact references"

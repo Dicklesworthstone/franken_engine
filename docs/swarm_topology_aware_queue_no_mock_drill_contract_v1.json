@@ -12,6 +12,7 @@
   "drill_script": "scripts/e2e/swarm_topology_aware_queue_no_mock_drill.sh",
   "truth_gate_script": "scripts/e2e/swarm_topology_aware_queue_truth_gate.sh",
   "docs": "docs/SWARM_TOPOLOGY_AWARE_QUEUE_NO_MOCK_DRILL.md",
+  "operator_runbook_path": "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md",
   "composed_scripts": [
     "scripts/swarm_topology_queue_signal_normalizer.sh",
     "scripts/swarm_topology_aware_queue_scorer.sh",
@@ -31,6 +32,7 @@
     "docs/swarm_topology_aware_queue_fidelity_ledger_contract_v1.json",
     "docs/swarm_topology_aware_queue_no_mock_drill_contract_v1.json",
     "docs/SWARM_TOPOLOGY_AWARE_QUEUE_NO_MOCK_DRILL.md",
+    "docs/SWARM_VALIDATION_CONTROL_PLANE_OPERATOR_RUNBOOK.md",
     "scripts/swarm_topology_queue_signal_normalizer.sh",
     "scripts/swarm_topology_aware_queue_scorer.sh",
     "scripts/swarm_topology_aware_queue_fidelity_ledger.sh",
@@ -100,7 +102,9 @@
     "Contradictory locality must block queue-ranking advice.",
     "Drain-recommended and probe-required workers must be excluded from preferred advice.",
     "Repeated unstable-worker evidence must downgrade or block locality-aware queue advice.",
-    "Local fallback contamination must fail closed before topology-aware queue advice is trusted."
+    "Local fallback contamination must fail closed before topology-aware queue advice is trusted.",
+    "Topology queue admission maps pass to admit, degraded to narrow, blocked to defer, and fail_closed to fail_closed.",
+    "The operator runbook uses scripts/swarm_topology_aware_queue_scorer.sh and franken-engine.swarm-topology-aware-queue-advisory.v1."
   ],
   "required_truth_gate_rejections": [
     "heavy_cargo_or_rch_claim",

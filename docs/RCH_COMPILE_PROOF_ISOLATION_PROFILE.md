@@ -91,6 +91,12 @@ Do not claim broad baseline parity from `--no-run`, shell-only, JSON-only,
 degraded, or target-ambiguous proof. Those receipts can support triage, but they
 must not close the workspace `cargo test` obligation by themselves.
 
+Source beads may close under this narrower baseline only when the changed
+surface has an exact `rch` test receipt that reached Rust test execution and the
+broad `cargo test` brownout remains tracked on a separate validation bead. The
+closeout note must name the exact command or build id that executed and the
+separate bead that preserves the broad-test gap.
+
 ## Artifacts
 
 Each run emits:

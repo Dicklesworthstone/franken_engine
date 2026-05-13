@@ -63,6 +63,7 @@
     "remote_command_timeout",
     "remote_command_terminated",
     "remote_command_stalled_live_hook",
+    "remote_rust_test_failure",
     "remote_worker_native_dependency_unavailable",
     "remote_worker_resource_exhausted",
     "remote_worker_toolchain_unavailable"

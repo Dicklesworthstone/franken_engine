@@ -101,9 +101,10 @@ require real Rust test execution markers before the runner can pass.
 The runner preserves `rch_build_id` from either explicit RCH build lines or
 worker-scoped `job-<id>` target paths. Remote failures are classified as command
 failure, timeout, termination, `remote_command_stalled_live_hook`, or
-worker environment failures such as `remote_worker_toolchain_unavailable` and
-`remote_worker_native_dependency_unavailable`, or remote worker resource
-failures such as `remote_worker_resource_exhausted`.
+Rust test failures such as `remote_rust_test_failure`, worker environment
+failures such as `remote_worker_toolchain_unavailable` and
+`remote_worker_native_dependency_unavailable`, or remote worker resource failures
+such as `remote_worker_resource_exhausted`.
 
 By default the runner polls `rch --json status --workers --jobs` every 15
 seconds during execution. If RCH reports the shard build with stale progress
@@ -113,7 +114,9 @@ timeout or termination for that build is classified as
 `remote_command_stalled_live_hook` so the receipt distinguishes an RCH
 live-hook progress stall from ordinary command failure. More specific terminal
 failures, such as a remote rustc kill with exit status 137, keep their resource
-classification instead. Use
+classification instead. Likewise, a cargo test run that reaches Rust test
+execution and exits with `test result: FAILED` keeps the
+`remote_rust_test_failure` classification. Use
 `--status-poll-seconds 0` only for fixtures that need polling disabled.
 
 ## Outputs

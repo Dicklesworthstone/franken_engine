@@ -465,6 +465,13 @@ test_execution_observed() {
     && strip_ansi "$path" | grep -Eq '(^|[[:space:]])test[[:space:]]+result:[[:space:]]+ok\.'
 }
 
+remote_rust_test_failure_detected() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  strip_ansi "$path" | grep -Eq '(^|[[:space:]])running[[:space:]]+[0-9]+[[:space:]]+tests?($|[[:space:]])' \
+    && strip_ansi "$path" | grep -Eq '(^|[[:space:]])test[[:space:]]+result:[[:space:]]+FAILED\.|^failures:$'
+}
+
 emit_event "preflight_start" "$diagnose_command"
 set +e
 run_text_command "$diagnose_command" "$diagnose_path" "$diagnose_stderr_path"
@@ -593,6 +600,8 @@ elif remote_native_dependency_failure_detected "$cargo_log_path"; then
   remote_failure_reason="remote_worker_native_dependency_unavailable"
 elif remote_resource_exhaustion_detected "$cargo_log_path"; then
   remote_failure_reason="remote_worker_resource_exhausted"
+elif remote_rust_test_failure_detected "$cargo_log_path"; then
+  remote_failure_reason="remote_rust_test_failure"
 fi
 if stale_live_hook_detected && [[ "$remote_failure_reason" == "remote_command_failed" || "$remote_failure_reason" == "remote_command_timeout" || "$remote_failure_reason" == "remote_command_terminated" ]]; then
   remote_failure_reason="remote_command_stalled_live_hook"

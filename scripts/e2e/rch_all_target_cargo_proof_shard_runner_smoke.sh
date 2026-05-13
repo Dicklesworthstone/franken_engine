@@ -154,6 +154,16 @@ if [[ "${1:-}" == "exec" ]]; then
     exit 0
   fi
   printf '   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)\n'
+  if [[ "${FAKE_RCH_TEST_FAILURE:-0}" == "1" ]]; then
+    printf '    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s\n'
+    printf '     Running unittests src/lib.rs\n\n'
+    printf 'running 2 tests\n'
+    printf 'test fake::test_fails ... FAILED\n'
+    printf 'test fake::test_passes ... ok\n\n'
+    printf 'failures:\n\n'
+    printf 'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n'
+    exit 101
+  fi
   if [[ "${FAKE_RCH_NO_TEST_EXECUTION:-0}" != "1" ]]; then
     printf '    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s\n'
     printf '     Running unittests src/lib.rs\n\n'
@@ -345,6 +355,18 @@ set -e
 jq -e '.decision == "remote_failure" and .reason == "remote_worker_resource_exhausted" and .exit_code == 101 and .rch_build_id == "123456789"' \
   "${resource_exhausted_dir}/result.json" >/dev/null || record_failure "resource exhausted result"
 record_pass "remote_worker_resource_exhausted_classified"
+
+rust_test_failure_dir="${tmp_root}/rust-test-failure"
+set +e
+FAKE_RCH_STATUS_STALE_LIVE_HOOK=1 \
+FAKE_RCH_TEST_FAILURE=1 \
+  runner --output-dir "$rust_test_failure_dir" --execute --timeout-seconds 30 --status-poll-seconds 0 >/dev/null 2>"${rust_test_failure_dir}.stderr"
+rust_test_failure_status=$?
+set -e
+[[ "$rust_test_failure_status" -eq 101 ]] || record_failure "rust test failure exit ${rust_test_failure_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_rust_test_failure" and .exit_code == 101 and .rch_build_id == "123456789"' \
+  "${rust_test_failure_dir}/result.json" >/dev/null || record_failure "rust test failure result"
+record_pass "remote_rust_test_failure_classified"
 
 job_build_id_dir="${tmp_root}/job-build-id"
 set +e

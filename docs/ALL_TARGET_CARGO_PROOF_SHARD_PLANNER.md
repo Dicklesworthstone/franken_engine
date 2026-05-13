@@ -66,6 +66,24 @@ Each shard also emits a preflight contract:
 Broad-baseline runners must reject shards before remote Cargo starts when the
 selected worker is missing from the status snapshot or has critical pressure.
 
+## Shard Runner
+
+`scripts/rch_all_target_cargo_proof_shard_runner.sh` consumes one shard from a
+manifest and preserves the admission and execution receipts for that shard:
+
+```bash
+scripts/rch_all_target_cargo_proof_shard_runner.sh \
+  --manifest artifacts/<bead>/<run>/shards/shard_manifest.json \
+  --shard-id cargo-proof-lib_test_frankenengine_engine_all \
+  --output-dir artifacts/<bead>/<run>/lib-test \
+  --execute
+```
+
+Without `--execute`, the runner performs admission only. With `--execute`, it
+runs the shard command after admission passes, then fails closed on execution worker drift,
+RCH local fallback markers, missing selected-worker evidence, and missing Rust
+test-execution markers for test lanes.
+
 ## Outputs
 
 - `shard_manifest.json`
@@ -90,7 +108,9 @@ stale target diagnostics, and a non-mutating policy.
 ```bash
 jq empty docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/testdata/all_target_cargo_proof_shard_planner/cases.json
 bash -n scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh
+bash -n scripts/rch_all_target_cargo_proof_shard_runner.sh scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh
 bash scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh check
 bash scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh selftest
-git diff --check -- docs/ALL_TARGET_CARGO_PROOF_SHARD_PLANNER.md docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh scripts/testdata/all_target_cargo_proof_shard_planner/cases.json
+bash scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh
+git diff --check -- docs/ALL_TARGET_CARGO_PROOF_SHARD_PLANNER.md docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh scripts/rch_all_target_cargo_proof_shard_runner.sh scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh scripts/testdata/all_target_cargo_proof_shard_planner/cases.json
 ```

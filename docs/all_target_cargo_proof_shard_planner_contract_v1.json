@@ -11,6 +11,8 @@
   },
   "implementation_script": "scripts/all_target_cargo_proof_shard_planner.sh",
   "smoke_script": "scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh",
+  "runner_script": "scripts/rch_all_target_cargo_proof_shard_runner.sh",
+  "runner_smoke_script": "scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh",
   "fixtures": "scripts/testdata/all_target_cargo_proof_shard_planner/cases.json",
   "input_sources": [
     {
@@ -112,8 +114,10 @@
   "validation_commands": [
     "jq empty docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/testdata/all_target_cargo_proof_shard_planner/cases.json",
     "bash -n scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh",
+    "bash -n scripts/rch_all_target_cargo_proof_shard_runner.sh scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh",
     "bash scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh check",
     "bash scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh selftest",
-    "git diff --check -- docs/ALL_TARGET_CARGO_PROOF_SHARD_PLANNER.md docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh scripts/testdata/all_target_cargo_proof_shard_planner/cases.json"
+    "bash scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh",
+    "git diff --check -- docs/ALL_TARGET_CARGO_PROOF_SHARD_PLANNER.md docs/all_target_cargo_proof_shard_planner_contract_v1.json scripts/all_target_cargo_proof_shard_planner.sh scripts/e2e/all_target_cargo_proof_shard_planner_smoke.sh scripts/rch_all_target_cargo_proof_shard_runner.sh scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh scripts/testdata/all_target_cargo_proof_shard_planner/cases.json"
   ]
 }

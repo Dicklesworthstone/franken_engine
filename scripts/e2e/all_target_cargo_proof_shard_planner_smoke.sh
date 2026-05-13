@@ -5,6 +5,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 planner_script="${root_dir}/scripts/all_target_cargo_proof_shard_planner.sh"
 docs_path="${root_dir}/docs/ALL_TARGET_CARGO_PROOF_SHARD_PLANNER.md"
 contract_path="${root_dir}/docs/all_target_cargo_proof_shard_planner_contract_v1.json"
+runner_script="${root_dir}/scripts/rch_all_target_cargo_proof_shard_runner.sh"
+runner_smoke_script="${root_dir}/scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh"
 fixtures_path="${ALL_TARGET_CARGO_PROOF_SHARD_FIXTURES:-${root_dir}/scripts/testdata/all_target_cargo_proof_shard_planner/cases.json}"
 mode="${1:-check}"
 failures=0
@@ -31,6 +33,8 @@ contract_shape_ok() {
     and .mutation_policy.runs_rch == false
     and .mutation_policy.mutates_br == false
     and .mutation_policy.sends_agent_mail == false
+    and .runner_script == "scripts/rch_all_target_cargo_proof_shard_runner.sh"
+    and .runner_smoke_script == "scripts/e2e/rch_all_target_cargo_proof_shard_runner_smoke.sh"
   ' "$contract_path" >/dev/null
 }
 
@@ -39,7 +43,9 @@ docs_shape_ok() {
     && grep -Fq "RCH-wrapped proof command shards" "$docs_path" \
     && grep -Fq "local-fallback transcripts fail closed" "$docs_path" \
     && grep -Fq "preflight.diagnose_command" "$docs_path" \
-    && grep -Fq "critical pressure" "$docs_path"
+    && grep -Fq "critical pressure" "$docs_path" \
+    && grep -Fq "scripts/rch_all_target_cargo_proof_shard_runner.sh" "$docs_path" \
+    && grep -Fq "execution worker drift" "$docs_path"
 }
 
 fixtures_shape_ok() {
@@ -141,9 +147,9 @@ run_case() {
 
 run_check() {
   jq empty "$contract_path" "$fixtures_path"
-  bash -n "$planner_script" "${BASH_SOURCE[0]}"
+  bash -n "$planner_script" "${BASH_SOURCE[0]}" "$runner_script" "$runner_smoke_script"
   if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -x "$planner_script" "${BASH_SOURCE[0]}"
+    shellcheck -x "$planner_script" "${BASH_SOURCE[0]}" "$runner_script" "$runner_smoke_script"
   fi
   contract_shape_ok || record_failure "contract shape"
   docs_shape_ok || record_failure "docs shape"

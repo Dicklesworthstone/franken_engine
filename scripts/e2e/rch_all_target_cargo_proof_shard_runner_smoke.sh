@@ -98,6 +98,7 @@ if [[ "${1:-}" == "exec" ]]; then
     printf 'exec\n' >>"${FAKE_RCH_EXEC_MARKER}"
   fi
   worker="${FAKE_RCH_EXEC_WORKER:-vmi-good}"
+  printf 'Remote build #123456789 on %s\n' "$worker"
   printf 'Selected worker: %s at 192.0.2.10 (rust)\n' "$worker"
   if [[ "${FAKE_RCH_LOCAL_FALLBACK:-0}" == "1" ]]; then
     printf '[RCH] local (forced smoke fixture)\n'
@@ -172,7 +173,7 @@ record_pass "preflight_only"
 execute_dir="${tmp_root}/execute"
 FAKE_RCH_EXEC_MARKER="${tmp_root}/execute-exec.marker" \
   runner --output-dir "$execute_dir" --execute --timeout-seconds 30 >/dev/null
-jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good"' \
+jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good" and .rch_build_id == "123456789"' \
   "${execute_dir}/result.json" >/dev/null || record_failure "execute result"
 grep -q 'running 1 test' "${execute_dir}/cargo-output.log" || record_failure "execute test output"
 record_pass "execute_success"
@@ -233,6 +234,17 @@ set -e
 jq -e '.decision == "remote_failure" and .reason == "remote_command_failed" and .exit_code == 101' \
   "${remote_failure_dir}/result.json" >/dev/null || record_failure "remote failure result"
 record_pass "remote_failure_propagates"
+
+terminated_dir="${tmp_root}/terminated"
+set +e
+FAKE_RCH_EXEC_STATUS=15 \
+  runner --output-dir "$terminated_dir" --execute --timeout-seconds 30 >/dev/null 2>"${terminated_dir}.stderr"
+terminated_status=$?
+set -e
+[[ "$terminated_status" -eq 15 ]] || record_failure "terminated exit ${terminated_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_command_terminated" and .exit_code == 15 and .rch_build_id == "123456789"' \
+  "${terminated_dir}/result.json" >/dev/null || record_failure "terminated result"
+record_pass "remote_command_terminated_classified"
 
 printf 'rch all-target cargo proof shard runner smoke passed\n'
 printf 'smoke artifacts: %s\n' "$tmp_root"

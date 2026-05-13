@@ -42,6 +42,27 @@
     "FE-IW3-SHARD-LOCAL-FALLBACK",
     "FE-IW3-SHARD-CRITICAL-WORKER-PRESSURE"
   ],
+  "runner_result_fields": [
+    "schema_version",
+    "shard_id",
+    "lane",
+    "target_kind",
+    "decision",
+    "reason",
+    "exit_code",
+    "selected_worker",
+    "execution_worker",
+    "rch_build_id",
+    "pressure_state",
+    "pressure_reason",
+    "output_dir",
+    "artifacts"
+  ],
+  "runner_remote_failure_reasons": [
+    "remote_command_failed",
+    "remote_command_timeout",
+    "remote_command_terminated"
+  ],
   "required_outputs": [
     "shard_manifest.json",
     "commands.txt",

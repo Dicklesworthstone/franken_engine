@@ -147,6 +147,10 @@ emit_result() {
   local execution_worker="${5:-}"
   local pressure_state="${6:-}"
   local pressure_reason="${7:-}"
+  local rch_build_id=""
+  if [[ -f "$cargo_log_path" ]]; then
+    rch_build_id="$(extract_rch_build_id_from_log "$cargo_log_path")"
+  fi
   jq -n \
     --arg schema_version "franken-engine.rch-shard-runner.result.v1" \
     --arg shard_id "$shard_id" \
@@ -157,6 +161,7 @@ emit_result() {
     --argjson exit_code "$exit_code" \
     --arg selected_worker "$selected_worker" \
     --arg execution_worker "$execution_worker" \
+    --arg rch_build_id "$rch_build_id" \
     --arg pressure_state "$pressure_state" \
     --arg pressure_reason "$pressure_reason" \
     --arg output_dir "$output_dir" \
@@ -177,6 +182,7 @@ emit_result() {
       exit_code:$exit_code,
       selected_worker:$selected_worker,
       execution_worker:$execution_worker,
+      rch_build_id:(if $rch_build_id == "" then null else $rch_build_id end),
       pressure_state:$pressure_state,
       pressure_reason:$pressure_reason,
       output_dir:$output_dir,
@@ -217,6 +223,11 @@ local_fallback_detected() {
 extract_selected_worker_from_log() {
   local path="$1"
   strip_ansi "$path" | sed -n 's/.*Selected worker: \([^ ]*\).*/\1/p' | tail -n1 || true
+}
+
+extract_rch_build_id_from_log() {
+  local path="$1"
+  strip_ansi "$path" | sed -En 's/.*[Bb]uild[[:space:]#:=]+([0-9]{6,}).*/\1/p' | tail -n1 || true
 }
 
 test_lane_requires_execution() {
@@ -334,7 +345,14 @@ if [[ "$exec_status" -eq 0 ]]; then
   exit 0
 fi
 
-emit_result "remote_failure" "remote_command_failed" "$exec_status" "$selected_worker" "$execution_worker" "$pressure_state" "$pressure_reason"
-emit_event "remote_failure" "exit_code=${exec_status}"
-log "result=remote_failure exit_code=${exec_status} selected_worker=${selected_worker} artifact_root=${output_dir}"
+remote_failure_reason="remote_command_failed"
+if [[ "$exec_status" -eq 124 ]]; then
+  remote_failure_reason="remote_command_timeout"
+elif [[ "$exec_status" -eq 15 || "$exec_status" -eq 143 ]]; then
+  remote_failure_reason="remote_command_terminated"
+fi
+
+emit_result "remote_failure" "$remote_failure_reason" "$exec_status" "$selected_worker" "$execution_worker" "$pressure_state" "$pressure_reason"
+emit_event "remote_failure" "reason=${remote_failure_reason} exit_code=${exec_status}"
+log "result=remote_failure reason=${remote_failure_reason} exit_code=${exec_status} selected_worker=${selected_worker} artifact_root=${output_dir}"
 exit "$exec_status"

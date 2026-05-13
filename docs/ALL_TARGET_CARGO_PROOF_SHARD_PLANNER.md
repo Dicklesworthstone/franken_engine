@@ -82,7 +82,11 @@ scripts/rch_all_target_cargo_proof_shard_runner.sh \
 Without `--execute`, the runner performs admission only. With `--execute`, it
 runs the shard command after admission passes, then fails closed on execution worker drift,
 RCH local fallback markers, missing selected-worker evidence, and missing Rust
-test-execution markers for test lanes.
+test-execution markers for test lanes. Execution results preserve the selected
+worker, observed execution worker, pressure snapshot, cargo log path, and
+`rch_build_id` when RCH emits a build id in the transcript. Timeout and
+termination exits are classified separately from ordinary remote command
+failures.
 
 ## Outputs
 

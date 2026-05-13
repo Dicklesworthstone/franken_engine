@@ -2245,10 +2245,17 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
             current_start_line = line_no;
             last_significant = None;
             trailing_identifier.clear();
+            current_text.push_str(line);
         } else {
+            let preserve_leading_whitespace =
+                in_quote.is_some() || in_block_comment || in_regex_literal;
             current_text.push(' ');
+            if preserve_leading_whitespace {
+                current_text.push_str(line);
+            } else {
+                current_text.push_str(line.trim_start());
+            }
         }
-        current_text.push_str(line);
 
         let mut chars = line.chars().peekable();
         while let Some(ch) = chars.next() {

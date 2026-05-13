@@ -98,8 +98,18 @@ require real Rust test execution markers before the runner can pass.
 
 The runner preserves `rch_build_id` from either explicit RCH build lines or
 worker-scoped `job-<id>` target paths. Remote failures are classified as command
-failure, timeout, termination, or `remote_worker_toolchain_unavailable` when the
-worker cannot invoke Cargo for the selected Rust toolchain.
+failure, timeout, termination, `remote_command_stalled_live_hook`, or
+worker environment failures such as `remote_worker_toolchain_unavailable` and
+`remote_worker_native_dependency_unavailable`.
+
+By default the runner polls `rch --json status --workers --jobs` every 15
+seconds during execution. If RCH reports the shard build with stale progress
+while the hook is alive and heartbeats remain fresh, the runner preserves
+`stale-live-hook-status.json` plus `stale-live-hook-detection.json`. A later
+timeout or termination for that build is classified as
+`remote_command_stalled_live_hook` so the receipt distinguishes an RCH
+live-hook progress stall from ordinary command failure. Use
+`--status-poll-seconds 0` only for fixtures that need polling disabled.
 
 ## Outputs
 

@@ -38,7 +38,35 @@ JSON
 fi
 
 if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
-  cat <<'JSON'
+  active_builds_json='[]'
+  if [[ "${FAKE_RCH_STATUS_STALE_LIVE_HOOK:-0}" == "1" ]]; then
+    active_builds_json='[
+        {
+          "id": 123456789,
+          "project_id": "franken_engine-5d919732",
+          "worker_id": "vmi-good",
+          "command": "env CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine --lib fake::test_executes -- --nocapture",
+          "started_at": "2026-05-13T13:17:42Z",
+          "last_heartbeat_at": "2026-05-13T13:23:17Z",
+          "heartbeat_age_secs": 4,
+          "last_progress_at": "2026-05-13T13:17:50Z",
+          "progress_age_secs": 347,
+          "heartbeat_phase": "execute",
+          "heartbeat_detail": "remote_exec_start",
+          "heartbeat_counter": 2,
+          "heartbeat_percent": null,
+          "slots": 2,
+          "detector_hook_alive": true,
+          "detector_heartbeat_stale": false,
+          "detector_progress_stale": true,
+          "detector_confidence": 0.25,
+          "detector_build_age_secs": 355,
+          "detector_slots_owned": 2,
+          "detector_last_evaluated_at": "2026-05-13T13:23:15Z"
+        }
+      ]'
+  fi
+  cat <<JSON
 {
   "api_version": "1.0",
   "command": "status",
@@ -85,7 +113,8 @@ if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
           "pressure_memory_pressure": 0,
           "pressure_telemetry_fresh": true
         }
-      ]
+      ],
+      "active_builds": ${active_builds_json}
     }
   }
 }
@@ -108,6 +137,11 @@ if [[ "${1:-}" == "exec" ]]; then
   if [[ "${FAKE_RCH_TOOLCHAIN_UNAVAILABLE:-0}" == "1" ]]; then
     printf "error: the 'cargo' binary, normally provided by the 'cargo' component, is not applicable to the 'nightly-2026-04-30-x86_64-unknown-linux-gnu' toolchain\n"
     exit 1
+  fi
+  if [[ "${FAKE_RCH_NATIVE_DEP_UNAVAILABLE:-0}" == "1" ]]; then
+    printf 'error: failed to run custom build command for `hdf5-metno-sys v0.11.3`\n'
+    printf 'Unable to locate HDF5 root directory and/or headers.\n'
+    exit 101
   fi
   if [[ "${FAKE_RCH_LOCAL_FALLBACK:-0}" == "1" ]]; then
     printf '[RCH] local (forced smoke fixture)\n'
@@ -278,6 +312,21 @@ jq -e '.decision == "remote_failure" and .reason == "remote_command_terminated" 
   "${terminated_dir}/result.json" >/dev/null || record_failure "terminated result"
 record_pass "remote_command_terminated_classified"
 
+stale_live_hook_dir="${tmp_root}/stale-live-hook"
+set +e
+FAKE_RCH_STATUS_STALE_LIVE_HOOK=1 \
+FAKE_RCH_EXEC_STATUS=15 \
+  runner --output-dir "$stale_live_hook_dir" --execute --timeout-seconds 30 --status-poll-seconds 0 >/dev/null 2>"${stale_live_hook_dir}.stderr"
+stale_live_hook_status=$?
+set -e
+[[ "$stale_live_hook_status" -eq 15 ]] || record_failure "stale live hook exit ${stale_live_hook_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_command_stalled_live_hook" and .exit_code == 15 and .rch_build_id == "123456789"' \
+  "${stale_live_hook_dir}/result.json" >/dev/null || record_failure "stale live hook result"
+jq -e '.truth_state == "confirmed" and .reason == "rch_stale_progress_live_hook" and .rch_build_id == "123456789" and .worker_id == "vmi-good" and .progress_age_secs == 347' \
+  "${stale_live_hook_dir}/stale-live-hook-detection.json" >/dev/null || record_failure "stale live hook detection"
+jq empty "${stale_live_hook_dir}/stale-live-hook-status.json" >/dev/null || record_failure "stale live hook status"
+record_pass "remote_command_stalled_live_hook_classified"
+
 job_build_id_dir="${tmp_root}/job-build-id"
 set +e
 FAKE_RCH_SUPPRESS_BUILD_LINE=1 \
@@ -301,6 +350,17 @@ set -e
 jq -e '.decision == "remote_failure" and .reason == "remote_worker_toolchain_unavailable" and .exit_code == 1 and .rch_build_id == "123456789"' \
   "${toolchain_dir}/result.json" >/dev/null || record_failure "toolchain unavailable result"
 record_pass "remote_worker_toolchain_unavailable_classified"
+
+native_dep_dir="${tmp_root}/native-dep"
+set +e
+FAKE_RCH_NATIVE_DEP_UNAVAILABLE=1 \
+  runner --output-dir "$native_dep_dir" --execute --timeout-seconds 30 >/dev/null 2>"${native_dep_dir}.stderr"
+native_dep_status=$?
+set -e
+[[ "$native_dep_status" -eq 101 ]] || record_failure "native dependency unavailable exit ${native_dep_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_worker_native_dependency_unavailable" and .exit_code == 101 and .rch_build_id == "123456789"' \
+  "${native_dep_dir}/result.json" >/dev/null || record_failure "native dependency unavailable result"
+record_pass "remote_worker_native_dependency_unavailable_classified"
 
 printf 'rch all-target cargo proof shard runner smoke passed\n'
 printf 'smoke artifacts: %s\n' "$tmp_root"

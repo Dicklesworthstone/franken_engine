@@ -43,6 +43,7 @@ output_dir=""
 execute=false
 timeout_seconds="${RCH_SHARD_TIMEOUT_SECONDS:-3600}"
 remote_keepalive_seconds="${RCH_SHARD_REMOTE_KEEPALIVE_SECONDS:-0}"
+status_poll_seconds="${RCH_SHARD_STATUS_POLL_SECONDS:-15}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -63,6 +64,9 @@ Optional:
   --remote-keepalive-seconds N
                         opt into RUSTC_WRAPPER progress while rustc is silent
                         (default: 0, disabled)
+  --status-poll-seconds N
+                        poll rch status during execution to preserve
+                        stale-live-hook evidence (default: 15, 0 disables)
 EOF
 }
 
@@ -102,6 +106,10 @@ while [[ "$#" -gt 0 ]]; do
       remote_keepalive_seconds="${2:-}"
       shift 2
       ;;
+    --status-poll-seconds)
+      status_poll_seconds="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -117,6 +125,7 @@ done
 [[ -n "$output_dir" ]] || fail_usage "--output-dir is required"
 [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || fail_usage "--timeout-seconds must be an integer"
 [[ "$remote_keepalive_seconds" =~ ^[0-9]+$ ]] || fail_usage "--remote-keepalive-seconds must be an integer"
+[[ "$status_poll_seconds" =~ ^[0-9]+$ ]] || fail_usage "--status-poll-seconds must be an integer"
 [[ -f "$manifest_path" ]] || fail_usage "manifest not found: $manifest_path"
 command -v jq >/dev/null 2>&1 || { printf 'jq is required\n' >&2; exit 2; }
 jq empty "$manifest_path" >/dev/null
@@ -132,6 +141,9 @@ worker_status_path="${output_dir}/worker-pressure-status.json"
 worker_status_stderr_path="${output_dir}/worker-pressure-status.stderr"
 selected_worker_status_path="${output_dir}/selected-worker-status.json"
 cargo_log_path="${output_dir}/cargo-output.log"
+stale_live_hook_detection_path="${output_dir}/stale-live-hook-detection.json"
+stale_live_hook_status_path="${output_dir}/stale-live-hook-status.json"
+stale_live_hook_status_stderr_path="${output_dir}/stale-live-hook-status.stderr"
 
 for artifact_path in \
   "$shard_json" \
@@ -143,7 +155,10 @@ for artifact_path in \
   "$worker_status_path" \
   "$worker_status_stderr_path" \
   "$selected_worker_status_path" \
-  "$cargo_log_path"; do
+  "$cargo_log_path" \
+  "$stale_live_hook_detection_path" \
+  "$stale_live_hook_status_path" \
+  "$stale_live_hook_status_stderr_path"; do
   if [[ -e "$artifact_path" ]]; then
     printf 'refusing to overwrite existing artifact: %s\n' "$artifact_path" >&2
     exit 73
@@ -173,6 +188,7 @@ target_kind="$(jq -r '.target_kind // ""' "$shard_json")"
   printf 'worker_status_command=%s\n' "$worker_status_command"
   printf 'execute_command=%s\n' "$exec_command"
   printf 'remote_keepalive_seconds=%q\n' "$remote_keepalive_seconds"
+  printf 'status_poll_seconds=%q\n' "$status_poll_seconds"
 } >"$commands_path"
 
 : >"$events_path"
@@ -218,6 +234,9 @@ emit_result() {
     --arg worker_status_json "$worker_status_path" \
     --arg selected_worker_status_json "$selected_worker_status_path" \
     --arg cargo_output_log "$cargo_log_path" \
+    --arg stale_live_hook_detection_json "$stale_live_hook_detection_path" \
+    --arg stale_live_hook_status_json "$stale_live_hook_status_path" \
+    --arg stale_live_hook_status_stderr "$stale_live_hook_status_stderr_path" \
     '{
       schema_version:$schema_version,
       shard_id:$shard_id,
@@ -239,7 +258,10 @@ emit_result() {
         worker_diagnose_json:$worker_diagnose_json,
         worker_pressure_status_json:$worker_status_json,
         selected_worker_status_json:$selected_worker_status_json,
-        cargo_output_log:$cargo_output_log
+        cargo_output_log:$cargo_output_log,
+        stale_live_hook_detection_json:$stale_live_hook_detection_json,
+        stale_live_hook_status_json:$stale_live_hook_status_json,
+        stale_live_hook_status_stderr:$stale_live_hook_status_stderr
       }
     }' >"$result_path"
 }
@@ -337,6 +359,95 @@ remote_toolchain_failure_detected() {
   strip_ansi "$path" | grep -Eiq "the 'cargo' binary, normally provided by the 'cargo' component, is not applicable|toolchain.*cargo.*component|cargo component.*toolchain"
 }
 
+remote_native_dependency_failure_detected() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  strip_ansi "$path" | grep -Eiq 'Unable to locate HDF5 root directory|failed to run custom build command for `hdf5|pkg-config.*(failed|could not|not found)|could not find system library|native library .* not found|failed to find .*headers'
+}
+
+capture_stale_live_hook_status_once() {
+  local selected="$1"
+  local log_path="$2"
+  local rch_build_id=""
+  local status_json=""
+  local detection_json=""
+
+  [[ -f "$log_path" ]] || return 1
+  rch_build_id="$(extract_rch_build_id_from_log "$log_path")"
+  [[ -n "$rch_build_id" ]] || return 1
+
+  set +e
+  status_json="$(rch --json status --workers --jobs 2>"$stale_live_hook_status_stderr_path")"
+  local status_code=$?
+  set -e
+  [[ "$status_code" -eq 0 ]] || return 1
+
+  set +e
+  detection_json="$(printf '%s\n' "$status_json" | jq -ce \
+    --arg schema_version "franken-engine.rch-shard-runner.stale-live-hook.v1" \
+    --arg shard_id "$shard_id" \
+    --arg selected_worker "$selected" \
+    --arg rch_build_id "$rch_build_id" \
+    --arg status_artifact "$stale_live_hook_status_path" \
+    '
+      ($rch_build_id | tonumber) as $build_id
+      | .data.daemon.active_builds[]?
+      | select(.id == $build_id)
+      | select((.worker_id // "") == $selected_worker)
+      | select(
+          ((.detector_progress_stale == true) or ((.progress_age_secs // 0) >= 90))
+          and (.detector_hook_alive == true)
+          and ((.detector_heartbeat_stale == false) or ((.heartbeat_age_secs // 999999) < 20))
+        )
+      | {
+          schema_version:$schema_version,
+          shard_id:$shard_id,
+          truth_state:"confirmed",
+          reason:"rch_stale_progress_live_hook",
+          selected_worker:$selected_worker,
+          status_artifact:$status_artifact,
+          rch_build_id:(.id | tostring),
+          worker_id:.worker_id,
+          command:.command,
+          heartbeat_phase:.heartbeat_phase,
+          heartbeat_detail:.heartbeat_detail,
+          heartbeat_counter:.heartbeat_counter,
+          heartbeat_age_secs:.heartbeat_age_secs,
+          progress_age_secs:.progress_age_secs,
+          detector_hook_alive:.detector_hook_alive,
+          detector_heartbeat_stale:.detector_heartbeat_stale,
+          detector_progress_stale:.detector_progress_stale,
+          detector_confidence:.detector_confidence,
+          detector_build_age_secs:.detector_build_age_secs,
+          detector_slots_owned:.detector_slots_owned,
+          detector_last_evaluated_at:.detector_last_evaluated_at
+        }
+    ')"
+  local jq_status=$?
+  set -e
+  [[ "$jq_status" -eq 0 && -n "$detection_json" ]] || return 1
+
+  printf '%s\n' "$status_json" >"$stale_live_hook_status_path"
+  printf '%s\n' "$detection_json" >"$stale_live_hook_detection_path"
+}
+
+stale_live_hook_detected() {
+  [[ -s "$stale_live_hook_detection_path" ]]
+}
+
+monitor_stale_live_hook_status() {
+  local selected="$1"
+  local log_path="$2"
+
+  [[ "$status_poll_seconds" -gt 0 ]] || return 0
+  while true; do
+    sleep "$status_poll_seconds"
+    if capture_stale_live_hook_status_once "$selected" "$log_path"; then
+      return 0
+    fi
+  done
+}
+
 test_lane_requires_execution() {
   [[ "$lane" == "lib_test" || "$lane" == "bin_test" || "$lane" == "integration_test" || "$lane" == "doctest" ]]
 }
@@ -417,10 +528,22 @@ if [[ "$execute" == false ]]; then
 fi
 
 emit_event "execute_start" "$exec_command"
+monitor_pid=""
+if [[ "$status_poll_seconds" -gt 0 ]]; then
+  monitor_stale_live_hook_status "$selected_worker" "$cargo_log_path" &
+  monitor_pid=$!
+fi
 set +e
 run_exec_command_with_keepalive "$exec_command" "$cargo_log_path"
 exec_status=$?
 set -e
+if [[ -n "$monitor_pid" ]]; then
+  kill "$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
+fi
+if ! stale_live_hook_detected; then
+  capture_stale_live_hook_status_once "$selected_worker" "$cargo_log_path" || true
+fi
 
 if local_fallback_detected "$cargo_log_path"; then
   emit_result "fail_closed" "rch_local_fallback_detected" 67 "$selected_worker" "" "$pressure_state" "$pressure_reason"
@@ -459,6 +582,11 @@ elif [[ "$exec_status" -eq 15 || "$exec_status" -eq 143 ]]; then
   remote_failure_reason="remote_command_terminated"
 elif remote_toolchain_failure_detected "$cargo_log_path"; then
   remote_failure_reason="remote_worker_toolchain_unavailable"
+elif remote_native_dependency_failure_detected "$cargo_log_path"; then
+  remote_failure_reason="remote_worker_native_dependency_unavailable"
+fi
+if stale_live_hook_detected; then
+  remote_failure_reason="remote_command_stalled_live_hook"
 fi
 
 emit_result "remote_failure" "$remote_failure_reason" "$exec_status" "$selected_worker" "$execution_worker" "$pressure_state" "$pressure_reason"

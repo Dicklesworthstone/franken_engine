@@ -87,6 +87,19 @@ RCH_VISIBILITY=summary rch exec -- env \
   cargo test -p frankenengine-engine <exact-filter-or-target> -- --nocapture
 ```
 
+For `frankenengine-engine` library filters, prefer the checked gate:
+
+```bash
+FRANKEN_ENGINE_LIB_UNIT_TEST_FILTER=<exact-lib-test-filter> \
+FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT=artifacts/<bead>/<timestamp> \
+scripts/rch_engine_lib_unit_smoke_gate.sh run-execute
+```
+
+That gate runs `rch diagnose` before `rch exec`, snapshots
+`rch --json status --workers --jobs`, rejects critically pressured selected workers,
+rejects local fallback transcripts, and fails unless Rust test execution is
+observed in the output log.
+
 Do not claim broad baseline parity from `--no-run`, shell-only, JSON-only,
 degraded, or target-ambiguous proof. Those receipts can support triage, but they
 must not close the workspace `cargo test` obligation by themselves.

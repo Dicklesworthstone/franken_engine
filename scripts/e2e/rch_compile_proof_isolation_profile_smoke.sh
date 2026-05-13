@@ -68,6 +68,8 @@ run_check() {
   ' "$cases_json" >/dev/null || record_failure "fixture shape"
 
   grep -Fq 'advisory-only' "$operator_doc"
+  grep -Fq 'scripts/rch_engine_lib_unit_smoke_gate.sh run-execute' "$operator_doc"
+  grep -Fq 'rejects critically pressured selected workers' "$operator_doc"
   grep -Fq 'runs_cargo: false' "$profile_script"
   grep -Fq 'runs_rch: false' "$profile_script"
   goldens_shape_ok

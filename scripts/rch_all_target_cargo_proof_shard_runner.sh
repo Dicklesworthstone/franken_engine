@@ -325,7 +325,16 @@ extract_selected_worker_from_log() {
 
 extract_rch_build_id_from_log() {
   local path="$1"
-  strip_ansi "$path" | sed -En 's/.*[Bb]uild[[:space:]#:=]+([0-9]{6,}).*/\1/p' | tail -n1 || true
+  strip_ansi "$path" | sed -En '
+    s/.*[Bb]uild[[:space:]#:=]+([0-9]{6,}).*/\1/p
+    s/.*job-([0-9]{6,}).*/\1/p
+  ' | tail -n1 || true
+}
+
+remote_toolchain_failure_detected() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  strip_ansi "$path" | grep -Eiq "the 'cargo' binary, normally provided by the 'cargo' component, is not applicable|toolchain.*cargo.*component|cargo component.*toolchain"
 }
 
 test_lane_requires_execution() {
@@ -448,6 +457,8 @@ if [[ "$exec_status" -eq 124 ]]; then
   remote_failure_reason="remote_command_timeout"
 elif [[ "$exec_status" -eq 15 || "$exec_status" -eq 143 ]]; then
   remote_failure_reason="remote_command_terminated"
+elif remote_toolchain_failure_detected "$cargo_log_path"; then
+  remote_failure_reason="remote_worker_toolchain_unavailable"
 fi
 
 emit_result "remote_failure" "$remote_failure_reason" "$exec_status" "$selected_worker" "$execution_worker" "$pressure_state" "$pressure_reason"

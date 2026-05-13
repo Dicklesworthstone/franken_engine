@@ -98,8 +98,17 @@ if [[ "${1:-}" == "exec" ]]; then
     printf 'exec\n' >>"${FAKE_RCH_EXEC_MARKER}"
   fi
   worker="${FAKE_RCH_EXEC_WORKER:-vmi-good}"
-  printf 'Remote build #123456789 on %s\n' "$worker"
+  if [[ "${FAKE_RCH_SUPPRESS_BUILD_LINE:-0}" != "1" ]]; then
+    printf 'Remote build #123456789 on %s\n' "$worker"
+  fi
   printf 'Selected worker: %s at 192.0.2.10 (rust)\n' "$worker"
+  if [[ "${FAKE_RCH_JOB_TARGET_PATH:-0}" == "1" ]]; then
+    printf 'Rewriting CARGO_TARGET_DIR for remote execution (worker-scoped path): /tmp/rch_target_fake -> /data/projects/franken_engine/.rch-target-%s-job-987654321-0\n' "$worker"
+  fi
+  if [[ "${FAKE_RCH_TOOLCHAIN_UNAVAILABLE:-0}" == "1" ]]; then
+    printf "error: the 'cargo' binary, normally provided by the 'cargo' component, is not applicable to the 'nightly-2026-04-30-x86_64-unknown-linux-gnu' toolchain\n"
+    exit 1
+  fi
   if [[ "${FAKE_RCH_LOCAL_FALLBACK:-0}" == "1" ]]; then
     printf '[RCH] local (forced smoke fixture)\n'
     exit 0
@@ -268,6 +277,30 @@ set -e
 jq -e '.decision == "remote_failure" and .reason == "remote_command_terminated" and .exit_code == 15 and .rch_build_id == "123456789"' \
   "${terminated_dir}/result.json" >/dev/null || record_failure "terminated result"
 record_pass "remote_command_terminated_classified"
+
+job_build_id_dir="${tmp_root}/job-build-id"
+set +e
+FAKE_RCH_SUPPRESS_BUILD_LINE=1 \
+FAKE_RCH_JOB_TARGET_PATH=1 \
+FAKE_RCH_EXEC_STATUS=15 \
+  runner --output-dir "$job_build_id_dir" --execute --timeout-seconds 30 >/dev/null 2>"${job_build_id_dir}.stderr"
+job_build_id_status=$?
+set -e
+[[ "$job_build_id_status" -eq 15 ]] || record_failure "job build id exit ${job_build_id_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_command_terminated" and .exit_code == 15 and .rch_build_id == "987654321"' \
+  "${job_build_id_dir}/result.json" >/dev/null || record_failure "job build id extraction result"
+record_pass "job_build_id_extracted"
+
+toolchain_dir="${tmp_root}/toolchain"
+set +e
+FAKE_RCH_TOOLCHAIN_UNAVAILABLE=1 \
+  runner --output-dir "$toolchain_dir" --execute --timeout-seconds 30 >/dev/null 2>"${toolchain_dir}.stderr"
+toolchain_status=$?
+set -e
+[[ "$toolchain_status" -eq 1 ]] || record_failure "toolchain unavailable exit ${toolchain_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_worker_toolchain_unavailable" and .exit_code == 1 and .rch_build_id == "123456789"' \
+  "${toolchain_dir}/result.json" >/dev/null || record_failure "toolchain unavailable result"
+record_pass "remote_worker_toolchain_unavailable_classified"
 
 printf 'rch all-target cargo proof shard runner smoke passed\n'
 printf 'smoke artifacts: %s\n' "$tmp_root"

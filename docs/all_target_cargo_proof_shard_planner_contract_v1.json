@@ -61,7 +61,8 @@
   "runner_remote_failure_reasons": [
     "remote_command_failed",
     "remote_command_timeout",
-    "remote_command_terminated"
+    "remote_command_terminated",
+    "remote_worker_toolchain_unavailable"
   ],
   "required_outputs": [
     "shard_manifest.json",

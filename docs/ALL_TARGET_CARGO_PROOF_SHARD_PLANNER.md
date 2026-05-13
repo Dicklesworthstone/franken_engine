@@ -96,6 +96,11 @@ invocation is otherwise silent. `commands.txt` records both the manifest
 `executed_command`. Keepalive output is not proof of success: test lanes still
 require real Rust test execution markers before the runner can pass.
 
+The runner preserves `rch_build_id` from either explicit RCH build lines or
+worker-scoped `job-<id>` target paths. Remote failures are classified as command
+failure, timeout, termination, or `remote_worker_toolchain_unavailable` when the
+worker cannot invoke Cargo for the selected Rust toolchain.
+
 ## Outputs
 
 - `shard_manifest.json`

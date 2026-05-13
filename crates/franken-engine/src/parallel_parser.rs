@@ -9,7 +9,7 @@
 //! ## Architecture
 //!
 //! 1. **Partition**: input split at deterministic depth-aware boundaries.
-//! 2. **Parallel lex**: each chunk lexed independently (simulated, no threads).
+//! 2. **Parallel lex**: chunks lexed by bounded scoped worker threads.
 //! 3. **Merge**: chunk results merged by start offset with boundary token repair.
 //! 4. **Parity check**: merged output compared against serial reference.
 //! 5. **Fallback**: on any mismatch, fallback to serial output with evidence.
@@ -23,6 +23,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::thread;
 
 use serde::{Deserialize, Serialize};
 
@@ -1691,6 +1692,114 @@ fn build_timeout_cancellation_record(
     }
 }
 
+struct ScopedChunkLex {
+    chunk_result: ChunkResult,
+    timing: ChunkTiming,
+}
+
+fn lex_chunks_with_scoped_workers<F>(
+    source: &str,
+    chunk_plan: &ChunkPlan,
+    replay_order: &[u32],
+    lexer_config: &LexerConfig,
+    lex_fn: F,
+) -> Result<Vec<ScopedChunkLex>, ParseError>
+where
+    F: Fn(&str, &LexerConfig) -> Result<LexerOutput, simd_lexer::LexerError> + Sync,
+{
+    let mut config = lexer_config.clone();
+    config.emit_tokens = true;
+
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(replay_order.len());
+        for (step_index, chunk_index) in replay_order.iter().copied().enumerate() {
+            let (start, end) = chunk_plan.chunks[chunk_index as usize];
+            let start_index = usize::try_from(start).map_err(|_| ParseError::LexerError {
+                chunk_index,
+                detail: format!("chunk start offset {start} does not fit usize"),
+            })?;
+            let end_index = usize::try_from(end).map_err(|_| ParseError::LexerError {
+                chunk_index,
+                detail: format!("chunk end offset {end} does not fit usize"),
+            })?;
+            let chunk_bytes = source
+                .as_bytes()
+                .get(start_index..end_index)
+                .ok_or_else(|| ParseError::LexerError {
+                    chunk_index,
+                    detail: format!("chunk range {start}..{end} is outside source bounds"),
+                })?;
+            let chunk_str =
+                std::str::from_utf8(chunk_bytes).map_err(|err| ParseError::LexerError {
+                    chunk_index,
+                    detail: format!("chunk split invalid UTF-8: {err}"),
+                })?;
+            let worker_config = config.clone();
+            let lex_fn_ref = &lex_fn;
+            handles.push((
+                step_index,
+                chunk_index,
+                start,
+                end,
+                scope.spawn(move || lex_fn_ref(chunk_str, &worker_config)),
+            ));
+        }
+
+        let mut first_error = None;
+        let mut lexed_chunks = Vec::with_capacity(handles.len());
+        for (step_index, chunk_index, start, end, handle) in handles {
+            match handle.join() {
+                Ok(Ok(output)) => {
+                    let token_count = output.token_count;
+                    let tokens = output.tokens;
+                    let elapsed_us = deterministic_chunk_elapsed_us(
+                        end.saturating_sub(start),
+                        token_count,
+                        step_index,
+                    );
+                    lexed_chunks.push(ScopedChunkLex {
+                        chunk_result: ChunkResult {
+                            chunk_index,
+                            chunk_start: start,
+                            chunk_end: end,
+                            tokens,
+                            token_count,
+                        },
+                        timing: ChunkTiming {
+                            chunk_index,
+                            chunk_bytes: end.saturating_sub(start),
+                            token_count,
+                            elapsed_us,
+                        },
+                    });
+                }
+                Ok(Err(err)) => {
+                    if first_error.is_none() {
+                        first_error = Some(ParseError::LexerError {
+                            chunk_index,
+                            detail: format!("{err:?}"),
+                        });
+                    }
+                }
+                Err(_) => {
+                    if first_error.is_none() {
+                        first_error = Some(ParseError::LexerError {
+                            chunk_index,
+                            detail: "parallel worker panicked while lexing chunk".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(lexed_chunks)
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Core parse logic
 // ---------------------------------------------------------------------------
@@ -1794,133 +1903,107 @@ pub fn parse(input: &ParseInput<'_>) -> Result<ParseOutput, ParseError> {
         }
     };
 
-    // 3. Lex each chunk independently using transcripted execution order.
-    let mut chunk_results = Vec::new();
-    let mut chunk_timings = Vec::new();
+    // 3. Lex each chunk on bounded scoped workers, then evaluate transcript order.
+    let lexed_chunks = lex_chunks_with_scoped_workers(
+        source,
+        &chunk_plan,
+        &replay_order,
+        &config.lexer_config,
+        simd_lexer::lex,
+    )?;
+
+    let mut chunk_results = Vec::with_capacity(lexed_chunks.len());
+    let mut chunk_timings = Vec::with_capacity(lexed_chunks.len());
     let mut total_elapsed_us = 0u64;
-    let mut lexer_config = config.lexer_config.clone();
-    lexer_config.emit_tokens = true;
 
-    for chunk_index in replay_order {
-        let (start, end) = chunk_plan.chunks[chunk_index as usize];
-        let chunk_bytes = &bytes[start as usize..end as usize];
-        let chunk_str = std::str::from_utf8(chunk_bytes).map_err(|err| ParseError::LexerError {
-            chunk_index,
-            detail: format!("chunk split invalid UTF-8: {err}"),
-        })?;
-        match simd_lexer::lex(chunk_str, &lexer_config) {
-            Ok(output) => {
-                let elapsed_us = deterministic_chunk_elapsed_us(
-                    end.saturating_sub(start),
-                    output.token_count,
-                    chunk_timings.len(),
-                );
-                total_elapsed_us = total_elapsed_us.saturating_add(elapsed_us);
-                chunk_timings.push(ChunkTiming {
-                    chunk_index,
-                    chunk_bytes: end.saturating_sub(start),
-                    token_count: output.token_count,
-                    elapsed_us,
-                });
-                backpressure_snapshot =
-                    compute_backpressure_snapshot(&chunk_timings, &timeout_policy);
+    for lexed in lexed_chunks {
+        let chunk_index = lexed.timing.chunk_index;
+        let elapsed_us = lexed.timing.elapsed_us;
+        total_elapsed_us = total_elapsed_us.saturating_add(elapsed_us);
+        chunk_timings.push(lexed.timing);
+        backpressure_snapshot = compute_backpressure_snapshot(&chunk_timings, &timeout_policy);
 
-                let chunk_budget_exceeded = elapsed_us > timeout_policy.max_chunk_us;
-                let total_budget_exceeded = total_elapsed_us > timeout_policy.max_total_us;
-                let critical_backpressure =
-                    backpressure_snapshot.level == BackpressureLevel::Critical;
+        let chunk_budget_exceeded = elapsed_us > timeout_policy.max_chunk_us;
+        let total_budget_exceeded = total_elapsed_us > timeout_policy.max_total_us;
+        let critical_backpressure = backpressure_snapshot.level == BackpressureLevel::Critical;
 
-                if chunk_budget_exceeded || total_budget_exceeded || critical_backpressure {
-                    let trigger = if critical_backpressure {
-                        FailoverTrigger {
-                            class: FailoverTriggerClass::ResourceLimit,
-                            detail: format!(
-                                "critical backpressure: peak_queue_depth={} delayed_chunks={} total_delay_us={}",
-                                backpressure_snapshot.peak_queue_depth,
-                                backpressure_snapshot.delayed_chunks,
-                                backpressure_snapshot.total_delay_us
-                            ),
-                        }
-                    } else if chunk_budget_exceeded {
-                        FailoverTrigger {
-                            class: FailoverTriggerClass::Timeout,
-                            detail: format!(
-                                "chunk {} elapsed {}us exceeded chunk budget {}us",
-                                chunk_index, elapsed_us, timeout_policy.max_chunk_us
-                            ),
-                        }
-                    } else {
-                        FailoverTrigger {
-                            class: FailoverTriggerClass::Timeout,
-                            detail: format!(
-                                "total elapsed {}us exceeded total budget {}us",
-                                total_elapsed_us, timeout_policy.max_total_us
-                            ),
-                        }
-                    };
-                    let cancellation = if critical_backpressure {
-                        None
-                    } else {
-                        Some(build_timeout_cancellation_record(
-                            &timeout_policy,
-                            total_elapsed_us,
-                            if chunk_budget_exceeded {
-                                Some(chunk_index)
-                            } else {
-                                None
-                            },
-                        ))
-                    };
-                    let budget_us = if chunk_budget_exceeded || critical_backpressure {
-                        timeout_policy.max_chunk_us
-                    } else {
-                        timeout_policy.max_total_us
-                    };
-                    let reason = SerialReason::BudgetExhausted { budget_us };
-                    let serial = serial_parse_inner(source, &config.lexer_config)?;
-                    let output_hash = compute_token_hash(&serial.tokens);
-                    let failover_decision = build_failover_decision(
-                        input,
-                        trigger,
-                        Some(&schedule_transcript),
-                        None,
-                        &output_hash,
-                    );
-                    return Ok(ParseOutput {
-                        schema_version: SCHEMA_VERSION.to_string(),
-                        mode: ParserMode::Serial,
-                        serial_reason: Some(reason.clone()),
-                        fallback_cause: Some(FallbackCause::ResourceLimit(reason)),
-                        tokens: serial.tokens,
-                        token_count: serial.token_count,
-                        bytes_scanned: serial.bytes_scanned,
-                        chunk_plan: Some(chunk_plan),
-                        merge_witness: None,
-                        schedule_transcript: Some(schedule_transcript),
-                        parity_result: None,
-                        failover_decision: Some(failover_decision),
-                        timeout_policy: Some(timeout_policy.clone()),
-                        cancellation,
-                        backpressure: Some(backpressure_snapshot.clone()),
-                        output_hash,
-                    });
+        if chunk_budget_exceeded || total_budget_exceeded || critical_backpressure {
+            let trigger = if critical_backpressure {
+                FailoverTrigger {
+                    class: FailoverTriggerClass::ResourceLimit,
+                    detail: format!(
+                        "critical backpressure: peak_queue_depth={} delayed_chunks={} total_delay_us={}",
+                        backpressure_snapshot.peak_queue_depth,
+                        backpressure_snapshot.delayed_chunks,
+                        backpressure_snapshot.total_delay_us
+                    ),
                 }
-
-                chunk_results.push(ChunkResult {
-                    chunk_index,
-                    chunk_start: start,
-                    chunk_end: end,
-                    tokens: output.tokens,
-                    token_count: output.token_count,
-                });
-            }
-            Err(e) => {
-                return Err(ParseError::LexerError {
-                    chunk_index,
-                    detail: format!("{e:?}"),
-                });
-            }
+            } else if chunk_budget_exceeded {
+                FailoverTrigger {
+                    class: FailoverTriggerClass::Timeout,
+                    detail: format!(
+                        "chunk {} elapsed {}us exceeded chunk budget {}us",
+                        chunk_index, elapsed_us, timeout_policy.max_chunk_us
+                    ),
+                }
+            } else {
+                FailoverTrigger {
+                    class: FailoverTriggerClass::Timeout,
+                    detail: format!(
+                        "total elapsed {}us exceeded total budget {}us",
+                        total_elapsed_us, timeout_policy.max_total_us
+                    ),
+                }
+            };
+            let cancellation = if critical_backpressure {
+                None
+            } else {
+                Some(build_timeout_cancellation_record(
+                    &timeout_policy,
+                    total_elapsed_us,
+                    if chunk_budget_exceeded {
+                        Some(chunk_index)
+                    } else {
+                        None
+                    },
+                ))
+            };
+            let budget_us = if chunk_budget_exceeded || critical_backpressure {
+                timeout_policy.max_chunk_us
+            } else {
+                timeout_policy.max_total_us
+            };
+            let reason = SerialReason::BudgetExhausted { budget_us };
+            let serial = serial_parse_inner(source, &config.lexer_config)?;
+            let output_hash = compute_token_hash(&serial.tokens);
+            let failover_decision = build_failover_decision(
+                input,
+                trigger,
+                Some(&schedule_transcript),
+                None,
+                &output_hash,
+            );
+            return Ok(ParseOutput {
+                schema_version: SCHEMA_VERSION.to_string(),
+                mode: ParserMode::Serial,
+                serial_reason: Some(reason.clone()),
+                fallback_cause: Some(FallbackCause::ResourceLimit(reason)),
+                tokens: serial.tokens,
+                token_count: serial.token_count,
+                bytes_scanned: serial.bytes_scanned,
+                chunk_plan: Some(chunk_plan),
+                merge_witness: None,
+                schedule_transcript: Some(schedule_transcript),
+                parity_result: None,
+                failover_decision: Some(failover_decision),
+                timeout_policy: Some(timeout_policy.clone()),
+                cancellation,
+                backpressure: Some(backpressure_snapshot.clone()),
+                output_hash,
+            });
         }
+
+        chunk_results.push(lexed.chunk_result);
     }
 
     // 4. Merge chunks.
@@ -2273,6 +2356,9 @@ pub fn generate_log_entries(trace_id: &str, output: &ParseOutput) -> Vec<ParseLo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn default_config() -> ParallelConfig {
         ParallelConfig::default()
@@ -2815,6 +2901,102 @@ mod tests {
 
         // Token counts should match.
         assert_eq!(output.token_count, serial_output.token_count);
+    }
+
+    #[test]
+    fn parallel_lex_uses_scoped_worker_threads() {
+        let source = create_medium_js_source();
+        let config = small_config();
+        let chunk_plan = compute_chunk_plan(source.as_bytes(), config.max_workers);
+        assert!(
+            chunk_plan.worker_count > 1,
+            "fixture should route to multiple worker chunks"
+        );
+        let transcript = build_schedule_transcript(&chunk_plan, config.schedule_seed);
+        let thread_ids = Mutex::new(HashSet::new());
+
+        let lexed = lex_chunks_with_scoped_workers(
+            &source,
+            &chunk_plan,
+            &transcript.execution_order,
+            &config.lexer_config,
+            |chunk, lexer_config| {
+                thread_ids
+                    .lock()
+                    .expect("thread id mutex should not be poisoned")
+                    .insert(std::thread::current().id());
+                simd_lexer::lex(chunk, lexer_config)
+            },
+        )
+        .expect("scoped workers should lex the fixture");
+
+        assert_eq!(lexed.len(), transcript.execution_order.len());
+        assert!(
+            thread_ids
+                .lock()
+                .expect("thread id mutex should not be poisoned")
+                .len()
+                > 1,
+            "chunk lexing should run on scoped worker threads, not the caller thread"
+        );
+    }
+
+    #[test]
+    fn parallel_lex_worker_error_fails_closed() {
+        let source = create_medium_js_source();
+        let config = small_config();
+        let chunk_plan = compute_chunk_plan(source.as_bytes(), config.max_workers);
+        let transcript = build_schedule_transcript(&chunk_plan, config.schedule_seed);
+
+        let err = lex_chunks_with_scoped_workers(
+            &source,
+            &chunk_plan,
+            &transcript.execution_order,
+            &config.lexer_config,
+            |_chunk, _lexer_config| {
+                Err(simd_lexer::LexerError::InternalError(
+                    "synthetic worker error".into(),
+                ))
+            },
+        )
+        .expect_err("worker lexer errors must fail closed");
+
+        match err {
+            ParseError::LexerError { detail, .. } => {
+                assert!(detail.contains("synthetic worker error"));
+            }
+            other => panic!("expected lexer error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parallel_lex_worker_panic_fails_closed() {
+        let source = create_medium_js_source();
+        let config = small_config();
+        let chunk_plan = compute_chunk_plan(source.as_bytes(), config.max_workers);
+        let transcript = build_schedule_transcript(&chunk_plan, config.schedule_seed);
+        let panic_once = AtomicBool::new(false);
+
+        let err = lex_chunks_with_scoped_workers(
+            &source,
+            &chunk_plan,
+            &transcript.execution_order,
+            &config.lexer_config,
+            |chunk, lexer_config| {
+                if !panic_once.swap(true, Ordering::SeqCst) {
+                    panic!("synthetic worker panic");
+                }
+                simd_lexer::lex(chunk, lexer_config)
+            },
+        )
+        .expect_err("worker panics must fail closed");
+
+        match err {
+            ParseError::LexerError { detail, .. } => {
+                assert!(detail.contains("panicked"));
+            }
+            other => panic!("expected lexer error, got {other:?}"),
+        }
     }
 
     #[test]

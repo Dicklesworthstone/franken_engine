@@ -821,13 +821,18 @@ mod tests {
     #[test]
     fn verify_uses_constant_time_signature_comparison() {
         let source = include_str!("recovery_artifact.rs");
+        let production_source = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let not_equal = [char::from(b'!'), char::from(b'=')]
+            .into_iter()
+            .collect::<String>();
+        let early_exit_comparison = format!("expected_sig {not_equal} artifact.signature");
 
         assert!(
-            source.contains("artifact.signature.constant_time_eq(&expected_sig)"),
+            production_source.contains("artifact.signature.constant_time_eq(&expected_sig)"),
             "recovery artifact verification must compare keyed signatures in constant time"
         );
         assert!(
-            !source.contains("expected_sig != artifact.signature"),
+            !production_source.contains(&early_exit_comparison),
             "keyed recovery signatures must not use early-exit equality"
         );
     }

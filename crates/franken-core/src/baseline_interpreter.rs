@@ -5237,15 +5237,48 @@ impl InterpreterCore {
                         // Promise already settled - continue execution synchronously
                         match &promise_record.state {
                             crate::promise_model::PromiseState::Fulfilled(js_val) => {
-                                let _result_value = Self::js_value_to_value(js_val);
-                                // Store result in a temporary register or continue with the value
-                                // For now, we'll need to figure out where to store the resolved value
-                                // This might need to be handled by the lowering pipeline
+                                let result_value = Self::js_value_to_value(js_val);
+                                self.write_reg(promise_reg, result_value)?;
                                 self.ip += 1;
-                                return Ok(Value::Undefined); // Placeholder
+                                continue;
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
                                 let error_value = Self::js_value_to_value(js_reason);
+                                if let Some(async_func_id) = self
+                                    .call_stack
+                                    .last()
+                                    .and_then(|frame| frame.async_function_id)
+                                {
+                                    let async_func = self
+                                        .async_functions
+                                        .get(async_func_id as usize)
+                                        .ok_or_else(|| InterpreterError::TypeError {
+                                            expected: "valid async function".to_string(),
+                                            got: format!(
+                                                "async function #{async_func_id} not found"
+                                            ),
+                                        })?;
+                                    let promise_handle = crate::promise_model::PromiseHandle(
+                                        async_func.result_promise,
+                                    );
+                                    let js_reason = Self::value_to_js_value(&error_value);
+                                    self.reject_promise(
+                                        promise_handle,
+                                        js_reason,
+                                        crate::ifc_artifacts::Label::Public,
+                                    )?;
+                                    if let Some(func) =
+                                        self.async_functions.get_mut(async_func_id as usize)
+                                    {
+                                        func.phase = AsyncFunctionPhase::Completed;
+                                    }
+                                    if let Some(final_value) =
+                                        self.complete_return(Value::Undefined)?
+                                    {
+                                        return Ok(final_value);
+                                    }
+                                    continue;
+                                }
                                 return Err(InterpreterError::UncaughtException {
                                     value: format!("{}", error_value),
                                 });
@@ -13523,6 +13556,183 @@ mod tests {
                 AsyncFunctionPhase::Completed
             ));
             assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
+        }
+
+        #[test]
+        fn async_function_throw_rejects_result_promise() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-throw");
+            let mut module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 0,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    },
+                    Ir3Instruction::AsyncThrow { error_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("throw_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+            module.constant_pool.push("boom".to_string());
+
+            core.execute(&module)
+                .expect("async throw should reject its promise without aborting");
+
+            let Value::Promise(handle) = core.registers[1] else {
+                panic!("async call should leave result promise in destination register");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(handle))
+                .expect("result promise exists");
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                    reason
+                )) if reason == "boom"
+            ));
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::Completed
+            ));
+        }
+
+        #[test]
+        fn async_function_awaits_resolved_promise_and_fulfills_with_value() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-await");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .fulfill(
+                    handle,
+                    crate::object_model::JsValue::Int(99),
+                    crate::ifc_artifacts::Label::Public,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be fulfillable");
+            core.registers[10] = Value::Promise(handle.0);
+
+            core.execute(&module)
+                .expect("resolved await should continue through async return");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave result promise in destination register");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result promise exists");
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(
+                    99
+                ))
+            ));
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::Completed
+            ));
+        }
+
+        #[test]
+        fn async_function_pending_await_fails_closed_and_marks_suspended() {
+            let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-pending");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("pending_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.registers[10] = Value::Promise(handle.0);
+
+            let err = core
+                .execute(&module)
+                .expect_err("pending await should fail closed in franken-core");
+            assert!(
+                format!("{err:?}").contains("pending promise requires full async scheduling"),
+                "unexpected error: {err:?}"
+            );
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::SuspendedAwait
+            ));
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave result promise before failing closed");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result promise exists");
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Pending
+            ));
         }
 
         #[test]

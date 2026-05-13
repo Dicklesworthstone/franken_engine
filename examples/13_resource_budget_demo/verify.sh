@@ -7,6 +7,7 @@ RCH_BIN="${RCH_BIN:-rch}"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 CARGO_TARGET_DIR="${RESOURCE_BUDGET_DEMO_CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_resource_budget_demo_$(date +%s)_$$}"
+EVIDENCE_DIR="${RESOURCE_BUDGET_DEMO_EVIDENCE_DIR:-${repo_root}/artifacts/resource_budget_demo/$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 
 echo "Running escalation demo and verifying output..."
 
@@ -17,8 +18,9 @@ fi
 
 run_resource_budget_demo() {
   local stdout_path stderr_path
-  stdout_path="$(mktemp "${TMPDIR:-/tmp}/resource-budget-demo.XXXXXX.stdout")"
-  stderr_path="$(mktemp "${TMPDIR:-/tmp}/resource-budget-demo.XXXXXX.stderr")"
+  mkdir -p "${EVIDENCE_DIR}"
+  stdout_path="${EVIDENCE_DIR}/verify.stdout"
+  stderr_path="${EVIDENCE_DIR}/verify.stderr"
 
   set +e
   (
@@ -34,19 +36,18 @@ run_resource_budget_demo() {
 
   if [[ "${status}" -ne 0 ]]; then
     cat "${stderr_path}" >&2
-    rm -f "${stdout_path}" "${stderr_path}"
+    echo "evidence logs preserved in ${EVIDENCE_DIR}" >&2
     return "${status}"
   fi
 
   if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${stdout_path}" "${stderr_path}"; then
     cat "${stderr_path}" >&2
     echo "rch reported local fallback; refusing local execution" >&2
-    rm -f "${stdout_path}" "${stderr_path}"
+    echo "evidence logs preserved in ${EVIDENCE_DIR}" >&2
     return 125
   fi
 
   cat "${stdout_path}"
-  rm -f "${stdout_path}" "${stderr_path}"
 }
 
 # Generate the log

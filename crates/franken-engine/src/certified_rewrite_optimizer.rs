@@ -832,21 +832,23 @@ impl CertifiedRewriteOptimizer {
         result.success = true;
 
         // Update metrics
-        let mut metrics = OptimizationMetrics::default();
-        metrics.steps_performed = result.optimization_steps.len();
-        metrics.steps_validated = result
-            .optimization_steps
-            .iter()
-            .filter(|s| s.is_validated())
-            .count();
-        metrics.steps_certified = result
-            .optimization_steps
-            .iter()
-            .filter(|s| s.is_certified())
-            .count();
-        metrics.rollbacks_triggered = result.rollback_records.len();
-        metrics.validation_overhead_ms = total_validation_time;
-        metrics.certification_overhead_ms = total_certification_time;
+        let metrics = OptimizationMetrics {
+            steps_performed: result.optimization_steps.len(),
+            steps_validated: result
+                .optimization_steps
+                .iter()
+                .filter(|s| s.is_validated())
+                .count(),
+            steps_certified: result
+                .optimization_steps
+                .iter()
+                .filter(|s| s.is_certified())
+                .count(),
+            rollbacks_triggered: result.rollback_records.len(),
+            validation_overhead_ms: total_validation_time,
+            certification_overhead_ms: total_certification_time,
+            ..OptimizationMetrics::default()
+        };
 
         result = result.with_metrics(metrics);
         result = result.with_total_time(start_time.elapsed().as_millis() as u64);
@@ -1308,10 +1310,12 @@ mod tests {
 
     #[test]
     fn test_optimization_metrics_success_rates() {
-        let mut metrics = OptimizationMetrics::default();
-        metrics.steps_performed = 10;
-        metrics.steps_validated = 8;
-        metrics.steps_certified = 6;
+        let metrics = OptimizationMetrics {
+            steps_performed: 10,
+            steps_validated: 8,
+            steps_certified: 6,
+            ..OptimizationMetrics::default()
+        };
 
         assert_eq!(metrics.validation_success_rate_millionths(), 800_000);
         assert_eq!(metrics.certification_success_rate_millionths(), 600_000);
@@ -1319,9 +1323,11 @@ mod tests {
 
     #[test]
     fn test_optimization_metrics_performance_improvement() {
-        let mut metrics = OptimizationMetrics::default();
-        metrics.baseline_cost_millionths = 1_000_000;
-        metrics.optimized_cost_millionths = 750_000;
+        let metrics = OptimizationMetrics {
+            baseline_cost_millionths: 1_000_000,
+            optimized_cost_millionths: 750_000,
+            ..OptimizationMetrics::default()
+        };
 
         assert_eq!(metrics.performance_improvement_millionths(), 250_000);
     }

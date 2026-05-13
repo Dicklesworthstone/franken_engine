@@ -3464,7 +3464,7 @@ impl InterpreterCore {
                 self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
 
                 // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::String(format!("{err:?}"));
+                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store
                     .reject(
@@ -3506,8 +3506,33 @@ impl InterpreterCore {
 
         // Handle execution result and fulfill promise accordingly
         let promise_result = match &execution_result {
-            Ok(yielded_val) => {
-                // Save execution state for next resume
+            Ok(result_value)
+                if matches!(
+                    _module.instructions.get(self.ip),
+                    Some(Ir3Instruction::Return { .. })
+                ) =>
+            {
+                let async_gen = &mut self.async_generators[gen_id as usize];
+                async_gen.phase = AsyncGeneratorPhase::Completed;
+
+                let result_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(result_id, "value".to_string(), result_value.clone())?;
+                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+
+                let js_val = crate::object_model::JsValue::Object(
+                    crate::object_model::ObjectHandle(result_id.0),
+                );
+                let label = crate::ifc_artifacts::Label::Public;
+                self.promise_store.fulfill(
+                    crate::promise_model::PromiseHandle(result_promise),
+                    js_val,
+                    label,
+                    &mut self.event_loop.microtasks,
+                )
+            }
+            Ok(yield_result) => {
+                // Yield already returns the generator result object
+                // `{ value, done: false }`; promise-wrap it directly.
                 let max_regs = self.config.max_registers as usize;
                 let saved_regs: Vec<Value> =
                     self.registers[self.register_base..self.register_base + max_regs].to_vec();
@@ -3518,14 +3543,7 @@ impl InterpreterCore {
                 async_gen.saved_register_base = self.register_base;
                 async_gen.phase = AsyncGeneratorPhase::SuspendedYield;
 
-                // Create {value, done: false} object
-                let result_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(result_id, "value".to_string(), yielded_val.clone())?;
-                self.set_object_property(result_id, "done".to_string(), Value::Bool(false))?;
-
-                let js_val = crate::object_model::JsValue::Object(
-                    crate::object_model::ObjectHandle(result_id.0),
-                );
+                let js_val = Self::value_to_js_value(yield_result);
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store.fulfill(
                     crate::promise_model::PromiseHandle(result_promise),
@@ -3561,7 +3579,7 @@ impl InterpreterCore {
                 async_gen.phase = AsyncGeneratorPhase::Completed;
 
                 // Reject the promise with the error
-                let js_val = crate::object_model::JsValue::String(format!("{err:?}"));
+                let js_val = crate::object_model::JsValue::Str(format!("{err:?}"));
                 let label = crate::ifc_artifacts::Label::Public;
                 self.promise_store.reject(
                     crate::promise_model::PromiseHandle(result_promise),
@@ -3817,111 +3835,12 @@ impl InterpreterCore {
                         continue;
                     }
 
-                    // Async function call: create an AsyncFunctionObject and start execution.
-                    if let Value::AsyncFunction(_) = &callee_val {
-                        // Create a new promise that will be resolved when the async function completes
-                        let promise_handle = self.promise_store.create();
-
-                        // Create the async function object
-                        let async_func_id =
-                            u32::try_from(self.async_functions.len()).map_err(|_| {
-                                InterpreterError::TypeError {
-                                    expected: "async function table capacity".into(),
-                                    got: format!(
-                                        "exceeded u32::MAX ({})",
-                                        self.async_functions.len()
-                                    ),
-                                }
-                            })?;
-
-                        // Initialize with function start state
-                        self.async_functions.push(AsyncFunctionObject {
-                            function_index: func_idx,
-                            closure_index: closure_id,
-                            saved_ip: 0,
-                            saved_registers: Vec::new(),
-                            saved_register_base: 0,
-                            phase: AsyncFunctionPhase::Start,
-                            result_promise: promise_handle.0,
-                        });
-
-                        // Store the promise as the result of this call
-                        self.write_reg(dst, Value::Promise(promise_handle.0))?;
-
-                        // Set up a normal function call but mark the frame as async
-                        // This will allow the async function to execute normally until await
-                        let return_ip = self.ip + 1;
-                        let return_reg = None; // Async functions don't return normally
-
-                        let scope_depth = self.scope_chain.frames.len();
-                        let (saved_chain, captured_env_bytes) = if let Some(env) = &captured_env {
-                            let bytes = Self::estimate_scope_chain_bytes(env);
-                            let saved = self.snapshot_scope_chain_with_temporary_budget(bytes)?;
-                            (Some(saved), bytes)
-                        } else {
-                            (None, 0)
-                        };
-
-                        self.call_stack.push(CallFrame {
-                            return_ip,
-                            return_reg,
-                            register_base: self.register_base,
-                            function_index: Some(func_idx),
-                            this_value: Value::Undefined,
-                            new_target_value: Value::Undefined,
-                            super_value: Value::Undefined,
-                            construct_this: None,
-                            saved_pending_exception: self.pending_exception.take(),
-                            saved_pending_return: self.pending_return.take(),
-                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
-                            saved_finally_mode_depth: self.finally_modes.len(),
-                            saved_scope_depth: scope_depth,
-                            saved_scope_chain: saved_chain,
-                            closure_id,
-                            captured_scope_depth: captured_env.as_ref().map_or(0, |env| env.len()),
-                            async_function_id: Some(async_func_id),
-                        });
-
-                        // Set up the captured environment if present
-                        if let Some(env) = captured_env {
-                            self.scope_chain.frames = env;
-                        }
-
-                        // Set up the register frame and arguments
-                        let module = self.module_state.get_module(func_idx)?;
-                        let register_count = module.metadata.register_count as usize;
-                        let old_base = self.register_base;
-                        self.register_base = self.registers.len();
-
-                        // Expand registers for the new frame
-                        self.registers
-                            .resize(self.register_base + register_count, Value::Undefined);
-
-                        // Copy arguments to the new frame
-                        if args.count > 0 {
-                            for i in 0..args.count.min(register_count as u32) {
-                                let arg_reg = args.start.checked_add(i).ok_or(
-                                    InterpreterError::RegisterOutOfBounds {
-                                        register: args.start,
-                                        max: self.config.max_registers,
-                                    },
-                                )?;
-                                let dest_reg = i as usize;
-                                let arg_value = self.read_reg_from_base(arg_reg, old_base)?;
-                                self.write_reg(dest_reg as u32, arg_value)?;
-                            }
-                        }
-
-                        // Jump to the function
-                        self.ip = 0;
-                        continue;
-                    }
-
                     // Resolve function index and optional captured environment.
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
                         Value::Closure(closure_id)
                         | Value::GeneratorFunction(closure_id)
+                        | Value::AsyncFunction(closure_id)
                         | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
@@ -3943,6 +3862,125 @@ impl InterpreterCore {
                             });
                         }
                     };
+
+                    // Async function call: return the result promise immediately
+                    // while executing the body on an async-marked call frame.
+                    if let Value::AsyncFunction(_) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+
+                        if self.call_stack.len() >= self.config.max_call_depth {
+                            return Err(InterpreterError::StackOverflow {
+                                depth: self.call_stack.len(),
+                                max: self.config.max_call_depth,
+                            });
+                        }
+
+                        let mut arg_vals = Vec::new();
+                        for i in 0..args.count.min(func.arity) {
+                            let reg = args.start.checked_add(i).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arg_vals.push(self.read_reg(reg)?);
+                        }
+
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
+                        let promise_handle = self.promise_store.create();
+                        let async_func_id =
+                            u32::try_from(self.async_functions.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async function table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_functions.len()
+                                    ),
+                                }
+                            })?;
+                        self.async_functions.push(AsyncFunctionObject {
+                            function_index: func_idx,
+                            closure_index: closure_id,
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: AsyncFunctionPhase::Executing,
+                            result_promise: promise_handle.0,
+                        });
+                        self.write_reg(dst, Value::Promise(promise_handle.0))?;
+
+                        let scope_depth = self.scope_chain.depth();
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
+                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+                        let saved_chain =
+                            if captured_env.is_some() {
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
+                            } else {
+                                None
+                            };
+
+                        self.call_stack.push(CallFrame {
+                            return_ip: self.ip + 1,
+                            return_reg: None,
+                            register_base: self.register_base,
+                            function_index: Some(func_idx),
+                            this_value: Value::Undefined,
+                            new_target_value: Value::Undefined,
+                            super_value: Value::Undefined,
+                            construct_this: None,
+                            saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_return: self.pending_return.take(),
+                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                            saved_finally_mode_depth: self.finally_modes.len(),
+                            saved_scope_depth: scope_depth,
+                            saved_scope_chain: saved_chain,
+                            closure_id,
+                            captured_scope_depth,
+                            async_function_id: Some(async_func_id),
+                        });
+
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+
+                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+
+                        self.register_base += self.config.max_registers as usize;
+                        let req_len = self.register_base + self.config.max_registers as usize;
+                        if req_len > self.registers.len() {
+                            self.registers.resize(req_len, Value::Undefined);
+                        } else {
+                            self.registers[self.register_base..req_len].fill(Value::Undefined);
+                        }
+
+                        for (i, val) in arg_vals.into_iter().enumerate() {
+                            let reg = i as u32;
+                            if reg < self.config.max_registers {
+                                self.write_reg(reg, val)?;
+                            }
+                        }
+
+                        self.ip = func.entry as usize;
+                        continue;
+                    }
 
                     // Generator function call: create a suspended GeneratorObject.
                     if let Value::GeneratorFunction(cid) = &callee_val {
@@ -5246,7 +5284,7 @@ impl InterpreterCore {
                         async_func.saved_ip = self.ip + 1; // Resume after the await instruction
                         async_func.saved_registers = self.registers[self.register_base..].to_vec();
                         async_func.saved_register_base = self.register_base;
-                        async_func.phase = AsyncFunctionPhase::Suspended;
+                        async_func.phase = AsyncFunctionPhase::SuspendedAwait;
 
                         // For this basic implementation, we'll treat pending promises as an error
                         // A full implementation would need microtask scheduling and async resumption
@@ -5289,17 +5327,22 @@ impl InterpreterCore {
 
                     // Resolve the promise with the return value
                     let js_val = Self::value_to_js_value(&return_value);
-                    self.promise_store.resolve(promise_handle, js_val);
+                    self.fulfill_promise(
+                        promise_handle,
+                        js_val,
+                        crate::ifc_artifacts::Label::Public,
+                    )?;
 
                     // Update the async function phase to completed
                     if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
                         func.phase = AsyncFunctionPhase::Completed;
                     }
 
-                    // Return from the async function by simulating a normal return
-                    // This will unwind the call stack and return to the caller
-                    self.pending_return = Some(Value::Undefined); // Async functions don't return values directly
-                    self.ip += 1;
+                    // Return from the async function without overwriting the
+                    // caller register that already holds the result promise.
+                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                        return Ok(final_value);
+                    }
                     continue;
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
@@ -5335,17 +5378,22 @@ impl InterpreterCore {
 
                     // Reject the promise with the error value
                     let js_reason = Self::value_to_js_value(&error_value);
-                    self.promise_store.reject(promise_handle, js_reason);
+                    self.reject_promise(
+                        promise_handle,
+                        js_reason,
+                        crate::ifc_artifacts::Label::Public,
+                    )?;
 
                     // Update the async function phase to completed
                     if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
                         func.phase = AsyncFunctionPhase::Completed;
                     }
 
-                    // Return from the async function by simulating a normal return
-                    // The promise rejection has already been handled
-                    self.pending_return = Some(Value::Undefined); // Async functions don't return values directly
-                    self.ip += 1;
+                    // Return from the async function without overwriting the
+                    // caller register that already holds the result promise.
+                    if let Some(final_value) = self.complete_return(Value::Undefined)? {
+                        return Ok(final_value);
+                    }
                     continue;
                 }
                 Ir3Instruction::PushCapture { name_pool_index } => {
@@ -8109,23 +8157,6 @@ impl InterpreterCore {
             return Err(err);
         }
         Ok(())
-    }
-
-    /// Read a register value from a specific register base.
-    /// Used when setting up async function arguments from a different frame.
-    fn read_reg_from_base(&self, reg: u32, base: usize) -> Result<Value, InterpreterError> {
-        if reg >= self.config.max_registers {
-            return Err(InterpreterError::RegisterOutOfBounds {
-                register: reg,
-                max: self.config.max_registers,
-            });
-        }
-        let actual_reg = base + reg as usize;
-        if actual_reg < self.registers.len() {
-            Ok(self.registers[actual_reg].clone())
-        } else {
-            Ok(Value::Undefined)
-        }
     }
 
     // -- Heap operations ---------------------------------------------------
@@ -13441,7 +13472,7 @@ mod tests {
         }
 
         #[test]
-        fn async_function_call_execution_fails_closed_before_allocating_promise() {
+        fn async_function_call_returns_and_resolves_promise() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-call");
             let module = test_module_with_functions(
                 vec![
@@ -13459,7 +13490,8 @@ mod tests {
                         dst: 1,
                     },
                     Ir3Instruction::Halt,
-                    Ir3Instruction::Halt,
+                    Ir3Instruction::LoadInt { dst: 0, value: 42 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
                 ],
                 vec![Ir3FunctionDesc {
                     entry: 3,
@@ -13470,18 +13502,26 @@ mod tests {
                 }],
             );
 
-            let error = core
-                .execute(&module)
-                .expect_err("unsupported async function execution must fail closed");
+            core.execute(&module)
+                .expect("async function execution should resolve its promise");
 
-            match error {
-                InterpreterError::TypeError { expected, got } => {
-                    assert_eq!(expected, "implemented async function body execution");
-                    assert_eq!(got, "async function call execution is not implemented");
-                }
-                other => panic!("expected TypeError, got {other:?}"),
-            }
-            assert_eq!(core.promise_store.len(), 0);
+            let Value::Promise(handle) = core.registers[1] else {
+                panic!("async call should leave result promise in destination register");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(handle))
+                .expect("result promise exists");
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(
+                    42
+                ))
+            ));
+            assert!(matches!(
+                core.async_functions[0].phase,
+                AsyncFunctionPhase::Completed
+            ));
             assert!(matches!(core.registers[0], Value::AsyncFunction(0)));
         }
 
@@ -13686,10 +13726,20 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
-                    Ir3Instruction::LoadConst { dst: 0, idx: 0 }, // Load "hello"
-                    Ir3Instruction::Yield { value: 0 },           // Yield "hello"
-                    Ir3Instruction::LoadConst { dst: 0, idx: 1 }, // Load "world"
-                    Ir3Instruction::Return { value: 0 },          // Return "world"
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    }, // Load "hello"
+                    Ir3Instruction::Yield {
+                        value: 0,
+                        delegate: false,
+                        resume_dst: 1,
+                    }, // Yield "hello"
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 1,
+                    }, // Load "world"
+                    Ir3Instruction::Return { value: 0 }, // Return "world"
                 ],
                 vec!["hello".to_string(), "world".to_string()],
                 vec![Ir3FunctionDesc {
@@ -13737,10 +13787,20 @@ mod tests {
             // Create a simple async generator function that yields then returns
             let module = test_module_with_pool_and_functions(
                 vec![
-                    Ir3Instruction::LoadConst { dst: 0, idx: 0 }, // Load "hello"
-                    Ir3Instruction::Yield { value: 0 },           // Yield "hello"
-                    Ir3Instruction::LoadConst { dst: 0, idx: 1 }, // Load "world"
-                    Ir3Instruction::Return { value: 0 },          // Return "world"
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 0,
+                    }, // Load "hello"
+                    Ir3Instruction::Yield {
+                        value: 0,
+                        delegate: false,
+                        resume_dst: 1,
+                    }, // Yield "hello"
+                    Ir3Instruction::LoadStr {
+                        dst: 0,
+                        pool_index: 1,
+                    }, // Load "world"
+                    Ir3Instruction::Return { value: 0 }, // Return "world"
                 ],
                 vec!["hello".to_string(), "world".to_string()],
                 vec![Ir3FunctionDesc {

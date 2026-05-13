@@ -37,6 +37,7 @@ and fails closed if frankenengine-test-support appears in the lib-unit compile
 path. `run-execute` runs the filtered unit test and fails closed unless the log
 shows Rust test execution. When an expected worker is configured, the gate first
 checks `rch diagnose` so worker-selection drift fails before a long compile.
+That preflight also rejects critically pressured workers before Cargo starts.
 The default mode is compile-only run.
 
 Environment:
@@ -204,6 +205,59 @@ worker_selection_context() {
   ' "$status_path"
 }
 
+enforce_selected_worker_pressure_guard() {
+  local selected_worker="$1"
+  local status_path="${run_dir}/worker-pressure-status.json"
+  local status_stderr_path="${run_dir}/worker-pressure-status.stderr"
+
+  set +e
+  "$RCH_BIN" --json status --workers --jobs >"$status_path" 2>"$status_stderr_path"
+  local status_code=$?
+  set -e
+
+  if [[ "$status_code" -ne 0 ]]; then
+    fail "worker_pressure_preflight_status_failed status=${status_code} selected_worker=${selected_worker} snapshot=${status_path} stderr=${status_stderr_path}"
+  fi
+  jq empty "$status_path" >/dev/null 2>&1 || fail "worker_pressure_preflight_status_invalid_json selected_worker=${selected_worker} snapshot=${status_path}"
+
+  if ! jq -e --arg selected "$selected_worker" '.data.daemon.workers[]? | select(.id == $selected)' "$status_path" >/dev/null; then
+    fail "worker_pressure_preflight_worker_missing selected_worker=${selected_worker} snapshot=${status_path}"
+  fi
+
+  local pressure_state
+  local pressure_reason
+  local pressure_policy
+  local pressure_disk_free_gb
+  local pressure_disk_free_ratio
+  local pressure_memory_pressure
+  local pressure_telemetry_fresh
+  pressure_state="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_state // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_reason="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_reason_code // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_policy="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_policy_rule // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_disk_free_gb="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_disk_free_gb // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_disk_free_ratio="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_disk_free_ratio // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_memory_pressure="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_memory_pressure // "unknown"] | first) // "unknown"' "$status_path")"
+  pressure_telemetry_fresh="$(jq -r --arg selected "$selected_worker" '([.data.daemon.workers[]? | select(.id == $selected) | .pressure_telemetry_fresh // "unknown"] | first) // "unknown"' "$status_path")"
+
+  local critical_pressure
+  critical_pressure="$(jq -r --arg selected "$selected_worker" '
+    ([.data.daemon.workers[]? | select(.id == $selected)] | first) as $worker
+    | [
+        ($worker.pressure_state // ""),
+        ($worker.pressure_reason_code // ""),
+        ($worker.pressure_policy_rule // "")
+      ]
+    | map(ascii_downcase)
+    | any(. == "critical" or contains("critical"))
+  ' "$status_path")"
+
+  if [[ "$critical_pressure" == "true" ]]; then
+    fail "worker_pressure_preflight_critical selected_worker=${selected_worker} pressure_state=${pressure_state} pressure_reason=${pressure_reason} pressure_policy=${pressure_policy} disk_free_gb=${pressure_disk_free_gb} disk_free_ratio=${pressure_disk_free_ratio} memory_pressure=${pressure_memory_pressure} telemetry_fresh=${pressure_telemetry_fresh} snapshot=${status_path}"
+  fi
+
+  log "worker_pressure_preflight=pass selected_worker=${selected_worker} pressure_state=${pressure_state} pressure_reason=${pressure_reason} pressure_policy=${pressure_policy} disk_free_gb=${pressure_disk_free_gb} disk_free_ratio=${pressure_disk_free_ratio} memory_pressure=${pressure_memory_pressure} telemetry_fresh=${pressure_telemetry_fresh} snapshot=${status_path}"
+}
+
 preflight_worker_selection() {
   local mode="$1"
   [[ -n "$EXPECTED_RCH_WORKER" || -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
@@ -253,6 +307,8 @@ preflight_worker_selection() {
     reason="$(jq -r '.data.worker_selection.reason // "unknown"' "$diagnose_path")"
     fail "worker_selection_preflight_not_observed expected_worker=${EXPECTED_RCH_WORKER:-unset} native_route_advisory=${NATIVE_ROUTE_ADVISORY_JSON:-unset} reason=${reason} diagnose=${diagnose_path}"
   fi
+
+  enforce_selected_worker_pressure_guard "$selected_worker"
 
   if [[ -n "$EXPECTED_RCH_WORKER" && "$selected_worker" != "$EXPECTED_RCH_WORKER" ]]; then
     fail "expected_worker_preflight_mismatch expected_worker=${EXPECTED_RCH_WORKER} selected_worker=${selected_worker} diagnose=${diagnose_path}"

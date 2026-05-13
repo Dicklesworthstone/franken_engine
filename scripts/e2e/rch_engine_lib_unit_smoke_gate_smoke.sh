@@ -69,7 +69,8 @@ if [[ "${1:-}" == "diagnose" ]]; then
   if [[ -n "${FAKE_RCH_ENV_LOG:-}" ]]; then
     printf '%s\n' "${RCH_WORKERS:-}" >"${FAKE_RCH_ENV_LOG}"
   fi
-  cat <<'JSON'
+  selected_worker="${FAKE_RCH_SELECTED_WORKER:-vmi-other}"
+  cat <<JSON
 {
   "api_version": "1.0",
   "command": "diagnose",
@@ -77,7 +78,7 @@ if [[ "${1:-}" == "diagnose" ]]; then
   "data": {
     "worker_selection": {
       "worker": {
-        "id": "vmi-other"
+        "id": "${selected_worker}"
       },
       "reason": "success"
     }
@@ -101,7 +102,12 @@ if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
           "used_slots": 4,
           "total_slots": 8,
           "pressure_state": "healthy",
-          "pressure_reason_code": "pressure_healthy"
+          "pressure_reason_code": "pressure_healthy",
+          "pressure_policy_rule": "all_pressure_inputs_healthy",
+          "pressure_disk_free_gb": 100,
+          "pressure_disk_free_ratio": 0.5,
+          "pressure_memory_pressure": false,
+          "pressure_telemetry_fresh": true
         },
         {
           "id": "vmi-other",
@@ -109,7 +115,25 @@ if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
           "used_slots": 0,
           "total_slots": 8,
           "pressure_state": "healthy",
-          "pressure_reason_code": "pressure_healthy"
+          "pressure_reason_code": "pressure_healthy",
+          "pressure_policy_rule": "all_pressure_inputs_healthy",
+          "pressure_disk_free_gb": 200,
+          "pressure_disk_free_ratio": 0.8,
+          "pressure_memory_pressure": false,
+          "pressure_telemetry_fresh": true
+        },
+        {
+          "id": "vmi-critical",
+          "status": "healthy",
+          "used_slots": 0,
+          "total_slots": 8,
+          "pressure_state": "critical",
+          "pressure_reason_code": "disk_ratio_below_critical",
+          "pressure_policy_rule": "disk_free_ratio_below_critical_free_ratio",
+          "pressure_disk_free_gb": 2,
+          "pressure_disk_free_ratio": 0.01,
+          "pressure_memory_pressure": false,
+          "pressure_telemetry_fresh": true
         }
       ]
     }
@@ -216,6 +240,22 @@ fi
 
 if ! grep -q 'expected_worker_preflight_mismatch' "${failure_dir}/preflight-fail.stdout"; then
   echo "expected diagnose worker mismatch diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if RCH_BIN="${failure_dir}/fake-rch-diagnose" \
+  FAKE_RCH_SELECTED_WORKER=vmi-critical \
+  FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-critical \
+  FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/critical-pressure-artifacts" \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/critical-pressure-fail.stdout" 2>"${failure_dir}/critical-pressure-fail.stderr"; then
+  echo "expected critical worker preflight to fail before compile" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'worker_pressure_preflight_critical' "${failure_dir}/critical-pressure-fail.stdout"; then
+  echo "expected critical worker pressure diagnostic not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

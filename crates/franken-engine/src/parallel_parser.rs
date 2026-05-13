@@ -1692,6 +1692,7 @@ fn build_timeout_cancellation_record(
     }
 }
 
+#[derive(Debug)]
 struct ScopedChunkLex {
     chunk_result: ChunkResult,
     timing: ChunkTiming,

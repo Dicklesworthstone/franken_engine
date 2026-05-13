@@ -11,6 +11,7 @@ TEST_FILTER="${FRANKEN_ENGINE_LIB_UNIT_TEST_FILTER:-adversarial_coevolution_harn
 RCH_BIN="${RCH_BIN:-rch}"
 CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
 RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -22,11 +23,12 @@ commands_path="${run_dir}/commands.txt"
 
 usage() {
   cat <<'USAGE'
-usage: scripts/rch_engine_lib_unit_smoke_gate.sh [run|--scan-log <path>|--check-script <path>|--print-command]
+usage: scripts/rch_engine_lib_unit_smoke_gate.sh [run|run-execute|--scan-log <path>|--scan-execution-log <path>|--check-script <path>|--print-command]
 
 Runs a source-local frankenengine-engine library unit-test compile through rch
 and fails closed if frankenengine-test-support appears in the lib-unit compile
-path. The default mode is run.
+path. `run-execute` runs the filtered unit test and fails closed unless the log
+shows Rust test execution. The default mode is compile-only run.
 
 Environment:
   FRANKEN_ENGINE_LIB_UNIT_PACKAGE       package to validate (default: frankenengine-engine)
@@ -46,7 +48,22 @@ fail() {
 }
 
 command_text() {
-  printf 'rch exec -- env CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
+  local mode="${1:-compile}"
+  if [[ "$mode" == "execute" ]]; then
+    printf 'rch exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s -- --nocapture\n' \
+      "$RUSTUP_TOOLCHAIN" \
+      "$CARGO_INCREMENTAL" \
+      "$CARGO_BUILD_JOBS" \
+      "$CARGO_TARGET_DIR" \
+      "$RUSTFLAGS" \
+      "$PACKAGE" \
+      "$TARGET_KIND" \
+      "$TEST_FILTER"
+    return 0
+  fi
+
+  printf 'rch exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
+    "$RUSTUP_TOOLCHAIN" \
     "$CARGO_INCREMENTAL" \
     "$CARGO_BUILD_JOBS" \
     "$CARGO_TARGET_DIR" \
@@ -76,36 +93,69 @@ scan_log_for_forbidden_support() {
   log "support_dependency=absent package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
 }
 
+scan_log_for_test_execution() {
+  local candidate_log="$1"
+  [[ -f "$candidate_log" ]] || fail "log_not_found path=${candidate_log}"
+
+  if ! grep -Eq '(^|[[:space:]])running[[:space:]]+[1-9][0-9]*[[:space:]]+tests?($|[[:space:]])' "$candidate_log"; then
+    fail "test_execution_not_observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
+  fi
+
+  if ! grep -Eq '(^|[[:space:]])test[[:space:]]+result:[[:space:]]+ok\.' "$candidate_log"; then
+    fail "test_success_not_observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
+  fi
+
+  log "test_execution=observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
+}
+
 run_gate() {
+  local mode="${1:-compile}"
   [[ "$TARGET_KIND" == "lib" ]] || fail "unsupported_target_kind target_kind=${TARGET_KIND}"
   command -v "$RCH_BIN" >/dev/null 2>&1 || fail "rch_not_found binary=${RCH_BIN}"
   check_script_wrapping "$script_path"
 
   mkdir -p "$run_dir"
-  command_text >"$commands_path"
+  command_text "$mode" >"$commands_path"
 
   log "selected_package=${PACKAGE}"
   log "target_kind=${TARGET_KIND}"
   log "test_filter=${TEST_FILTER}"
-  log "command=$(command_text)"
+  log "mode=${mode}"
+  log "command=$(command_text "$mode")"
   log "log_path=${log_path}"
 
   local -a command=(
     "$RCH_BIN" exec -- env \
+      "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
       "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
       "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
       "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
       "RUSTFLAGS=${RUSTFLAGS}" \
-      cargo test -p "$PACKAGE" "--${TARGET_KIND}" "$TEST_FILTER" --no-run
+      cargo test -p "$PACKAGE" "--${TARGET_KIND}" "$TEST_FILTER"
   )
 
-  if timeout "$RCH_TIMEOUT_SECONDS" "${command[@]}" >"$log_path" 2>&1; then
+  if [[ "$mode" == "compile" ]]; then
+    command+=(--no-run)
+  elif [[ "$mode" == "execute" ]]; then
+    command+=(-- --nocapture)
+  else
+    fail "unsupported_mode mode=${mode}"
+  fi
+
+  set +e
+  timeout "$RCH_TIMEOUT_SECONDS" "${command[@]}" >"$log_path" 2>&1
+  local exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
     scan_log_for_forbidden_support "$log_path"
+    if [[ "$mode" == "execute" ]]; then
+      scan_log_for_test_execution "$log_path"
+    fi
     log "result=pass"
     return 0
   fi
 
-  local exit_code=$?
   scan_log_for_forbidden_support "$log_path" || true
   log "result=fail exit_code=${exit_code} log=${log_path}"
   return "$exit_code"
@@ -114,11 +164,19 @@ run_gate() {
 mode="${1:-run}"
 case "$mode" in
   run)
-    run_gate
+    run_gate compile
+    ;;
+  run-execute)
+    run_gate execute
     ;;
   --scan-log)
     [[ $# -eq 2 ]] || fail "--scan-log requires a path"
     scan_log_for_forbidden_support "$2"
+    ;;
+  --scan-execution-log)
+    [[ $# -eq 2 ]] || fail "--scan-execution-log requires a path"
+    scan_log_for_forbidden_support "$2"
+    scan_log_for_test_execution "$2"
     ;;
   --check-script)
     [[ $# -eq 2 ]] || fail "--check-script requires a path"
@@ -126,7 +184,10 @@ case "$mode" in
     log "script_wrapping=pass path=$2"
     ;;
   --print-command)
-    command_text
+    command_text compile
+    ;;
+  --print-execute-command)
+    command_text execute
     ;;
   -h|--help)
     usage

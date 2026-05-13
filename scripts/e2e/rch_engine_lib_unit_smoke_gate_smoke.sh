@@ -6,7 +6,9 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 tmp_root="${TMPDIR:-/tmp}/franken-engine-lib-unit-smoke-gate-${timestamp}-$$"
 good_dir="${tmp_root}/good"
 bad_dir="${tmp_root}/bad"
-mkdir -p "$good_dir" "$bad_dir"
+exec_dir="${tmp_root}/exec"
+failure_dir="${tmp_root}/failure"
+mkdir -p "$good_dir" "$bad_dir" "$exec_dir" "$failure_dir"
 
 cat >"${good_dir}/cargo-output.log" <<'GOOD_LOG'
 INFO rch::transfer: Syncing /data/projects/franken_engine/crates/franken-engine-test-support -> /data/projects/franken_engine/crates/franken-engine-test-support on worker
@@ -18,11 +20,28 @@ cat >"${bad_dir}/cargo-output.log" <<'BAD_LOG'
    Compiling frankenengine-test-support v0.1.0 (/data/projects/franken_engine/crates/franken-engine-test-support)
 BAD_LOG
 
+cat >"${exec_dir}/cargo-output.log" <<'EXEC_LOG'
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+     Running unittests src/lib.rs
+
+running 1 test
+test recovery_artifact::tests::verify_uses_constant_time_signature_comparison ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; finished in 0.00s
+EXEC_LOG
+
+cat >"${bad_dir}/no-execution.log" <<'NO_EXEC_LOG'
+   Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+NO_EXEC_LOG
+
 cat >"${good_dir}/wrapped.sh" <<'GOOD_SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 RCH_BIN="${RCH_BIN:-rch}"
 "$RCH_BIN" exec -- env \
+  "RUSTUP_TOOLCHAIN=nightly" \
   "CARGO_TARGET_DIR=/tmp/rch_target_good" \
   cargo test -p frankenengine-engine --lib some::unit::test --no-run
 GOOD_SCRIPT
@@ -33,11 +52,24 @@ set -euo pipefail
 cargo test -p frankenengine-engine --lib some::unit::test --no-run
 BAD_SCRIPT
 
+cat >"${failure_dir}/fake-rch" <<'FAKE_RCH'
+#!/usr/bin/env bash
+echo "fake rch failure"
+exit 42
+FAKE_RCH
+chmod +x "${failure_dir}/fake-rch"
+
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --check-script "${good_dir}/wrapped.sh" >/dev/null
 
 if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command | grep -q 'rch exec -- env'; then
   echo "expected printed command to use rch exec -- env" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-execute-command | grep -q -- '-- --nocapture'; then
+  echo "expected printed execute command to run the filtered test" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi
@@ -62,6 +94,43 @@ fi
 
 if ! grep -q 'bare Cargo command must be routed through rch exec' "${tmp_root}/bad-script.stderr"; then
   echo "expected bare cargo diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-execution-log "${exec_dir}/cargo-output.log" >/dev/null; then
+  echo "expected execution fixture to pass" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-execution-log "${bad_dir}/no-execution.log" >"${tmp_root}/bad-exec.stdout" 2>"${tmp_root}/bad-exec.stderr"; then
+  echo "expected no-execution fixture to fail" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'test_execution_not_observed' "${tmp_root}/bad-exec.stdout"; then
+  echo "expected no-execution diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+set +e
+RCH_BIN="${failure_dir}/fake-rch" \
+FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/artifacts" \
+"${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/run-fail.stdout" 2>"${failure_dir}/run-fail.stderr"
+fake_status=$?
+set -e
+
+if [[ "$fake_status" -ne 42 ]]; then
+  echo "expected failed rch exit status to propagate, got ${fake_status}" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'result=fail exit_code=42' "${failure_dir}/run-fail.stdout"; then
+  echo "expected failed rch diagnostic not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

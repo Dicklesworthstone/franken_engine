@@ -51,6 +51,21 @@ rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_all_target_shard
 Bare Cargo, missing `CARGO_TARGET_DIR`, shell wrappers that can fall open into
 local execution, and local-fallback transcripts fail closed as proof evidence.
 
+Each shard also emits a preflight contract:
+
+- `preflight.diagnose_command`: the `rch diagnose --json -- ... cargo ...`
+  command shape that must run before `rch exec`.
+- `preflight.worker_status_command`: `rch --json status --workers --jobs`.
+- `preflight.selected_worker_json_path`: where the selected worker id must be
+  read from diagnose output.
+- `preflight.fail_closed_pressure_states`: pressure states that make the shard
+  inadmissible before Cargo starts.
+- `preflight.required_artifacts`: the minimum evidence files a shard execution
+  must preserve.
+
+Broad-baseline runners must reject shards before remote Cargo starts when the
+selected worker is missing from the status snapshot or has critical pressure.
+
 ## Outputs
 
 - `shard_manifest.json`

@@ -37,7 +37,8 @@
     "FE-IW3-SHARD-STALE-TARGET",
     "FE-IW3-SHARD-BARE-CARGO",
     "FE-IW3-SHARD-MISSING-TARGET-DIR",
-    "FE-IW3-SHARD-LOCAL-FALLBACK"
+    "FE-IW3-SHARD-LOCAL-FALLBACK",
+    "FE-IW3-SHARD-CRITICAL-WORKER-PRESSURE"
   ],
   "required_outputs": [
     "shard_manifest.json",
@@ -68,7 +69,8 @@
     "command",
     "target_dir",
     "expected_artifacts",
-    "rch_policy"
+    "rch_policy",
+    "preflight"
   ],
   "lanes": [
     "check",
@@ -83,7 +85,10 @@
     "required_prefix": "rch exec -- env CARGO_TARGET_DIR=",
     "heavy_cargo_example": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_all_target_shards_check CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check -p frankenengine-engine --all-targets",
     "bare_cargo_is_fail_closed": true,
-    "local_fallback_is_rejected_fail_closed": true
+    "local_fallback_is_rejected_fail_closed": true,
+    "worker_selection_preflight_required": true,
+    "worker_pressure_snapshot_required": true,
+    "critical_worker_pressure_is_fail_closed": true
   },
   "mutation_policy": {
     "advisory_only": true,

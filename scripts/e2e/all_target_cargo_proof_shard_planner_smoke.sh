@@ -24,6 +24,9 @@ contract_shape_ok() {
     and .bead_id == "bd-j3lwi"
     and (.lanes | sort) == ["bin_test","check","clippy","doctest","integration_test","lib_test"]
     and .command_policy.required_prefix == "rch exec -- env CARGO_TARGET_DIR="
+    and .command_policy.worker_selection_preflight_required == true
+    and .command_policy.worker_pressure_snapshot_required == true
+    and .command_policy.critical_worker_pressure_is_fail_closed == true
     and .mutation_policy.runs_cargo == false
     and .mutation_policy.runs_rch == false
     and .mutation_policy.mutates_br == false
@@ -34,7 +37,9 @@ contract_shape_ok() {
 docs_shape_ok() {
   grep -Fq "never runs Cargo" "$docs_path" \
     && grep -Fq "RCH-wrapped proof command shards" "$docs_path" \
-    && grep -Fq "local-fallback transcripts fail closed" "$docs_path"
+    && grep -Fq "local-fallback transcripts fail closed" "$docs_path" \
+    && grep -Fq "preflight.diagnose_command" "$docs_path" \
+    && grep -Fq "critical pressure" "$docs_path"
 }
 
 fixtures_shape_ok() {
@@ -116,6 +121,8 @@ run_case() {
       and (.stale_target_diagnostics | length) == $stale
       and (if ($lanes | length) == 0 then true else (.lanes | sort) == ($lanes | sort) end)
       and all(.shards[]?; (.command | test("^rch exec -- env CARGO_TARGET_DIR=")) and (.command | contains(" cargo ")) and .rch_policy.direct_rch_exec == true and .rch_policy.requires_cargo_target_dir == true)
+      and all(.shards[]?; (.preflight.diagnose_command | test("^rch diagnose --json -- env CARGO_TARGET_DIR=")) and .preflight.worker_status_command == "rch --json status --workers --jobs")
+      and all(.shards[]?; .rch_policy.requires_worker_selection_preflight == true and .rch_policy.requires_worker_pressure_snapshot == true and .rch_policy.rejects_critical_worker_pressure == true)
       and .mutation_policy.runs_cargo == false
       and .mutation_policy.runs_rch == false
       and .mutation_policy.mutates_br == false

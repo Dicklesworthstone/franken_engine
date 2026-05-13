@@ -173,9 +173,13 @@ jq -n \
   def pkg_arg($pkg): "-p " + $pkg;
   def target_dir($lane; $pkg; $target):
     $target_dir_prefix + "_" + token($lane + "_" + $pkg + "_" + ($target // "all"));
+  def cargo_env_prefix($lane; $pkg; $target):
+    "env CARGO_TARGET_DIR=" + target_dir($lane; $pkg; $target)
+    + " CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 ";
   def rch_cmd($lane; $pkg; $target; $cargo_args):
-    "rch exec -- env CARGO_TARGET_DIR=" + target_dir($lane; $pkg; $target)
-    + " CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo " + $cargo_args;
+    "rch exec -- " + cargo_env_prefix($lane; $pkg; $target) + "cargo " + $cargo_args;
+  def rch_diagnose_cmd($lane; $pkg; $target; $cargo_args):
+    "rch diagnose --json -- " + cargo_env_prefix($lane; $pkg; $target) + "cargo " + $cargo_args;
   def metadata_ok:
     (($metadata[0].packages // null) | type) == "array";
   def package_rows:
@@ -211,7 +215,19 @@ jq -n \
         direct_rch_exec:true,
         requires_cargo_target_dir:true,
         rejects_local_fallback:true,
+        requires_worker_selection_preflight:true,
+        requires_worker_pressure_snapshot:true,
+        rejects_critical_worker_pressure:true,
         executes_now:false
+      },
+      preflight:{
+        diagnose_command:rch_diagnose_cmd($lane; $pkg; $target; $cargo_args),
+        worker_status_command:"rch --json status --workers --jobs",
+        selected_worker_json_path:".data.worker_selection.worker.id",
+        worker_status_json_path:".data.daemon.workers[]",
+        fail_closed_pressure_states:["critical"],
+        fail_closed_pressure_reason_pattern:"critical",
+        required_artifacts:["worker-diagnose.json", "worker-pressure-status.json", "cargo-output.log"]
       }
     };
   def package_shards($pkg):
@@ -326,7 +342,10 @@ jq -n \
           heavy_commands_are_templates:true,
           required_prefix:"rch exec -- env CARGO_TARGET_DIR=",
           bare_cargo_is_fail_closed:true,
-          local_fallback_is_rejected_fail_closed:true
+          local_fallback_is_rejected_fail_closed:true,
+          worker_selection_preflight_required:true,
+          worker_pressure_snapshot_required:true,
+          critical_worker_pressure_is_fail_closed:true
         },
         mutation_policy:{
           advisory_only:true,

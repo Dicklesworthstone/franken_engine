@@ -88,6 +88,16 @@ exit 99
 FAKE_RCH_DIAGNOSE
 chmod +x "${failure_dir}/fake-rch-diagnose"
 
+cat >"${failure_dir}/native-route-advisory.json" <<'NATIVE_ROUTE_ADVISORY'
+{
+  "schema_version": "franken-engine.native-dependency-route-planner.output.v1",
+  "decision": "pass",
+  "truth_state": "confirmed",
+  "compatible_worker_ids": ["vmi-good"],
+  "reason_codes": ["compatible_worker_available", "hdf5_present"]
+}
+NATIVE_ROUTE_ADVISORY
+
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --check-script "${good_dir}/wrapped.sh" >/dev/null
 FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-good \
@@ -171,6 +181,21 @@ fi
 
 if ! grep -q 'expected_worker_preflight_mismatch' "${failure_dir}/preflight-fail.stdout"; then
   echo "expected diagnose worker mismatch diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if RCH_BIN="${failure_dir}/fake-rch-diagnose" \
+  FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON="${failure_dir}/native-route-advisory.json" \
+  FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/native-route-artifacts" \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/native-route-fail.stdout" 2>"${failure_dir}/native-route-fail.stderr"; then
+  echo "expected native-route worker mismatch to fail before compile" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'native_route_preflight_incompatible_worker' "${failure_dir}/native-route-fail.stdout"; then
+  echo "expected native-route worker diagnostic not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

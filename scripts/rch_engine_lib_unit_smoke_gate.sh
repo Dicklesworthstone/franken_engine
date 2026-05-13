@@ -15,6 +15,7 @@ RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
 RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
 EXPECTED_RCH_WORKER="${FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER:-${RCH_WORKER:-}}"
+NATIVE_ROUTE_ADVISORY_JSON="${FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON:-}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_lib_unit_smoke_${timestamp}}"
 artifact_root="${FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT:-artifacts/rch_engine_lib_unit_smoke}"
@@ -39,6 +40,9 @@ Environment:
   FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER
                                       fail closed if RCH selects a different worker
                                       (defaults to RCH_WORKER when set)
+  FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON
+                                      fail closed if RCH selects a worker outside
+                                      an advisory's compatible_worker_ids
   RCH_BIN                               rch binary (default: rch)
   RCH_EXEC_TIMEOUT_SECONDS              outer timeout seconds (default: 900)
 USAGE
@@ -130,15 +134,20 @@ scan_log_for_test_execution() {
   log "test_execution=observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
 }
 
-preflight_expected_worker() {
+preflight_worker_selection() {
   local mode="$1"
-  [[ -n "$EXPECTED_RCH_WORKER" ]] || return 0
+  [[ -n "$EXPECTED_RCH_WORKER" || -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
 
-  command -v jq >/dev/null 2>&1 || fail "jq_not_found_for_expected_worker_preflight"
+  command -v jq >/dev/null 2>&1 || fail "jq_not_found_for_worker_selection_preflight"
 
   local diagnose_path="${run_dir}/worker-diagnose.json"
   local diagnose_stderr_path="${run_dir}/worker-diagnose.stderr"
-  log "expected_worker_preflight=checking expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path}"
+  if [[ -n "$EXPECTED_RCH_WORKER" ]]; then
+    log "expected_worker_preflight=checking expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path}"
+  fi
+  if [[ -n "$NATIVE_ROUTE_ADVISORY_JSON" ]]; then
+    log "native_route_preflight=checking advisory=${NATIVE_ROUTE_ADVISORY_JSON} diagnose=${diagnose_path}"
+  fi
 
   local -a diagnose_command=(
     "$RCH_BIN" diagnose --json -- env \
@@ -164,7 +173,7 @@ preflight_expected_worker() {
   set -e
 
   if [[ "$diagnose_status" -ne 0 ]]; then
-    fail "expected_worker_preflight_diagnose_failed status=${diagnose_status} expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path} stderr=${diagnose_stderr_path}"
+    fail "worker_selection_preflight_diagnose_failed status=${diagnose_status} expected_worker=${EXPECTED_RCH_WORKER:-unset} native_route_advisory=${NATIVE_ROUTE_ADVISORY_JSON:-unset} diagnose=${diagnose_path} stderr=${diagnose_stderr_path}"
   fi
 
   local selected_worker
@@ -172,14 +181,39 @@ preflight_expected_worker() {
   if [[ -z "$selected_worker" ]]; then
     local reason
     reason="$(jq -r '.data.worker_selection.reason // "unknown"' "$diagnose_path")"
-    fail "expected_worker_preflight_not_observed expected_worker=${EXPECTED_RCH_WORKER} reason=${reason} diagnose=${diagnose_path}"
+    fail "worker_selection_preflight_not_observed expected_worker=${EXPECTED_RCH_WORKER:-unset} native_route_advisory=${NATIVE_ROUTE_ADVISORY_JSON:-unset} reason=${reason} diagnose=${diagnose_path}"
   fi
 
-  if [[ "$selected_worker" != "$EXPECTED_RCH_WORKER" ]]; then
+  if [[ -n "$EXPECTED_RCH_WORKER" && "$selected_worker" != "$EXPECTED_RCH_WORKER" ]]; then
     fail "expected_worker_preflight_mismatch expected_worker=${EXPECTED_RCH_WORKER} selected_worker=${selected_worker} diagnose=${diagnose_path}"
   fi
 
-  log "expected_worker_preflight=observed worker=${selected_worker} diagnose=${diagnose_path}"
+  if [[ -n "$EXPECTED_RCH_WORKER" ]]; then
+    log "expected_worker_preflight=observed worker=${selected_worker} diagnose=${diagnose_path}"
+  fi
+
+  if [[ -n "$NATIVE_ROUTE_ADVISORY_JSON" ]]; then
+    [[ -f "$NATIVE_ROUTE_ADVISORY_JSON" ]] || fail "native_route_preflight_advisory_not_found path=${NATIVE_ROUTE_ADVISORY_JSON}"
+    jq empty "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null 2>&1 || fail "native_route_preflight_advisory_invalid_json path=${NATIVE_ROUTE_ADVISORY_JSON}"
+
+    local advisory_decision advisory_truth_state compatible_workers reason_codes
+    advisory_decision="$(jq -r '.decision // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
+    advisory_truth_state="$(jq -r '.truth_state // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
+    compatible_workers="$(jq -r '(.compatible_worker_ids // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
+    reason_codes="$(jq -r '(.reason_codes // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
+
+    if [[ "$advisory_decision" != "pass" ]]; then
+      fail "native_route_preflight_blocked decision=${advisory_decision} truth_state=${advisory_truth_state} reason_codes=${reason_codes:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+    fi
+    if [[ -z "$compatible_workers" ]]; then
+      fail "native_route_preflight_no_compatible_workers advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+    fi
+    if ! jq -e --arg worker "$selected_worker" '(.compatible_worker_ids // []) | index($worker) != null' "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null; then
+      fail "native_route_preflight_incompatible_worker selected_worker=${selected_worker} compatible_workers=${compatible_workers} reason_codes=${reason_codes:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+    fi
+
+    log "native_route_preflight=compatible worker=${selected_worker} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+  fi
 }
 
 run_gate() {
@@ -197,7 +231,7 @@ run_gate() {
   log "mode=${mode}"
   log "command=$(command_text "$mode")"
   log "log_path=${log_path}"
-  preflight_expected_worker "$mode"
+  preflight_worker_selection "$mode"
 
   local -a command=(
     "$RCH_BIN" exec -- env \

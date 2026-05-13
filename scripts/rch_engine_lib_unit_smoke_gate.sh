@@ -173,6 +173,37 @@ prepare_rch_selection_env() {
   fi
 }
 
+worker_selection_context() {
+  local selected_worker="$1"
+  local status_path="${run_dir}/worker-status.json"
+  local status_stderr_path="${run_dir}/worker-status.stderr"
+
+  set +e
+  "$RCH_BIN" --json status --workers --jobs >"$status_path" 2>"$status_stderr_path"
+  local status_code=$?
+  set -e
+
+  if [[ "$status_code" -ne 0 ]]; then
+    printf 'worker_status_unavailable status=%s snapshot=%s stderr=%s' "$status_code" "$status_path" "$status_stderr_path"
+    return 0
+  fi
+
+  jq -r \
+    --arg selected "$selected_worker" \
+    --arg compatible "$NATIVE_ROUTE_COMPATIBLE_WORKERS" \
+    --arg snapshot "$status_path" '
+    . as $status
+    |
+    def worker_context($worker_id):
+      ([$status.data.daemon.workers[]?
+        | select(.id == $worker_id)
+        | "\(.id):status=\(.status // "unknown"),slots=\(.used_slots // "?")/\(.total_slots // "?"),pressure=\(.pressure_state // "unknown"),reason=\(.pressure_reason_code // "unknown")"
+      ] | first) // ($worker_id + ":missing");
+    ($compatible | split(",") | map(select(. != "")) | map(worker_context(.)) | join(";")) as $compatible_context
+    | "worker_status_snapshot=\($snapshot) selected_context=\(worker_context($selected)) compatible_context=\($compatible_context)"
+  ' "$status_path"
+}
+
 preflight_worker_selection() {
   local mode="$1"
   [[ -n "$EXPECTED_RCH_WORKER" || -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
@@ -233,7 +264,9 @@ preflight_worker_selection() {
 
   if [[ -n "$NATIVE_ROUTE_ADVISORY_JSON" ]]; then
     if ! jq -e --arg worker "$selected_worker" '(.compatible_worker_ids // []) | index($worker) != null' "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null; then
-      fail "native_route_preflight_incompatible_worker selected_worker=${selected_worker} compatible_workers=${NATIVE_ROUTE_COMPATIBLE_WORKERS} reason_codes=${NATIVE_ROUTE_REASON_CODES:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+      local worker_context
+      worker_context="$(worker_selection_context "$selected_worker")"
+      fail "native_route_preflight_incompatible_worker selected_worker=${selected_worker} compatible_workers=${NATIVE_ROUTE_COMPATIBLE_WORKERS} reason_codes=${NATIVE_ROUTE_REASON_CODES:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON} ${worker_context}"
     fi
 
     log "native_route_preflight=compatible worker=${selected_worker} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"

@@ -86,6 +86,38 @@ if [[ "${1:-}" == "diagnose" ]]; then
 JSON
   exit 0
 fi
+if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
+  cat <<'JSON'
+{
+  "api_version": "1.0",
+  "command": "status",
+  "success": true,
+  "data": {
+    "daemon": {
+      "workers": [
+        {
+          "id": "vmi-good",
+          "status": "healthy",
+          "used_slots": 4,
+          "total_slots": 8,
+          "pressure_state": "healthy",
+          "pressure_reason_code": "pressure_healthy"
+        },
+        {
+          "id": "vmi-other",
+          "status": "healthy",
+          "used_slots": 0,
+          "total_slots": 8,
+          "pressure_state": "healthy",
+          "pressure_reason_code": "pressure_healthy"
+        }
+      ]
+    }
+  }
+}
+JSON
+  exit 0
+fi
 echo "unexpected fake rch invocation: $*" >&2
 exit 99
 FAKE_RCH_DIAGNOSE
@@ -199,6 +231,11 @@ fi
 
 if ! grep -q 'native_route_preflight_incompatible_worker' "${failure_dir}/native-route-fail.stdout"; then
   echo "expected native-route worker diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+if ! grep -q 'compatible_context=vmi-good:status=healthy,slots=4/8,pressure=healthy,reason=pressure_healthy' "${failure_dir}/native-route-fail.stdout"; then
+  echo "expected native-route compatible worker status context not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

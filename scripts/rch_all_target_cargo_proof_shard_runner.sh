@@ -62,8 +62,8 @@ Optional:
   --execute             run the shard after preflight passes
   --timeout-seconds N   execution timeout for --execute (default: 3600)
   --remote-keepalive-seconds N
-                        opt into RUSTC_WRAPPER progress while rustc is silent
-                        (default: 0, disabled)
+                        opt into RUSTC_WORKSPACE_WRAPPER progress while
+                        workspace rustc is silent (default: 0, disabled)
   --status-poll-seconds N
                         poll rch status during execution to preserve
                         stale-live-hook evidence (default: 15, 0 disables)
@@ -188,6 +188,7 @@ target_kind="$(jq -r '.target_kind // ""' "$shard_json")"
   printf 'worker_status_command=%s\n' "$worker_status_command"
   printf 'execute_command=%s\n' "$exec_command"
   printf 'remote_keepalive_seconds=%q\n' "$remote_keepalive_seconds"
+  printf 'remote_keepalive_wrapper_env=%q\n' "RUSTC_WORKSPACE_WRAPPER"
   printf 'status_poll_seconds=%q\n' "$status_poll_seconds"
 } >"$commands_path"
 
@@ -318,7 +319,7 @@ run_exec_command_with_keepalive() {
   instrumented_payload+=(
     "RCH_SHARD_RUSTC_KEEPALIVE_WRAPPER=1"
     "RCH_SHARD_RUSTC_KEEPALIVE_SECONDS=${remote_keepalive_seconds}"
-    "RUSTC_WRAPPER=${script_path}"
+    "RUSTC_WORKSPACE_WRAPPER=${script_path}"
   )
   instrumented_payload+=("${payload[@]:cargo_index}")
   instrumented_command=(rch exec -- "${instrumented_payload[@]}")
@@ -363,6 +364,12 @@ remote_native_dependency_failure_detected() {
   local path="$1"
   [[ -f "$path" ]] || return 1
   strip_ansi "$path" | grep -Eiq 'Unable to locate HDF5 root directory|failed to run custom build command for `hdf5|pkg-config.*(failed|could not|not found)|could not find system library|native library .* not found|failed to find .*headers'
+}
+
+remote_resource_exhaustion_detected() {
+  local path="$1"
+  [[ -f "$path" ]] || return 1
+  strip_ansi "$path" | grep -Eiq 'exit status: 137|signal: 9|SIGKILL|[Kk]illed[[:space:]]*$|out of memory|memory allocation of .* failed|Cannot allocate memory'
 }
 
 capture_stale_live_hook_status_once() {
@@ -584,8 +591,10 @@ elif remote_toolchain_failure_detected "$cargo_log_path"; then
   remote_failure_reason="remote_worker_toolchain_unavailable"
 elif remote_native_dependency_failure_detected "$cargo_log_path"; then
   remote_failure_reason="remote_worker_native_dependency_unavailable"
+elif remote_resource_exhaustion_detected "$cargo_log_path"; then
+  remote_failure_reason="remote_worker_resource_exhausted"
 fi
-if stale_live_hook_detected; then
+if stale_live_hook_detected && [[ "$remote_failure_reason" == "remote_command_failed" || "$remote_failure_reason" == "remote_command_timeout" || "$remote_failure_reason" == "remote_command_terminated" ]]; then
   remote_failure_reason="remote_command_stalled_live_hook"
 fi
 

@@ -143,6 +143,12 @@ if [[ "${1:-}" == "exec" ]]; then
     printf 'Unable to locate HDF5 root directory and/or headers.\n'
     exit 101
   fi
+  if [[ "${FAKE_RCH_RESOURCE_EXHAUSTED:-0}" == "1" ]]; then
+    printf 'error: could not compile `frankenengine-engine` (lib test)\n\n'
+    printf 'Caused by:\n'
+    printf '  process did not exit successfully: `rustc ...` (exit status: 137)\n'
+    exit 101
+  fi
   if [[ "${FAKE_RCH_LOCAL_FALLBACK:-0}" == "1" ]]; then
     printf '[RCH] local (forced smoke fixture)\n'
     exit 0
@@ -230,7 +236,8 @@ runner --output-dir "$keepalive_enabled_dir" --execute --timeout-seconds 30 --re
 jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good"' \
   "${keepalive_enabled_dir}/result.json" >/dev/null || record_failure "keepalive enabled result"
 grep -q '^remote_keepalive_seconds=60$' "${keepalive_enabled_dir}/commands.txt" || record_failure "enabled remote keepalive recorded"
-grep -Eq '^executed_command=.*RUSTC_WRAPPER=.*rch_all_target_cargo_proof_shard_runner[.]sh.* cargo test' \
+grep -q '^remote_keepalive_wrapper_env=RUSTC_WORKSPACE_WRAPPER$' "${keepalive_enabled_dir}/commands.txt" || record_failure "keepalive wrapper env recorded"
+grep -Eq '^executed_command=.*RUSTC_WORKSPACE_WRAPPER=.*rch_all_target_cargo_proof_shard_runner[.]sh.* cargo test' \
   "${keepalive_enabled_dir}/commands.txt" || record_failure "instrumented execute command recorded"
 record_pass "remote_keepalive_enable"
 
@@ -326,6 +333,18 @@ jq -e '.truth_state == "confirmed" and .reason == "rch_stale_progress_live_hook"
   "${stale_live_hook_dir}/stale-live-hook-detection.json" >/dev/null || record_failure "stale live hook detection"
 jq empty "${stale_live_hook_dir}/stale-live-hook-status.json" >/dev/null || record_failure "stale live hook status"
 record_pass "remote_command_stalled_live_hook_classified"
+
+resource_exhausted_dir="${tmp_root}/resource-exhausted"
+set +e
+FAKE_RCH_STATUS_STALE_LIVE_HOOK=1 \
+FAKE_RCH_RESOURCE_EXHAUSTED=1 \
+  runner --output-dir "$resource_exhausted_dir" --execute --timeout-seconds 30 --status-poll-seconds 0 >/dev/null 2>"${resource_exhausted_dir}.stderr"
+resource_exhausted_status=$?
+set -e
+[[ "$resource_exhausted_status" -eq 101 ]] || record_failure "resource exhausted exit ${resource_exhausted_status}"
+jq -e '.decision == "remote_failure" and .reason == "remote_worker_resource_exhausted" and .exit_code == 101 and .rch_build_id == "123456789"' \
+  "${resource_exhausted_dir}/result.json" >/dev/null || record_failure "resource exhausted result"
+record_pass "remote_worker_resource_exhausted_classified"
 
 job_build_id_dir="${tmp_root}/job-build-id"
 set +e

@@ -90,8 +90,10 @@ failures.
 
 Execution preserves the `rch exec -- env ... cargo ...` command shape. Operators
 may opt into `--remote-keepalive-seconds N`, which injects the runner as
-`RUSTC_WRAPPER` and asks it to emit progress while an individual `rustc`
-invocation is otherwise silent. `commands.txt` records both the manifest
+`RUSTC_WORKSPACE_WRAPPER` and asks it to emit progress while a workspace
+`rustc` invocation is otherwise silent. This keeps dependency compilation on the
+normal Cargo/rustc path while surfacing long final-crate compiles to RCH.
+`commands.txt` records both the manifest
 `execute_command` and, when keepalive instrumentation is enabled, the actual
 `executed_command`. Keepalive output is not proof of success: test lanes still
 require real Rust test execution markers before the runner can pass.
@@ -100,7 +102,8 @@ The runner preserves `rch_build_id` from either explicit RCH build lines or
 worker-scoped `job-<id>` target paths. Remote failures are classified as command
 failure, timeout, termination, `remote_command_stalled_live_hook`, or
 worker environment failures such as `remote_worker_toolchain_unavailable` and
-`remote_worker_native_dependency_unavailable`.
+`remote_worker_native_dependency_unavailable`, or remote worker resource
+failures such as `remote_worker_resource_exhausted`.
 
 By default the runner polls `rch --json status --workers --jobs` every 15
 seconds during execution. If RCH reports the shard build with stale progress
@@ -108,7 +111,9 @@ while the hook is alive and heartbeats remain fresh, the runner preserves
 `stale-live-hook-status.json` plus `stale-live-hook-detection.json`. A later
 timeout or termination for that build is classified as
 `remote_command_stalled_live_hook` so the receipt distinguishes an RCH
-live-hook progress stall from ordinary command failure. Use
+live-hook progress stall from ordinary command failure. More specific terminal
+failures, such as a remote rustc kill with exit status 137, keep their resource
+classification instead. Use
 `--status-poll-seconds 0` only for fixtures that need polling disabled.
 
 ## Outputs

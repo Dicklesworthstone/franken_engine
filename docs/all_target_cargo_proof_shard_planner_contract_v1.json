@@ -64,6 +64,7 @@
     "remote_command_terminated",
     "remote_command_stalled_live_hook",
     "remote_worker_native_dependency_unavailable",
+    "remote_worker_resource_exhausted",
     "remote_worker_toolchain_unavailable"
   ],
   "required_outputs": [
@@ -117,6 +118,7 @@
     "critical_worker_pressure_is_fail_closed": true,
     "runner_rustc_keepalive_default_seconds": 0,
     "runner_keepalive_enable_flag_shape": "--remote-keepalive-seconds N",
+    "runner_keepalive_wrapper_env": "RUSTC_WORKSPACE_WRAPPER",
     "runner_status_poll_default_seconds": 15,
     "runner_status_poll_disable_flag_shape": "--status-poll-seconds 0",
     "runner_stale_live_hook_reason": "remote_command_stalled_live_hook",

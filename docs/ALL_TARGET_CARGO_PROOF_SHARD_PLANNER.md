@@ -88,6 +88,14 @@ worker, observed execution worker, pressure snapshot, cargo log path, and
 termination exits are classified separately from ordinary remote command
 failures.
 
+Execution preserves the `rch exec -- env ... cargo ...` command shape. Operators
+may opt into `--remote-keepalive-seconds N`, which injects the runner as
+`RUSTC_WRAPPER` and asks it to emit progress while an individual `rustc`
+invocation is otherwise silent. `commands.txt` records both the manifest
+`execute_command` and, when keepalive instrumentation is enabled, the actual
+`executed_command`. Keepalive output is not proof of success: test lanes still
+require real Rust test execution markers before the runner can pass.
+
 ## Outputs
 
 - `shard_manifest.json`

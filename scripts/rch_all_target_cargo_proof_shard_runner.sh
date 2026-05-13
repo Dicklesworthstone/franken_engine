@@ -1,11 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${RCH_SHARD_RUSTC_KEEPALIVE_WRAPPER:-0}" == "1" ]]; then
+  rustc_keepalive_seconds="${RCH_SHARD_RUSTC_KEEPALIVE_SECONDS:-60}"
+  [[ "$rustc_keepalive_seconds" =~ ^[0-9]+$ ]] || {
+    printf 'RCH_SHARD_RUSTC_KEEPALIVE_SECONDS must be an integer\n' >&2
+    exit 64
+  }
+  [[ "$#" -ge 1 ]] || {
+    printf 'rustc keepalive wrapper requires the rustc executable argument\n' >&2
+    exit 64
+  }
+  rustc_executable="$1"
+  shift
+  if [[ "$rustc_keepalive_seconds" -eq 0 ]]; then
+    exec "$rustc_executable" "$@"
+  fi
+
+  "$rustc_executable" "$@" &
+  rustc_pid=$!
+  elapsed=0
+  while kill -0 "$rustc_pid" 2>/dev/null; do
+    sleep "$rustc_keepalive_seconds" &
+    sleep_pid=$!
+    wait "$sleep_pid" 2>/dev/null || true
+    elapsed=$((elapsed + rustc_keepalive_seconds))
+    if kill -0 "$rustc_pid" 2>/dev/null; then
+      printf '[rch-shard-runner] rustc_keepalive elapsed_seconds=%s\n' "$elapsed" >&2
+    fi
+  done
+  set +e
+  wait "$rustc_pid"
+  rustc_status=$?
+  set -e
+  exit "$rustc_status"
+fi
+
+script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 manifest_path=""
 shard_id=""
 output_dir=""
 execute=false
 timeout_seconds="${RCH_SHARD_TIMEOUT_SECONDS:-3600}"
+remote_keepalive_seconds="${RCH_SHARD_REMOTE_KEEPALIVE_SECONDS:-0}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -23,6 +60,9 @@ Required:
 Optional:
   --execute             run the shard after preflight passes
   --timeout-seconds N   execution timeout for --execute (default: 3600)
+  --remote-keepalive-seconds N
+                        opt into RUSTC_WRAPPER progress while rustc is silent
+                        (default: 0, disabled)
 EOF
 }
 
@@ -58,6 +98,10 @@ while [[ "$#" -gt 0 ]]; do
       timeout_seconds="${2:-}"
       shift 2
       ;;
+    --remote-keepalive-seconds)
+      remote_keepalive_seconds="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -72,6 +116,7 @@ done
 [[ -n "$shard_id" ]] || fail_usage "--shard-id is required"
 [[ -n "$output_dir" ]] || fail_usage "--output-dir is required"
 [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || fail_usage "--timeout-seconds must be an integer"
+[[ "$remote_keepalive_seconds" =~ ^[0-9]+$ ]] || fail_usage "--remote-keepalive-seconds must be an integer"
 [[ -f "$manifest_path" ]] || fail_usage "manifest not found: $manifest_path"
 command -v jq >/dev/null 2>&1 || { printf 'jq is required\n' >&2; exit 2; }
 jq empty "$manifest_path" >/dev/null
@@ -127,6 +172,7 @@ target_kind="$(jq -r '.target_kind // ""' "$shard_json")"
   printf 'diagnose_command=%s\n' "$diagnose_command"
   printf 'worker_status_command=%s\n' "$worker_status_command"
   printf 'execute_command=%s\n' "$exec_command"
+  printf 'remote_keepalive_seconds=%q\n' "$remote_keepalive_seconds"
 } >"$commands_path"
 
 : >"$events_path"
@@ -208,6 +254,58 @@ run_text_command() {
   local status=$?
   set -e
   return "$status"
+}
+
+run_exec_command_with_keepalive() {
+  local command_text="$1"
+  local log_path="$2"
+  local -a command_parts=()
+  local -a instrumented_command=()
+  local -a payload=()
+  local -a instrumented_payload=()
+  local cargo_index=-1
+
+  if [[ "$remote_keepalive_seconds" -eq 0 ]]; then
+    timeout "$timeout_seconds" bash -c "$command_text" >"$log_path" 2>&1
+    return "$?"
+  fi
+
+  eval "command_parts=(${command_text})"
+  if [[ "${#command_parts[@]}" -lt 4 || "${command_parts[0]}" != "rch" || "${command_parts[1]}" != "exec" || "${command_parts[2]}" != "--" ]]; then
+    timeout "$timeout_seconds" bash -c "$command_text" >"$log_path" 2>&1
+    return "$?"
+  fi
+
+  payload=("${command_parts[@]:3}")
+  if [[ "${payload[0]:-}" != "env" ]]; then
+    timeout "$timeout_seconds" bash -c "$command_text" >"$log_path" 2>&1
+    return "$?"
+  fi
+  for i in "${!payload[@]}"; do
+    if [[ "${payload[$i]}" == "cargo" ]]; then
+      cargo_index="$i"
+      break
+    fi
+  done
+  if [[ "$cargo_index" -lt 0 ]]; then
+    timeout "$timeout_seconds" bash -c "$command_text" >"$log_path" 2>&1
+    return "$?"
+  fi
+
+  instrumented_payload=("${payload[@]:0:cargo_index}")
+  instrumented_payload+=(
+    "RCH_SHARD_RUSTC_KEEPALIVE_WRAPPER=1"
+    "RCH_SHARD_RUSTC_KEEPALIVE_SECONDS=${remote_keepalive_seconds}"
+    "RUSTC_WRAPPER=${script_path}"
+  )
+  instrumented_payload+=("${payload[@]:cargo_index}")
+  instrumented_command=(rch exec -- "${instrumented_payload[@]}")
+  {
+    printf 'executed_command='
+    printf '%q ' "${instrumented_command[@]}"
+    printf '\n'
+  } >>"$commands_path"
+  timeout "$timeout_seconds" "${instrumented_command[@]}" >"$log_path" 2>&1
 }
 
 strip_ansi() {
@@ -311,7 +409,7 @@ fi
 
 emit_event "execute_start" "$exec_command"
 set +e
-bash -c "timeout ${timeout_seconds} ${exec_command}" >"$cargo_log_path" 2>&1
+run_exec_command_with_keepalive "$exec_command" "$cargo_log_path"
 exec_status=$?
 set -e
 

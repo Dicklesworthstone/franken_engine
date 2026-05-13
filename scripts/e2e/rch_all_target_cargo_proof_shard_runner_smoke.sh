@@ -176,7 +176,30 @@ FAKE_RCH_EXEC_MARKER="${tmp_root}/execute-exec.marker" \
 jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good" and .rch_build_id == "123456789"' \
   "${execute_dir}/result.json" >/dev/null || record_failure "execute result"
 grep -q 'running 1 test' "${execute_dir}/cargo-output.log" || record_failure "execute test output"
+grep -q '^remote_keepalive_seconds=0$' "${execute_dir}/commands.txt" || record_failure "default remote keepalive disabled"
+if grep -q '^executed_command=' "${execute_dir}/commands.txt"; then
+  record_failure "default keepalive unexpectedly wrapped command"
+fi
 record_pass "execute_success"
+
+keepalive_enabled_dir="${tmp_root}/keepalive-enabled"
+runner --output-dir "$keepalive_enabled_dir" --execute --timeout-seconds 30 --remote-keepalive-seconds 60 >/dev/null
+jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good"' \
+  "${keepalive_enabled_dir}/result.json" >/dev/null || record_failure "keepalive enabled result"
+grep -q '^remote_keepalive_seconds=60$' "${keepalive_enabled_dir}/commands.txt" || record_failure "enabled remote keepalive recorded"
+grep -Eq '^executed_command=.*RUSTC_WRAPPER=.*rch_all_target_cargo_proof_shard_runner[.]sh.* cargo test' \
+  "${keepalive_enabled_dir}/commands.txt" || record_failure "instrumented execute command recorded"
+record_pass "remote_keepalive_enable"
+
+keepalive_disabled_dir="${tmp_root}/keepalive-disabled"
+runner --output-dir "$keepalive_disabled_dir" --execute --timeout-seconds 30 --remote-keepalive-seconds 0 >/dev/null
+jq -e '.decision == "pass" and .reason == "remote_execution_passed" and .execution_worker == "vmi-good"' \
+  "${keepalive_disabled_dir}/result.json" >/dev/null || record_failure "keepalive disabled result"
+grep -q '^remote_keepalive_seconds=0$' "${keepalive_disabled_dir}/commands.txt" || record_failure "disabled remote keepalive recorded"
+if grep -q '^executed_command=' "${keepalive_disabled_dir}/commands.txt"; then
+  record_failure "disabled keepalive unexpectedly wrapped command"
+fi
+record_pass "remote_keepalive_disable"
 
 critical_dir="${tmp_root}/critical"
 set +e

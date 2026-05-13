@@ -111,7 +111,10 @@
     "local_fallback_is_rejected_fail_closed": true,
     "worker_selection_preflight_required": true,
     "worker_pressure_snapshot_required": true,
-    "critical_worker_pressure_is_fail_closed": true
+    "critical_worker_pressure_is_fail_closed": true,
+    "runner_rustc_keepalive_default_seconds": 0,
+    "runner_keepalive_enable_flag_shape": "--remote-keepalive-seconds N",
+    "runner_records_actual_executed_command": true
   },
   "mutation_policy": {
     "advisory_only": true,

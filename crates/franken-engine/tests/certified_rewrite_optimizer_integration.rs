@@ -1,89 +1,125 @@
-//! Fail-closed guard for certified rewrite optimizer integration.
+//! Integration coverage for the public certified rewrite optimizer boundary.
 //!
-//! This test ensures the certified_rewrite_optimizer module remains intentionally
-//! disabled until all dependent APIs are implemented. The module is not available
-//! for production use due to missing dependencies, and this test prevents silent
-//! enablement without proper validation.
-//!
-//! **Tracking**: bd-1lsy.7.7.3.2 - Explicit fail-closed guard for unavailable module
-//! **Dependencies**: Module requires implementation of:
-//! - TranslationValidator, ValidationResult, ValidationReceipt types
-//! - RewriteRule, RewriteRuleId, OptimizationTier::Conservative
-//! - GovernanceState::new(), RollbackRecord::new, OptimizationCertificate::new
-//!
-//! **Re-enable when**: All dependent APIs exist and imports resolve successfully.
+//! Tracks bd-mw20e.1: the optimizer module is re-enabled, so this file now
+//! exercises the live crate API instead of the old waiver text.
 
 #![forbid(unsafe_code)]
 
-/// Test that certified_rewrite_optimizer module is intentionally unavailable.
-///
-/// This fail-closed guard prevents silent enablement of the module before
-/// all dependent APIs are properly implemented and tested.
-#[test]
-fn certified_rewrite_optimizer_intentionally_unavailable() {
-    // Verify the module is not accessible from the public API
-    let module_available =
-        option_env!("CARGO_FEATURE_CERTIFIED_REWRITE_OPTIMIZER_PRODUCTION").is_some();
+use frankenengine_engine::certified_optimization_governance::OptimizationTier;
+use frankenengine_engine::certified_rewrite_optimizer::{
+    BEAD_ID, COMPONENT, CertifiedOptimizerError, CertifiedRewriteOptimizer, OptimizationRequest,
+    RewriteRuleId, SCHEMA_VERSION, TranslationValidator, ValidationReceipt, ValidationResult,
+};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::translation_validation::ValidationMode;
 
-    // Should be false - module is intentionally disabled
-    assert!(
-        !module_available,
-        "certified_rewrite_optimizer module should remain disabled until dependent APIs are implemented"
-    );
-
-    // Document the expected dependencies that must be satisfied before re-enabling
-    let required_dependencies = vec![
-        "TranslationValidator",
-        "ValidationResult",
-        "ValidationReceipt",
-        "RewriteRule",
-        "RewriteRuleId",
-        "OptimizationTier::Conservative",
-        "GovernanceState::new()",
-        "RollbackRecord::new",
-        "OptimizationCertificate::new",
-    ];
-
-    // Ensure we have a clear list of what's needed
-    assert!(!required_dependencies.is_empty());
-    assert!(required_dependencies.len() >= 9); // All listed dependencies accounted for
+fn epoch() -> SecurityEpoch {
+    SecurityEpoch::from_raw(607)
 }
 
-/// Test that integration tests fail explicitly when module is unavailable.
-///
-/// This ensures the integration test suite doesn't silently pass when the
-/// underlying module is disabled, which would provide false confidence.
 #[test]
-fn integration_tests_fail_closed_when_module_disabled() {
-    // Verify that we're in fail-closed mode for disabled module
-    let integration_enabled = cfg!(feature = "certified_rewrite_optimizer_integration");
+fn public_optimizer_api_is_reenabled() {
+    let optimizer = CertifiedRewriteOptimizer::new(epoch());
+    assert_eq!(optimizer.security_epoch, epoch());
+    assert!(optimizer.rewrite_packs.is_empty());
 
-    // Integration should be explicitly disabled, not silently skipped
+    let rule_id: RewriteRuleId = "identity_add_zero".to_string();
+    assert_eq!(rule_id.as_str(), "identity_add_zero");
+
+    let validator_type = std::any::type_name::<TranslationValidator>();
+    assert!(validator_type.contains("TranslationValidationGate"));
+    let _validator = TranslationValidator::new();
+
+    let receipt = ValidationReceipt::new(format!("{COMPONENT}:integration-receipt"), true);
+    let validation = ValidationResult::success(receipt);
+    assert!(validation.is_valid());
     assert!(
-        !integration_enabled,
-        "Integration tests should be explicitly disabled, not silently skipped"
+        validation
+            .receipt()
+            .expect("validation result should carry a receipt")
+            .validation_passed()
     );
 
-    // When the module is re-enabled, this test should be updated to validate
-    // that proper integration tests are running and passing
+    let tier_names: Vec<_> = OptimizationTier::ALL
+        .iter()
+        .map(|tier| tier.as_str())
+        .collect();
+    assert_eq!(
+        tier_names.as_slice(),
+        ["baseline", "standard", "aggressive", "speculative"]
+    );
+
+    let contract_id = format!("{SCHEMA_VERSION}:{COMPONENT}:{BEAD_ID}");
+    assert!(contract_id.contains("certified-rewrite-optimizer"));
+    assert!(contract_id.contains("certified_rewrite_optimizer"));
 }
 
-/// Test waiver documentation for intentional disablement.
-///
-/// Ensures there's explicit documentation for why the module is disabled
-/// and what conditions are required for re-enablement.
 #[test]
-fn explicit_waiver_documentation_present() {
-    // This file itself serves as the waiver documentation
-    let waiver_file = file!();
-    assert!(waiver_file.contains("certified_rewrite_optimizer_integration.rs"));
+fn public_optimizer_applies_validated_builtin_rewrite() {
+    let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+    let request = OptimizationRequest::new(
+        "integration-identity-add-zero".to_string(),
+        epoch(),
+        OptimizationTier::Standard,
+        "x + 0".to_string(),
+    )
+    .with_validation_mode(ValidationMode::SymbolicEquivalence {
+        proof_hash: ContentHash::compute(b"integration-proof"),
+    });
 
-    // Ensure the waiver includes bead tracking
-    let waiver_content = include_str!("certified_rewrite_optimizer_integration.rs");
-    assert!(waiver_content.contains("bd-1lsy.7.7.3.2"));
-    assert!(waiver_content.contains("intentionally disabled"));
-    assert!(waiver_content.contains("dependent APIs"));
+    let result = optimizer
+        .optimize(request)
+        .expect("enabled optimizer should run a supported built-in rewrite");
 
-    // Fail if someone tries to silently re-enable without updating this guard
-    assert!(waiver_content.contains("Re-enable when"));
+    assert!(result.success);
+    assert_eq!(result.optimized_program.as_deref(), Some("x"));
+    assert_eq!(result.optimization_steps.len(), 1);
+    assert!(result.all_steps_validated());
+    assert!(result.all_steps_certified());
+    assert!(result.errors.is_empty());
+    assert!(result.rollback_records.is_empty());
+    assert_eq!(result.metrics.steps_performed, 1);
+    assert_eq!(result.metrics.steps_validated, 1);
+    assert_eq!(result.metrics.steps_certified, 1);
+
+    let step = result
+        .optimization_steps
+        .first()
+        .expect("supported rewrite should produce one step");
+    assert_eq!(step.before_program, "x + 0");
+    assert_eq!(step.after_program, "x");
+    assert!(
+        step.validation_receipt
+            .as_ref()
+            .expect("validated step should include a receipt")
+            .validation_passed()
+    );
+    assert!(
+        step.optimization_certificate.is_some(),
+        "validated built-in rewrites should receive a certificate"
+    );
+}
+
+#[test]
+fn optimizer_rejects_tampered_request_hash_fail_closed() {
+    let mut optimizer = CertifiedRewriteOptimizer::new(epoch());
+    let mut request = OptimizationRequest::new(
+        "integration-tampered-hash".to_string(),
+        epoch(),
+        OptimizationTier::Standard,
+        "x + 0".to_string(),
+    );
+    request.input_program = "y + 0".to_string();
+
+    let err = optimizer
+        .optimize(request)
+        .expect_err("tampered input hash must fail request validation");
+
+    match err {
+        CertifiedOptimizerError::InvalidRequest { reason, .. } => {
+            assert!(reason.contains("input_hash"));
+        }
+        other => panic!("expected invalid request error, got {other:?}"),
+    }
 }

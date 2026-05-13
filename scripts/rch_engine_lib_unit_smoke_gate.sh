@@ -14,6 +14,7 @@ CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-nightly}"
 RUSTFLAGS="${RUSTFLAGS:--C linker=cc}"
 RCH_TIMEOUT_SECONDS="${RCH_EXEC_TIMEOUT_SECONDS:-900}"
+EXPECTED_RCH_WORKER="${FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER:-${RCH_WORKER:-}}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/rch_target_franken_engine_lib_unit_smoke_${timestamp}}"
 artifact_root="${FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT:-artifacts/rch_engine_lib_unit_smoke}"
@@ -33,6 +34,9 @@ shows Rust test execution. The default mode is compile-only run.
 Environment:
   FRANKEN_ENGINE_LIB_UNIT_PACKAGE       package to validate (default: frankenengine-engine)
   FRANKEN_ENGINE_LIB_UNIT_TEST_FILTER   source-local unit test filter
+  FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER
+                                      fail closed if RCH selects a different worker
+                                      (defaults to RCH_WORKER when set)
   RCH_BIN                               rch binary (default: rch)
   RCH_EXEC_TIMEOUT_SECONDS              outer timeout seconds (default: 900)
 USAGE
@@ -45,6 +49,10 @@ log() {
 fail() {
   log "error=$*"
   exit 1
+}
+
+strip_ansi() {
+  perl -pe 's/\e\[[0-9;?]*[ -\/]*[@-~]//g' "$1"
 }
 
 command_text() {
@@ -81,6 +89,18 @@ check_script_wrapping() {
 scan_log_for_forbidden_support() {
   local candidate_log="$1"
   [[ -f "$candidate_log" ]] || fail "log_not_found path=${candidate_log}"
+
+  if [[ -n "$EXPECTED_RCH_WORKER" ]]; then
+    local selected_worker
+    selected_worker="$(strip_ansi "$candidate_log" | sed -n 's/.*Selected worker: \([^ ]*\).*/\1/p' | tail -n1 || true)"
+    if [[ -z "$selected_worker" ]]; then
+      fail "expected_worker_not_observed expected_worker=${EXPECTED_RCH_WORKER} log=${candidate_log}"
+    fi
+    if [[ "$selected_worker" != "$EXPECTED_RCH_WORKER" ]]; then
+      fail "unexpected_worker_selected expected_worker=${EXPECTED_RCH_WORKER} selected_worker=${selected_worker} log=${candidate_log}"
+    fi
+    log "expected_worker=observed worker=${selected_worker} log=${candidate_log}"
+  fi
 
   if grep -Eiq '(^|[[:space:]])(Compiling|Checking|Fresh|Dirty)[[:space:]]+frankenengine-test-support([[:space:]]|$)' "$candidate_log"; then
     fail "forbidden_support_dependency package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"

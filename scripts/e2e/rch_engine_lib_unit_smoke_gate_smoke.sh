@@ -11,16 +11,19 @@ failure_dir="${tmp_root}/failure"
 mkdir -p "$good_dir" "$bad_dir" "$exec_dir" "$failure_dir"
 
 cat >"${good_dir}/cargo-output.log" <<'GOOD_LOG'
+Selected worker: vmi-good at 192.0.2.10 (rust)
 INFO rch::transfer: Syncing /data/projects/franken_engine/crates/franken-engine-test-support -> /data/projects/franken_engine/crates/franken-engine-test-support on worker
    Compiling frankenengine-extension-host v0.1.0 (/data/projects/franken_engine/crates/franken-extension-host)
    Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
 GOOD_LOG
 
 cat >"${bad_dir}/cargo-output.log" <<'BAD_LOG'
+Selected worker: vmi-bad at 192.0.2.11 (rust)
    Compiling frankenengine-test-support v0.1.0 (/data/projects/franken_engine/crates/franken-engine-test-support)
 BAD_LOG
 
 cat >"${exec_dir}/cargo-output.log" <<'EXEC_LOG'
+Selected worker: vmi-good at 192.0.2.10 (rust)
    Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
      Running unittests src/lib.rs
@@ -32,6 +35,7 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 101 filtered out; fi
 EXEC_LOG
 
 cat >"${bad_dir}/no-execution.log" <<'NO_EXEC_LOG'
+Selected worker: vmi-good at 192.0.2.10 (rust)
    Compiling frankenengine-engine v0.1.0 (/data/projects/franken_engine/crates/franken-engine)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
 NO_EXEC_LOG
@@ -61,6 +65,8 @@ chmod +x "${failure_dir}/fake-rch"
 
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --check-script "${good_dir}/wrapped.sh" >/dev/null
+FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-good \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 
 if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-command | grep -q 'rch exec -- env'; then
   echo "expected printed command to use rch exec -- env" >&2
@@ -70,6 +76,19 @@ fi
 
 if ! "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --print-execute-command | grep -q -- '-- --nocapture'; then
   echo "expected printed execute command to run the filtered test" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-other \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >"${tmp_root}/bad-worker.stdout" 2>"${tmp_root}/bad-worker.stderr"; then
+  echo "expected wrong selected worker fixture to fail" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'unexpected_worker_selected' "${tmp_root}/bad-worker.stdout"; then
+  echo "expected wrong selected worker diagnostic not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

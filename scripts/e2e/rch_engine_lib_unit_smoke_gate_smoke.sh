@@ -63,6 +63,31 @@ exit 42
 FAKE_RCH
 chmod +x "${failure_dir}/fake-rch"
 
+cat >"${failure_dir}/fake-rch-diagnose" <<'FAKE_RCH_DIAGNOSE'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "diagnose" ]]; then
+  cat <<'JSON'
+{
+  "api_version": "1.0",
+  "command": "diagnose",
+  "success": true,
+  "data": {
+    "worker_selection": {
+      "worker": {
+        "id": "vmi-other"
+      },
+      "reason": "success"
+    }
+  }
+}
+JSON
+  exit 0
+fi
+echo "unexpected fake rch invocation: $*" >&2
+exit 99
+FAKE_RCH_DIAGNOSE
+chmod +x "${failure_dir}/fake-rch-diagnose"
+
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --scan-log "${good_dir}/cargo-output.log" >/dev/null
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" --check-script "${good_dir}/wrapped.sh" >/dev/null
 FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-good \
@@ -131,6 +156,21 @@ fi
 
 if ! grep -q 'test_execution_not_observed' "${tmp_root}/bad-exec.stdout"; then
   echo "expected no-execution diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if RCH_BIN="${failure_dir}/fake-rch-diagnose" \
+  FRANKEN_ENGINE_LIB_UNIT_EXPECTED_WORKER=vmi-good \
+  FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/preflight-artifacts" \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/preflight-fail.stdout" 2>"${failure_dir}/preflight-fail.stderr"; then
+  echo "expected diagnose worker mismatch to fail before compile" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if ! grep -q 'expected_worker_preflight_mismatch' "${failure_dir}/preflight-fail.stdout"; then
+  echo "expected diagnose worker mismatch diagnostic not found" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

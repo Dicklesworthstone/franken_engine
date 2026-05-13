@@ -29,7 +29,9 @@ usage: scripts/rch_engine_lib_unit_smoke_gate.sh [run|run-execute|--scan-log <pa
 Runs a source-local frankenengine-engine library unit-test compile through rch
 and fails closed if frankenengine-test-support appears in the lib-unit compile
 path. `run-execute` runs the filtered unit test and fails closed unless the log
-shows Rust test execution. The default mode is compile-only run.
+shows Rust test execution. When an expected worker is configured, the gate first
+checks `rch diagnose` so worker-selection drift fails before a long compile.
+The default mode is compile-only run.
 
 Environment:
   FRANKEN_ENGINE_LIB_UNIT_PACKAGE       package to validate (default: frankenengine-engine)
@@ -128,6 +130,58 @@ scan_log_for_test_execution() {
   log "test_execution=observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
 }
 
+preflight_expected_worker() {
+  local mode="$1"
+  [[ -n "$EXPECTED_RCH_WORKER" ]] || return 0
+
+  command -v jq >/dev/null 2>&1 || fail "jq_not_found_for_expected_worker_preflight"
+
+  local diagnose_path="${run_dir}/worker-diagnose.json"
+  local diagnose_stderr_path="${run_dir}/worker-diagnose.stderr"
+  log "expected_worker_preflight=checking expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path}"
+
+  local -a diagnose_command=(
+    "$RCH_BIN" diagnose --json -- env \
+      "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN}" \
+      "CARGO_INCREMENTAL=${CARGO_INCREMENTAL}" \
+      "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}" \
+      "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}" \
+      "RUSTFLAGS=${RUSTFLAGS}" \
+      cargo test -p "$PACKAGE" "--${TARGET_KIND}" "$TEST_FILTER" # rch-cargo-allow: diagnose preflight classifies only; Cargo is not executed here.
+  )
+
+  if [[ "$mode" == "compile" ]]; then
+    diagnose_command+=(--no-run)
+  elif [[ "$mode" == "execute" ]]; then
+    diagnose_command+=(-- --nocapture)
+  else
+    fail "unsupported_mode mode=${mode}"
+  fi
+
+  set +e
+  "${diagnose_command[@]}" >"$diagnose_path" 2>"$diagnose_stderr_path"
+  local diagnose_status=$?
+  set -e
+
+  if [[ "$diagnose_status" -ne 0 ]]; then
+    fail "expected_worker_preflight_diagnose_failed status=${diagnose_status} expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path} stderr=${diagnose_stderr_path}"
+  fi
+
+  local selected_worker
+  selected_worker="$(jq -r '.data.worker_selection.worker.id // ""' "$diagnose_path")"
+  if [[ -z "$selected_worker" ]]; then
+    local reason
+    reason="$(jq -r '.data.worker_selection.reason // "unknown"' "$diagnose_path")"
+    fail "expected_worker_preflight_not_observed expected_worker=${EXPECTED_RCH_WORKER} reason=${reason} diagnose=${diagnose_path}"
+  fi
+
+  if [[ "$selected_worker" != "$EXPECTED_RCH_WORKER" ]]; then
+    fail "expected_worker_preflight_mismatch expected_worker=${EXPECTED_RCH_WORKER} selected_worker=${selected_worker} diagnose=${diagnose_path}"
+  fi
+
+  log "expected_worker_preflight=observed worker=${selected_worker} diagnose=${diagnose_path}"
+}
+
 run_gate() {
   local mode="${1:-compile}"
   [[ "$TARGET_KIND" == "lib" ]] || fail "unsupported_target_kind target_kind=${TARGET_KIND}"
@@ -143,6 +197,7 @@ run_gate() {
   log "mode=${mode}"
   log "command=$(command_text "$mode")"
   log "log_path=${log_path}"
+  preflight_expected_worker "$mode"
 
   local -a command=(
     "$RCH_BIN" exec -- env \

@@ -1245,16 +1245,18 @@ fn execution_produces_witness_completed_event() {
 fn hostcall_produces_dispatch_and_capability_witness() {
     let mut m = test_module(vec![
         Ir3Instruction::HostCall {
-            capability: CapabilityTag("db".into()),
+            capability: CapabilityTag("heap_allocate".into()),
             args: RegRange { start: 0, count: 0 },
             dst: 0,
         },
         Ir3Instruction::Halt,
     ]);
-    m.required_capabilities = vec![CapabilityTag("db".into())];
+    m.required_capabilities = vec![CapabilityTag("heap_allocate".into())];
 
     let mut config = InterpreterConfig::quickjs_defaults();
-    // "db" is an unmapped tag — passes through typed check.
+    // "heap_allocate" maps to RuntimeCapability::HeapAllocate, which is granted
+    // by baseline_execution_capabilities(). Unmapped tags fail closed since
+    // 8f26855f (2026-05-03 capability gate hardening).
     config.granted_capabilities = baseline_execution_capabilities();
     let lane = QuickJsLane::with_config(config);
     let r = lane.execute(&m, "integ").unwrap();
@@ -1702,21 +1704,23 @@ fn re_execution_on_same_core_clears_runtime_state_after_error() {
 fn witness_events_have_monotonic_seq() {
     let mut m = test_module(vec![
         Ir3Instruction::HostCall {
-            capability: CapabilityTag("a".into()),
+            capability: CapabilityTag("heap_allocate".into()),
             args: RegRange { start: 0, count: 0 },
             dst: 0,
         },
         Ir3Instruction::HostCall {
-            capability: CapabilityTag("b".into()),
+            capability: CapabilityTag("heap_allocate".into()),
             args: RegRange { start: 0, count: 0 },
             dst: 0,
         },
         Ir3Instruction::Halt,
     ]);
-    m.required_capabilities = vec![CapabilityTag("a".into()), CapabilityTag("b".into())];
+    m.required_capabilities = vec![CapabilityTag("heap_allocate".into())];
 
     let mut config = InterpreterConfig::quickjs_defaults();
-    // "a"/"b" are unmapped tags — pass through typed check.
+    // "heap_allocate" maps to RuntimeCapability::HeapAllocate, which is granted
+    // by baseline_execution_capabilities(). Unmapped tags fail closed since
+    // 8f26855f (2026-05-03 capability gate hardening).
     config.granted_capabilities = baseline_execution_capabilities();
     let lane = QuickJsLane::with_config(config);
     let r = lane.execute(&m, "integ").unwrap();

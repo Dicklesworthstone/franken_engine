@@ -22,6 +22,11 @@ artifact_root="${FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT:-artifacts/rch_engi
 run_dir="${artifact_root}/${timestamp}"
 log_path="${run_dir}/cargo-output.log"
 commands_path="${run_dir}/commands.txt"
+NATIVE_ROUTE_COMPATIBLE_WORKERS=""
+NATIVE_ROUTE_REASON_CODES=""
+NATIVE_ROUTE_DECISION=""
+NATIVE_ROUTE_TRUTH_STATE=""
+RCH_SELECTION_ENV=()
 
 usage() {
   cat <<'USAGE'
@@ -41,8 +46,8 @@ Environment:
                                       fail closed if RCH selects a different worker
                                       (defaults to RCH_WORKER when set)
   FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON
-                                      fail closed if RCH selects a worker outside
-                                      an advisory's compatible_worker_ids
+                                      prefer advisory.compatible_worker_ids and
+                                      fail closed if RCH selects outside them
   RCH_BIN                               rch binary (default: rch)
   RCH_EXEC_TIMEOUT_SECONDS              outer timeout seconds (default: 900)
 USAGE
@@ -63,8 +68,13 @@ strip_ansi() {
 
 command_text() {
   local mode="${1:-compile}"
+  local rch_prefix="rch"
+  if [[ "${#RCH_SELECTION_ENV[@]}" -gt 0 ]]; then
+    rch_prefix="${RCH_SELECTION_ENV[*]} rch"
+  fi
   if [[ "$mode" == "execute" ]]; then
-    printf 'rch exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s -- --nocapture\n' \
+    printf '%s exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s -- --nocapture\n' \
+      "$rch_prefix" \
       "$RUSTUP_TOOLCHAIN" \
       "$CARGO_INCREMENTAL" \
       "$CARGO_BUILD_JOBS" \
@@ -76,7 +86,8 @@ command_text() {
     return 0
   fi
 
-  printf 'rch exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
+  printf '%s exec -- env RUSTUP_TOOLCHAIN=%s CARGO_INCREMENTAL=%s CARGO_BUILD_JOBS=%s CARGO_TARGET_DIR=%s RUSTFLAGS=%q cargo test -p %s --%s %s --no-run\n' \
+    "$rch_prefix" \
     "$RUSTUP_TOOLCHAIN" \
     "$CARGO_INCREMENTAL" \
     "$CARGO_BUILD_JOBS" \
@@ -134,6 +145,34 @@ scan_log_for_test_execution() {
   log "test_execution=observed package=${PACKAGE} target_kind=${TARGET_KIND} log=${candidate_log}"
 }
 
+prepare_rch_selection_env() {
+  RCH_SELECTION_ENV=()
+  NATIVE_ROUTE_COMPATIBLE_WORKERS=""
+  NATIVE_ROUTE_REASON_CODES=""
+  NATIVE_ROUTE_DECISION=""
+  NATIVE_ROUTE_TRUTH_STATE=""
+
+  [[ -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
+  [[ -f "$NATIVE_ROUTE_ADVISORY_JSON" ]] || fail "native_route_preflight_advisory_not_found path=${NATIVE_ROUTE_ADVISORY_JSON}"
+  jq empty "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null 2>&1 || fail "native_route_preflight_advisory_invalid_json path=${NATIVE_ROUTE_ADVISORY_JSON}"
+
+  NATIVE_ROUTE_DECISION="$(jq -r '.decision // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
+  NATIVE_ROUTE_TRUTH_STATE="$(jq -r '.truth_state // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
+  NATIVE_ROUTE_COMPATIBLE_WORKERS="$(jq -r '(.compatible_worker_ids // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
+  NATIVE_ROUTE_REASON_CODES="$(jq -r '(.reason_codes // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
+
+  if [[ "$NATIVE_ROUTE_DECISION" != "pass" ]]; then
+    fail "native_route_preflight_blocked decision=${NATIVE_ROUTE_DECISION} truth_state=${NATIVE_ROUTE_TRUTH_STATE} reason_codes=${NATIVE_ROUTE_REASON_CODES:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+  fi
+  if [[ -z "$NATIVE_ROUTE_COMPATIBLE_WORKERS" ]]; then
+    fail "native_route_preflight_no_compatible_workers advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+  fi
+
+  if [[ -z "${RCH_WORKER:-}" && -z "${RCH_WORKERS:-}" ]]; then
+    RCH_SELECTION_ENV=("RCH_WORKERS=${NATIVE_ROUTE_COMPATIBLE_WORKERS}")
+  fi
+}
+
 preflight_worker_selection() {
   local mode="$1"
   [[ -n "$EXPECTED_RCH_WORKER" || -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
@@ -168,7 +207,7 @@ preflight_worker_selection() {
   fi
 
   set +e
-  "${diagnose_command[@]}" >"$diagnose_path" 2>"$diagnose_stderr_path"
+  env "${RCH_SELECTION_ENV[@]}" "${diagnose_command[@]}" >"$diagnose_path" 2>"$diagnose_stderr_path"
   local diagnose_status=$?
   set -e
 
@@ -193,23 +232,8 @@ preflight_worker_selection() {
   fi
 
   if [[ -n "$NATIVE_ROUTE_ADVISORY_JSON" ]]; then
-    [[ -f "$NATIVE_ROUTE_ADVISORY_JSON" ]] || fail "native_route_preflight_advisory_not_found path=${NATIVE_ROUTE_ADVISORY_JSON}"
-    jq empty "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null 2>&1 || fail "native_route_preflight_advisory_invalid_json path=${NATIVE_ROUTE_ADVISORY_JSON}"
-
-    local advisory_decision advisory_truth_state compatible_workers reason_codes
-    advisory_decision="$(jq -r '.decision // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
-    advisory_truth_state="$(jq -r '.truth_state // "unknown"' "$NATIVE_ROUTE_ADVISORY_JSON")"
-    compatible_workers="$(jq -r '(.compatible_worker_ids // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
-    reason_codes="$(jq -r '(.reason_codes // []) | join(",")' "$NATIVE_ROUTE_ADVISORY_JSON")"
-
-    if [[ "$advisory_decision" != "pass" ]]; then
-      fail "native_route_preflight_blocked decision=${advisory_decision} truth_state=${advisory_truth_state} reason_codes=${reason_codes:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
-    fi
-    if [[ -z "$compatible_workers" ]]; then
-      fail "native_route_preflight_no_compatible_workers advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
-    fi
     if ! jq -e --arg worker "$selected_worker" '(.compatible_worker_ids // []) | index($worker) != null' "$NATIVE_ROUTE_ADVISORY_JSON" >/dev/null; then
-      fail "native_route_preflight_incompatible_worker selected_worker=${selected_worker} compatible_workers=${compatible_workers} reason_codes=${reason_codes:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
+      fail "native_route_preflight_incompatible_worker selected_worker=${selected_worker} compatible_workers=${NATIVE_ROUTE_COMPATIBLE_WORKERS} reason_codes=${NATIVE_ROUTE_REASON_CODES:-none} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
     fi
 
     log "native_route_preflight=compatible worker=${selected_worker} advisory=${NATIVE_ROUTE_ADVISORY_JSON}"
@@ -223,12 +247,16 @@ run_gate() {
   check_script_wrapping "$script_path"
 
   mkdir -p "$run_dir"
+  prepare_rch_selection_env
   command_text "$mode" >"$commands_path"
 
   log "selected_package=${PACKAGE}"
   log "target_kind=${TARGET_KIND}"
   log "test_filter=${TEST_FILTER}"
   log "mode=${mode}"
+  if [[ "${#RCH_SELECTION_ENV[@]}" -gt 0 ]]; then
+    log "rch_worker_preference=${RCH_SELECTION_ENV[*]}"
+  fi
   log "command=$(command_text "$mode")"
   log "log_path=${log_path}"
   preflight_worker_selection "$mode"
@@ -252,7 +280,7 @@ run_gate() {
   fi
 
   set +e
-  timeout "$RCH_TIMEOUT_SECONDS" "${command[@]}" >"$log_path" 2>&1
+  timeout "$RCH_TIMEOUT_SECONDS" env "${RCH_SELECTION_ENV[@]}" "${command[@]}" >"$log_path" 2>&1
   local exit_code=$?
   set -e
 

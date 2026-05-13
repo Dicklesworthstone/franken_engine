@@ -66,6 +66,9 @@ chmod +x "${failure_dir}/fake-rch"
 cat >"${failure_dir}/fake-rch-diagnose" <<'FAKE_RCH_DIAGNOSE'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "diagnose" ]]; then
+  if [[ -n "${FAKE_RCH_ENV_LOG:-}" ]]; then
+    printf '%s\n' "${RCH_WORKERS:-}" >"${FAKE_RCH_ENV_LOG}"
+  fi
   cat <<'JSON'
 {
   "api_version": "1.0",
@@ -196,6 +199,22 @@ fi
 
 if ! grep -q 'native_route_preflight_incompatible_worker' "${failure_dir}/native-route-fail.stdout"; then
   echo "expected native-route worker diagnostic not found" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if RCH_BIN="${failure_dir}/fake-rch-diagnose" \
+  FAKE_RCH_ENV_LOG="${failure_dir}/native-route-env.log" \
+  FRANKEN_ENGINE_LIB_UNIT_NATIVE_ROUTE_ADVISORY_JSON="${failure_dir}/native-route-advisory.json" \
+  FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/native-route-env-artifacts" \
+  "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/native-route-env-fail.stdout" 2>"${failure_dir}/native-route-env-fail.stderr"; then
+  echo "expected native-route env fixture to fail on fake selected worker" >&2
+  echo "smoke artifacts: ${tmp_root}" >&2
+  exit 1
+fi
+
+if [[ "$(cat "${failure_dir}/native-route-env.log")" != "vmi-good" ]]; then
+  echo "expected native-route compatible workers to be passed as RCH_WORKERS" >&2
   echo "smoke artifacts: ${tmp_root}" >&2
   exit 1
 fi

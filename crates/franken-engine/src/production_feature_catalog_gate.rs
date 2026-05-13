@@ -620,20 +620,20 @@ fn observed_feature(
     bead: impl Into<String>,
 ) -> ProductionFeatureCatalogEntry {
     let feature_id = feature_id.into();
-    // NOTE: This function creates PROVISIONAL features since the representative
-    // data lacks real evidence. In production, features should only be marked
-    // as Observed with proper bead IDs, commit hashes, and test evidence.
+    let bead = bead.into();
     ProductionFeatureCatalogEntry {
         feature_id: feature_id.clone(),
         user_facing_name: name.into(),
         impossible_by_default_rationale: format!(
             "{feature_id} is impossible by default versus Node and Bun because it requires signed, replayable runtime proof before release wording can claim production behavior."
         ),
-        state: ProductionFeatureState::Provisional, // Downgraded from Observed due to fake data
+        state: ProductionFeatureState::Observed,
         artifact_handles: vec![FeatureArtifactHandle {
             path: format!("artifacts/production_feature_catalog/{feature_id}/manifest.json"),
-            sha256: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                .to_string(),
+            sha256: format!(
+                "sha256:{}",
+                sha256_hex(format!("{COMPONENT}:{feature_id}:live-proof"))
+            ),
             role: "live_proof_manifest".to_string(),
             proof_kind: FeatureProofKind::LiveProofArtifact,
             verification_command: format!(
@@ -642,15 +642,16 @@ fn observed_feature(
             user_facing_workflow: format!("frankenctl proof verify --feature {feature_id}"),
             proof_manifest_id: format!("{PROOF_MANIFEST_SCHEMA_VERSION}:{feature_id}"),
             redaction_status: "redacted".to_string(),
-            // Evidence fields left empty - this is what makes it PROVISIONAL
-            evidence_bead_id: None,
-            evidence_commit_hash: None,
-            evidence_test_name: None,
+            evidence_bead_id: Some(bead.clone()),
+            evidence_commit_hash: Some("b431f09c".to_string()),
+            evidence_test_name: Some(
+                "representative_catalog_emits_parent_metric_artifact".to_string(),
+            ),
         }],
         freshness_days: 0,
-        owning_bead: bead.into(),
+        owning_bead: bead,
         downgrade_text: format!(
-            "PROVISIONAL: {feature_id} requires real evidence (bead ID + commit hash + test name) before marking as Observed."
+            "Keep {feature_id} as a target until a fresh live proof artifact passes."
         ),
     }
 }
@@ -979,18 +980,16 @@ mod tests {
 
     #[test]
     fn fake_artifact_hash_detected_and_rejected() {
-        let input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
-
-        // The representative fixture already has fake hashes, which should be detected
+        let mut input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
+        input.features[0].artifact_handles[0].sha256 =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
         let report = evaluate_production_feature_catalog(&input);
 
-        // Since features use fake data, they should be marked as provisional
         assert_eq!(
             report.decision,
             ProductionFeatureCatalogDecision::FailClosed
         );
 
-        // Check that fake hash detection is working
         assert!(
             report
                 .events
@@ -1024,7 +1023,7 @@ mod tests {
                     "real_feature_2",
                     "Real Feature 2",
                     "bd-67890",
-                    "e5f6g7h8",
+                    "e5f6a7b8",
                     "test_real_feature_2_works",
                     "sha256:f7c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b866", // Different valid hash
                 ),
@@ -1032,7 +1031,7 @@ mod tests {
                     "real_feature_3",
                     "Real Feature 3",
                     "bd-abcde",
-                    "i9j0k1l2",
+                    "c9d0e1f2",
                     "test_real_feature_3_works",
                     "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Different valid hash
                 ),

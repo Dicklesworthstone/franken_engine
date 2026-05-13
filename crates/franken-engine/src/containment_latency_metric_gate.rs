@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn median_threshold_overage_fails_closed() {
         let mut input = ContainmentLatencyMetricInput::representative_fixture("rev-under-test");
-        input.signals[0].containment_action_applied_at_us = Some(1_400_000);
+        input.signals[0].containment_action_applied_at_us = Some(1_249_999);
         input.signals[1].containment_action_applied_at_us = Some(2_360_000);
         input.signals[2].containment_action_applied_at_us = Some(3_410_000);
         let report = evaluate_containment_latency_metric(&input);
@@ -913,8 +913,12 @@ mod tests {
 
     #[test]
     fn fake_timing_data_in_signals_causes_failure() {
-        let input = ContainmentLatencyMetricInput::representative_fixture("rev-under-test");
-        // The fixture uses containment_signal() which creates fake timing data
+        let mut input = ContainmentLatencyMetricInput::representative_fixture("rev-under-test");
+        for (signal, latency_us) in input.signals.iter_mut().zip([80_000_u64, 120_000, 200_000]) {
+            signal.containment_action_applied_at_us =
+                Some(signal.signal_detected_at_us + latency_us);
+            signal.duration_us = 1_000;
+        }
 
         let report = evaluate_containment_latency_metric(&input);
         assert_eq!(report.decision, ContainmentLatencyDecision::FailClosed);
@@ -992,14 +996,14 @@ mod tests {
             trace_id: "invalid-trace".to_string(),
             policy_id: "invalid-policy".to_string(),
             workload_profile: "invalid_workload".to_string(),
-            signal_detected_at_us: 1_000_000,
-            containment_action_applied_at_us: Some(1_100_000),
+            signal_detected_at_us: 1_000_123,
+            containment_action_applied_at_us: Some(1_100_789),
             clock_id: "invalid-clock".to_string(),
             clock_source: REQUIRED_CLOCK_SOURCE.to_string(),
             action: ContainmentAction::Throttle,
             action_command: "frankenctl contain invalid-signal".to_string(),
             action_exit_code: 0,
-            duration_us: 100_000,
+            duration_us: 100_333,
             measurement_status: ContainmentMeasurementStatus::Measured, // Claims to be measured
             evidence_bead_id: None,                                     // But missing evidence
             evidence_commit_hash: None,

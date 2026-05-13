@@ -572,8 +572,13 @@ pub fn evaluate_replay_coverage_metric(
     // replay evidence before live security-decision logs exist.
     let mut global_failures = Vec::new();
 
-    // Validate scenario enumeration first - fail closed if enumeration is invalid
-    if let Err(validation_error) = validate_scenario_enumeration(&input.decisions) {
+    // Validate scenario enumeration first, except the empty inventory path. An
+    // empty inventory has a stable public reason used by the parent gate and
+    // by operator reports; malformed non-empty enumerations keep the richer
+    // validation details.
+    if !input.decisions.is_empty()
+        && let Err(validation_error) = validate_scenario_enumeration(&input.decisions)
+    {
         global_failures.push("invalid_scenario_enumeration");
         // Return early with fail-closed decision due to enumeration validation failure
         return ReplayCoverageMetricReport {
@@ -1063,40 +1068,15 @@ mod tests {
 
     #[test]
     fn missing_evidence_requirements_marks_replay_provisional() {
-        let mut evidence = verified_replay_evidence(
-            "incomplete-replay",
-            SecurityDecisionKind::Allow,
-            "bd-99999",
-            "commit123",
-            "test_works",
-            "sha256:1234567890123456789012345678901234567890123456789012345678901234", // Valid but not fake
-            "sha256:1234567890123456789012345678901234567890123456789012345678901234", // Same hash
-            "sha256:5678901234567890123456789012345678901234567890123456789012345678", // Different report hash
-        );
-
-        // Remove evidence to simulate missing requirements
-        evidence.evidence_bead_id = None;
-        evidence.evidence_commit_hash = None;
-        evidence.evidence_test_name = None;
-
-        let input = ReplayCoverageMetricInput {
-            code_revision: "test-revision".to_string(),
-            freshness_days: 0,
-            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
-            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
-            artifact_hash:
-                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
-                    .to_string(),
-            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
-            redaction_status: "redacted".to_string(),
-            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
-            decisions: vec![evidence],
-        };
+        let mut input = ReplayCoverageMetricInput::verified_fixture("test-revision");
+        input.decisions[0].evidence_bead_id = None;
+        input.decisions[0].evidence_commit_hash = None;
+        input.decisions[0].evidence_test_name = None;
 
         let report = evaluate_replay_coverage_metric(&input);
 
         assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
-        assert_eq!(report.replay_backed_security_critical_decisions, 0); // Not backed due to missing evidence
+        assert_eq!(report.replay_backed_security_critical_decisions, 2);
         assert!(
             report.events[0]
                 .reason
@@ -1112,37 +1092,17 @@ mod tests {
 
     #[test]
     fn invalid_evidence_format_rejected() {
-        let evidence = verified_replay_evidence(
-            "bad-evidence-replay",
-            SecurityDecisionKind::Deny,
-            "invalid-bead", // Invalid bead ID format
-            "xyz",          // Invalid commit hash format
-            "",             // Empty test name
-            "sha256:1234567890123456789012345678901234567890123456789012345678901234",
-            "sha256:1234567890123456789012345678901234567890123456789012345678901234",
-            "sha256:5678901234567890123456789012345678901234567890123456789012345678",
-        );
-
-        let input = ReplayCoverageMetricInput {
-            code_revision: "test-revision".to_string(),
-            freshness_days: 0,
-            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
-            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
-            artifact_hash:
-                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
-                    .to_string(),
-            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
-            redaction_status: "redacted".to_string(),
-            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
-            decisions: vec![evidence],
-        };
+        let mut input = ReplayCoverageMetricInput::verified_fixture("test-revision");
+        input.decisions[1].evidence_bead_id = Some("invalid-bead".to_string());
+        input.decisions[1].evidence_commit_hash = Some("xyz".to_string());
+        input.decisions[1].evidence_test_name = Some(String::new());
 
         let report = evaluate_replay_coverage_metric(&input);
 
         assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
-        assert_eq!(report.replay_backed_security_critical_decisions, 0); // Not backed due to invalid evidence
+        assert_eq!(report.replay_backed_security_critical_decisions, 2);
         assert_eq!(
-            report.events[0].verification_status,
+            report.events[1].verification_status,
             ReplayVerificationStatus::Provisional
         );
     }

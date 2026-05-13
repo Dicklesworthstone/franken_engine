@@ -54,6 +54,43 @@ diagnostics. Recommendation kinds are:
 Rust validation recommendations always preserve an `rch exec --` command shape;
 the profiler never suggests bare local Cargo.
 
+## Brownout Baseline Contract
+
+Full `cargo test` remains the broad workspace baseline. When repeated `rch`
+attempts fail before Rust test execution because workers are storage pressured,
+linker-failing, heartbeat-live/progress-stale, or locally falling back, that
+evidence is not a green validation result. Record the command, build id, worker,
+pressure state, first failure or stale-progress snapshot, and cancellation
+outcome on the owning bead before switching proof shape.
+
+During that brownout, the supported narrower baseline is:
+
+- an `rch`-backed `cargo check --all-targets` for the affected package or
+  workspace scope,
+- an `rch`-backed `cargo clippy --all-targets -- -D warnings` for the same
+  scope,
+- one or more exact `rch` test commands that reach Rust test execution for the
+  changed surface, preferably `exact_integration_test` or
+  `exact_lib_test_filter`, and
+- a bead-visible blocker that keeps the broad `cargo test` gap explicit until a
+  remote run reaches test execution or fails with a non-infrastructure Rust/test
+  error.
+
+The narrow test command must use isolated target state and fail closed on local
+fallback, for example:
+
+```bash
+RCH_VISIBILITY=summary rch exec -- env \
+  CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_<bead>_<lane> \
+  CARGO_INCREMENTAL=0 \
+  CARGO_BUILD_JOBS=1 \
+  cargo test -p frankenengine-engine <exact-filter-or-target> -- --nocapture
+```
+
+Do not claim broad baseline parity from `--no-run`, shell-only, JSON-only,
+degraded, or target-ambiguous proof. Those receipts can support triage, but they
+must not close the workspace `cargo test` obligation by themselves.
+
 ## Artifacts
 
 Each run emits:

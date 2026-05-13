@@ -1238,13 +1238,15 @@ mod tests {
         let mut index = make_index();
         let rec = make_record("legacy-generic", 1);
         let ctx = index.make_ctx("legacy-seed");
+        let mut metadata = BTreeMap::from([("epoch".to_string(), rec.epoch.as_u64().to_string())]);
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
         index
             .storage
             .put(
                 STORE,
                 format!("{RECEIPT_PREFIX}{}", rec.receipt_id.to_hex()),
                 serde_json::to_vec(&rec).expect("legacy receipt should serialize"),
-                BTreeMap::from([("epoch".to_string(), rec.epoch.as_u64().to_string())]),
+                metadata,
                 &ctx,
             )
             .expect("legacy seed should write");

@@ -298,9 +298,17 @@ pub trait TypedStoreRecord: Serialize + DeserializeOwned + Sized {
                 key: key.to_string(),
             });
         };
-        raw_id.parse::<i64>().map_err(|_| StorageError::InvalidKey {
-            key: key.to_string(),
-        })
+        let record_id = raw_id
+            .parse::<i64>()
+            .map_err(|_| StorageError::InvalidKey {
+                key: key.to_string(),
+            })?;
+        if record_id < 0 {
+            return Err(StorageError::InvalidKey {
+                key: key.to_string(),
+            });
+        }
+        Ok(record_id)
     }
 
     /// Convert this typed model into a generic store record.

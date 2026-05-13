@@ -302,6 +302,17 @@ fn enforce_typed_heavy_delete_policy(
         return Ok(());
     }
 
+    if !typed_heavy_key_is_recognized(store, key) {
+        return Err(typed_heavy_read_policy_error(
+            store,
+            "delete",
+            format!(
+                "key `{key}` is neither a typed `{}` envelope nor a recognized compatibility prefix",
+                typed_store_prefix(store)
+            ),
+        ));
+    }
+
     let typed_prefix = typed_store_prefix(store);
     if key.starts_with(&typed_prefix) {
         return Ok(());

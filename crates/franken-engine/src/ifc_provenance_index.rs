@@ -1784,12 +1784,14 @@ mod tests {
         key: &str,
         ctx: &EventContext,
     ) {
+        let mut metadata = BTreeMap::new();
+        mark_typed_heavy_generic_compat_metadata(&mut metadata);
         idx.store_mut()
             .put(
                 STORE,
                 key.to_string(),
                 b"{not-valid-json".to_vec(),
-                std::collections::BTreeMap::new(),
+                metadata,
                 ctx,
             )
             .expect("corrupt test record should be stored");
@@ -2032,7 +2034,11 @@ mod tests {
                 STORE,
                 legacy_key.clone(),
                 serde_json::to_vec(&ev).expect("legacy flow event should serialize"),
-                BTreeMap::new(),
+                {
+                    let mut metadata = BTreeMap::new();
+                    mark_typed_heavy_generic_compat_metadata(&mut metadata);
+                    metadata
+                },
                 &ctx,
             )
             .expect("legacy seed should write");

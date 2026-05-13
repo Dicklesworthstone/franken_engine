@@ -954,6 +954,16 @@ impl CapabilityWitness {
         &self,
         input: &PromotionTheoremInput,
     ) -> Result<PromotionTheoremReport, WitnessError> {
+        let signing_key = self.synthesizer_signing_key()?;
+        self.evaluate_promotion_theorems_signed_by(input, &signing_key)
+    }
+
+    /// Evaluate deterministic theorem checks and sign the report with an explicit authority.
+    pub fn evaluate_promotion_theorems_signed_by(
+        &self,
+        input: &PromotionTheoremInput,
+        report_signing_key: &SigningKey,
+    ) -> Result<PromotionTheoremReport, WitnessError> {
         let mut results = Vec::new();
 
         let mut source_union = BTreeSet::new();
@@ -1103,14 +1113,14 @@ impl CapabilityWitness {
         .map_err(|err| WitnessError::IdDerivation(err.to_string()))?;
 
         // Sign the report for authenticity verification.
-        let signing_key = self.synthesizer_signing_key()?;
         let unsigned_report_bytes =
             Self::theorem_report_canonical_bytes(self, &results, all_passed);
-        let signature = sign_preimage(&signing_key, &unsigned_report_bytes).map_err(|err| {
-            WitnessError::SignatureInvalid {
-                detail: format!("promotion theorem report signing failed: {err}"),
-            }
-        })?;
+        let signature =
+            sign_preimage(report_signing_key, &unsigned_report_bytes).map_err(|err| {
+                WitnessError::SignatureInvalid {
+                    detail: format!("promotion theorem report signing failed: {err}"),
+                }
+            })?;
 
         Ok(PromotionTheoremReport {
             results,
@@ -4047,6 +4057,24 @@ mod tests {
         CapabilityWitnessTrustRoot::single_authority(test_signing_key().verification_key())
     }
 
+    fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
+        witness.metadata.insert(
+            TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA.to_string(),
+            signing_key.verification_key().to_hex(),
+        );
+    }
+
+    fn evaluate_test_promotion_theorems(
+        witness: &mut CapabilityWitness,
+        input: &PromotionTheoremInput,
+    ) -> PromotionTheoremReport {
+        let signing_key = test_signing_key();
+        trust_theorem_report_signer(witness, &signing_key);
+        witness
+            .evaluate_promotion_theorems_signed_by(input, &signing_key)
+            .expect("serde serialization should succeed")
+    }
+
     fn test_extension_id() -> EngineObjectId {
         // SAFETY: Test helper uses valid parameters for engine object ID derivation.
         // derive_id only fails on invalid domain or malformed inputs (both impossible here).
@@ -4105,14 +4133,17 @@ mod tests {
     }
 
     fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
+        let signing_key = test_signing_key();
+        trust_theorem_report_signer(witness, &signing_key);
+        let input = promotion_theorem_input_for(witness);
         let report = witness
-            .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
+            .evaluate_promotion_theorems_signed_by(&input, &signing_key)
             .expect("theorem check report");
         assert!(report.all_passed, "expected passing theorem report");
         witness
             .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
-        rebind_witness(witness, &test_signing_key());
+        rebind_witness(witness, &signing_key);
     }
 
     fn rebind_witness(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
@@ -4334,9 +4365,7 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness
-            .evaluate_promotion_theorems(&input)
-            .expect("serde serialization should succeed");
+        let report = evaluate_test_promotion_theorems(&mut witness, &input);
         assert!(report.all_passed);
         witness
             .apply_promotion_theorem_report(&report)
@@ -7033,9 +7062,7 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness
-            .evaluate_promotion_theorems(&input)
-            .expect("serde serialization should succeed");
+        let report = evaluate_test_promotion_theorems(&mut witness, &input);
         assert!(!report.all_passed);
 
         let proofs_before = witness
@@ -8598,9 +8625,7 @@ mod tests {
         .build()
         .expect("serde serialization should succeed");
         let input = promotion_theorem_input_for(&witness);
-        let report = witness
-            .evaluate_promotion_theorems(&input)
-            .expect("serde serialization should succeed");
+        let report = evaluate_test_promotion_theorems(&mut witness, &input);
         assert!(report.all_passed);
         witness
             .apply_promotion_theorem_report(&report)

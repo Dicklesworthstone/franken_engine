@@ -142,6 +142,10 @@ if [[ "${1:-}" == "--json" && "${2:-}" == "status" ]]; then
 JSON
   exit 0
 fi
+if [[ "${1:-}" == "exec" && -n "${FAKE_RCH_EXEC_STATUS:-}" ]]; then
+  echo "fake rch failure"
+  exit "${FAKE_RCH_EXEC_STATUS}"
+fi
 echo "unexpected fake rch invocation: $*" >&2
 exit 99
 FAKE_RCH_DIAGNOSE
@@ -297,7 +301,8 @@ if [[ "$(cat "${failure_dir}/native-route-env.log")" != "vmi-good" ]]; then
 fi
 
 set +e
-RCH_BIN="${failure_dir}/fake-rch" \
+RCH_BIN="${failure_dir}/fake-rch-diagnose" \
+FAKE_RCH_EXEC_STATUS=42 \
 FRANKEN_ENGINE_LIB_UNIT_SMOKE_ARTIFACT_ROOT="${failure_dir}/artifacts" \
 "${repo_root}/scripts/rch_engine_lib_unit_smoke_gate.sh" run >"${failure_dir}/run-fail.stdout" 2>"${failure_dir}/run-fail.stderr"
 fake_status=$?

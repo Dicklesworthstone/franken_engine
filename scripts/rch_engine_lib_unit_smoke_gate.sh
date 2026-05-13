@@ -37,7 +37,7 @@ and fails closed if frankenengine-test-support appears in the lib-unit compile
 path. `run-execute` runs the filtered unit test and fails closed unless the log
 shows Rust test execution. When an expected worker is configured, the gate first
 checks `rch diagnose` so worker-selection drift fails before a long compile.
-That preflight also rejects critically pressured workers before Cargo starts.
+Every run also rejects critically pressured selected workers before Cargo starts.
 The default mode is compile-only run.
 
 Environment:
@@ -260,12 +260,12 @@ enforce_selected_worker_pressure_guard() {
 
 preflight_worker_selection() {
   local mode="$1"
-  [[ -n "$EXPECTED_RCH_WORKER" || -n "$NATIVE_ROUTE_ADVISORY_JSON" ]] || return 0
 
   command -v jq >/dev/null 2>&1 || fail "jq_not_found_for_worker_selection_preflight"
 
   local diagnose_path="${run_dir}/worker-diagnose.json"
   local diagnose_stderr_path="${run_dir}/worker-diagnose.stderr"
+  log "worker_selection_preflight=checking diagnose=${diagnose_path}"
   if [[ -n "$EXPECTED_RCH_WORKER" ]]; then
     log "expected_worker_preflight=checking expected_worker=${EXPECTED_RCH_WORKER} diagnose=${diagnose_path}"
   fi

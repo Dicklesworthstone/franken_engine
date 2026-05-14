@@ -1,0 +1,68 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xii-zero-ready-validation-truth-no-mock-drill.v1",
+  "source_revision": "smoke-zero-ready-validation-truth",
+  "decision": "pass",
+  "checks": {
+    "rch_policy": {
+      "trusted_wrapper_status": "pass",
+      "trusted_wrapper_violation_count": 0,
+      "bare_cargo_status": "fail",
+      "bare_cargo_violation_kinds": [
+        "bare_cargo"
+      ]
+    },
+    "closed_bead_proof": {
+      "semantic_decision": "degraded",
+      "semantic_classification": "semantic_contradiction",
+      "semantic_contradiction_count": 1,
+      "semantic_reason_codes": [
+        "FE-IW4-CLOSED-BEAD-SEMANTIC-CONTRADICTION",
+        "closed_bead_source_marker_contradiction"
+      ],
+      "clean_decision": "green",
+      "clean_classification": "true_saturation"
+    },
+    "source_gap_picker": {
+      "decision": "proposals_emitted",
+      "classification": "source_gap_candidates",
+      "proposal_count": 1,
+      "proposed_titles": [
+        "[IDEA-WIZARD-XII-C] Reopen real pending-promise await execution from source evidence"
+      ],
+      "clean_decision": "no_actionable_source_gap",
+      "clean_classification": "true_zero_ready_no_source_gaps"
+    },
+    "operator_handoff": {
+      "source_gap_decision": "degraded",
+      "source_gap_state": "source_gap_found",
+      "source_gap_reason_codes": [
+        "FE-IWXII-SEMANTIC-CONTRADICTION",
+        "FE-IWXII-SOURCE-GAP-PROPOSAL"
+      ],
+      "clean_decision": "green",
+      "clean_state": "true_saturation"
+    }
+  },
+  "assertion_results": {
+    "trusted_rch_wrapper_passed": true,
+    "true_bare_cargo_failed": true,
+    "pending_promise_contradiction_reported": true,
+    "source_gap_picker_recommended_followup": true,
+    "operator_handoff_rendered_source_gap": true,
+    "clean_zero_ready_remained_green": true,
+    "no_local_heavy_cargo_executed": true,
+    "suggested_heavy_commands_rch_wrapped": true
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "queries_live_workers": false,
+    "mutates_live_workers": false
+  }
+}

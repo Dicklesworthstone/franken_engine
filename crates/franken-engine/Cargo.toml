@@ -44,6 +44,11 @@ name = "comparative_bun"
 path = "benches/comparative_bun.rs"
 harness = false
 
+[[bench]]
+name = "hot_paths"
+path = "benches/hot_paths.rs"
+harness = false
+
 [[test]]
 name = "cancellation_lifecycle_integration"
 path = "tests/cancellation_lifecycle_integration.rs"

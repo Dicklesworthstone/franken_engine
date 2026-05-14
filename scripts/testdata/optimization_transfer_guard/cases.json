@@ -1,0 +1,197 @@
+{
+  "schema_version": "franken-engine.optimization-transfer-guard-fixtures.v1",
+  "base_input": {
+    "schema_version": "franken-engine.optimization-transfer-guard.input.v1",
+    "source_revision": "rev-current",
+    "expected_source_revision": "rev-current",
+    "candidate": {
+      "candidate_id": "candidate-proof-specialized-hostcall-elision",
+      "source_workload_id": "workload-server-hot-loop",
+      "target_workload_id": "workload-server-hot-loop",
+      "source_regime": "server_hot_loop",
+      "target_regime": "server_hot_loop",
+      "requested_state": "promote",
+      "source_paths": ["crates/franken-engine/src/cross_workload_transfer.rs"]
+    },
+    "evidence": {
+      "real_hot_path_evidence": {
+        "freshness": "fresh",
+        "real_runtime_execution": true,
+        "workload_id": "workload-server-hot-loop",
+        "regime_id": "server_hot_loop",
+        "scenario_id": "steady_state",
+        "artifact_path": "artifacts/real_hot_path/run_manifest.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "cross_workload_transfer": {
+        "freshness": "fresh",
+        "available": true,
+        "confidence": "high",
+        "benefit_scope": "all_regimes",
+        "supported_regimes": ["server_hot_loop", "api_hot_loop"],
+        "excluded_regimes": [],
+        "proximity_millionths": 920000,
+        "counterevidence": [],
+        "artifact_path": "artifacts/cross_workload_transfer/guard.json",
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "workload_manifold": {
+        "freshness": "fresh",
+        "source_regime": "server_hot_loop",
+        "target_regime": "server_hot_loop",
+        "identity_ambiguous": false,
+        "similarity_millionths": 920000,
+        "threshold_millionths": 800000,
+        "artifact_path": "artifacts/workload_manifold/neighborhood.json",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "performance_regression": {
+        "freshness": "fresh",
+        "tail_budget_ok": true,
+        "throughput_delta_millionths": 180000,
+        "tail_delta_millionths": 20000,
+        "artifact_path": "artifacts/performance_regression/report.json",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    },
+    "contamination": {
+      "synthetic_only": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "same_regime_promotion_allowed",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "allow_same_regime",
+        "required_reason_code": "OPT_TRANSFER_SAME_REGIME_SUPPORTED"
+      }
+    },
+    {
+      "case_id": "cross_regime_refused",
+      "overrides": {
+        "candidate": {
+          "target_workload_id": "workload-cold-start-api",
+          "target_regime": "cold_start"
+        },
+        "evidence": {
+          "workload_manifold": {
+            "target_regime": "cold_start",
+            "similarity_millionths": 640000
+          },
+          "cross_workload_transfer": {
+            "supported_regimes": ["server_hot_loop"],
+            "excluded_regimes": ["cold_start"],
+            "confidence": "medium",
+            "proximity_millionths": 640000,
+            "counterevidence": [
+              {
+                "source_id": "cold_start_tail_probe",
+                "detail": "cold-start target regime exceeded transfer tail budget"
+              }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "refuse_transfer",
+        "required_reason_code": "OPT_TRANSFER_UNSUPPORTED_REGIME",
+        "expected_additional_proof": true
+      }
+    },
+    {
+      "case_id": "missing_transfer_evidence_fails_closed",
+      "overrides": {
+        "evidence": {
+          "cross_workload_transfer": null
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_recommended_state": "fail_closed",
+        "required_error_code": "FE-OPT-TRANSFER-MISSING-EVIDENCE"
+      }
+    },
+    {
+      "case_id": "contradictory_regime_labels_fail_closed",
+      "overrides": {
+        "candidate": {
+          "target_regime": "server_hot_loop"
+        },
+        "evidence": {
+          "workload_manifold": {
+            "target_regime": "browser_dom_hot_loop"
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_recommended_state": "fail_closed",
+        "required_error_code": "FE-OPT-TRANSFER-CONTRADICTORY-REGIME-LABELS"
+      }
+    },
+    {
+      "case_id": "cold_start_only_win_refused",
+      "overrides": {
+        "candidate": {
+          "target_workload_id": "workload-server-hot-loop",
+          "source_regime": "cold_start",
+          "target_regime": "server_hot_loop"
+        },
+        "evidence": {
+          "real_hot_path_evidence": {
+            "regime_id": "cold_start"
+          },
+          "workload_manifold": {
+            "source_regime": "cold_start",
+            "target_regime": "server_hot_loop"
+          },
+          "cross_workload_transfer": {
+            "benefit_scope": "cold_start_only",
+            "supported_regimes": ["cold_start"],
+            "excluded_regimes": ["server_hot_loop"]
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "refuse_transfer",
+        "required_reason_code": "OPT_TRANSFER_COLD_START_ONLY_WIN",
+        "expected_additional_proof": true
+      }
+    },
+    {
+      "case_id": "warmed_cache_only_win_refused",
+      "overrides": {
+        "candidate": {
+          "target_workload_id": "workload-api-cold-start",
+          "target_regime": "cold_start"
+        },
+        "evidence": {
+          "workload_manifold": {
+            "target_regime": "cold_start"
+          },
+          "cross_workload_transfer": {
+            "benefit_scope": "warmed_cache_only",
+            "supported_regimes": ["warmed_cache"],
+            "excluded_regimes": ["cold_start"]
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "refuse_transfer",
+        "required_reason_code": "OPT_TRANSFER_WARMED_CACHE_ONLY_WIN",
+        "expected_additional_proof": true
+      }
+    }
+  ]
+}

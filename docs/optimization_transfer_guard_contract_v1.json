@@ -1,0 +1,110 @@
+{
+  "schema_version": "franken-engine.optimization-transfer-guard-contract.v1",
+  "bead_id": "bd-jp4r0",
+  "parent_bead_id": "bd-xg3d6",
+  "depends_on": ["bd-4j2ck", "bd-or2e1"],
+  "script": "scripts/optimization_transfer_guard.sh",
+  "smoke_script": "scripts/e2e/optimization_transfer_guard_smoke.sh",
+  "docs": "docs/OPTIMIZATION_TRANSFER_GUARD.md",
+  "fixture_bundle": "scripts/testdata/optimization_transfer_guard/cases.json",
+  "guard_schema_version": "franken-engine.optimization-transfer-guard.v1",
+  "required_inputs": [
+    "cross_workload_transfer",
+    "workload_manifold",
+    "performance_regression",
+    "real_hot_path_evidence",
+    "source_revision"
+  ],
+  "recommended_states": [
+    "allow_same_regime",
+    "allow_transfer",
+    "refuse_transfer",
+    "fail_closed"
+  ],
+  "reason_codes": [
+    "OPT_TRANSFER_SAME_REGIME_SUPPORTED",
+    "OPT_TRANSFER_CROSS_REGIME_SUPPORTED",
+    "OPT_TRANSFER_UNSUPPORTED_REGIME",
+    "OPT_TRANSFER_COLD_START_ONLY_WIN",
+    "OPT_TRANSFER_WARMED_CACHE_ONLY_WIN"
+  ],
+  "fail_closed_error_codes": [
+    "FE-OPT-TRANSFER-MISSING-EVIDENCE",
+    "FE-OPT-TRANSFER-SOURCE-REVISION-MISMATCH",
+    "FE-OPT-TRANSFER-AMBIGUOUS-WORKLOAD-IDENTITY",
+    "FE-OPT-TRANSFER-CONTRADICTORY-REGIME-LABELS",
+    "FE-OPT-TRANSFER-SYNTHETIC-CONTAMINATION"
+  ],
+  "artifacts": {
+    "guard_json": "optimization_transfer_guard.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization transfer guard is advisory only and proof only.",
+    "It emits an `optimization_transfer_guard.json` receipt without mutating runtime policy.",
+    "The guard distinguishes same-regime promotion, transferable cross-regime evidence, refused cross-regime evidence, and fail_closed evidence.",
+    "Workload identity must be unambiguous before promotion side conditions can pass.",
+    "Cold-start-only and warmed-cache-only wins are refused outside their measured regimes unless additional proof is listed.",
+    "Every next validation command is rch-wrapped.",
+    "Missing transfer evidence, contradictory regime labels, ambiguous workload identity, or synthetic-only evidence fails closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "same_regime_promotion_allowed",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "allow_same_regime",
+      "required_reason_code": "OPT_TRANSFER_SAME_REGIME_SUPPORTED"
+    },
+    {
+      "case_id": "cross_regime_refused",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "refuse_transfer",
+      "required_reason_code": "OPT_TRANSFER_UNSUPPORTED_REGIME"
+    },
+    {
+      "case_id": "missing_transfer_evidence_fails_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_recommended_state": "fail_closed",
+      "required_error_code": "FE-OPT-TRANSFER-MISSING-EVIDENCE"
+    },
+    {
+      "case_id": "contradictory_regime_labels_fail_closed",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_recommended_state": "fail_closed",
+      "required_error_code": "FE-OPT-TRANSFER-CONTRADICTORY-REGIME-LABELS"
+    },
+    {
+      "case_id": "cold_start_only_win_refused",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "refuse_transfer",
+      "required_reason_code": "OPT_TRANSFER_COLD_START_ONLY_WIN"
+    },
+    {
+      "case_id": "warmed_cache_only_win_refused",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "refuse_transfer",
+      "required_reason_code": "OPT_TRANSFER_WARMED_CACHE_ONLY_WIN"
+    }
+  ]
+}

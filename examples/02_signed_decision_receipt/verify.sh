@@ -43,6 +43,14 @@ run_decision_demo() {
   ) >"${receipt_output}" 2>"${stderr_output}"
   local status=$?
 
+  if [[ ! -s "${receipt_output}" ]]; then
+    awk '
+      /^\{/ { capture = 1 }
+      capture { print }
+      /^\}/ { capture = 0 }
+    ' "${stderr_output}" >"${receipt_output}"
+  fi
+
   if grep -Eiq 'falling back to local|local fallback|running locally|\[RCH\] local \(|Dependency preflight blocked remote execution|RCH-E326' "${receipt_output}" "${stderr_output}"; then
     echo "rch reported local fallback; refusing local execution" >&2
     return 125

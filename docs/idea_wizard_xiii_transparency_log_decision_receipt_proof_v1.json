@@ -1,0 +1,50 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.v1",
+  "bead_id": "bd-ly6hp.2",
+  "claim_id": "FE-CLAIM-004",
+  "promotion_subset": "decision_receipts_plus_transparency_log_only",
+  "tee_attestation_state": "not_promoted",
+  "source_receipt_surface": {
+    "example": "examples/02_signed_decision_receipt/verify.sh",
+    "receipt_artifact": "signed_decision_receipt.json",
+    "heavy_validation_policy": "rch_required"
+  },
+  "proof_command": "scripts/idea_wizard_xiii_transparency_log_decision_receipt_proof.sh",
+  "smoke_command": "scripts/e2e/idea_wizard_xiii_transparency_log_decision_receipt_proof_smoke.sh",
+  "required_artifacts": [
+    "decision_receipt_json",
+    "transparency_log_json",
+    "inclusion_proofs_json",
+    "consistency_proof_json",
+    "independent_verifier_report_json",
+    "commands_txt",
+    "events_jsonl",
+    "run_manifest_json",
+    "human_report_md",
+    "tampered_receipt_negative_fixture",
+    "forked_log_root_negative_fixture",
+    "missing_signer_negative_fixture",
+    "stale_proof_negative_fixture"
+  ],
+  "required_report_fields": [
+    "receipt_chain_root",
+    "log_root",
+    "inclusion_proof_count",
+    "consistency_proof_count",
+    "independent_verifier_verdict",
+    "tee_attestation_state"
+  ],
+  "failure_policy": {
+    "missing_signature": "fail_closed",
+    "tampered_receipt_leaf": "fail_closed",
+    "forked_log_root": "fail_closed",
+    "stale_source_revision": "fail_closed",
+    "local_heavy_cargo": "fail_closed",
+    "tee_claim_without_attestation": "fail_closed"
+  },
+  "promotion_limits": [
+    "Does not promote optional TEE attestation wording.",
+    "Does not rewrite README or the claim-to-proof matrix.",
+    "Does not repair Agent Mail or mutate beads."
+  ]
+}

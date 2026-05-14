@@ -1,7 +1,7 @@
 {
-  "decision": "quarantine",
+  "decision": "suspend",
   "posterior_after_millionths": 605718,
-  "rationale": "fishy() started with 3 normal file_read observations, then network_egress and crypto_op shifted the posterior to malicious and triggered quarantine.",
+  "rationale": "fishy() started with 3 normal file_read observations, then network_egress and crypto_op shifted the posterior to malicious and triggered suspend.",
   "replay_seed": 3737211141,
-  "signature_hex": "a84d3090ee1be4e30eb65faf0a03c4e9228442cff1a45b5639ccd5934c222d60"
+  "signature_hex": "5bf1f3cd9e381d0175c3340fe581c0ef6b8b9cf1dae462c3d973aa91de891a53"
 }

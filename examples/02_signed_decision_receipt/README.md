@@ -19,7 +19,8 @@ Use [`verify.sh`](./verify.sh) to run the demo and assert the receipt contract w
 ## Field Guide
 
 - `decision`: the guardplane verdict chosen after replaying the modeled hostcall sequence.
-- `rationale`: a human-readable explanation of how the normal and anomalous events drove that verdict.
+- `rationale`: a human-readable explanation of how the normal and anomalous
+  events drove the selected guardplane action.
 - `posterior_after_millionths`: the posterior maliciousness estimate after all five events, encoded on a `0..=1_000_000` scale.
 - `replay_seed`: the deterministic seed that lets operators rerun the same scenario and preserve the receipt's replay story.
 - `signature_hex`: a 64-character hex authenticity hash produced by `AuthenticityHash::compute_keyed`, binding the decision payload to a cryptographic provenance check.

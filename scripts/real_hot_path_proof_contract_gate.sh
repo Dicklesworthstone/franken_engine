@@ -172,6 +172,26 @@ record_checked_artifact() {
     '{key: $key, path: $path, kind: $kind, exists: $exists}' >>"$checked_artifacts_jsonl"
 }
 
+detect_synthetic_contamination() {
+  local candidate
+  while IFS= read -r candidate; do
+    if grep -Eq 'hot_paths_simulation|MockCertificate' "$candidate"; then
+      emit_failure \
+        "FE-REAL-HOT-PATH-CONTRACT-SYNTHETIC-CONTAMINATION" \
+        "$(repo_relative_path "$candidate")" \
+        "proof bundle contains fixture-only simulated hot-path evidence markers" \
+        "Discard contaminated evidence and re-run scripts/run_real_hot_path_proof.sh against real_runtime_hot_paths."
+      return 0
+    fi
+  done < <(
+    find "$bundle_abs" -type f \
+      \( -name "*.json" -o -name "*.jsonl" -o -name "*.md" -o -name "*.txt" -o -name "*.log" \) \
+      | sort
+  )
+
+  return 1
+}
+
 assert_file_exists() {
   local key="$1"
   local path="$2"
@@ -196,6 +216,7 @@ assert_file_exists "run_manifest" "$manifest_path" || true
 assert_file_exists "trace_ids" "$trace_ids_path" || true
 assert_file_exists "events" "$events_path" || true
 assert_file_exists "commands" "$commands_path" || true
+detect_synthetic_contamination || true
 
 manifest_valid=false
 trace_ids_valid=false

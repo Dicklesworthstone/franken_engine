@@ -1,0 +1,178 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-eligibility-composer-fixtures.v1",
+  "base_input": {
+    "schema_version": "franken-engine.optimization-promotion-eligibility.input.v1",
+    "source_revision": "rev-current",
+    "expected_source_revision": "rev-current",
+    "requested_state": "promote",
+    "contract_report": {
+      "schema_version": "franken-engine.optimization-promotion-control.report.v1",
+      "decision": "pass",
+      "artifact_path": "artifacts/optimization_promotion_control_contract.json"
+    },
+    "candidate": {
+      "candidate_id": "candidate-proof-specialized-hostcall-elision",
+      "workload_regime": "real_runtime_hot_path",
+      "source_paths": ["crates/franken-engine/src/proof_specialization_receipt.rs"]
+    },
+    "evidence": {
+      "real_hot_path_evidence": {
+        "freshness": "fresh",
+        "real_runtime_execution": true,
+        "synthetic_only": false,
+        "artifact_path": "artifacts/real_hot_path/run_manifest.json"
+      },
+      "proof_specialization_receipt": {
+        "freshness": "fresh",
+        "proof_inputs_current": true,
+        "artifact_path": "artifacts/proof_specialization/receipt.json"
+      },
+      "semantic_parity": {
+        "freshness": "fresh",
+        "outcome": "match",
+        "artifact_path": "artifacts/specialization_conformance/evidence.jsonl"
+      },
+      "rollback_health": {
+        "freshness": "fresh",
+        "ready": true,
+        "rollback_token": "rollback-token-001",
+        "artifact_path": "artifacts/rollback/rollback_health.json"
+      },
+      "safe_mode_fallback": {
+        "freshness": "fresh",
+        "ready": true,
+        "artifact_path": "artifacts/safe_mode/replay.json"
+      },
+      "performance_regression": {
+        "freshness": "fresh",
+        "tail_budget_ok": true,
+        "throughput_delta_millionths": 180000,
+        "tail_delta_millionths": 20000,
+        "artifact_path": "artifacts/performance_regression/report.json"
+      },
+      "cross_workload_transfer": {
+        "freshness": "fresh",
+        "confidence": "medium",
+        "artifact_path": "artifacts/cross_workload_transfer/guard.json"
+      },
+      "support_surface_truth": {
+        "freshness": "fresh",
+        "aligned": true,
+        "artifact_path": "artifacts/support_surface/truth.json"
+      }
+    },
+    "contamination": {
+      "synthetic_only": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "promotable_current_evidence",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "promote"
+      }
+    },
+    {
+      "case_id": "observe_only_low_delta",
+      "overrides": {
+        "evidence": {
+          "performance_regression": {
+            "throughput_delta_millionths": 45000
+          },
+          "cross_workload_transfer": {
+            "confidence": "low"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "observe"
+      }
+    },
+    {
+      "case_id": "stale_evidence_fails",
+      "overrides": {
+        "evidence": {
+          "real_hot_path_evidence": {
+            "freshness": "stale"
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-STALE-EVIDENCE"
+      }
+    },
+    {
+      "case_id": "semantic_divergence_fails",
+      "overrides": {
+        "evidence": {
+          "semantic_parity": {
+            "outcome": "diverge"
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-SEMANTIC-DIVERGENCE"
+      }
+    },
+    {
+      "case_id": "tail_regression_fails",
+      "overrides": {
+        "evidence": {
+          "performance_regression": {
+            "tail_budget_ok": false,
+            "tail_delta_millionths": -120000
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-TAIL-REGRESSION"
+      }
+    },
+    {
+      "case_id": "rollback_unready_fails",
+      "overrides": {
+        "evidence": {
+          "rollback_health": {
+            "ready": false,
+            "rollback_token": null
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-ROLLBACK-UNREADY"
+      }
+    },
+    {
+      "case_id": "synthetic_contamination_fails",
+      "overrides": {
+        "evidence": {
+          "real_hot_path_evidence": {
+            "real_runtime_execution": false,
+            "synthetic_only": true
+          }
+        },
+        "contamination": {
+          "synthetic_only": true
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+      }
+    }
+  ]
+}

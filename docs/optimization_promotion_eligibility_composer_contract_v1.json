@@ -1,0 +1,120 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-eligibility-composer-contract.v1",
+  "bead_id": "bd-4j2ck",
+  "parent_bead_id": "bd-xg3d6",
+  "depends_on": ["bd-sisok"],
+  "script": "scripts/optimization_promotion_eligibility_composer.sh",
+  "smoke_script": "scripts/e2e/optimization_promotion_eligibility_composer_smoke.sh",
+  "docs": "docs/OPTIMIZATION_PROMOTION_ELIGIBILITY_COMPOSER.md",
+  "fixture_bundle": "scripts/testdata/optimization_promotion_eligibility_composer/cases.json",
+  "plan_schema_version": "franken-engine.optimization-promotion-plan.v1",
+  "required_inputs": [
+    "optimization_promotion_control_contract",
+    "real_hot_path_evidence",
+    "proof_specialization_receipt",
+    "semantic_parity",
+    "rollback_health",
+    "safe_mode_fallback",
+    "performance_regression",
+    "source_revision"
+  ],
+  "required_side_conditions": [
+    "contract_report_passed",
+    "source_revision_aligned",
+    "real_hot_path_evidence_fresh",
+    "proof_inputs_current",
+    "semantic_parity_matched",
+    "tail_budget_ok",
+    "rollback_ready",
+    "safe_mode_ready",
+    "support_surface_aligned",
+    "no_synthetic_contamination"
+  ],
+  "recommended_states": [
+    "observe",
+    "promote",
+    "pin",
+    "fail_closed"
+  ],
+  "fail_closed_error_codes": [
+    "FE-OPT-PROMO-CONTRACT-FAILED",
+    "FE-OPT-PROMO-MISSING-EVIDENCE",
+    "FE-OPT-PROMO-STALE-EVIDENCE",
+    "FE-OPT-PROMO-SOURCE-REVISION-MISMATCH",
+    "FE-OPT-PROMO-SEMANTIC-DIVERGENCE",
+    "FE-OPT-PROMO-TAIL-REGRESSION",
+    "FE-OPT-PROMO-ROLLBACK-UNREADY",
+    "FE-OPT-PROMO-SUPPORT-TRUTH-DRIFT",
+    "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+  ],
+  "artifacts": {
+    "plan_json": "optimization_promotion_plan.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization promotion eligibility composer is advisory only and proof only.",
+    "It emits observe, promote, pin, or fail_closed recommendations without mutating runtime policy.",
+    "Promote and pin recommendations require semantic parity, fresh proof inputs, tail-budget health, rollback readiness, safe-mode readiness, support-surface truth, and source-revision alignment.",
+    "Every next validation command is rch-wrapped.",
+    "Synthetic contamination, stale evidence, semantic divergence, tail regression, or rollback-unready evidence fails closed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "promotable_current_evidence",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "promote"
+    },
+    {
+      "case_id": "observe_only_low_delta",
+      "expected_decision": "pass",
+      "expected_exit_code": 0,
+      "required_recommended_state": "observe"
+    },
+    {
+      "case_id": "stale_evidence_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-STALE-EVIDENCE"
+    },
+    {
+      "case_id": "semantic_divergence_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-SEMANTIC-DIVERGENCE"
+    },
+    {
+      "case_id": "tail_regression_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-TAIL-REGRESSION"
+    },
+    {
+      "case_id": "rollback_unready_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-ROLLBACK-UNREADY"
+    },
+    {
+      "case_id": "synthetic_contamination_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+    }
+  ]
+}

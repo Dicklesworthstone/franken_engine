@@ -579,9 +579,17 @@ pub struct GovernanceReport {
 
 impl GovernanceReport {
     pub fn compute_hash(&self) -> String {
+        // Length-prefix `schema_version` and `spec_id` so adjacent
+        // variable-length strings cannot smear: without prefixes
+        // `schema_version="foo" spec_id="barbaz"` would produce the same
+        // byte stream as `schema_version="foobar" spec_id="baz"`.
         let mut h = Sha256::new();
-        h.update(self.schema_version.as_bytes());
-        h.update(self.spec_id.as_bytes());
+        let schema_bytes = self.schema_version.as_bytes();
+        let spec_bytes = self.spec_id.as_bytes();
+        h.update((schema_bytes.len() as u64).to_le_bytes());
+        h.update(schema_bytes);
+        h.update((spec_bytes.len() as u64).to_le_bytes());
+        h.update(spec_bytes);
         h.update(if self.is_sound { &[1u8] } else { &[0u8] });
         h.update(self.verified_properties.to_le_bytes());
         h.update(self.honest_dominance_rate_millionths.to_le_bytes());
@@ -1330,6 +1338,36 @@ mod tests {
         assert_eq!(
             generate_report(&spec).content_hash,
             generate_report(&spec).content_hash
+        );
+    }
+
+    #[test]
+    fn report_hash_distinguishes_schema_spec_id_boundary() {
+        // Regression: without length prefixes,
+        // `schema_version="ab" spec_id="cd"` would hash to the same byte
+        // stream as `schema_version="a" spec_id="bcd"`. Length-prefixed
+        // hashing keeps them distinct.
+        let base = GovernanceReport {
+            report_id: String::new(),
+            schema_version: "ab".to_string(),
+            spec_id: "cd".to_string(),
+            is_sound: true,
+            verified_properties: 1,
+            total_properties: 1,
+            honest_dominance_rate_millionths: 1_000_000,
+            budget_balanced: true,
+            exploitable_scenarios: Vec::new(),
+            content_hash: String::new(),
+        };
+        let smeared = GovernanceReport {
+            schema_version: "a".to_string(),
+            spec_id: "bcd".to_string(),
+            ..base.clone()
+        };
+        assert_ne!(
+            base.compute_hash(),
+            smeared.compute_hash(),
+            "adjacent variable-length strings must be length-prefixed",
         );
     }
 

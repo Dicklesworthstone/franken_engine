@@ -48,6 +48,19 @@ when a claim is missing, current matrix state is stronger than the contract
 allows, required artifacts are omitted, or a promotion rule lacks downgrade
 language.
 
+## Live Report Gate
+
+`bd-ly6hp.5` adds the second-stage live report gate:
+
+```bash
+./scripts/idea_wizard_xiii_claim_promotion_gate.sh
+```
+
+It consumes the XIII proof reports from `bd-ly6hp.2`, `bd-ly6hp.3`, and
+`bd-ly6hp.4`, emits per-claim `green`, `degraded`, or `fail_closed` operator
+status, and rejects stale, synthetic, missing, or overclaiming README inputs
+before any README wording can be promoted.
+
 ## Validation
 
 ```bash

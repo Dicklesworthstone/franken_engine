@@ -1,0 +1,58 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-claim-promotion-gate.v1",
+  "bead_id": "bd-ly6hp.5",
+  "matrix_path": "docs/claim_to_proof_matrix_v1.json",
+  "readme_path": "README.md",
+  "proof_reports": {
+    "FE-CLAIM-004": {
+      "source_bead": "bd-ly6hp.2",
+      "report_schema": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+      "promotion_subset": "decision_receipts_plus_transparency_log_only",
+      "live_status": "degraded",
+      "downgrade_boundary": "optional TEE attestation remains hypothesis without a separate live TEE report"
+    },
+    "FE-CLAIM-005": {
+      "source_bead": "bd-ly6hp.3",
+      "report_schema": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+      "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+      "live_status": "green",
+      "downgrade_boundary": "de-escalation and recovery semantics remain out of scope"
+    },
+    "FE-CLAIM-006": {
+      "source_bead": "bd-ly6hp.4",
+      "report_schema": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+      "promotion_subset": "covered_capability_typed_input_subset_only",
+      "live_status": "degraded",
+      "downgrade_boundary": "typed TypeScript-to-IR onboarding remains hypothesis until a production compiler path ships"
+    }
+  },
+  "operator_status_model": {
+    "green": "The named promotion subset has a fresh pass report and README text does not overclaim beyond that subset.",
+    "degraded": "The named subset has a fresh pass report, but public wording must preserve an explicit downgrade boundary.",
+    "fail_closed": "Evidence is missing, stale, synthetic, invalid, non-passing, or README text claims more than the proof supports."
+  },
+  "fail_closed_inputs": [
+    "missing_artifact",
+    "stale_proof",
+    "synthetic_proof",
+    "invalid_json",
+    "non_passing_report",
+    "overclaiming_readme_text"
+  ],
+  "required_outputs": [
+    "claim_promotion_gate_report.json",
+    "operator_status.json",
+    "events.jsonl",
+    "commands.txt",
+    "run_manifest.json",
+    "report.md"
+  ],
+  "golden_fixtures": "scripts/testdata/idea_wizard_xiii_claim_promotion_gate/cases.json",
+  "mutation_policy": {
+    "promotes_claims": false,
+    "rewrites_readme": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "repairs_agent_mail_db": false
+  }
+}

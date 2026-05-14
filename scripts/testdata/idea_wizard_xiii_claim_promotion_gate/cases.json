@@ -1,0 +1,240 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-claim-promotion-gate.fixtures.v1",
+  "cases": [
+    {
+      "case_id": "live_proof",
+      "expected_decision": "pass",
+      "expected_statuses": {
+        "FE-CLAIM-004": "degraded",
+        "FE-CLAIM-005": "green",
+        "FE-CLAIM-006": "degraded"
+      },
+      "readme_text": "| Cryptographic governance | HYPOTHESIS Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |\n| Fleet immune system | TARGETED Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |\n| Capability-typed execution | HYPOTHESIS Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |\n| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim |\n| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. Note: De-escalation unimplemented |\n| Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped |\n",
+      "reports": {
+        "transparency": {
+          "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+          "claim_id": "FE-CLAIM-004",
+          "bead_id": "bd-ly6hp.2",
+          "decision": "pass",
+          "independent_verifier_verdict": "pass",
+          "tee_attestation_state": "not_promoted",
+          "promotion_subset": "decision_receipts_plus_transparency_log_only",
+          "receipt_chain_root": "sha256:fixture-receipt-root",
+          "log_root": "sha256:fixture-log-root",
+          "inclusion_proof_count": 1,
+          "consistency_proof_count": 1
+        },
+        "quarantine": {
+          "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+          "claim_id": "FE-CLAIM-005",
+          "bead_id": "bd-ly6hp.3",
+          "decision": "pass",
+          "replay_verifier_verdict": "pass",
+          "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+          "peer_count": 3,
+          "attempted_targets": [
+            "peer-a",
+            "peer-b",
+            "peer-c"
+          ],
+          "failed_targets": [],
+          "convergence_ms": 25,
+          "slo_threshold_ms": 250,
+          "permanent_ratchet": true,
+          "de_escalation_supported": false
+        },
+        "capability": {
+          "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+          "claim_id": "FE-CLAIM-006",
+          "bead_id": "bd-ly6hp.4",
+          "decision": "pass",
+          "promotion_subset": "covered_capability_typed_input_subset_only",
+          "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+          "requested_capabilities": [
+            "fs_read"
+          ],
+          "granted_capabilities": [
+            "vm_dispatch",
+            "heap_allocate",
+            "fs_read"
+          ],
+          "denied_ambient_authority": [
+            "filesystem",
+            "network",
+            "hostcall"
+          ],
+          "runtime_enforcement_verdict": "pass",
+          "unsupported_contract": {
+            "expected": "fail_closed",
+            "actual": "fail_closed"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "stale_proof",
+      "expected_decision": "fail_closed",
+      "readme_text": "| Cryptographic governance | HYPOTHESIS Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |\n| Fleet immune system | TARGETED Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |\n| Capability-typed execution | HYPOTHESIS Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |\n| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim |\n| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. Note: De-escalation unimplemented |\n| Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped |\n",
+      "reports": {
+        "transparency": {
+          "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+          "claim_id": "FE-CLAIM-004",
+          "decision": "pass",
+          "independent_verifier_verdict": "pass",
+          "tee_attestation_state": "not_promoted",
+          "promotion_subset": "decision_receipts_plus_transparency_log_only",
+          "evidence_freshness": "stale",
+          "fixture_kind": "stale_proof"
+        },
+        "quarantine": {
+          "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+          "claim_id": "FE-CLAIM-005",
+          "decision": "pass",
+          "replay_verifier_verdict": "pass",
+          "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+          "permanent_ratchet": true,
+          "de_escalation_supported": false
+        },
+        "capability": {
+          "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+          "claim_id": "FE-CLAIM-006",
+          "decision": "pass",
+          "promotion_subset": "covered_capability_typed_input_subset_only",
+          "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+          "denied_ambient_authority": [
+            "filesystem",
+            "network",
+            "hostcall"
+          ],
+          "runtime_enforcement_verdict": "pass",
+          "unsupported_contract": {
+            "actual": "fail_closed"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "synthetic_proof",
+      "expected_decision": "fail_closed",
+      "readme_text": "| Cryptographic governance | HYPOTHESIS Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |\n| Fleet immune system | TARGETED Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |\n| Capability-typed execution | HYPOTHESIS Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |\n| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim |\n| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. Note: De-escalation unimplemented |\n| Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped |\n",
+      "reports": {
+        "transparency": {
+          "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+          "claim_id": "FE-CLAIM-004",
+          "decision": "pass",
+          "independent_verifier_verdict": "pass",
+          "tee_attestation_state": "not_promoted",
+          "promotion_subset": "decision_receipts_plus_transparency_log_only"
+        },
+        "quarantine": {
+          "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+          "claim_id": "FE-CLAIM-005",
+          "decision": "pass",
+          "replay_verifier_verdict": "pass",
+          "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+          "permanent_ratchet": true,
+          "de_escalation_supported": false,
+          "evidence_kind": "synthetic",
+          "fixture_kind": "synthetic_proof"
+        },
+        "capability": {
+          "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+          "claim_id": "FE-CLAIM-006",
+          "decision": "pass",
+          "promotion_subset": "covered_capability_typed_input_subset_only",
+          "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+          "denied_ambient_authority": [
+            "filesystem",
+            "network",
+            "hostcall"
+          ],
+          "runtime_enforcement_verdict": "pass",
+          "unsupported_contract": {
+            "actual": "fail_closed"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "missing_artifact",
+      "expected_decision": "fail_closed",
+      "readme_text": "| Cryptographic governance | HYPOTHESIS Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |\n| Fleet immune system | TARGETED Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |\n| Capability-typed execution | HYPOTHESIS Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |\n| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim |\n| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. Note: De-escalation unimplemented |\n| Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped |\n",
+      "missing_report": "capability",
+      "reports": {
+        "transparency": {
+          "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+          "claim_id": "FE-CLAIM-004",
+          "decision": "pass",
+          "independent_verifier_verdict": "pass",
+          "tee_attestation_state": "not_promoted",
+          "promotion_subset": "decision_receipts_plus_transparency_log_only"
+        },
+        "quarantine": {
+          "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+          "claim_id": "FE-CLAIM-005",
+          "decision": "pass",
+          "replay_verifier_verdict": "pass",
+          "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+          "permanent_ratchet": true,
+          "de_escalation_supported": false
+        },
+        "capability": {
+          "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+          "claim_id": "FE-CLAIM-006",
+          "decision": "pass",
+          "promotion_subset": "covered_capability_typed_input_subset_only",
+          "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+          "denied_ambient_authority": [
+            "filesystem",
+            "network",
+            "hostcall"
+          ],
+          "runtime_enforcement_verdict": "pass",
+          "unsupported_contract": {
+            "actual": "fail_closed"
+          }
+        }
+      }
+    },
+    {
+      "case_id": "overclaiming_readme_text",
+      "expected_decision": "fail_closed",
+      "readme_text": "| Cryptographic governance | OBSERVED Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |\n| Fleet immune system | OBSERVED quarantine propagation with bounded convergence SLOs |\n| Capability-typed execution | OBSERVED compile-time TS-to-IR ambient-authority rejection |\n| Cryptographic decision receipts | OBSERVED with TEE attestation |\n| Fleet quarantine convergence model | OBSERVED production convergence |\n| Capability-typed extension contract | OBSERVED full TS-to-IR |\n",
+      "reports": {
+        "transparency": {
+          "schema_version": "franken-engine.idea-wizard-xiii-transparency-log-decision-receipt-proof.report.v1",
+          "claim_id": "FE-CLAIM-004",
+          "decision": "pass",
+          "independent_verifier_verdict": "pass",
+          "tee_attestation_state": "not_promoted",
+          "promotion_subset": "decision_receipts_plus_transparency_log_only"
+        },
+        "quarantine": {
+          "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.report.v1",
+          "claim_id": "FE-CLAIM-005",
+          "decision": "pass",
+          "replay_verifier_verdict": "pass",
+          "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+          "permanent_ratchet": true,
+          "de_escalation_supported": false
+        },
+        "capability": {
+          "schema_version": "franken-engine.idea-wizard-xiii-capability-typed-ambient-authority-proof.report.v1",
+          "claim_id": "FE-CLAIM-006",
+          "decision": "pass",
+          "promotion_subset": "covered_capability_typed_input_subset_only",
+          "covered_input_subset": "capability_typed_manifest_ir_hostcall_v1",
+          "denied_ambient_authority": [
+            "filesystem",
+            "network",
+            "hostcall"
+          ],
+          "runtime_enforcement_verdict": "pass",
+          "unsupported_contract": {
+            "actual": "fail_closed"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-control-fixtures.v1",
+  "base_input": {
+    "schema_version": "franken-engine.optimization-promotion-control.input.v1",
+    "surfaces": [
+      {
+        "surface_id": "proof_specialization_receipt",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/proof_specialization_receipt.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "security proof receipt",
+        "required_for_states": ["observe", "promote", "pin", "demote", "quarantine", "fail_closed"]
+      },
+      {
+        "surface_id": "specialization_lane_gate",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/specialization_lane_gate.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "specialization eligibility",
+        "required_for_states": ["observe", "promote", "pin"]
+      },
+      {
+        "surface_id": "specialization_rollback_gate",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/specialization_rollback_gate.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "rollback and demotion",
+        "required_for_states": ["demote", "quarantine", "fail_closed"]
+      },
+      {
+        "surface_id": "performance_regression_gate",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/performance_regression_gate.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "tail and throughput side condition",
+        "required_for_states": ["observe", "promote", "pin", "demote"]
+      },
+      {
+        "surface_id": "safe_mode_fallback",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/safe_mode_fallback.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "deterministic fallback",
+        "required_for_states": ["demote", "quarantine", "fail_closed"]
+      },
+      {
+        "surface_id": "cross_workload_transfer",
+        "owner_kind": "rust_module",
+        "path": "crates/franken-engine/src/cross_workload_transfer.rs",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "workload regime transfer guard",
+        "required_for_states": ["promote", "pin"]
+      },
+      {
+        "surface_id": "real_hot_path_evidence",
+        "owner_kind": "script_and_runbook",
+        "path": "scripts/run_real_hot_path_proof.sh",
+        "present": true,
+        "freshness": "fresh",
+        "promotion_role": "real runtime hot-path evidence",
+        "required_for_states": ["observe", "promote", "pin"]
+      }
+    ],
+    "evidence_families": [
+      "real_hot_path_evidence",
+      "proof_specialization_receipt",
+      "semantic_parity",
+      "rollback_health",
+      "safe_mode_fallback",
+      "cross_workload_transfer",
+      "performance_regression"
+    ],
+    "promotion_states": ["observe", "promote", "pin", "demote", "quarantine", "fail_closed"],
+    "mutation_policy": {
+      "advisory_only": true,
+      "proof_only": true,
+      "fixture_fed_only": true,
+      "mutates_runtime_policy": false,
+      "mutates_br": false,
+      "sends_agent_mail": false,
+      "releases_reservations": false,
+      "runs_cargo": false,
+      "runs_rch": false,
+      "mutates_remote_workers": false,
+      "publishes_benchmark_claims": false
+    },
+    "contradictions": [],
+    "contamination": {
+      "synthetic_only": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "complete_contract_passes",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0
+      }
+    },
+    {
+      "case_id": "missing_rollback_surface_fails",
+      "overrides": {
+        "surfaces": [
+          {"surface_id": "proof_specialization_receipt", "present": true, "freshness": "fresh"},
+          {"surface_id": "specialization_lane_gate", "present": true, "freshness": "fresh"},
+          {"surface_id": "performance_regression_gate", "present": true, "freshness": "fresh"},
+          {"surface_id": "safe_mode_fallback", "present": true, "freshness": "fresh"},
+          {"surface_id": "cross_workload_transfer", "present": true, "freshness": "fresh"},
+          {"surface_id": "real_hot_path_evidence", "present": true, "freshness": "fresh"}
+        ]
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-MISSING-SURFACE"
+      }
+    },
+    {
+      "case_id": "stale_hot_path_evidence_fails",
+      "overrides": {
+        "surfaces": [
+          {"surface_id": "proof_specialization_receipt", "present": true, "freshness": "fresh"},
+          {"surface_id": "specialization_lane_gate", "present": true, "freshness": "fresh"},
+          {"surface_id": "specialization_rollback_gate", "present": true, "freshness": "fresh"},
+          {"surface_id": "performance_regression_gate", "present": true, "freshness": "fresh"},
+          {"surface_id": "safe_mode_fallback", "present": true, "freshness": "fresh"},
+          {"surface_id": "cross_workload_transfer", "present": true, "freshness": "fresh"},
+          {"surface_id": "real_hot_path_evidence", "present": true, "freshness": "stale"}
+        ]
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-STALE-SURFACE"
+      }
+    },
+    {
+      "case_id": "unsafe_mutation_policy_fails",
+      "overrides": {
+        "mutation_policy": {
+          "advisory_only": false,
+          "proof_only": true,
+          "fixture_fed_only": true,
+          "mutates_runtime_policy": true,
+          "mutates_br": false,
+          "sends_agent_mail": false,
+          "releases_reservations": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "mutates_remote_workers": false,
+          "publishes_benchmark_claims": false
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-UNSAFE-MUTATION-POLICY"
+      }
+    },
+    {
+      "case_id": "contradictory_evidence_fails",
+      "overrides": {
+        "contradictions": [
+          {
+            "source_id": "performance_regression_gate",
+            "detail": "throughput says promote while tail budget says demote",
+            "remediation": "Refresh side-condition evidence before promotion composition."
+          }
+        ]
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-CONTRADICTORY-EVIDENCE"
+      }
+    },
+    {
+      "case_id": "synthetic_contamination_fails",
+      "overrides": {
+        "contamination": {
+          "synthetic_only": true
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_error_code": "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+      }
+    }
+  ]
+}

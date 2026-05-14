@@ -1,0 +1,110 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-control-contract.v1",
+  "bead_id": "bd-sisok",
+  "parent_bead_id": "bd-xg3d6",
+  "script": "scripts/optimization_promotion_control_contract.sh",
+  "smoke_script": "scripts/e2e/optimization_promotion_control_contract_smoke.sh",
+  "docs": "docs/OPTIMIZATION_PROMOTION_CONTROL_CONTRACT.md",
+  "fixture_bundle": "scripts/testdata/optimization_promotion_control_contract/cases.json",
+  "report_schema_version": "franken-engine.optimization-promotion-control.report.v1",
+  "inventory_schema_version": "franken-engine.optimization-promotion-control.inventory.v1",
+  "required_surfaces": [
+    "proof_specialization_receipt",
+    "specialization_lane_gate",
+    "specialization_rollback_gate",
+    "performance_regression_gate",
+    "safe_mode_fallback",
+    "cross_workload_transfer",
+    "real_hot_path_evidence"
+  ],
+  "required_evidence_families": [
+    "real_hot_path_evidence",
+    "proof_specialization_receipt",
+    "semantic_parity",
+    "rollback_health",
+    "safe_mode_fallback",
+    "cross_workload_transfer",
+    "performance_regression"
+  ],
+  "promotion_states": [
+    "observe",
+    "promote",
+    "pin",
+    "demote",
+    "quarantine",
+    "fail_closed"
+  ],
+  "fail_closed_error_codes": [
+    "FE-OPT-PROMO-MISSING-SURFACE",
+    "FE-OPT-PROMO-STALE-SURFACE",
+    "FE-OPT-PROMO-MISSING-EVIDENCE-FAMILY",
+    "FE-OPT-PROMO-MISSING-STATE",
+    "FE-OPT-PROMO-UNSAFE-MUTATION-POLICY",
+    "FE-OPT-PROMO-CONTRADICTORY-EVIDENCE",
+    "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+  ],
+  "artifacts": {
+    "report_json": "optimization_promotion_control_contract.json",
+    "inventory_json": "optimization_promotion_surface_inventory.json",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization promotion-control contract is advisory only and proof only.",
+    "Promotion states are observe, promote, pin, demote, quarantine, and fail_closed.",
+    "The contract consumes existing optimization, rollback, safe-mode, cross-workload, and real hot-path evidence surfaces.",
+    "Synthetic-only evidence and contradictory evidence fail closed.",
+    "The contract never mutates runtime policy, br, Agent Mail, reservations, workers, Cargo, RCH, or benchmark claims."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "complete_contract_passes",
+      "expected_decision": "pass",
+      "expected_exit_code": 0
+    },
+    {
+      "case_id": "missing_rollback_surface_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-MISSING-SURFACE"
+    },
+    {
+      "case_id": "stale_hot_path_evidence_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-STALE-SURFACE"
+    },
+    {
+      "case_id": "unsafe_mutation_policy_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-UNSAFE-MUTATION-POLICY"
+    },
+    {
+      "case_id": "contradictory_evidence_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-CONTRADICTORY-EVIDENCE"
+    },
+    {
+      "case_id": "synthetic_contamination_fails",
+      "expected_decision": "fail_closed",
+      "expected_exit_code": 42,
+      "required_error_code": "FE-OPT-PROMO-SYNTHETIC-CONTAMINATION"
+    }
+  ]
+}

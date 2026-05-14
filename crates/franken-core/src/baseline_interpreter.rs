@@ -553,6 +553,8 @@ struct GeneratorObject {
     saved_ip: usize,
     /// Saved register file snapshot at the time of yield.
     saved_registers: Vec<Value>,
+    /// Saved IFC label snapshot for the register file at the time of yield.
+    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
     /// Saved register base offset.
     saved_register_base: usize,
     /// Current phase of the generator.
@@ -602,6 +604,8 @@ struct AsyncFunctionObject {
     saved_ip: usize,
     /// Saved register file snapshot at the time of await.
     saved_registers: Vec<Value>,
+    /// Saved IFC label snapshot for the register file at the time of await.
+    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
     /// Saved register base offset.
     saved_register_base: usize,
     /// Current phase of the async function.
@@ -623,6 +627,8 @@ struct AsyncGeneratorObject {
     saved_ip: usize,
     /// Saved register file snapshot at suspension.
     saved_registers: Vec<Value>,
+    /// Saved IFC label snapshot at suspension.
+    saved_register_labels: Vec<crate::ifc_artifacts::Label>,
     /// Saved register base offset.
     saved_register_base: usize,
     /// Current phase of the async generator.
@@ -1601,6 +1607,7 @@ pub struct ExecutionResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExecutionSeed {
     registers: Vec<Value>,
+    register_labels: Vec<crate::ifc_artifacts::Label>,
     heap: Vec<HeapObject>,
     function_prototypes: BTreeMap<u32, ObjectId>,
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
@@ -1609,6 +1616,7 @@ struct ExecutionSeed {
 #[derive(Debug, Clone)]
 struct ModuleExecutionSnapshot {
     registers: Vec<Value>,
+    register_labels: Vec<crate::ifc_artifacts::Label>,
     call_stack: Vec<CallFrame>,
     ip: usize,
     register_base: usize,
@@ -1670,6 +1678,8 @@ pub struct InterpreterCore {
     hook: Option<Arc<dyn InterpreterHook>>,
     /// Register file (flat, indexed by register number).
     registers: Vec<Value>,
+    /// IFC label for each register slot. Missing labels default to Public.
+    register_labels: Vec<crate::ifc_artifacts::Label>,
     /// Call stack.
     call_stack: Vec<CallFrame>,
     /// Object heap.
@@ -1782,6 +1792,7 @@ impl InterpreterCore {
             config,
             hook: None,
             registers: vec![Value::Undefined; max_regs],
+            register_labels: vec![crate::ifc_artifacts::Label::Public; max_regs],
             call_stack: Vec::new(),
             heap: Vec::new(),
             estimated_memory_bytes: 0,
@@ -1963,8 +1974,12 @@ impl InterpreterCore {
         let mut registers = self.registers.clone();
         registers.resize(max_regs, Value::Undefined);
         registers.truncate(max_regs);
+        let mut register_labels = self.register_labels.clone();
+        register_labels.resize(max_regs, crate::ifc_artifacts::Label::Public);
+        register_labels.truncate(max_regs);
         ExecutionSeed {
             registers,
+            register_labels,
             heap: self.heap.clone(),
             function_prototypes: self.function_prototypes.clone(),
             function_objects: self.function_objects.clone(),
@@ -1974,6 +1989,9 @@ impl InterpreterCore {
     fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
         self.register_base = 0;
         self.registers = seed.registers.clone();
+        self.register_labels = seed.register_labels.clone();
+        self.register_labels
+            .resize(self.registers.len(), crate::ifc_artifacts::Label::Public);
         self.call_stack.clear();
         self.heap = seed.heap.clone();
         self.iterators.clear();
@@ -2002,6 +2020,7 @@ impl InterpreterCore {
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
             registers: self.registers.clone(),
+            register_labels: self.register_labels.clone(),
             call_stack: self.call_stack.clone(),
             ip: self.ip,
             register_base: self.register_base,
@@ -2018,6 +2037,9 @@ impl InterpreterCore {
 
     fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
         self.registers = snapshot.registers;
+        self.register_labels = snapshot.register_labels;
+        self.register_labels
+            .resize(self.registers.len(), crate::ifc_artifacts::Label::Public);
         self.call_stack = snapshot.call_stack;
         self.ip = snapshot.ip;
         self.register_base = snapshot.register_base;
@@ -2034,7 +2056,8 @@ impl InterpreterCore {
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
         let max_regs = self.config.max_registers as usize;
         self.registers.clear();
-        self.registers.resize(max_regs, Value::Undefined);
+        self.register_labels.clear();
+        self.clear_register_range(0, max_regs);
         self.call_stack.clear();
         self.ip = 0;
         self.register_base = 0;
@@ -3147,11 +3170,7 @@ impl InterpreterCore {
 
         self.register_base += self.config.max_registers as usize;
         let req_len = self.register_base + self.config.max_registers as usize;
-        if req_len > self.registers.len() {
-            self.registers.resize(req_len, Value::Undefined);
-        } else {
-            self.registers[self.register_base..req_len].fill(Value::Undefined);
-        }
+        self.clear_register_range(self.register_base, req_len);
 
         for (i, val) in arg_vals.into_iter().enumerate() {
             let reg = i as u32;
@@ -3262,7 +3281,7 @@ impl InterpreterCore {
 
                 self.register_base = self.registers.len();
                 let req_len = self.register_base + self.config.max_registers as usize;
-                self.registers.resize(req_len, Value::Undefined);
+                self.clear_register_range(self.register_base, req_len);
 
                 self.ip = func.entry as usize;
                 Ok(())
@@ -3278,24 +3297,19 @@ impl InterpreterCore {
                 return Err(err);
             }
         } else {
-            let (saved_ip, saved_regs, saved_base) = {
+            let (saved_ip, saved_regs, saved_labels, saved_base) = {
                 let gobj = &mut self.generators[gen_id as usize];
                 (
                     gobj.saved_ip,
                     std::mem::take(&mut gobj.saved_registers),
+                    std::mem::take(&mut gobj.saved_register_labels),
                     gobj.saved_register_base,
                 )
             };
 
             self.ip = saved_ip;
             self.register_base = saved_base;
-            let req_len = saved_base + saved_regs.len();
-            if req_len > self.registers.len() {
-                self.registers.resize(req_len, Value::Undefined);
-            }
-            for (i, val) in saved_regs.into_iter().enumerate() {
-                self.registers[saved_base + i] = val;
-            }
+            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
         }
 
         let result = self.run_loop(module);
@@ -3305,10 +3319,13 @@ impl InterpreterCore {
                 let max_regs = self.config.max_registers as usize;
                 let saved_regs: Vec<Value> =
                     self.registers[self.register_base..self.register_base + max_regs].to_vec();
+                let saved_labels = self
+                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
 
                 let gobj = &mut self.generators[gen_id as usize];
                 gobj.saved_ip = self.ip;
                 gobj.saved_registers = saved_regs;
+                gobj.saved_register_labels = saved_labels;
                 gobj.saved_register_base = self.register_base;
                 gobj.phase = GeneratorPhase::SuspendedYield;
 
@@ -3448,7 +3465,7 @@ impl InterpreterCore {
 
                 self.register_base = self.registers.len();
                 let req_len = self.register_base + self.config.max_registers as usize;
-                self.registers.resize(req_len, Value::Undefined);
+                self.clear_register_range(self.register_base, req_len);
 
                 self.ip = func.entry as usize;
                 Ok(())
@@ -3481,24 +3498,19 @@ impl InterpreterCore {
             }
         } else {
             // Resume from saved state (SuspendedYield/SuspendedAwait)
-            let (saved_ip, saved_regs, saved_base) = {
+            let (saved_ip, saved_regs, saved_labels, saved_base) = {
                 let async_gen = &mut self.async_generators[gen_id as usize];
                 (
                     async_gen.saved_ip,
                     std::mem::take(&mut async_gen.saved_registers),
+                    std::mem::take(&mut async_gen.saved_register_labels),
                     async_gen.saved_register_base,
                 )
             };
 
             self.ip = saved_ip;
             self.register_base = saved_base;
-            let req_len = saved_base + saved_regs.len();
-            if req_len > self.registers.len() {
-                self.registers.resize(req_len, Value::Undefined);
-            }
-            for (i, val) in saved_regs.into_iter().enumerate() {
-                self.registers[saved_base + i] = val;
-            }
+            self.restore_saved_register_range(saved_base, saved_regs, saved_labels);
         }
 
         // Execute until yield/return/throw
@@ -3536,10 +3548,13 @@ impl InterpreterCore {
                 let max_regs = self.config.max_registers as usize;
                 let saved_regs: Vec<Value> =
                     self.registers[self.register_base..self.register_base + max_regs].to_vec();
+                let saved_labels = self
+                    .register_labels_in_range(self.register_base, self.register_base + max_regs);
 
                 let async_gen = &mut self.async_generators[gen_id as usize];
                 async_gen.saved_ip = self.ip;
                 async_gen.saved_registers = saved_regs;
+                async_gen.saved_register_labels = saved_labels;
                 async_gen.saved_register_base = self.register_base;
                 async_gen.phase = AsyncGeneratorPhase::SuspendedYield;
 
@@ -3881,6 +3896,7 @@ impl InterpreterCore {
                         }
 
                         let mut arg_vals = Vec::new();
+                        let mut arg_labels = Vec::new();
                         for i in 0..args.count.min(func.arity) {
                             let reg = args.start.checked_add(i).ok_or(
                                 InterpreterError::RegisterOutOfBounds {
@@ -3889,6 +3905,7 @@ impl InterpreterCore {
                                 },
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
+                            arg_labels.push(self.read_reg_label(reg)?);
                         }
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
@@ -3909,6 +3926,7 @@ impl InterpreterCore {
                             closure_index: closure_id,
                             saved_ip: 0,
                             saved_registers: Vec::new(),
+                            saved_register_labels: Vec::new(),
                             saved_register_base: 0,
                             phase: AsyncFunctionPhase::Executing,
                             result_promise: promise_handle.0,
@@ -3965,16 +3983,14 @@ impl InterpreterCore {
 
                         self.register_base += self.config.max_registers as usize;
                         let req_len = self.register_base + self.config.max_registers as usize;
-                        if req_len > self.registers.len() {
-                            self.registers.resize(req_len, Value::Undefined);
-                        } else {
-                            self.registers[self.register_base..req_len].fill(Value::Undefined);
-                        }
+                        self.clear_register_range(self.register_base, req_len);
 
-                        for (i, val) in arg_vals.into_iter().enumerate() {
+                        for (i, (val, label)) in
+                            arg_vals.into_iter().zip(arg_labels.into_iter()).enumerate()
+                        {
                             let reg = i as u32;
                             if reg < self.config.max_registers {
-                                self.write_reg(reg, val)?;
+                                self.write_reg_with_label(reg, val, label)?;
                             }
                         }
 
@@ -3995,6 +4011,7 @@ impl InterpreterCore {
                             closure_index: Some(*cid),
                             saved_ip: 0,
                             saved_registers: Vec::new(),
+                            saved_register_labels: Vec::new(),
                             saved_register_base: 0,
                             phase: GeneratorPhase::SuspendedStart,
                         });
@@ -4020,6 +4037,7 @@ impl InterpreterCore {
                             closure_index: Some(*cid),
                             saved_ip: 0,
                             saved_registers: Vec::new(),
+                            saved_register_labels: Vec::new(),
                             saved_register_base: 0,
                             phase: AsyncGeneratorPhase::SuspendedStart,
                         });
@@ -4149,11 +4167,7 @@ impl InterpreterCore {
 
                             // Clear all registers in the new frame to prevent data leakage from previous calls
                             let req_len = self.register_base + self.config.max_registers as usize;
-                            if req_len > self.registers.len() {
-                                self.registers.resize(req_len, Value::Undefined);
-                            } else {
-                                self.registers[self.register_base..req_len].fill(Value::Undefined);
-                            }
+                            self.clear_register_range(self.register_base, req_len);
 
                             // Copy arguments into registers for the callee.
                             for (i, val) in arg_vals.into_iter().enumerate() {
@@ -4286,11 +4300,7 @@ impl InterpreterCore {
 
                     self.register_base += self.config.max_registers as usize;
                     let req_len = self.register_base + self.config.max_registers as usize;
-                    if req_len > self.registers.len() {
-                        self.registers.resize(req_len, Value::Undefined);
-                    } else {
-                        self.registers[self.register_base..req_len].fill(Value::Undefined);
-                    }
+                    self.clear_register_range(self.register_base, req_len);
 
                     for (i, val) in arg_vals.into_iter().enumerate() {
                         let reg = i as u32;
@@ -4861,11 +4871,7 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
                             let req_len = self.register_base + self.config.max_registers as usize;
-                            if req_len > self.registers.len() {
-                                self.registers.resize(req_len, Value::Undefined);
-                            } else {
-                                self.registers[self.register_base..req_len].fill(Value::Undefined);
-                            }
+                            self.clear_register_range(self.register_base, req_len);
 
                             // Register 0 = `this` for the constructor body.
                             self.write_reg(0, this_val)?;
@@ -5211,6 +5217,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {
                     let awaited_value = self.read_reg(promise_reg)?;
+                    let awaited_label = self.read_reg_label(promise_reg)?;
 
                     // Convert the awaited value to a Promise if it's not already one
                     let promise_handle = match awaited_value {
@@ -5219,8 +5226,7 @@ impl InterpreterCore {
                             // await non-promise: create a resolved promise with the value
                             let js_val = Self::value_to_js_value(&awaited_value);
                             let handle = self.promise_store.create();
-                            let label = crate::ifc_artifacts::Label::Public; // TODO: proper label propagation
-                            self.fulfill_promise(handle, js_val, label)?;
+                            self.fulfill_promise(handle, js_val, awaited_label)?;
                             handle
                         }
                     };
@@ -5232,18 +5238,24 @@ impl InterpreterCore {
                             got: e.to_string(),
                         }
                     })?;
+                    let promise_state = promise_record.state.clone();
+                    let promise_label = promise_record.label.clone();
 
-                    if promise_record.state.is_settled() {
+                    if promise_state.is_settled() {
                         // Promise already settled - continue execution synchronously
-                        match &promise_record.state {
+                        match promise_state {
                             crate::promise_model::PromiseState::Fulfilled(js_val) => {
-                                let result_value = Self::js_value_to_value(js_val);
-                                self.write_reg(promise_reg, result_value)?;
+                                let result_value = Self::js_value_to_value(&js_val);
+                                self.write_reg_with_label(
+                                    promise_reg,
+                                    result_value,
+                                    promise_label,
+                                )?;
                                 self.ip += 1;
                                 continue;
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
-                                let error_value = Self::js_value_to_value(js_reason);
+                                let error_value = Self::js_value_to_value(&js_reason);
                                 if let Some(async_func_id) = self
                                     .call_stack
                                     .last()
@@ -5262,11 +5274,7 @@ impl InterpreterCore {
                                         async_func.result_promise,
                                     );
                                     let js_reason = Self::value_to_js_value(&error_value);
-                                    self.reject_promise(
-                                        promise_handle,
-                                        js_reason,
-                                        crate::ifc_artifacts::Label::Public,
-                                    )?;
+                                    self.reject_promise(promise_handle, js_reason, promise_label)?;
                                     if let Some(func) =
                                         self.async_functions.get_mut(async_func_id as usize)
                                     {
@@ -5304,6 +5312,10 @@ impl InterpreterCore {
                             }
                         })?;
 
+                        let saved_registers = self.registers[self.register_base..].to_vec();
+                        let saved_register_labels =
+                            self.register_labels_in_range(self.register_base, self.registers.len());
+
                         // Save the current execution state
                         let async_func = self
                             .async_functions
@@ -5315,7 +5327,8 @@ impl InterpreterCore {
 
                         // Save state for when the promise resolves
                         async_func.saved_ip = self.ip + 1; // Resume after the await instruction
-                        async_func.saved_registers = self.registers[self.register_base..].to_vec();
+                        async_func.saved_registers = saved_registers;
+                        async_func.saved_register_labels = saved_register_labels;
                         async_func.saved_register_base = self.register_base;
                         async_func.phase = AsyncFunctionPhase::SuspendedAwait;
 
@@ -5329,6 +5342,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AsyncReturn { value_reg } => {
                     let return_value = self.read_reg(value_reg)?;
+                    let return_label = self.read_reg_label(value_reg)?;
 
                     // Find the currently executing async function
                     let current_frame =
@@ -5360,11 +5374,7 @@ impl InterpreterCore {
 
                     // Resolve the promise with the return value
                     let js_val = Self::value_to_js_value(&return_value);
-                    self.fulfill_promise(
-                        promise_handle,
-                        js_val,
-                        crate::ifc_artifacts::Label::Public,
-                    )?;
+                    self.fulfill_promise(promise_handle, js_val, return_label)?;
 
                     // Update the async function phase to completed
                     if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
@@ -5380,6 +5390,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::AsyncThrow { error_reg } => {
                     let error_value = self.read_reg(error_reg)?;
+                    let error_label = self.read_reg_label(error_reg)?;
 
                     // Find the currently executing async function
                     let current_frame =
@@ -5411,11 +5422,7 @@ impl InterpreterCore {
 
                     // Reject the promise with the error value
                     let js_reason = Self::value_to_js_value(&error_value);
-                    self.reject_promise(
-                        promise_handle,
-                        js_reason,
-                        crate::ifc_artifacts::Label::Public,
-                    )?;
+                    self.reject_promise(promise_handle, js_reason, error_label)?;
 
                     // Update the async function phase to completed
                     if let Some(func) = self.async_functions.get_mut(async_func_id as usize) {
@@ -7334,11 +7341,7 @@ impl InterpreterCore {
 
         self.register_base += self.config.max_registers as usize;
         let req_len = self.register_base + self.config.max_registers as usize;
-        if req_len > self.registers.len() {
-            self.registers.resize(req_len, Value::Undefined);
-        } else {
-            self.registers[self.register_base..req_len].fill(Value::Undefined);
-        }
+        self.clear_register_range(self.register_base, req_len);
 
         self.ip = func.entry as usize;
         let result = self.run_loop(module);
@@ -7377,11 +7380,11 @@ impl InterpreterCore {
                     handler: _,
                     argument,
                     result_promise,
-                    label: _task_label,
+                    label: task_label,
                 } => {
                     // With no closure handler, the identity transform propagates
                     // the argument to the result promise as a fulfillment value.
-                    let _ = self.fulfill_promise(result_promise, argument, label.clone());
+                    let _ = self.fulfill_promise(result_promise, argument, task_label);
                 }
                 crate::promise_model::Microtask::PromiseRejection {
                     reason,
@@ -8171,7 +8174,77 @@ impl InterpreterCore {
             .unwrap_or(Value::Undefined))
     }
 
+    fn read_reg_label(&self, reg: u32) -> Result<crate::ifc_artifacts::Label, InterpreterError> {
+        if reg >= self.config.max_registers {
+            return Err(InterpreterError::RegisterOutOfBounds {
+                register: reg,
+                max: self.config.max_registers,
+            });
+        }
+        let actual_reg = self.register_base + reg as usize;
+        Ok(self
+            .register_labels
+            .get(actual_reg)
+            .cloned()
+            .unwrap_or(crate::ifc_artifacts::Label::Public))
+    }
+
+    fn clear_register_range(&mut self, start: usize, end: usize) {
+        if end > self.registers.len() {
+            self.registers.resize(end, Value::Undefined);
+        }
+        self.registers[start..end].fill(Value::Undefined);
+
+        if end > self.register_labels.len() {
+            self.register_labels
+                .resize(end, crate::ifc_artifacts::Label::Public);
+        }
+        self.register_labels[start..end].fill(crate::ifc_artifacts::Label::Public);
+    }
+
+    fn register_labels_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Vec<crate::ifc_artifacts::Label> {
+        (start..end)
+            .map(|idx| {
+                self.register_labels
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or(crate::ifc_artifacts::Label::Public)
+            })
+            .collect()
+    }
+
+    fn restore_saved_register_range(
+        &mut self,
+        base: usize,
+        saved_regs: Vec<Value>,
+        saved_labels: Vec<crate::ifc_artifacts::Label>,
+    ) {
+        let req_len = base + saved_regs.len();
+        self.clear_register_range(base, req_len);
+        for (i, val) in saved_regs.into_iter().enumerate() {
+            self.registers[base + i] = val;
+        }
+        for (i, label) in saved_labels.into_iter().enumerate() {
+            if base + i < req_len {
+                self.register_labels[base + i] = label;
+            }
+        }
+    }
+
     fn write_reg(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
+        self.write_reg_with_label(reg, value, crate::ifc_artifacts::Label::Public)
+    }
+
+    fn write_reg_with_label(
+        &mut self,
+        reg: u32,
+        value: Value,
+        label: crate::ifc_artifacts::Label,
+    ) -> Result<(), InterpreterError> {
         if reg >= self.config.max_registers {
             return Err(InterpreterError::RegisterOutOfBounds {
                 register: reg,
@@ -8182,10 +8255,17 @@ impl InterpreterCore {
         if actual_reg >= self.registers.len() {
             self.registers.resize(actual_reg + 1, Value::Undefined);
         }
+        if actual_reg >= self.register_labels.len() {
+            self.register_labels
+                .resize(actual_reg + 1, crate::ifc_artifacts::Label::Public);
+        }
         let previous = self.registers[actual_reg].clone();
+        let previous_label = self.register_labels[actual_reg].clone();
         self.registers[actual_reg] = value;
+        self.register_labels[actual_reg] = label;
         if let Err(err) = self.sync_estimated_memory_bytes() {
             self.registers[actual_reg] = previous;
+            self.register_labels[actual_reg] = previous_label;
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
@@ -13679,6 +13759,124 @@ mod tests {
         }
 
         #[test]
+        fn async_function_awaits_secret_promise_preserves_result_label() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "async-function-await-secret");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_secret_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+            let handle = core.promise_store.create();
+            core.promise_store
+                .fulfill(
+                    handle,
+                    crate::object_model::JsValue::Str("secret".into()),
+                    crate::ifc_artifacts::Label::Secret,
+                    &mut core.event_loop.microtasks,
+                )
+                .expect("seed promise should be fulfillable");
+            core.registers[10] = Value::Promise(handle.0);
+
+            core.execute(&module)
+                .expect("secret-labeled promise await should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave result promise in destination register");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret"
+            ));
+        }
+
+        #[test]
+        fn async_function_awaits_labeled_non_promise_without_downgrade() {
+            let mut core =
+                InterpreterCore::new(test_quickjs_config(), "async-function-await-non-promise");
+            let module = test_module_with_functions(
+                vec![
+                    Ir3Instruction::CreateAsyncFunction {
+                        dst: 0,
+                        function_index: 0,
+                        capture_count: 0,
+                    },
+                    Ir3Instruction::Call {
+                        callee: 0,
+                        args: RegRange {
+                            start: 10,
+                            count: 1,
+                        },
+                        dst: 1,
+                    },
+                    Ir3Instruction::Halt,
+                    Ir3Instruction::AwaitValue { promise_reg: 0 },
+                    Ir3Instruction::AsyncReturn { value_reg: 0 },
+                ],
+                vec![Ir3FunctionDesc {
+                    entry: 3,
+                    arity: 1,
+                    frame_size: 1,
+                    name: Some("await_labeled_value_async".to_string()),
+                    is_generator: false,
+                }],
+            );
+            core.write_reg_with_label(
+                10,
+                Value::Str("secret".into()),
+                crate::ifc_artifacts::Label::Secret,
+            )
+            .expect("test register should be writable");
+
+            core.execute(&module)
+                .expect("labeled non-promise await should resolve");
+
+            let Value::Promise(result_handle) = core.registers[1] else {
+                panic!("async call should leave result promise in destination register");
+            };
+            let record = core
+                .promise_store
+                .get(crate::promise_model::PromiseHandle(result_handle))
+                .expect("result promise exists");
+            assert_eq!(record.label, crate::ifc_artifacts::Label::Secret);
+            assert!(matches!(
+                &record.state,
+                crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                    value
+                )) if value == "secret"
+            ));
+        }
+
+        #[test]
         fn async_function_pending_await_fails_closed_and_marks_suspended() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-pending");
             let module = test_module_with_functions(
@@ -13913,6 +14111,7 @@ mod tests {
                     closure_index: None,
                     saved_ip: 0,
                     saved_registers: Vec::new(),
+                    saved_register_labels: Vec::new(),
                     saved_register_base: 0,
                     phase: AsyncGeneratorPhase::Completed,
                 });
@@ -13967,6 +14166,7 @@ mod tests {
                     closure_index: None,
                     saved_ip: 0,
                     saved_registers: Vec::new(),
+                    saved_register_labels: Vec::new(),
                     saved_register_base: 0,
                     phase: AsyncGeneratorPhase::SuspendedStart,
                 });
@@ -14028,6 +14228,7 @@ mod tests {
                     closure_index: None,
                     saved_ip: 2, // Resume after yield
                     saved_registers: vec![Value::Undefined],
+                    saved_register_labels: vec![crate::ifc_artifacts::Label::Public],
                     saved_register_base: 0,
                     phase: AsyncGeneratorPhase::SuspendedYield,
                 });

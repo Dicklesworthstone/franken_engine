@@ -1,0 +1,107 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-claim-promotion-contract.v1",
+  "bead_id": "bd-ly6hp.1",
+  "matrix_path": "docs/claim_to_proof_matrix_v1.json",
+  "current_policy": {
+    "advisory_only": true,
+    "promotes_claims": false,
+    "rewrites_readme": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "required_heavy_cargo_prefix": "rch exec -- env CARGO_TARGET_DIR="
+  },
+  "global_promotion_requirements": [
+    "fresh_pass_json_report",
+    "commands_txt",
+    "events_jsonl",
+    "run_manifest_json",
+    "human_report",
+    "no_local_heavy_cargo_transcript",
+    "rch_wrapped_heavy_rust_validation",
+    "stale_synthetic_missing_and_tampered_negative_fixtures"
+  ],
+  "claims": [
+    {
+      "claim_id": "FE-CLAIM-004",
+      "current_allowed_state": "hypothesis",
+      "current_actual_wording_state": "hypothesis",
+      "next_target_state": "target",
+      "promotable_subset": "decision_receipts_plus_transparency_log_only",
+      "tee_policy": "optional_tee_attestation_remains_hypothesis_until_separate_live_tee_report",
+      "future_bead": "bd-ly6hp.2",
+      "required_artifacts": [
+        "decision_receipt_transparency_log_report_json",
+        "transparency_log_inclusion_proofs_json",
+        "transparency_log_consistency_proof_json",
+        "independent_verifier_report_json",
+        "tampered_receipt_negative_fixture",
+        "forked_log_root_negative_fixture",
+        "missing_signer_negative_fixture",
+        "stale_proof_negative_fixture"
+      ],
+      "required_report_fields": [
+        "receipt_chain_root",
+        "log_root",
+        "inclusion_proof_count",
+        "consistency_proof_count",
+        "independent_verifier_verdict",
+        "tee_attestation_state"
+      ],
+      "downgrade_text_required": true
+    },
+    {
+      "claim_id": "FE-CLAIM-005",
+      "current_allowed_state": "target",
+      "current_actual_wording_state": "target",
+      "next_target_state": "observed",
+      "promotable_subset": "live_quarantine_mesh_bounded_convergence_only",
+      "future_bead": "bd-ly6hp.3",
+      "required_artifacts": [
+        "live_quarantine_mesh_convergence_report_json",
+        "runtime_or_cli_command_transcript",
+        "peer_attempts_jsonl",
+        "partial_failure_degraded_fixture",
+        "total_failure_degraded_fixture",
+        "permanent_ratchet_limitation_note",
+        "replay_verifier_report_json"
+      ],
+      "required_report_fields": [
+        "peer_count",
+        "attempted_targets",
+        "failed_targets",
+        "convergence_ms",
+        "slo_threshold_ms",
+        "permanent_ratchet",
+        "de_escalation_supported"
+      ],
+      "downgrade_text_required": true
+    },
+    {
+      "claim_id": "FE-CLAIM-006",
+      "current_allowed_state": "hypothesis",
+      "current_actual_wording_state": "hypothesis",
+      "next_target_state": "target",
+      "promotable_subset": "covered_capability_typed_input_subset_only",
+      "future_bead": "bd-ly6hp.4",
+      "required_artifacts": [
+        "capability_typed_onboarding_report_json",
+        "typed_input_or_manifest_fixture",
+        "runtime_enforcement_result_json",
+        "ambient_filesystem_rejection_fixture",
+        "ambient_network_rejection_fixture",
+        "ambient_hostcall_rejection_fixture",
+        "unsupported_syntax_fail_closed_fixture",
+        "replay_verifier_report_json"
+      ],
+      "required_report_fields": [
+        "covered_input_subset",
+        "requested_capabilities",
+        "granted_capabilities",
+        "denied_ambient_authority",
+        "runtime_enforcement_verdict",
+        "unsupported_contract"
+      ],
+      "downgrade_text_required": true
+    }
+  ]
+}

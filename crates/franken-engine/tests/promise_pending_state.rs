@@ -1,8 +1,9 @@
-//! Tests for async/await pending promise suspension and resumption.
+//! Tests for the async/await pending promise suspension contract.
 //!
 //! This test module verifies that the async/await execution engine correctly
-//! handles pending promises by suspending and resuming async function execution
-//! rather than panicking with unimplemented errors.
+//! handles pending promises by suspending and returning control rather than
+//! panicking or publishing a resumption guarantee that the public contract does
+//! not exercise.
 
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
 use frankenengine_engine::capability::RuntimeCapability;
@@ -62,7 +63,7 @@ fn execute_public_async_module(module: &Ir3Module) -> Value {
 }
 
 #[test]
-fn pending_promise_await_from_public_ir_does_not_panic() {
+fn pending_promise_await_from_public_ir_returns_control_without_resumption_claim() {
     let module = async_module(
         vec![
             Ir3Instruction::HostCall {
@@ -81,7 +82,11 @@ fn pending_promise_await_from_public_ir_does_not_panic() {
     }));
     assert!(
         result.is_ok(),
-        "awaiting a pending promise must suspend or return control without panicking"
+        "awaiting a pending promise must return control without panicking"
+    );
+    assert!(
+        matches!(result.expect("panic-free pending await"), Value::Undefined),
+        "pending await should return control without claiming async resumption"
     );
 }
 
@@ -192,17 +197,17 @@ mod legacy_private_api_tests {
 
         let module = test_module_with_async_function(instructions);
 
-        // This should not panic with "not fully implemented" error
-        // Instead, it should suspend the async function and return control
+        // This should not panic with placeholder implementation errors.
+        // Instead, it should suspend the async function and return control.
         match core.eval_function(&module, 0, vec![]) {
             Ok(_) => {
                 // Execution should complete gracefully, possibly returning a promise
             }
             Err(InterpreterError::TypeError { expected, got }) => {
-                // Should NOT be the "not fully implemented" error
+                // Should NOT be a placeholder implementation error.
                 assert!(
-                    !got.contains("not fully implemented"),
-                    "Async/await suspension should be implemented, but got error: {}",
+                    !got.contains("placeholder implementation"),
+                    "Async/await suspension contract should be explicit, but got error: {}",
                     got
                 );
             }

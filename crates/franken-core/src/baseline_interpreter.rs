@@ -5401,11 +5401,16 @@ impl InterpreterCore {
                         async_func.saved_register_base = self.register_base;
                         async_func.phase = AsyncFunctionPhase::SuspendedAwait;
 
-                        // For this basic implementation, we'll treat pending promises as an error
-                        // A full implementation would need microtask scheduling and async resumption
+                        // franken-core records the suspension state but does not own the
+                        // module-aware scheduler needed to resume pending awaits.
                         return Err(InterpreterError::TypeError {
-                            expected: "resolved promise for await".to_string(),
-                            got: "pending promise requires full async scheduling (not yet implemented)".to_string(),
+                            expected: "settled promise for franken-core baseline await".to_string(),
+                            got: concat!(
+                                "pending promise await is explicitly unsupported by the ",
+                                "franken-core baseline interpreter; async frame is suspended ",
+                                "and result promise remains pending"
+                            )
+                            .to_string(),
                         });
                     }
                 }
@@ -13992,7 +13997,7 @@ mod tests {
         }
 
         #[test]
-        fn async_function_pending_await_fails_closed_and_marks_suspended() {
+        fn async_function_pending_await_uses_explicit_unsupported_contract() {
             let mut core = InterpreterCore::new(test_quickjs_config(), "async-function-pending");
             let module = test_module_with_functions(
                 vec![
@@ -14026,9 +14031,9 @@ mod tests {
 
             let err = core
                 .execute(&module)
-                .expect_err("pending await should fail closed in franken-core");
+                .expect_err("pending await should use an explicit franken-core contract");
             assert!(
-                format!("{err:?}").contains("pending promise requires full async scheduling"),
+                format!("{err:?}").contains("pending promise await is explicitly unsupported"),
                 "unexpected error: {err:?}"
             );
             assert!(matches!(

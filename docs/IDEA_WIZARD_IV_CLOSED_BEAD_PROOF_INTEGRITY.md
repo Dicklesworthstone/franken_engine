@@ -84,8 +84,9 @@ and `artifact_paths`.
 Markers flagged as `ignored` or `negative_fixture` are normalized out. This
 keeps legitimate negative fixtures from failing the proof-integrity report while
 still allowing real source contradictions, such as a closed async bead whose
-runtime still says pending promise scheduling is not implemented, to degrade
-the zero-ready saturation claim.
+runtime still carries an unqualified pending-promise scheduling placeholder
+instead of an explicit unsupported contract, to degrade the zero-ready
+saturation claim.
 
 ## Mutation Boundary
 

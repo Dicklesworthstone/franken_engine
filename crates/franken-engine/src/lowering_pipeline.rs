@@ -3333,10 +3333,12 @@ pub fn lower_ir2_to_ir3(
                     // value into register 0 so the interpreter returns it as
                     // the script completion value when execution falls off
                     // the end of the instruction stream.
-                    ir3.instructions.push(Ir3Instruction::Move {
-                        dst: 0,
-                        src: register,
-                    });
+                    if register != 0 {
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: 0,
+                            src: register,
+                        });
+                    }
                 } else {
                     ir3.instructions.push(Ir3Instruction::Move {
                         dst: register,
@@ -4597,7 +4599,7 @@ pub fn lower_ir2_to_ir3(
                 }
                 Ir1Op::Pop | Ir1Op::Nop => {
                     let reg = pop_lowering_value(&mut fn_value_stack)?;
-                    if matches!(body_ir1, Ir1Op::Pop) {
+                    if matches!(body_ir1, Ir1Op::Pop) && reg != 0 {
                         ir3.instructions
                             .push(Ir3Instruction::Move { dst: 0, src: reg });
                     }
@@ -7064,6 +7066,11 @@ fn lower_expression_to_ir1(
             }
             // Ensure body ends with a return.
             if !matches!(body_ops.last(), Some(Ir1Op::Return)) {
+                if matches!(body, ArrowBody::Block(_)) {
+                    body_ops.push(Ir1Op::LoadLiteral {
+                        value: Ir1Literal::Undefined,
+                    });
+                }
                 body_ops.push(Ir1Op::Return);
             }
             let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();

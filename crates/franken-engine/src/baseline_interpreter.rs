@@ -3088,7 +3088,22 @@ impl InterpreterCore {
                     )),
                 })?;
 
-        let Some(canonical_root) = self.config.canonical_module_root.as_ref() else {
+        let canonical_root_storage;
+        let canonical_root = if let Some(canonical_root) =
+            self.config.canonical_module_root.as_ref()
+        {
+            canonical_root
+        } else if let Some(module_root) = self.config.module_root.as_ref() {
+            canonical_root_storage = Path::new(module_root).canonicalize().map_err(|error| {
+                InterpreterError::ModuleResolutionFailed {
+                    specifier: specifier.to_string(),
+                    reason: ModuleResolutionFailureReason::Other(format!(
+                        "failed to canonicalize module root: {error}"
+                    )),
+                }
+            })?;
+            &canonical_root_storage
+        } else {
             return Ok(canonical);
         };
 
@@ -21425,25 +21440,24 @@ mod async_runtime_tests_current {
         weakmap_id
     }
 
-    fn weakmap_entries_for_current_test(core: &InterpreterCore, weakmap_id: ObjectId) -> ObjectId {
-        match core.heap[weakmap_id.0 as usize].properties.get("__entries") {
-            Some(Value::Object(entries_id)) => *entries_id,
-            other => panic!("WeakMap should hold entries object, got {other:?}"),
-        }
+    fn weakmap_storage_for_current_test(
+        core: &mut InterpreterCore,
+        weakmap_id: ObjectId,
+    ) -> &mut WeakMapStorage {
+        core.weakmap_storage
+            .get_mut(&weakmap_id)
+            .expect("WeakMap constructor should initialize weak storage")
     }
 
     #[test]
     fn weakmap_get_has_use_constructor_entries_storage_current() {
         let mut core = test_interpreter();
         let weakmap_id = construct_weakmap_for_current_test(&mut core);
-        let entries_id = weakmap_entries_for_current_test(&core, weakmap_id);
-        assert_ne!(weakmap_id, entries_id);
 
         let key_id = core
             .alloc_object_with_prototype(None)
             .expect("object key allocation should succeed");
-        core.set_object_property(entries_id, format!("o:{}", key_id.0), Value::Int(41))
-            .expect("test setup should write WeakMap entries storage");
+        weakmap_storage_for_current_test(&mut core, weakmap_id).set(key_id.0, Value::Int(41));
 
         core.registers[0] = Value::Object(weakmap_id);
         core.registers[1] = Value::Object(key_id);
@@ -21520,9 +21534,10 @@ mod async_runtime_tests_current {
     fn weakmap_get_has_ignore_primitive_keys_even_when_entries_match_current() {
         let mut core = test_interpreter();
         let weakmap_id = construct_weakmap_for_current_test(&mut core);
-        let entries_id = weakmap_entries_for_current_test(&core, weakmap_id);
-        core.set_object_property(entries_id, "s:primitive".to_string(), Value::Int(7))
-            .expect("test setup should write non-object-key entry");
+        let object_key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("object key allocation should succeed");
+        weakmap_storage_for_current_test(&mut core, weakmap_id).set(object_key_id.0, Value::Int(7));
 
         core.registers[0] = Value::Object(weakmap_id);
         core.registers[1] = Value::Str("primitive".to_string());

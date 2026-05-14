@@ -890,18 +890,6 @@ impl ObjectHeap {
         key: PropertyKey,
         value: JsValue,
     ) -> Result<bool, ObjectError> {
-        // Check if the target object is frozen
-        if self.is_frozen(handle)? {
-            // In JavaScript, attempting to set a property on a frozen object:
-            // - In strict mode: throws TypeError
-            // - In sloppy mode: silently fails (returns false)
-            // For now, we'll always throw since we don't track strict mode context here.
-            // The interpreter can catch this and handle sloppy mode if needed.
-            return Err(ObjectError::TypeError(
-                "Cannot add property to frozen object".to_string(),
-            ));
-        }
-
         // First, traverse prototype chain to determine what should happen.
         let mut current = Some(handle);
         let mut depth: u32 = 0;

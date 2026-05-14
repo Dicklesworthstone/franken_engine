@@ -2259,8 +2259,8 @@ mod tests {
         store
             .fulfill(p, js_int(42), Label::Public, &mut queue)
             .expect("serde deserialization should succeed");
-        // 4 reactions (2 fulfill + 2 reject) -> 4 microtasks.
-        assert_eq!(queue.pending_count(), 4);
+        // Only fulfill reactions are scheduled when the promise fulfills.
+        assert_eq!(queue.pending_count(), 2);
     }
 
     // ----- Event loop multi-turn -----

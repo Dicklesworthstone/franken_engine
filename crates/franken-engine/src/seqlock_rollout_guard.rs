@@ -925,8 +925,27 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let canonical = canonical_json_value(value);
+    let bytes = serde_json::to_vec(&canonical).expect("serde deserialization should succeed");
     sha256_hex(&bytes)
+}
+
+fn canonical_json_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(canonical_json_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut sorted = serde_json::Map::new();
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by_key(|(key, _)| *key);
+            for (key, value) in entries {
+                sorted.insert(key.clone(), canonical_json_value(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        _ => value.clone(),
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -2045,10 +2064,8 @@ mod tests {
     }
 
     #[test]
-    fn digest_json_key_order_matters() {
-        // serde_json::json! with object keys produces ordered output for
-        // Value::Object (BTreeMap), so identical keys in different insertion
-        // order still produce the same hash.
+    fn digest_json_canonicalizes_object_key_order() {
+        // Hashes should be stable even when JSON object insertion order differs.
         let a = serde_json::json!({"alpha": 1, "beta": 2});
         let b = serde_json::json!({"beta": 2, "alpha": 1});
         let ha = super::digest_json(&a);

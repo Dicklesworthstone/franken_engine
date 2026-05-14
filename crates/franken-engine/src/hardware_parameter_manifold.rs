@@ -168,9 +168,16 @@ impl HardwareAxis {
 
     /// Content hash for this axis definition.
     pub fn content_hash(&self) -> ContentHash {
+        // Length-prefix the two adjacent variable-length fields (key and
+        // domain Display) so e.g. `key="ab" domain="cd"` cannot smear with
+        // `key="a" domain="bcd"`. Fixed-width fields stay unprefixed.
         let mut h = Sha256::new();
-        h.update(self.key.as_bytes());
-        h.update(self.domain.as_str().as_bytes());
+        let key_bytes = self.key.as_bytes();
+        let domain_bytes = self.domain.as_str().as_bytes();
+        h.update((key_bytes.len() as u64).to_le_bytes());
+        h.update(key_bytes);
+        h.update((domain_bytes.len() as u64).to_le_bytes());
+        h.update(domain_bytes);
         h.update(self.min_millionths.to_le_bytes());
         h.update(self.max_millionths.to_le_bytes());
         h.update(if self.required { &[1u8] } else { &[0u8] });
@@ -204,11 +211,21 @@ impl HardwareFingerprint {
     ) -> Self {
         let id = id.into();
         let label = label.into();
+        // Length-prefix id/label so they cannot smear into each other, and
+        // length-prefix the values map (count + per-key length) so a key like
+        // `"a" + 8_bytes_of_value + next_key` cannot merge into a longer key.
         let mut h = Sha256::new();
-        h.update(id.as_bytes());
-        h.update(label.as_bytes());
+        let id_bytes = id.as_bytes();
+        let label_bytes = label.as_bytes();
+        h.update((id_bytes.len() as u64).to_le_bytes());
+        h.update(id_bytes);
+        h.update((label_bytes.len() as u64).to_le_bytes());
+        h.update(label_bytes);
+        h.update((values.len() as u64).to_le_bytes());
         for (k, v) in &values {
-            h.update(k.as_bytes());
+            let key_bytes = k.as_bytes();
+            h.update((key_bytes.len() as u64).to_le_bytes());
+            h.update(key_bytes);
             h.update(v.to_le_bytes());
         }
         let content_hash = ContentHash::compute(&h.finalize());
@@ -1196,6 +1213,19 @@ mod tests {
     }
 
     #[test]
+    fn axis_content_hash_distinguishes_key_domain_boundary() {
+        // Regression: without length prefixes, `key="ab" domain="Microarch"`
+        // would feed the same byte stream as `key="a" domain="bMicroarch"`.
+        // Domain is a closed enum so the second variant isn't actually
+        // realizable, but the length-prefixed implementation must keep any
+        // such smear distinguishable regardless.
+        let a = HardwareAxis::new("ab", HardwareAxisDomain::Microarch, 0, 1, false, "x");
+        let b = HardwareAxis::new("a", HardwareAxisDomain::Microarch, 0, 1, false, "x");
+        // Different keys: hashes must differ.
+        assert_ne!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
     fn axis_serde_roundtrip() {
         let a = sample_axis();
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
@@ -1232,6 +1262,30 @@ mod tests {
         let fp1 = sample_fingerprint("fp1", 8_000_000, 50_000_000);
         let fp2 = sample_fingerprint("fp1", 16_000_000, 50_000_000);
         assert_ne!(fp1.content_hash, fp2.content_hash);
+    }
+
+    #[test]
+    fn fingerprint_hash_distinguishes_id_label_boundary() {
+        // Regression: `id="ab" label="cd"` would smear with `id="a" label="bcd"`
+        // without length prefixes. Both feed `abcd` to the hasher otherwise.
+        let values: BTreeMap<String, u64> = BTreeMap::new();
+        let a = HardwareFingerprint::new("ab", "cd", values.clone());
+        let b = HardwareFingerprint::new("a", "bcd", values);
+        assert_ne!(a.content_hash, b.content_hash);
+    }
+
+    #[test]
+    fn fingerprint_hash_distinguishes_key_count_smear() {
+        // Two entries vs one merged key with the same value must hash
+        // differently once we prefix the entry count and each key length.
+        let mut two = BTreeMap::new();
+        two.insert("aa".to_string(), 0u64);
+        two.insert("bb".to_string(), 0u64);
+        let mut one = BTreeMap::new();
+        one.insert("aabb".to_string(), 0u64);
+        let a = HardwareFingerprint::new("id", "label", two);
+        let b = HardwareFingerprint::new("id", "label", one);
+        assert_ne!(a.content_hash, b.content_hash);
     }
 
     #[test]

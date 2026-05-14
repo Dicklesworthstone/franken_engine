@@ -1,0 +1,106 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-operator-status-contract.v1",
+  "bead_id": "bd-yo0eh",
+  "parent_bead_id": "bd-xg3d6",
+  "depends_on": ["bd-4j2ck", "bd-or2e1", "bd-jp4r0"],
+  "script": "scripts/optimization_promotion_operator_status.sh",
+  "smoke_script": "scripts/e2e/optimization_promotion_operator_status_smoke.sh",
+  "docs": "docs/OPTIMIZATION_PROMOTION_OPERATOR_STATUS.md",
+  "fixture_bundle": "scripts/testdata/optimization_promotion_operator_status/cases.json",
+  "status_schema_version": "franken-engine.optimization-promotion-operator-status.v1",
+  "truth_gate_schema_version": "franken-engine.optimization-promotion-operator-truth-gate.v1",
+  "required_inputs": [
+    "optimization_promotion_plan",
+    "optimization_demotion_receipt",
+    "optimization_transfer_guard",
+    "source_revision"
+  ],
+  "operator_states": [
+    "observe",
+    "promote",
+    "pin",
+    "demote",
+    "quarantine",
+    "fail_closed"
+  ],
+  "truth_gate_violation_codes": [
+    "FE-OPT-STATUS-LIVE-MUTATION-CLAIM",
+    "FE-OPT-STATUS-AUTOMATIC-BENCHMARK-PUBLICATION",
+    "FE-OPT-STATUS-BARE-CARGO-VALIDATION",
+    "FE-OPT-STATUS-DENOMINATOR-WIN-OVERCLAIM"
+  ],
+  "artifacts": {
+    "status_json": "optimization_promotion_operator_status.json",
+    "truth_gate_report_json": "optimization_promotion_truth_gate_report.json",
+    "operator_status_md": "operator_status.md",
+    "events_jsonl": "events.jsonl",
+    "commands_txt": "commands.txt",
+    "report_md": "report.md"
+  },
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "fixture_fed_only": true,
+    "mutates_runtime_policy": false,
+    "mutates_br": false,
+    "sends_agent_mail": false,
+    "releases_reservations": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_remote_workers": false,
+    "publishes_benchmark_claims": false
+  },
+  "required_doc_text": [
+    "The optimization promotion operator status composer is advisory only and proof only.",
+    "It consumes saved promotion, demotion, and transfer guard receipts and emits operator-facing status without mutating runtime policy.",
+    "The status surface distinguishes observe, promote, pin, demote, quarantine, and fail_closed states.",
+    "Operator text must not claim live mutation, automatic benchmark publication, bare Cargo validation, or denominator wins without release gates.",
+    "Every copy/paste validation command is rch-wrapped.",
+    "Fail_closed status is a routing state for evidence problems, not proof that runtime policy changed."
+  ],
+  "selftest_cases": [
+    {
+      "case_id": "observe_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "observe",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "promote_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "promote",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "pin_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "pin",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "demote_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "demote",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "quarantine_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "quarantine",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "fail_closed_status",
+      "expected_exit_code": 0,
+      "expected_operator_state": "fail_closed",
+      "expected_truth_gate_decision": "pass"
+    },
+    {
+      "case_id": "forbidden_wording_rejected",
+      "expected_exit_code": 42,
+      "expected_operator_state": "fail_closed",
+      "expected_truth_gate_decision": "fail_closed",
+      "required_violation_code": "FE-OPT-STATUS-LIVE-MUTATION-CLAIM"
+    }
+  ]
+}

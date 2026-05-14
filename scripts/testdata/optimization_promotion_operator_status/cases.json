@@ -1,0 +1,191 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-operator-status-fixtures.v1",
+  "base_input": {
+    "schema_version": "franken-engine.optimization-promotion-operator-status.input.v1",
+    "source_revision": "rev-current",
+    "expected_source_revision": "rev-current",
+    "candidate": {
+      "candidate_id": "candidate-proof-specialized-hostcall-elision",
+      "workload_regime": "server_hot_loop",
+      "source_paths": ["crates/franken-engine/src/proof_specialization_receipt.rs"]
+    },
+    "optimization_promotion_plan": {
+      "schema_version": "franken-engine.optimization-promotion-plan.v1",
+      "decision": "pass",
+      "recommended_state": "observe",
+      "candidate": {
+        "candidate_id": "candidate-proof-specialized-hostcall-elision",
+        "workload_regime": "server_hot_loop"
+      },
+      "side_conditions": {
+        "contract_report_passed": true,
+        "source_revision_aligned": true,
+        "real_hot_path_evidence_fresh": true,
+        "proof_inputs_current": true,
+        "semantic_parity_matched": true,
+        "tail_budget_ok": true,
+        "rollback_ready": true,
+        "safe_mode_ready": true,
+        "support_surface_aligned": true,
+        "no_synthetic_contamination": true
+      },
+      "fail_closed_reasons": [],
+      "next_validation_commands": [
+        {
+          "purpose": "focused promotion eligibility proof",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_yo0eh CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib optimization_promotion -- --nocapture"
+        }
+      ]
+    },
+    "optimization_demotion_receipt": {
+      "schema_version": "franken-engine.optimization-demotion-receipt.v1",
+      "decision": "pass",
+      "recommended_state": "keep_observed",
+      "triggers": [],
+      "fail_closed_reasons": [],
+      "next_validation_commands": [
+        {
+          "purpose": "focused demotion replay receipt proof",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_yo0eh CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib demotion_rollback -- --nocapture"
+        }
+      ]
+    },
+    "optimization_transfer_guard": {
+      "schema_version": "franken-engine.optimization-transfer-guard.v1",
+      "decision": "pass",
+      "recommended_state": "allow_same_regime",
+      "promotion_side_conditions": {
+        "transfer_guard_passed": true,
+        "workload_identity_unambiguous": true,
+        "regime_labels_consistent": true,
+        "transfer_evidence_ready": true,
+        "target_regime_supported": true,
+        "target_regime_excluded": false,
+        "tail_budget_ok": true,
+        "no_synthetic_contamination": true
+      },
+      "required_additional_proof": [],
+      "fail_closed_reasons": [],
+      "next_validation_commands": [
+        {
+          "purpose": "focused transfer guard proof",
+          "command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_yo0eh CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test cross_workload_transfer_integration -- --nocapture"
+        }
+      ]
+    },
+    "evidence_freshness": {
+      "real_hot_path_evidence": "fresh",
+      "proof_specialization_receipt": "fresh",
+      "transfer_guard": "fresh",
+      "demotion_receipt": "fresh"
+    },
+    "operator_status_text": ""
+  },
+  "cases": [
+    {
+      "case_id": "observe_status",
+      "overrides": {},
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "observe",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "promote_status",
+      "overrides": {
+        "optimization_promotion_plan": {
+          "recommended_state": "promote"
+        }
+      },
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "promote",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "pin_status",
+      "overrides": {
+        "optimization_promotion_plan": {
+          "recommended_state": "pin"
+        }
+      },
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "pin",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "demote_status",
+      "overrides": {
+        "optimization_demotion_receipt": {
+          "recommended_state": "demote_now",
+          "triggers": [
+            {
+              "code": "OPT_DEMOTION_STALE_PROOF_RECEIPT",
+              "source_id": "proof_specialization_receipt"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "demote",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "quarantine_status",
+      "overrides": {
+        "optimization_demotion_receipt": {
+          "recommended_state": "quarantine_candidate",
+          "triggers": [
+            {
+              "code": "OPT_DEMOTION_SEMANTIC_DIVERGENCE",
+              "source_id": "semantic_parity"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "quarantine",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "fail_closed_status",
+      "overrides": {
+        "optimization_promotion_plan": {
+          "decision": "fail_closed",
+          "recommended_state": "fail_closed",
+          "fail_closed_reasons": [
+            {
+              "code": "FE-OPT-PROMO-STALE-EVIDENCE",
+              "source_id": "proof_specialization_receipt"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_operator_state": "fail_closed",
+        "expected_truth_gate_decision": "pass"
+      }
+    },
+    {
+      "case_id": "forbidden_wording_rejected",
+      "overrides": {
+        "operator_status_text": "This status automatically promotes the candidate, mutates runtime policy, publishes benchmark results automatically, proves denominator wins, and says to run cargo test."
+      },
+      "expected": {
+        "expected_exit_code": 42,
+        "expected_operator_state": "fail_closed",
+        "expected_truth_gate_decision": "fail_closed",
+        "required_violation_code": "FE-OPT-STATUS-LIVE-MUTATION-CLAIM"
+      }
+    }
+  ]
+}

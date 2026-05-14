@@ -25,6 +25,10 @@ jq -e '
   .schema_version == "franken-engine.idea-wizard-iv-operator-truth-gate.v1"
   and (.claim_sensitivity_checks.advisory_mode_required == true)
   and (.observed_claims | type) == "object"
+  and (.zero_ready_truth | type) == "object"
+  and (.zero_ready_truth.state | IN("true_saturation", "source_gap_found", "degraded_unknown"))
+  and (.zero_ready_truth.reason_codes | type) == "array"
+  and (.zero_ready_truth.next_commands | type) == "array"
   and (.targeted_claims | type) == "array"
   and (.violations | type) == "array"
   and .mutation_policy.mutates_br == false

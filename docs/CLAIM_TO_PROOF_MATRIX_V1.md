@@ -38,6 +38,9 @@ benchmark denominator contract. Artifacts containing `hot_paths_simulation` or
 `MockCertificate` are fixture-only and the gate rejects them as backing evidence
 for observed performance claims.
 
+Operator workflow, failure triage, and comparison steps live in
+`docs/REAL_HOT_PATH_EVIDENCE_RUNBOOK.md`.
+
 ## Matrix
 
 | Claim | Scope | Source | State | Decision | Owner |

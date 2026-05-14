@@ -1,0 +1,130 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xii-zero-ready-source-gap-picker.v1",
+  "source_revision": "smoke-zero-ready",
+  "generated_at_utc": "2026-05-14T07:00:00Z",
+  "decision": "proposals_emitted",
+  "classification": "source_gap_candidates",
+  "ready_count": 0,
+  "open_count": 0,
+  "closed_bead_count": 2,
+  "source_marker_count": 2,
+  "proposal_count": 1,
+  "suppressed_count": 1,
+  "duplicate_suppressed_count": 1,
+  "max_candidates": 25,
+  "ranking_policy": {
+    "safety": "prefer unsupported, not-implemented, fail-closed, placeholder, and TODO markers",
+    "user_impact": "runtime/core/security paths outrank script/docs markers",
+    "validation_cost": "low-cost script/docs checks rank slightly higher than medium-cost Rust checks",
+    "queue_policy": "refuse proposals unless br ready and open snapshots are both empty"
+  },
+  "proposed_beads": [
+    {
+      "bead_id": "bd-zlvz8",
+      "related_bead_ids": [
+        "bd-zlvz8"
+      ],
+      "file": "crates/franken-core/src/baseline_interpreter.rs",
+      "line": 5408,
+      "marker": "pending promise requires full async scheduling (not yet implemented)",
+      "marker_class": "unsupported_semantic_marker",
+      "detail": "Closed bead claims pending async/await execution is implemented, but source still fails closed for pending promise scheduling.",
+      "confidence": "high",
+      "suggested_next_bead_title": "[IDEA-WIZARD-XII-C] Reopen real pending-promise await execution from source evidence",
+      "validation_scope": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_gap CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p franken-core <focused_filter>",
+      "ignored": false,
+      "negative_fixture": false,
+      "candidate_id": "zero-ready-gap-crates-franken-core-src-baseline-interpreter-rs-5408-pending-promise-req",
+      "closed_bead_matches": [
+        {
+          "id": "bd-zlvz8",
+          "title": "[MOCK] CRITICAL: Implement async/await pending promise execution",
+          "status": "closed",
+          "priority": 1,
+          "issue_type": "",
+          "assignee": "ClaudeAlpha",
+          "description": "",
+          "notes": "",
+          "close_reason": "Done in commit cafefeed. Validation passed: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target cargo test -p franken-core async_function_pending_await",
+          "labels": [
+            "async-await",
+            "franken-core"
+          ]
+        }
+      ],
+      "open_bead_matches": [],
+      "priority": 1,
+      "issue_type": "bug",
+      "labels": [
+        "idea-wizard",
+        "semantic-debt",
+        "source-gap"
+      ],
+      "validation_cost": "medium",
+      "user_impact": "high",
+      "under_60_minute_estimate": true,
+      "rank_score": 100,
+      "title": "[IDEA-WIZARD-XII-C] Reopen real pending-promise await execution from source evidence",
+      "body_md": "## What\nResolve or explicitly contract the source gap at `crates/franken-core/src/baseline_interpreter.rs:5408`.\n\n## Evidence\n- Marker: `pending promise requires full async scheduling (not yet implemented)`\n- Marker class: `unsupported_semantic_marker`\n- Confidence: `high`\n- Detail: Closed bead claims pending async/await execution is implemented, but source still fails closed for pending promise scheduling.\n- Related closed beads: `bd-zlvz8`\n\n## Validation\n- rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_source_gap CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p franken-core <focused_filter>\n\n## Constraints\n- Keep the fix under 60 minutes or leave this as an explicit blocker.\n- Do not run local Cargo; use the repo-required rch shape for Rust validation.\n"
+    }
+  ],
+  "suppressed_candidates": [
+    {
+      "bead_id": "bd-closed-duplicate",
+      "related_bead_ids": [
+        "bd-closed-duplicate"
+      ],
+      "file": "scripts/legacy_gap_fixture.sh",
+      "line": 12,
+      "marker": "TODO production readiness",
+      "marker_class": "todo_marker",
+      "detail": "Duplicate closed source marker should not produce another bead without a follow-up signal.",
+      "confidence": "medium",
+      "suggested_next_bead_title": "",
+      "validation_scope": "bash -n <changed script>; shellcheck -x <changed script>; bash <focused smoke> check",
+      "ignored": false,
+      "negative_fixture": false,
+      "candidate_id": "zero-ready-gap-scripts-legacy-gap-fixture-sh-12-todo-production-readiness",
+      "closed_bead_matches": [
+        {
+          "id": "bd-closed-duplicate",
+          "title": "[SOURCE-GAP] Resolve TODO production marker in scripts/legacy_gap_fixture.sh",
+          "status": "closed",
+          "priority": 3,
+          "issue_type": "",
+          "assignee": "RainyBadger",
+          "description": "",
+          "notes": "",
+          "close_reason": "Closed duplicate source marker for scripts/legacy_gap_fixture.sh TODO production readiness.",
+          "labels": [
+            "tests"
+          ]
+        }
+      ],
+      "open_bead_matches": [],
+      "priority": 3,
+      "issue_type": "bug",
+      "labels": [
+        "idea-wizard",
+        "semantic-debt",
+        "source-gap"
+      ],
+      "validation_cost": "low",
+      "user_impact": "low",
+      "under_60_minute_estimate": true,
+      "rank_score": 40,
+      "title": "[SOURCE-GAP] Resolve todo_marker in scripts/legacy_gap_fixture.sh",
+      "body_md": "## What\nResolve or explicitly contract the source gap at `scripts/legacy_gap_fixture.sh:12`.\n\n## Evidence\n- Marker: `TODO production readiness`\n- Marker class: `todo_marker`\n- Confidence: `medium`\n- Detail: Duplicate closed source marker should not produce another bead without a follow-up signal.\n- Related closed beads: `bd-closed-duplicate`\n\n## Validation\n- bash -n <changed script>; shellcheck -x <changed script>; bash <focused smoke> check\n\n## Constraints\n- Keep the fix under 60 minutes or leave this as an explicit blocker.\n- Do not run local Cargo; use the repo-required rch shape for Rust validation.\n",
+      "suppression_reason": "duplicate_closed_bead_without_followup_signal"
+    }
+  ],
+  "mutation_policy": {
+    "advisory_only": true,
+    "creates_beads": false,
+    "mutates_br": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "sends_agent_mail": false,
+    "touches_workers": false
+  }
+}

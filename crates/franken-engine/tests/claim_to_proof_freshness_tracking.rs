@@ -498,6 +498,140 @@ fn test_observed_claim_rejects_targeted_placeholder_metric_artifact() {
 }
 
 #[test]
+fn test_observed_performance_claim_rejects_simulated_hot_path_artifact() {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+    let temp_path = temp_dir.path();
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    let artifact_dir = temp_path.join("simulated_hot_path_artifacts");
+    fs::create_dir_all(&artifact_dir).expect("Failed to create simulated artifact directory");
+    let simulated_report_path = artifact_dir.join("simulated_hot_paths_report.json");
+    let simulated_report = serde_json::json!({
+        "schema_version": "franken-engine.test-simulated-hot-path-artifact.v1",
+        "benchmark_group": "hot_paths_simulation",
+        "certificate_fixture": "MockCertificate",
+        "generated_at_utc": "20260514T030000Z"
+    });
+    fs::write(
+        &simulated_report_path,
+        serde_json::to_string_pretty(&simulated_report).unwrap(),
+    )
+    .expect("Failed to write simulated hot-path report");
+
+    let matrix = serde_json::json!({
+        "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+        "policy_id": "test-policy",
+        "owning_bead": "bd-test",
+        "max_observed_freshness_days": 999_999,
+        "stale_threshold_days": 999_999,
+        "state_order": ["hypothesis", "target", "observed"],
+        "claims": [
+            {
+                "claim_id": "TEST-SIM-HOTPATH-001",
+                "claim_scope": "performance",
+                "claim_text": "Observed performance claim backed by simulated hot-path evidence",
+                "source_path": "README.md",
+                "source_span": {
+                    "start_line": 1,
+                    "end_line": 1,
+                    "must_contain": "FrankenEngine"
+                },
+                "allowed_state": "observed",
+                "actual_wording_state": "observed",
+                "artifact_path": artifact_dir.display().to_string(),
+                "verification_command": "./scripts/run_real_hot_path_proof.sh smoke",
+                "freshness_days": 1,
+                "decision": "allow_observed",
+                "reason": "This must be rejected because simulated hot-path evidence is fixture-only",
+                "owning_bead": "bd-test",
+                "downgrade_text": "Target: performance claim needs real_runtime_hot_paths proof artifacts."
+            }
+        ]
+    });
+
+    let matrix_path = temp_path.join("simulated_hot_path_matrix.json");
+    fs::write(&matrix_path, serde_json::to_string_pretty(&matrix).unwrap())
+        .expect("Failed to write simulated hot-path matrix");
+
+    let artifact_root = temp_path.join("claim_gate_artifacts");
+    let output = Command::new("./scripts/run_claim_to_proof_matrix_gate.sh")
+        .arg("ci")
+        .env("CLAIM_TO_PROOF_MATRIX_PATH", &matrix_path)
+        .env("CLAIM_TO_PROOF_MATRIX_ARTIFACT_ROOT", &artifact_root)
+        .current_dir(repo_root)
+        .output()
+        .expect("Failed to run claim-to-proof matrix gate");
+
+    assert!(
+        !output.status.success(),
+        "Gate must fail observed performance claims backed by simulated hot-path artifacts"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("observed performance claim artifact cites simulated hot-path evidence"),
+        "Failure log should expose simulated hot-path evidence: stderr={}",
+        stderr
+    );
+    assert!(
+        stderr.contains("hot_paths_simulation"),
+        "Failure log should name the fixture-only marker: stderr={}",
+        stderr
+    );
+    assert!(
+        stderr.contains("MockCertificate"),
+        "Failure log should name the fixture-only certificate marker: stderr={}",
+        stderr
+    );
+
+    let report_line = stdout
+        .lines()
+        .find(|line| line.starts_with("claim_to_proof_matrix_gate_report="))
+        .expect("Report path not found in stdout");
+    let report_path = report_line
+        .strip_prefix("claim_to_proof_matrix_gate_report=")
+        .expect("Invalid report line format");
+    let report_path = repo_root.join(report_path);
+
+    let report_content = fs::read_to_string(&report_path).expect("Failed to read report");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Failed to parse report");
+    let event = report["events"]
+        .as_array()
+        .expect("No events in report")
+        .iter()
+        .find(|event| event["claim_id"] == "TEST-SIM-HOTPATH-001")
+        .expect("Simulated hot-path claim event not found");
+
+    assert_eq!(event["status"], "fail");
+    assert_eq!(event["artifact_quality_status"], "simulated_hot_path");
+    assert!(
+        event["artifact_quality_reason"]
+            .as_str()
+            .expect("quality reason should be present")
+            .contains("MockCertificate"),
+        "quality reason must include fixture-only certificate marker"
+    );
+    assert!(
+        event["artifact_quality_report_path"]
+            .as_str()
+            .expect("quality report path should be present")
+            .ends_with("simulated_hot_paths_report.json"),
+        "quality report path should point at the simulated report"
+    );
+
+    println!("✓ Simulated hot-path artifact rejection validation passed");
+    println!("  - Observed performance claims fail on hot_paths_simulation artifacts");
+    println!("  - Structured event records simulated_hot_path artifact quality");
+    println!("  - Operators get the exact fixture-only artifact path");
+}
+
+#[test]
 fn test_claim_to_proof_file_based_freshness() {
     let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
     let temp_path = temp_dir.path();

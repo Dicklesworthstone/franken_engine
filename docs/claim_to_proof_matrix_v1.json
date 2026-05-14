@@ -5,6 +5,24 @@
   "generated_by": "manual-ga-proof-audit",
   "max_observed_freshness_days": 30,
   "state_order": ["hypothesis", "target", "observed"],
+  "performance_evidence_policy": {
+    "real_hot_path_observed_internal_evidence": {
+      "runtime_lane": "real_runtime_hot_paths",
+      "proof_wrapper": "scripts/run_real_hot_path_proof.sh smoke",
+      "contract_gate": "scripts/real_hot_path_proof_contract_gate.sh",
+      "contract_schema": "franken-engine.real-hot-path-proof-contract-gate.v1",
+      "observed_scope": "Internal FrankenEngine hot-path workloads execute through rch and emit deterministic command, worker, target-dir, digest, metric, and proof-state artifacts."
+    },
+    "throughput_denominator_target_evidence": {
+      "claim_id": "FE-CLAIM-010",
+      "required_before_observed": "Fresh Node and Bun denominator artifacts under the benchmark denominator contract.",
+      "current_state": "target"
+    },
+    "banned_observed_performance_fragments": [
+      "hot_paths_simulation",
+      "MockCertificate"
+    ]
+  },
   "claims": [
     {
       "claim_id": "FE-CLAIM-001",

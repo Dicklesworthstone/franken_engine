@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
+# shellcheck source=scripts/lib/proof_artifact_contract.sh
 source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 mode="${1:-ci}"
@@ -55,7 +56,8 @@ json_string() {
 
 calculate_freshness_days() {
   local generated_utc="$1"
-  local current_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local current_utc
+  current_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   # Convert UTC timestamps to epoch seconds for calculation
   local generated_epoch
@@ -198,6 +200,34 @@ classify_quality_candidate() {
   else
     printf 'ok\n'
   fi
+}
+
+detect_simulated_hot_path_evidence() {
+  local artifact_path="$1"
+  simulated_hot_path_evidence_report_path=""
+
+  local candidates=()
+  if [[ -f "$artifact_path" ]]; then
+    candidates+=("$artifact_path")
+  elif [[ -d "$artifact_path" ]]; then
+    while IFS= read -r candidate; do
+      candidates+=("$candidate")
+    done < <(
+      find "$artifact_path" -type f \
+        \( -name "*.json" -o -name "*.jsonl" -o -name "*.md" -o -name "*.txt" -o -name "*.log" \) \
+        | sort
+    )
+  fi
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if grep -Eq 'hot_paths_simulation|MockCertificate' "$candidate"; then
+      simulated_hot_path_evidence_report_path="$candidate"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 quality_status_rank() {
@@ -488,6 +518,12 @@ while IFS= read -r claim; do
         inspect_observed_artifact_quality "$artifact_path"
         if [[ "$artifact_quality_status" != "ok" ]]; then
           status="fail"
+          local_reason="$artifact_quality_reason"
+        elif detect_simulated_hot_path_evidence "$artifact_path"; then
+          status="fail"
+          artifact_quality_status="simulated_hot_path"
+          artifact_quality_report_path="$simulated_hot_path_evidence_report_path"
+          artifact_quality_reason="observed performance claim artifact cites simulated hot-path evidence: ${simulated_hot_path_evidence_report_path}; hot_paths_simulation and MockCertificate are fixture-only markers, not observed real-runtime proof"
           local_reason="$artifact_quality_reason"
         fi
       fi

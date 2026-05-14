@@ -24,6 +24,20 @@ The gate fails when `actual_wording_state` is stronger than `allowed_state`, whe
 source spans drift, when observed rows lack artifact handles, or when missing
 proof lacks exact downgrade text.
 
+## Performance Evidence
+
+The real hot-path lane is observed internal FrankenEngine evidence only when
+`scripts/run_real_hot_path_proof.sh smoke` emits `real_runtime_hot_paths`
+artifacts and `scripts/real_hot_path_proof_contract_gate.sh` validates the
+deterministic command, rch worker, target-dir, digest, metric, and proof-state
+contract.
+
+That lane does not promote the Node/Bun denominator claim. `FE-CLAIM-010`
+remains `target` until fresh Node and Bun denominator artifacts satisfy the
+benchmark denominator contract. Artifacts containing `hot_paths_simulation` or
+`MockCertificate` are fixture-only and the gate rejects them as backing evidence
+for observed performance claims.
+
 ## Matrix
 
 | Claim | Scope | Source | State | Decision | Owner |

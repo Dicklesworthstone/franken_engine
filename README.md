@@ -1025,6 +1025,12 @@ The contract is identical replay from fixed code, policy, model snapshot, eviden
 
 ### 7. Can I verify your benchmark claims independently?
 Yes. The benchmark harness, manifests, and artifact bundles are designed for third-party reproduction.
+Current hot-path evidence is split deliberately: `scripts/run_real_hot_path_proof.sh smoke`
+plus `scripts/real_hot_path_proof_contract_gate.sh` is observed internal evidence
+for checked-in `real_runtime_hot_paths` workloads, rch execution, and deterministic
+proof artifacts. It is not Node/Bun denominator proof and does not promote the
+`>= 3x` throughput target. Any `hot_paths_simulation` or `MockCertificate`
+artifact is fixture-only and must not back an observed performance claim.
 
 ### 8. How fast is containment in practice?
 Operational target is at or below 250ms median from high-risk threshold crossing to containment action under defined load envelopes.

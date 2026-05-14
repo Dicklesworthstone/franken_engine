@@ -466,6 +466,40 @@ pub struct GateRunnerConfig {
     pub epoch: SecurityEpoch,
     pub zone: String,
     pub gate_strictness: Vec<GateStrictness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_verification: Option<RollbackVerificationEvidence>,
+}
+
+/// Explicit evidence that a promoted candidate can roll back to a known-good delegate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RollbackVerificationEvidence {
+    pub slot_id: SlotId,
+    pub candidate_digest: String,
+    pub rollback_target_digest: String,
+    pub rollback_token: String,
+    pub delegate_fallback_reachable: bool,
+    pub lineage_verified: bool,
+    pub rollback_drill_passed: bool,
+    pub evidence_refs: Vec<String>,
+}
+
+impl RollbackVerificationEvidence {
+    /// True when this evidence is complete and belongs to this exact promotion run.
+    pub fn verifies_config(&self, config: &GateRunnerConfig) -> bool {
+        self.slot_id == config.slot_id
+            && self.candidate_digest == config.candidate_digest
+            && !self.rollback_target_digest.trim().is_empty()
+            && self.rollback_target_digest != config.candidate_digest
+            && !self.rollback_token.trim().is_empty()
+            && self.delegate_fallback_reachable
+            && self.lineage_verified
+            && self.rollback_drill_passed
+            && !self.evidence_refs.is_empty()
+            && self
+                .evidence_refs
+                .iter()
+                .all(|reference| !reference.trim().is_empty())
+    }
 }
 
 impl GateRunnerConfig {
@@ -481,12 +515,19 @@ impl GateRunnerConfig {
                 .iter()
                 .map(|g| GateStrictness::standard(*g))
                 .collect(),
+            rollback_verification: None,
         }
     }
 
     /// Get strictness for a specific gate.
     pub fn strictness_for(&self, gate: GateKind) -> Option<&GateStrictness> {
         self.gate_strictness.iter().find(|s| s.gate == gate)
+    }
+
+    /// Attach explicit rollback verification evidence to this gate run.
+    pub fn with_rollback_verification(mut self, evidence: RollbackVerificationEvidence) -> Self {
+        self.rollback_verification = Some(evidence);
+        self
     }
 }
 
@@ -635,9 +676,11 @@ pub fn run_promotion_gates(config: &GateRunnerConfig, input: &GateRunnerInput) -
     let verdict = aggregate_verdict(&evaluations);
     let risk_level = assess_risk(&evaluations);
 
-    // Rollback verification: we verify that the slot can rollback
-    // (simulated here as always true when the delegate cell exists).
-    let rollback_verified = true;
+    let rollback_verified = matches!(verdict, GateVerdict::Approved)
+        && config
+            .rollback_verification
+            .as_ref()
+            .is_some_and(|evidence| evidence.verifies_config(config));
 
     let run_id = format!("gate-run-{:016x}", config.seed);
 
@@ -899,6 +942,24 @@ mod tests {
             performance_measurements: passing_perf_measurements(5),
             adversarial_results: passing_adversarial_results(20),
         }
+    }
+
+    fn rollback_evidence_for(config: &GateRunnerConfig) -> RollbackVerificationEvidence {
+        RollbackVerificationEvidence {
+            slot_id: config.slot_id.clone(),
+            candidate_digest: config.candidate_digest.clone(),
+            rollback_target_digest: "delegate-known-good-digest".to_string(),
+            rollback_token: "rollback-token-001".to_string(),
+            delegate_fallback_reachable: true,
+            lineage_verified: true,
+            rollback_drill_passed: true,
+            evidence_refs: vec!["lineage://test-slot-01/rollback-drill".to_string()],
+        }
+    }
+
+    fn with_rollback_evidence(config: GateRunnerConfig) -> GateRunnerConfig {
+        let evidence = rollback_evidence_for(&config);
+        config.with_rollback_verification(evidence)
     }
 
     // ── gate kind ────────────────────────────────────────────────────
@@ -1212,7 +1273,11 @@ mod tests {
 
     #[test]
     fn full_run_all_pass() {
-        let config = GateRunnerConfig::standard(test_slot_id(), "candidate-abc123".to_string(), 42);
+        let config = with_rollback_evidence(GateRunnerConfig::standard(
+            test_slot_id(),
+            "candidate-abc123".to_string(),
+            42,
+        ));
         let input = all_passing_input();
         let output = run_promotion_gates(&config, &input);
         assert_eq!(output.verdict, GateVerdict::Approved);
@@ -1220,6 +1285,15 @@ mod tests {
         assert!(output.rollback_verified);
         assert_eq!(output.evaluations.len(), 4);
         assert!(output.evidence_bundle.total_failed == 0);
+    }
+
+    #[test]
+    fn full_run_all_pass_without_rollback_evidence_does_not_verify_rollback() {
+        let config = GateRunnerConfig::standard(test_slot_id(), "candidate-abc123".to_string(), 42);
+        let input = all_passing_input();
+        let output = run_promotion_gates(&config, &input);
+        assert_eq!(output.verdict, GateVerdict::Approved);
+        assert!(!output.rollback_verified);
     }
 
     #[test]
@@ -1856,7 +1930,11 @@ mod tests {
 
     #[test]
     fn gate_runner_output_clone_independence() {
-        let config = GateRunnerConfig::standard(test_slot_id(), "c".to_string(), 42);
+        let config = with_rollback_evidence(GateRunnerConfig::standard(
+            test_slot_id(),
+            "c".to_string(),
+            42,
+        ));
         let input = all_passing_input();
         let original = run_promotion_gates(&config, &input);
         let mut cloned = original.clone();
@@ -2694,6 +2772,7 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             zone: "z".to_string(),
             gate_strictness: vec![], // no strictness entries
+            rollback_verification: None,
         };
         assert!(config.strictness_for(GateKind::Equivalence).is_none());
     }
@@ -2702,6 +2781,25 @@ mod tests {
     fn config_standard_epoch_is_one() {
         let config = GateRunnerConfig::standard(test_slot_id(), "c".to_string(), 0);
         assert_eq!(config.epoch.as_u64(), 1);
+    }
+
+    #[test]
+    fn rollback_evidence_must_match_config_and_be_complete() {
+        let config = GateRunnerConfig::standard(test_slot_id(), "candidate-good".to_string(), 42);
+        let valid = rollback_evidence_for(&config);
+        assert!(valid.verifies_config(&config));
+
+        let mut mismatched_candidate = valid.clone();
+        mismatched_candidate.candidate_digest = "other-candidate".to_string();
+        assert!(!mismatched_candidate.verifies_config(&config));
+
+        let mut missing_drill = valid.clone();
+        missing_drill.rollback_drill_passed = false;
+        assert!(!missing_drill.verifies_config(&config));
+
+        let mut stale_lineage = valid;
+        stale_lineage.lineage_verified = false;
+        assert!(!stale_lineage.verifies_config(&config));
     }
 
     #[test]

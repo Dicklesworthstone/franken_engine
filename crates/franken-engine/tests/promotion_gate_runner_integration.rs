@@ -26,7 +26,7 @@ use frankenengine_engine::promotion_gate_runner::{
     AdversarialTestResult, CandidateCapabilityRequest, EquivalenceTestCase, EvidenceArtifact,
     EvidenceBundle, GateEvaluation, GateKind, GateRunnerConfig, GateRunnerInput,
     GateRunnerLogEvent, GateRunnerOutput, GateStrictness, PerformanceMeasurement,
-    aggregate_verdict, assess_risk, evaluate_adversarial_survival,
+    RollbackVerificationEvidence, aggregate_verdict, assess_risk, evaluate_adversarial_survival,
     evaluate_capability_preservation, evaluate_equivalence, evaluate_performance_threshold,
     log_gate_evaluation, run_promotion_gates,
 };
@@ -152,6 +152,24 @@ fn all_passing_input() -> GateRunnerInput {
         performance_measurements: passing_perf_measurements(5),
         adversarial_results: passing_adversarial_results(20),
     }
+}
+
+fn rollback_evidence_for(config: &GateRunnerConfig) -> RollbackVerificationEvidence {
+    RollbackVerificationEvidence {
+        slot_id: config.slot_id.clone(),
+        candidate_digest: config.candidate_digest.clone(),
+        rollback_target_digest: "delegate-known-good-digest".to_string(),
+        rollback_token: "rollback-token-001".to_string(),
+        delegate_fallback_reachable: true,
+        lineage_verified: true,
+        rollback_drill_passed: true,
+        evidence_refs: vec!["lineage://test-slot-01/rollback-drill".to_string()],
+    }
+}
+
+fn with_rollback_evidence(config: GateRunnerConfig) -> GateRunnerConfig {
+    let evidence = rollback_evidence_for(&config);
+    config.with_rollback_verification(evidence)
 }
 
 fn make_gate_evaluation(gate: GateKind, passed: bool, required: bool) -> GateEvaluation {
@@ -1163,6 +1181,7 @@ fn config_strictness_for_missing_gate() {
         epoch: SecurityEpoch::from_raw(1),
         zone: "test".to_string(),
         gate_strictness: vec![GateStrictness::standard(GateKind::Equivalence)],
+        rollback_verification: None,
     };
     assert!(config.strictness_for(GateKind::Equivalence).is_some());
     assert!(
@@ -1189,6 +1208,7 @@ fn config_custom_epoch_and_zone() {
         epoch: SecurityEpoch::from_raw(42),
         zone: "production".to_string(),
         gate_strictness: vec![],
+        rollback_verification: None,
     };
     assert_eq!(config.epoch, SecurityEpoch::from_raw(42));
     assert_eq!(config.zone, "production");
@@ -1296,7 +1316,11 @@ fn gate_runner_output_serde_round_trip() {
 
 #[test]
 fn full_run_all_pass_approved() {
-    let config = GateRunnerConfig::standard(test_slot_id(), "candidate-abc123".to_string(), 42);
+    let config = with_rollback_evidence(GateRunnerConfig::standard(
+        test_slot_id(),
+        "candidate-abc123".to_string(),
+        42,
+    ));
     let input = all_passing_input();
     let output = run_promotion_gates(&config, &input);
     assert_eq!(output.verdict, GateVerdict::Approved);
@@ -1307,6 +1331,15 @@ fn full_run_all_pass_approved() {
     assert_eq!(output.slot_id, test_slot_id());
     assert_eq!(output.candidate_digest, "candidate-abc123");
     assert_eq!(output.seed, 42);
+}
+
+#[test]
+fn full_run_all_pass_without_rollback_evidence_keeps_rollback_unverified() {
+    let config = GateRunnerConfig::standard(test_slot_id(), "candidate-abc123".to_string(), 42);
+    let input = all_passing_input();
+    let output = run_promotion_gates(&config, &input);
+    assert_eq!(output.verdict, GateVerdict::Approved);
+    assert!(!output.rollback_verified);
 }
 
 #[test]
@@ -1727,6 +1760,7 @@ fn full_run_with_custom_strictness() {
                 min_adversarial_pass_rate_millionths: 400_000, // 40%
             },
         ],
+        rollback_verification: None,
     };
     // Use inputs that would fail with standard strictness
     let input = GateRunnerInput {
@@ -1759,6 +1793,7 @@ fn config_missing_all_strictness_uses_defaults() {
         epoch: SecurityEpoch::from_raw(1),
         zone: "test".to_string(),
         gate_strictness: vec![], // no custom strictness
+        rollback_verification: None,
     };
     let input = all_passing_input();
     let output = run_promotion_gates(&config, &input);

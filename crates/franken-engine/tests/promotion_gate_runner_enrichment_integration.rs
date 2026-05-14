@@ -116,6 +116,25 @@ fn standard_config() -> GateRunnerConfig {
     GateRunnerConfig::standard(test_slot_id(), "candidate-enrich".to_string(), 99)
 }
 
+fn rollback_evidence_for(config: &GateRunnerConfig) -> RollbackVerificationEvidence {
+    RollbackVerificationEvidence {
+        slot_id: config.slot_id.clone(),
+        candidate_digest: config.candidate_digest.clone(),
+        rollback_target_digest: "delegate-known-good-digest".to_string(),
+        rollback_token: "rollback-token-001".to_string(),
+        delegate_fallback_reachable: true,
+        lineage_verified: true,
+        rollback_drill_passed: true,
+        evidence_refs: vec!["lineage://test-slot-01/rollback-drill".to_string()],
+    }
+}
+
+fn standard_config_with_rollback() -> GateRunnerConfig {
+    let config = standard_config();
+    let evidence = rollback_evidence_for(&config);
+    config.with_rollback_verification(evidence)
+}
+
 // ── GateKind Display/as_str ────────────────────────────────────────────
 
 #[test]
@@ -747,13 +766,21 @@ fn runner_input_serde_roundtrip() {
 
 #[test]
 fn full_run_all_pass_approved() {
-    let cfg = standard_config();
+    let cfg = standard_config_with_rollback();
     let out = run_promotion_gates(&cfg, &all_pass_input());
     assert_eq!(out.verdict, GateVerdict::Approved);
     assert_eq!(out.risk_level, RiskLevel::Low);
     assert!(out.rollback_verified);
     assert_eq!(out.evaluations.len(), 4);
     assert_eq!(out.evidence_bundle.total_failed, 0);
+}
+
+#[test]
+fn full_run_all_pass_without_rollback_evidence_keeps_rollback_unverified() {
+    let cfg = standard_config();
+    let out = run_promotion_gates(&cfg, &all_pass_input());
+    assert_eq!(out.verdict, GateVerdict::Approved);
+    assert!(!out.rollback_verified);
 }
 
 #[test]

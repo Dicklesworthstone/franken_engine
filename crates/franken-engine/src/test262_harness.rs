@@ -302,18 +302,25 @@ impl Test262Harness {
     /// Split Test262 file into frontmatter and source code.
     fn split_frontmatter(&self, content: &str) -> Result<(String, String), Test262HarnessError> {
         // Test262 files start with /*--- frontmatter ---*/
-        if !content.starts_with("/*---") {
+        const OPEN: &str = "/*---";
+        const CLOSE: &str = "---*/";
+
+        if !content.starts_with(OPEN) {
             return Err(Test262HarnessError::ParseError(
                 "Missing Test262 frontmatter".to_string(),
             ));
         }
 
-        let frontmatter_end = content
-            .find("---*/")
+        // Search for the closing marker AFTER the opening one. Otherwise inputs
+        // like "/*-----*/" hit a `---*/` substring that overlaps with `/*---`
+        // and produce a frontmatter slice with start > end (panic on indexing).
+        let after_open = &content[OPEN.len()..];
+        let close_offset = after_open
+            .find(CLOSE)
             .ok_or_else(|| Test262HarnessError::ParseError("Malformed frontmatter".to_string()))?;
 
-        let frontmatter = content[5..frontmatter_end].to_string(); // Skip "/*---"
-        let source = content[frontmatter_end + 5..].to_string(); // Skip "---*/"
+        let frontmatter = after_open[..close_offset].to_string();
+        let source = after_open[close_offset + CLOSE.len()..].to_string();
 
         Ok((frontmatter, source))
     }
@@ -435,4 +442,86 @@ pub enum Test262HarnessError {
 
     #[error("Commit mismatch: expected {expected}, got {actual}")]
     CommitMismatch { expected: String, actual: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn harness() -> Test262Harness {
+        // Path/pins/profile are unused by split_frontmatter; placeholder values
+        // are sufficient for these focused tests.
+        let pins = Test262PinSet {
+            schema_version: "test262.pinset.v1".to_string(),
+            source_repo: "https://github.com/tc39/test262.git".to_string(),
+            es_profile: "ES2020".to_string(),
+            test262_commit: "0".repeat(40),
+        };
+        let profile = Test262Profile {
+            schema_version: "test262.profile.v1".to_string(),
+            profile_name: "placeholder".to_string(),
+            es_profile: "ES2020".to_string(),
+            includes: Vec::new(),
+            excludes: Vec::new(),
+        };
+        Test262Harness::new(PathBuf::from("/tmp/test262-placeholder"), pins, profile)
+    }
+
+    #[test]
+    fn split_frontmatter_extracts_metadata_and_source() {
+        let h = harness();
+        let content = "/*---\nesid: sec-test\ndescription: example\n---*/\nconst answer = 42;\n";
+        let (front, source) = h
+            .split_frontmatter(content)
+            .expect("well-formed frontmatter splits cleanly");
+        assert!(front.contains("esid: sec-test"));
+        assert!(front.contains("description: example"));
+        assert_eq!(source, "\nconst answer = 42;\n");
+    }
+
+    #[test]
+    fn split_frontmatter_rejects_missing_open_marker() {
+        let h = harness();
+        assert!(matches!(
+            h.split_frontmatter("// no frontmatter here\nconst x = 1;"),
+            Err(Test262HarnessError::ParseError(_))
+        ));
+    }
+
+    #[test]
+    fn split_frontmatter_rejects_unterminated_frontmatter() {
+        let h = harness();
+        assert!(matches!(
+            h.split_frontmatter("/*--- esid: sec-test"),
+            Err(Test262HarnessError::ParseError(_))
+        ));
+    }
+
+    #[test]
+    fn split_frontmatter_does_not_panic_on_overlapping_markers() {
+        // Regression: "/*-----*/" starts with "/*---" AND contains "---*/"
+        // beginning at byte offset 4 (overlapping the opener). The previous
+        // implementation produced `content[5..4]` and panicked. The fix must
+        // either return Ok with a valid split or Err — but never panic.
+        // For this input there is no valid closing marker after the opener
+        // (the remainder is just "--*/"), so a ParseError is the correct
+        // outcome.
+        let h = harness();
+        let result = h.split_frontmatter("/*-----*/");
+        assert!(
+            matches!(result, Err(Test262HarnessError::ParseError(_))),
+            "expected ParseError for malformed overlapping marker, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn split_frontmatter_handles_minimal_well_formed_block() {
+        let h = harness();
+        let (front, source) = h
+            .split_frontmatter("/*------*/")
+            .expect("minimal block should split");
+        // Body between the two markers is empty.
+        assert_eq!(front, "");
+        assert_eq!(source, "");
+    }
 }

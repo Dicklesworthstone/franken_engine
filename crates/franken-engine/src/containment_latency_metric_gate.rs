@@ -47,11 +47,10 @@ pub fn is_fake_hash(hash: &str) -> bool {
     }
 
     // All the same character repeated
-    if hex_part
-        .chars()
-        .all(|c| c == hex_part.chars().next().unwrap_or('x'))
-    {
-        return true;
+    if let Some(first) = hex_part.chars().next() {
+        if hex_part.chars().all(|c| c == first) {
+            return true;
+        }
     }
 
     // Common placeholder patterns

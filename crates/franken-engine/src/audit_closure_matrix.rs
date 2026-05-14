@@ -185,13 +185,27 @@ impl AuditClosureMatrix {
         Ok(())
     }
 
-    /// Get closure rate (100% if all findings have complete closures)
+    /// Closure rate as a percentage: complete closures / total closures × 100.
+    ///
+    /// A closure is "complete" when every field (`fixing_bead`, `file_path`,
+    /// `test_coverage`, `artifact`) is non-empty — the same predicate
+    /// [`validate_completeness`](Self::validate_completeness) enforces.
+    /// Returns `0.0` for an empty matrix.
     pub fn closure_rate(&self) -> f64 {
         if self.closures.is_empty() {
-            0.0
-        } else {
-            100.0 // All entries in the matrix are by definition closed
+            return 0.0;
         }
+        let complete = self
+            .closures
+            .values()
+            .filter(|closure| {
+                !closure.fixing_bead.is_empty()
+                    && !closure.file_path.is_empty()
+                    && !closure.test_coverage.is_empty()
+                    && !closure.artifact.is_empty()
+            })
+            .count();
+        (complete as f64 / self.closures.len() as f64) * 100.0
     }
 }
 
@@ -278,5 +292,65 @@ mod tests {
             .closures
             .insert("RGC-920A.2".to_string(), incomplete_closure);
         assert!(matrix.validate_completeness().is_err());
+    }
+
+    #[test]
+    fn closure_rate_reflects_completeness_of_entries() {
+        let mut matrix = AuditClosureMatrix::new();
+
+        let complete = AuditFindingClosure {
+            finding_id: "RGC-100A.1".to_string(),
+            fixing_bead: "bd-1".to_string(),
+            file_path: "src/a.rs".to_string(),
+            test_coverage: "tests/a.rs::test".to_string(),
+            artifact: "artifacts/a.json".to_string(),
+        };
+        let missing_bead = AuditFindingClosure {
+            finding_id: "RGC-100A.2".to_string(),
+            fixing_bead: String::new(),
+            file_path: "src/b.rs".to_string(),
+            test_coverage: "tests/b.rs::test".to_string(),
+            artifact: "artifacts/b.json".to_string(),
+        };
+        let missing_artifact = AuditFindingClosure {
+            finding_id: "RGC-100A.3".to_string(),
+            fixing_bead: "bd-3".to_string(),
+            file_path: "src/c.rs".to_string(),
+            test_coverage: "tests/c.rs::test".to_string(),
+            artifact: String::new(),
+        };
+
+        matrix
+            .closures
+            .insert(complete.finding_id.clone(), complete);
+        matrix
+            .closures
+            .insert(missing_bead.finding_id.clone(), missing_bead);
+        matrix
+            .closures
+            .insert(missing_artifact.finding_id.clone(), missing_artifact);
+
+        // 1 complete / 3 total ≈ 33.333…
+        let rate = matrix.closure_rate();
+        assert!(
+            (rate - (100.0 / 3.0)).abs() < 1e-9,
+            "expected ~33.333%, got {rate}"
+        );
+    }
+
+    #[test]
+    fn closure_rate_is_one_hundred_when_all_complete() {
+        let mut matrix = AuditClosureMatrix::new();
+        for idx in 0..4 {
+            let closure = AuditFindingClosure {
+                finding_id: format!("RGC-200A.{idx}"),
+                fixing_bead: format!("bd-{idx}"),
+                file_path: format!("src/f{idx}.rs"),
+                test_coverage: format!("tests/f{idx}.rs::test"),
+                artifact: format!("artifacts/f{idx}.json"),
+            };
+            matrix.closures.insert(closure.finding_id.clone(), closure);
+        }
+        assert_eq!(matrix.closure_rate(), 100.0);
     }
 }

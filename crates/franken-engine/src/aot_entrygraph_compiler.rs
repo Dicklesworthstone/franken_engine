@@ -884,15 +884,36 @@ pub fn compile_batch(
 // Hashing helpers
 // ---------------------------------------------------------------------------
 
+/// Write a length-prefixed byte slice into a SHA-256 hasher so adjacent
+/// variable-length fields cannot smear into each other.
+fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// Write a length-prefixed optional byte slice. The presence/absence flag is
+/// hashed before the body so `None` and `Some("")` are distinguishable.
+fn hash_optional(hasher: &mut Sha256, value: Option<&[u8]>) {
+    match value {
+        Some(bytes) => {
+            hasher.update([1u8]);
+            hash_len_prefixed(hasher, bytes);
+        }
+        None => hasher.update([0u8]),
+    }
+}
+
 /// Compute a hash over a compilation report's module results.
 pub fn compute_results_hash(results: &[ModuleCompileResult]) -> ContentHash {
     let mut hasher = Sha256::new();
+    hasher.update((results.len() as u64).to_le_bytes());
     for r in results {
-        hasher.update(r.specifier.as_bytes());
-        hasher.update(r.status.to_string().as_bytes());
-        if let Some(ref h) = r.artifact_hash {
-            hasher.update(h.as_bytes());
-        }
+        hash_len_prefixed(&mut hasher, r.specifier.as_bytes());
+        hash_len_prefixed(&mut hasher, r.status.to_string().as_bytes());
+        hash_optional(
+            &mut hasher,
+            r.artifact_hash.as_ref().map(|h| h.as_bytes().as_slice()),
+        );
         hasher.update(r.compile_time_micros.to_le_bytes());
     }
     ContentHash::compute(&hasher.finalize())
@@ -901,13 +922,13 @@ pub fn compute_results_hash(results: &[ModuleCompileResult]) -> ContentHash {
 /// Compute a hash over a compile configuration.
 pub fn compute_config_hash(config: &CompileConfig) -> ContentHash {
     let mut hasher = Sha256::new();
-    hasher.update(config.target.to_string().as_bytes());
+    hash_len_prefixed(&mut hasher, config.target.to_string().as_bytes());
     hasher.update(config.min_module_count.to_le_bytes());
     hasher.update(config.max_compile_time_micros.to_le_bytes());
     hasher.update([config.require_provenance as u8]);
     hasher.update([config.honour_cache as u8]);
     hasher.update(config.policy_revision.to_le_bytes());
-    hasher.update(config.engine_version.as_bytes());
+    hash_len_prefixed(&mut hasher, config.engine_version.as_bytes());
     hasher.update(config.max_module_source_bytes.to_le_bytes());
     ContentHash::compute(&hasher.finalize())
 }
@@ -915,9 +936,10 @@ pub fn compute_config_hash(config: &CompileConfig) -> ContentHash {
 /// Compute a batch hash over all compilation reports.
 fn compute_batch_hash(reports: &[CompilationReport]) -> ContentHash {
     let mut hasher = Sha256::new();
+    hasher.update((reports.len() as u64).to_le_bytes());
     for r in reports {
-        hasher.update(r.graph_id.as_bytes());
-        hasher.update(r.verdict.to_string().as_bytes());
+        hash_len_prefixed(&mut hasher, r.graph_id.as_bytes());
+        hash_len_prefixed(&mut hasher, r.verdict.to_string().as_bytes());
         hasher.update(r.success_rate_millionths.to_le_bytes());
     }
     ContentHash::compute(&hasher.finalize())
@@ -933,10 +955,12 @@ fn compute_receipt_hash(
     epoch: SecurityEpoch,
 ) -> ContentHash {
     let mut hasher = Sha256::new();
-    hasher.update(SCHEMA_VERSION.as_bytes());
-    hasher.update(COMPONENT.as_bytes());
-    hasher.update(graph_id.as_bytes());
-    hasher.update(verdict.to_string().as_bytes());
+    // SCHEMA_VERSION and COMPONENT are compile-time constants but become
+    // adjacent to graph_id (variable). Prefix all variable inputs.
+    hash_len_prefixed(&mut hasher, SCHEMA_VERSION.as_bytes());
+    hash_len_prefixed(&mut hasher, COMPONENT.as_bytes());
+    hash_len_prefixed(&mut hasher, graph_id.as_bytes());
+    hash_len_prefixed(&mut hasher, verdict.to_string().as_bytes());
     hasher.update(config_hash.as_bytes());
     hasher.update(graph_hash.as_bytes());
     hasher.update(results_hash.as_bytes());
@@ -1520,6 +1544,66 @@ mod tests {
         let h1 = compute_results_hash(&results);
         let h2 = compute_results_hash(&results);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_compute_results_hash_distinguishes_specifier_status_boundary() {
+        // Regression: without length prefixes, `specifier="a.js" status="Cached"`
+        // would feed the same hasher bytes as `specifier="a.jsCac" status="hed"`.
+        // (CompileStatus has multiple variants whose Display lengths differ.)
+        let make = |spec: &str, status: CompileStatus| ModuleCompileResult {
+            specifier: spec.into(),
+            status,
+            artifact_hash: None,
+            provenance: vec![],
+            compile_time_micros: 0,
+            skip_reason: None,
+        };
+        let left = vec![make("a.js", CompileStatus::CacheHit)];
+        let right = vec![make("a.jsCac", CompileStatus::Unsupported)];
+        // The two are different module specifiers AND different statuses, so
+        // regardless of any clever boundary-smear construction, the hashes
+        // must differ. (This test would still have passed pre-fix because
+        // CompileStatus Display strings are not in fact perfect prefixes of
+        // each other, but it locks in the length-prefix behavior.)
+        assert_ne!(compute_results_hash(&left), compute_results_hash(&right));
+    }
+
+    #[test]
+    fn test_compute_results_hash_distinguishes_record_count() {
+        // Without a record-count prefix, two records `{spec, status}` could
+        // hash to the same byte stream as one record whose spec is the
+        // concatenation. Length-prefixing the count rules this out.
+        let mk = |spec: &str| ModuleCompileResult {
+            specifier: spec.into(),
+            status: CompileStatus::CacheHit,
+            artifact_hash: None,
+            provenance: vec![],
+            compile_time_micros: 0,
+            skip_reason: None,
+        };
+        let two = vec![mk("foo"), mk("bar")];
+        let one = vec![mk("foobar")];
+        assert_ne!(compute_results_hash(&two), compute_results_hash(&one));
+    }
+
+    #[test]
+    fn test_compute_results_hash_distinguishes_none_from_some_empty() {
+        // `Option<ContentHash>::None` vs `Some(empty-content-hash)`: even
+        // though ContentHash is always 32 bytes (no Some(empty) per se),
+        // the hash_optional discriminant byte ensures None and Some()
+        // remain unambiguously different.
+        let mk = |artifact: Option<ContentHash>| ModuleCompileResult {
+            specifier: "x.js".into(),
+            status: CompileStatus::CacheHit,
+            artifact_hash: artifact,
+            provenance: vec![],
+            compile_time_micros: 0,
+            skip_reason: None,
+        };
+        let none = vec![mk(None)];
+        let some = vec![mk(Some(ContentHash::compute(&[])))];
+        assert_ne!(compute_results_hash(&none), compute_results_hash(&some));
     }
 
     // --- Summary tests ---

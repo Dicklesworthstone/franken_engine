@@ -221,29 +221,41 @@ impl<P: GatePolicy, E: GateEvidence> GateResult<P, E> {
     }
 
     /// Compute content hash for this result.
+    ///
+    /// Every variable-length component is length-prefixed (u64 little-endian)
+    /// so the hash is injective over the structured input. Without prefixes,
+    /// `{ category: "foo", description: "bar" }` would collide with
+    /// `{ category: "fooba", description: "r" }` because the byte stream is
+    /// the same. Fixed-set strings (verdict / severity discriminants) are
+    /// hashed unprefixed because their values cannot smear across each other.
     fn compute_content_hash(&self) -> ContentHash {
+        fn write_bytes(hasher: &mut sha2::Sha256, bytes: &[u8]) {
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
+
         let mut hasher = sha2::Sha256::new();
 
-        // Hash core result data
+        // Verdict is a closed enum; no collision risk with adjacent fields.
         hasher.update(self.verdict.as_str().as_bytes());
         hasher.update((self.violations.len() as u64).to_le_bytes());
 
-        // Hash violations in deterministic order
+        // Hash violations in deterministic order with length-prefixed strings.
         for violation in &self.violations {
             hasher.update(violation.severity.as_str().as_bytes());
-            hasher.update(violation.category.as_bytes());
-            hasher.update(violation.description.as_bytes());
+            write_bytes(&mut hasher, violation.category.as_bytes());
+            write_bytes(&mut hasher, violation.description.as_bytes());
         }
 
-        // Hash conditions and metadata
         hasher.update((self.conditions.len() as u64).to_le_bytes());
         for condition in &self.conditions {
-            hasher.update(condition.as_bytes());
+            write_bytes(&mut hasher, condition.as_bytes());
         }
 
+        hasher.update((self.metadata.len() as u64).to_le_bytes());
         for (key, value) in &self.metadata {
-            hasher.update(key.as_bytes());
-            hasher.update(value.as_bytes());
+            write_bytes(&mut hasher, key.as_bytes());
+            write_bytes(&mut hasher, value.as_bytes());
         }
 
         let hash_bytes = hasher.finalize();
@@ -863,6 +875,69 @@ mod tests {
         let hash2 = result2.compute_content_hash();
 
         assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn content_hash_distinguishes_violation_boundary_smear() {
+        // Without length prefixes, `category="foo" description="bar"` would
+        // hash to the same byte stream as `category="fooba" description="r"`.
+        // Length-prefixed hashing must keep these distinct.
+        let policy = ExamplePolicy {
+            policy_id: "boundary-test".to_string(),
+            max_violations: 1,
+            strict_mode: false,
+        };
+        let evidence = ExampleEvidence {
+            evidence_type: "boundary-evidence".to_string(),
+            violation_count: 1,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        let mut a = GateResult::new(GateVerdict::Rejected, policy.clone(), evidence.clone());
+        a.violations.push(GateViolation::new(
+            GateSeverity::Error,
+            "foo".to_string(),
+            "bar".to_string(),
+        ));
+
+        let mut b = GateResult::new(GateVerdict::Rejected, policy, evidence);
+        b.violations.push(GateViolation::new(
+            GateSeverity::Error,
+            "fooba".to_string(),
+            "r".to_string(),
+        ));
+
+        assert_ne!(
+            a.compute_content_hash(),
+            b.compute_content_hash(),
+            "adjacent violation fields must be length-prefixed",
+        );
+    }
+
+    #[test]
+    fn content_hash_distinguishes_metadata_boundary_smear() {
+        let policy = ExamplePolicy {
+            policy_id: "metadata-test".to_string(),
+            max_violations: 0,
+            strict_mode: false,
+        };
+        let evidence = ExampleEvidence {
+            evidence_type: "metadata-evidence".to_string(),
+            violation_count: 0,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+        };
+
+        let mut a = GateResult::new(GateVerdict::Approved, policy.clone(), evidence.clone());
+        a.metadata.insert("k".to_string(), "v".to_string());
+
+        let mut b = GateResult::new(GateVerdict::Approved, policy, evidence);
+        b.metadata.insert("kv".to_string(), String::new());
+
+        assert_ne!(
+            a.compute_content_hash(),
+            b.compute_content_hash(),
+            "metadata key/value pairs must be length-prefixed",
+        );
     }
 
     #[test]

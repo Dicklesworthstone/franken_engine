@@ -316,14 +316,23 @@ fn insert_unique(entries: &mut BTreeMap<String, String>, key: String, value: Str
 }
 
 fn evidence_hash_for_entries(entries: &BTreeMap<String, String>) -> String {
-    let mut material = String::new();
+    // Length-prefix every key/value with a u64 little-endian byte count so a
+    // value containing `\n` + `another_key=` cannot smear into two entries
+    // that hash to the same byte stream. Keys are normalized through
+    // `stable_label` (only `[a-z0-9_]`), but values are caller-controlled and
+    // may contain arbitrary bytes, so prefixing is required for collision
+    // resistance.
+    let mut hasher = Sha256::new();
+    hasher.update((entries.len() as u64).to_le_bytes());
     for (key, value) in entries {
-        material.push_str(key);
-        material.push('=');
-        material.push_str(value);
-        material.push('\n');
+        let key_bytes = key.as_bytes();
+        let value_bytes = value.as_bytes();
+        hasher.update((key_bytes.len() as u64).to_le_bytes());
+        hasher.update(key_bytes);
+        hasher.update((value_bytes.len() as u64).to_le_bytes());
+        hasher.update(value_bytes);
     }
-    prefixed_sha256(material.as_bytes())
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -771,5 +780,35 @@ mod tests {
             .parse::<usize>()
             .expect("usize");
         assert_eq!(count + 1, bundle.entries().len());
+    }
+
+    #[test]
+    fn evidence_hash_distinguishes_value_boundary_smear() {
+        // Regression: the prior `key=value\n` concatenation hashed
+        // `{"a": "x\nb=y"}` to the same byte stream as `{"a": "x", "b": "y"}`.
+        // The length-prefixed implementation must keep these distinct.
+        let mut single = BTreeMap::new();
+        single.insert("a".to_string(), "x\nb=y".to_string());
+
+        let mut split = BTreeMap::new();
+        split.insert("a".to_string(), "x".to_string());
+        split.insert("b".to_string(), "y".to_string());
+
+        assert_ne!(
+            super::evidence_hash_for_entries(&single),
+            super::evidence_hash_for_entries(&split),
+            "entries with smeared boundaries must hash distinctly",
+        );
+    }
+
+    #[test]
+    fn evidence_hash_is_deterministic_for_equal_inputs() {
+        let mut entries = BTreeMap::new();
+        entries.insert("key1".to_string(), "value1".to_string());
+        entries.insert("key2".to_string(), "value2".to_string());
+        let first = super::evidence_hash_for_entries(&entries);
+        let second = super::evidence_hash_for_entries(&entries);
+        assert_eq!(first, second);
+        assert!(first.starts_with("sha256:"));
     }
 }

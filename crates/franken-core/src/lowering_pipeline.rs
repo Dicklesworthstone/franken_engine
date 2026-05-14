@@ -1146,12 +1146,15 @@ fn lower_destructuring_to_ir1(
                         None => continue,
                     };
                     if let Some(&target_bid) = binding_lookup.get(target_name) {
-                        // Rest collects remaining elements — for now store
-                        // undefined as placeholder since array slicing requires
-                        // runtime support not yet available.
-                        ops.push(Ir1Op::LoadLiteral {
-                            value: Ir1Literal::Undefined,
+                        // Rest collects remaining elements by slicing the source array
+                        // from the current index to the end.
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: source_bid,
                         });
+                        ops.push(Ir1Op::LoadLiteral {
+                            value: Ir1Literal::Integer(index as i64),
+                        });
+                        ops.push(Ir1Op::ArraySlice);
                         ops.push(Ir1Op::StoreBinding {
                             binding_id: target_bid,
                         });
@@ -3482,6 +3485,15 @@ pub fn lower_ir2_to_ir3(
                     .push(Ir3Instruction::ArrayPush { array, element });
                 value_stack.push(array);
             }
+            Ir1Op::ArraySlice => {
+                // Stack: [..., array, start_index] -> [..., sliced_array]
+                let start = value_stack.pop().unwrap_or(0);
+                let array = value_stack.pop().unwrap_or(0);
+                let dst = alloc_register(&mut register_cursor);
+                ir3.instructions
+                    .push(Ir3Instruction::ArraySlice { array, start, dst });
+                value_stack.push(dst);
+            }
             Ir1Op::SpreadIntoArray => {
                 // Stack: [..., array, iterable] -> [..., array]
                 let iterable = value_stack.pop().unwrap_or(0);
@@ -4434,6 +4446,15 @@ pub fn lower_ir2_to_ir3(
                     ir3.instructions
                         .push(Ir3Instruction::ArrayPush { array, element });
                     fn_value_stack.push(array);
+                }
+                Ir1Op::ArraySlice => {
+                    // Stack: [..., array, start_index] -> [..., sliced_array]
+                    let start = fn_value_stack.pop().unwrap_or(0);
+                    let array = fn_value_stack.pop().unwrap_or(0);
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ArraySlice { array, start, dst });
+                    fn_value_stack.push(dst);
                 }
                 Ir1Op::SpreadIntoArray => {
                     // Stack: [..., array, iterable] -> [..., array]
@@ -11811,6 +11832,63 @@ mod tests {
         assert!(
             !get_props.contains(&"0".to_string()),
             "should NOT emit GetProperty for hole at index '0'"
+        );
+    }
+
+    #[test]
+    fn array_destructuring_rest_lowers_to_runtime_slice() {
+        // const [head, ...tail] = source
+        let ir0 = stmt_ir0(vec![Statement::VariableDeclaration(VariableDeclaration {
+            kind: VariableDeclarationKind::Const,
+            declarations: vec![VariableDeclarator {
+                pattern: BindingPattern::ArrayPattern(vec![
+                    Some(BindingPattern::Identifier("head".into())),
+                    Some(BindingPattern::Rest(Box::new(BindingPattern::Identifier(
+                        "tail".into(),
+                    )))),
+                ]),
+                initializer: Some(Expression::Identifier("source".into())),
+                span: span(),
+            }],
+            span: span(),
+        })]);
+
+        let ir1 = lower_ir0_to_ir1(&ir0).expect("array rest should lower to IR1");
+        let slice_index = ir1
+            .module
+            .ops
+            .iter()
+            .position(|op| matches!(op, Ir1Op::ArraySlice))
+            .expect("array rest must emit ArraySlice");
+
+        assert!(
+            ir1.module.ops[..slice_index].iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Integer(1)
+                }
+            )),
+            "array rest should load the current destructuring index as slice start"
+        );
+        assert!(
+            !ir1.module.ops.iter().any(|op| matches!(
+                op,
+                Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined
+                }
+            )),
+            "array rest must not preserve the old Undefined placeholder"
+        );
+
+        let ctx = LoweringContext::new("trace-array-rest", "decision-array-rest", "policy");
+        let ir3 = lower_ir0_to_ir3(&ir0, &ctx)
+            .expect("array rest should lower through IR3")
+            .ir3;
+        assert!(
+            ir3.instructions
+                .iter()
+                .any(|instr| matches!(instr, Ir3Instruction::ArraySlice { .. })),
+            "array rest must lower to an executable IR3 ArraySlice"
         );
     }
 

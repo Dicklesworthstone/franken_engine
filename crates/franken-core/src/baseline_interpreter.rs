@@ -3985,9 +3985,7 @@ impl InterpreterCore {
                         let req_len = self.register_base + self.config.max_registers as usize;
                         self.clear_register_range(self.register_base, req_len);
 
-                        for (i, (val, label)) in
-                            arg_vals.into_iter().zip(arg_labels.into_iter()).enumerate()
-                        {
+                        for (i, (val, label)) in arg_vals.into_iter().zip(arg_labels).enumerate() {
                             let reg = i as u32;
                             if reg < self.config.max_registers {
                                 self.write_reg_with_label(reg, val, label)?;
@@ -4551,6 +4549,77 @@ impl InterpreterCore {
                             Value::Int(i64::from(next_idx.saturating_add(1))),
                         )?;
                     }
+                    self.ip += 1;
+                }
+                Ir3Instruction::ArraySlice { array, start, dst } => {
+                    let arr_val = self.read_reg(array)?;
+                    let start_val = self.read_reg(start)?;
+                    let Value::Object(arr_id) = arr_val else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "array object".to_string(),
+                            got: arr_val.type_name().to_string(),
+                        });
+                    };
+
+                    let elements: Vec<Value> = {
+                        let obj = self
+                            .heap
+                            .get(arr_id.0 as usize)
+                            .ok_or(InterpreterError::ObjectNotFound { id: arr_id.0 })?;
+                        let length = obj
+                            .properties
+                            .get("length")
+                            .and_then(|value| match value {
+                                Value::Int(n) if *n > 0 => usize::try_from(*n).ok(),
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                obj.properties
+                                    .keys()
+                                    .filter_map(|key| key.parse::<usize>().ok())
+                                    .max()
+                                    .map_or(0, |index| index.saturating_add(1))
+                            });
+                        (0..length)
+                            .map(|index| {
+                                obj.properties
+                                    .get(&index.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            })
+                            .collect()
+                    };
+
+                    let length = elements.len();
+                    let start_idx = match start_val {
+                        Value::Undefined | Value::Null => 0,
+                        Value::Bool(false) => 0,
+                        Value::Bool(true) => 1usize.min(length),
+                        Value::Int(n) if n < 0 => {
+                            usize::try_from((length as i64).saturating_add(n).max(0)).unwrap_or(0)
+                        }
+                        Value::Int(n) => usize::try_from(n).unwrap_or(usize::MAX).min(length),
+                        Value::Float(f) => {
+                            let value = f.inner();
+                            if !value.is_finite() {
+                                0
+                            } else if value < 0.0 {
+                                ((length as f64) + value).max(0.0) as usize
+                            } else {
+                                (value as usize).min(length)
+                            }
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "integer-compatible array slice start".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    };
+
+                    let result_values: Vec<Value> = elements.into_iter().skip(start_idx).collect();
+                    let result_id = self.alloc_array_from_values(&result_values)?;
+                    self.write_reg(dst, Value::Object(result_id))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::SpreadIntoArray { array, iterable } => {
@@ -10630,6 +10699,52 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(object.value, Value::Bool(false));
+    }
+
+    #[test]
+    fn array_slice_instruction_returns_remaining_elements() {
+        let module = test_module(vec![
+            Ir3Instruction::NewArray { dst: 1 },
+            Ir3Instruction::LoadInt { dst: 2, value: 7 },
+            Ir3Instruction::ArrayPush {
+                array: 1,
+                element: 2,
+            },
+            Ir3Instruction::LoadInt { dst: 3, value: 8 },
+            Ir3Instruction::ArrayPush {
+                array: 1,
+                element: 3,
+            },
+            Ir3Instruction::LoadInt { dst: 4, value: 9 },
+            Ir3Instruction::ArrayPush {
+                array: 1,
+                element: 4,
+            },
+            Ir3Instruction::LoadInt { dst: 5, value: 1 },
+            Ir3Instruction::ArraySlice {
+                array: 1,
+                start: 5,
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ]);
+        let mut core = quickjs_test_core();
+        let result = core.execute(&module).unwrap();
+        let rest_id = object_id_from_value(&result.value, "ArraySlice result");
+
+        assert_ne!(
+            rest_id,
+            object_id_from_value(&core.registers[1], "ArraySlice source")
+        );
+        assert!(core.heap[rest_id.0 as usize].is_array);
+        assert_eq!(
+            core.read_array_like_values(rest_id),
+            vec![Value::Int(8), Value::Int(9)]
+        );
+        assert_eq!(
+            core.heap[rest_id.0 as usize].properties.get("length"),
+            Some(&Value::Int(2))
+        );
     }
 
     #[test]

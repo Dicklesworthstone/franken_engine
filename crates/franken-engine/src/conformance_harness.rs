@@ -1616,13 +1616,40 @@ fn ifc_label_taxonomy_hash() -> String {
 }
 
 fn build_failure_id(asset_id: &str, seed: u64, expected: &str, actual: &str) -> String {
-    let material = format!("asset={asset_id};seed={seed};expected={expected};actual={actual}");
-    format!("cf-{}", &digest_hex(material.as_bytes())[..16])
+    // Length-prefix the variable-length fields before hashing. The
+    // previous `asset=...;seed=...;expected=...;actual=...` encoding
+    // smeared when values contained `;` or `=`: expected="x;actual=y"
+    // actual="z" produced the same bytes as expected="x" actual="y;actual=z".
+    let material = build_failure_material(asset_id, seed, expected, actual);
+    format!("cf-{}", &digest_hex(&material)[..16])
 }
 
 fn repro_verification_digest(seed: u64, expected: &str, actual: &str) -> String {
-    let material = format!("seed={seed};expected={expected};actual={actual}");
-    digest_hex(material.as_bytes())
+    // Length-prefixed (same smear concern as `build_failure_id`).
+    let material = build_repro_material(seed, expected, actual);
+    digest_hex(&material)
+}
+
+fn build_failure_material(asset_id: &str, seed: u64, expected: &str, actual: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    push_len_prefixed(&mut buf, asset_id.as_bytes());
+    buf.extend_from_slice(&seed.to_le_bytes());
+    push_len_prefixed(&mut buf, expected.as_bytes());
+    push_len_prefixed(&mut buf, actual.as_bytes());
+    buf
+}
+
+fn build_repro_material(seed: u64, expected: &str, actual: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&seed.to_le_bytes());
+    push_len_prefixed(&mut buf, expected.as_bytes());
+    push_len_prefixed(&mut buf, actual.as_bytes());
+    buf
+}
+
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 pub fn classify_conformance_delta(

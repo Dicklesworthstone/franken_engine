@@ -160,7 +160,7 @@ extract_first_json_object() {
 }
 
 if [[ -z "$propagation_log_json" ]]; then
-  printf './examples/07_quarantine_mesh/demo.sh # internally rch exec -- env ... cargo run --quiet -p frankenengine-engine --bin franken-quarantine-mesh-demo\n' >>"$commands_path"
+  printf './examples/07_quarantine_mesh/demo.sh # internally rch exec -- env RUSTUP_TOOLCHAIN=... CARGO_BUILD_JOBS=... cargo run --quiet -p frankenengine-engine --bin franken-quarantine-mesh-demo; QUARANTINE_MESH_DEMO_CARGO_TARGET_DIR is optional\n' >>"$commands_path"
   set +e
   (
     cd "$root_dir"

@@ -7,6 +7,9 @@ full production fleet orchestration.
 
 The proof wrapper runs the existing `examples/07_quarantine_mesh/demo.sh`
 surface, which in turn executes `franken-quarantine-mesh-demo` through `rch`.
+The demo uses Cargo's normal remote target directory by default so worker
+caches can be reused; set `QUARANTINE_MESH_DEMO_CARGO_TARGET_DIR` only when a
+run needs an isolated target directory.
 The demo emits the real signed revocation and fleet immune protocol path used
 by the example:
 

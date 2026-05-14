@@ -1,0 +1,92 @@
+{
+  "schema_version": "franken-engine.optimization-promotion-replay-drill-fixtures.v1",
+  "base": {
+    "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json"
+  },
+  "cases": [
+    {
+      "case_id": "promotable_evidence",
+      "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "control_case": "complete_contract_passes",
+      "eligibility_case": "promotable_current_evidence",
+      "demotion_case": "current_evidence_keeps_observed",
+      "transfer_case": "same_regime_promotion_allowed",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_lane_state": "promote",
+        "expected_replay_exit_code": 0
+      }
+    },
+    {
+      "case_id": "stale_evidence",
+      "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "control_case": "stale_hot_path_evidence_fails",
+      "eligibility_case": "stale_evidence_fails",
+      "demotion_case": "current_evidence_keeps_observed",
+      "transfer_case": "same_regime_promotion_allowed",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_lane_state": "fail_closed",
+        "expected_replay_exit_code": 0
+      }
+    },
+    {
+      "case_id": "transfer_refusal",
+      "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "control_case": "complete_contract_passes",
+      "eligibility_case": "promotable_current_evidence",
+      "demotion_case": "current_evidence_keeps_observed",
+      "transfer_case": "cross_regime_refused",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_lane_state": "observe",
+        "expected_replay_exit_code": 0
+      }
+    },
+    {
+      "case_id": "rollback_demotion",
+      "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "control_case": "complete_contract_passes",
+      "eligibility_case": "observe_only_low_delta",
+      "demotion_case": "stale_proof_receipt_demotes_with_safe_mode",
+      "transfer_case": "same_regime_promotion_allowed",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_lane_state": "demote",
+        "expected_replay_exit_code": 0
+      }
+    },
+    {
+      "case_id": "synthetic_contamination",
+      "real_hot_path_bundle": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "control_case": "synthetic_contamination_fails",
+      "eligibility_case": "synthetic_contamination_fails",
+      "demotion_case": "current_evidence_keeps_observed",
+      "transfer_case": "same_regime_promotion_allowed",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 0,
+        "expected_lane_state": "fail_closed",
+        "expected_replay_exit_code": 0
+      }
+    },
+    {
+      "case_id": "missing_artifact_fail_closed",
+      "real_hot_path_bundle": "scripts/testdata/optimization_promotion_replay_drill/missing/run_manifest.json",
+      "control_case": "complete_contract_passes",
+      "eligibility_case": "promotable_current_evidence",
+      "demotion_case": "current_evidence_keeps_observed",
+      "transfer_case": "same_regime_promotion_allowed",
+      "operator_status_text": "",
+      "expected": {
+        "expected_exit_code": 42,
+        "expected_lane_state": "fail_closed",
+        "required_error_code": "FE-OPT-REPLAY-MISSING-HOT-PATH-BUNDLE"
+      }
+    }
+  ]
+}

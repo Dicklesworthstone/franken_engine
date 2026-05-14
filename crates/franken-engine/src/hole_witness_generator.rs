@@ -138,27 +138,36 @@ pub struct HoleReference {
 
 impl HoleReference {
     /// Content hash over all fields.
+    ///
+    /// Every variable-length input is length-prefixed (u64 LE) so a value
+    /// containing the literal delimiter strings cannot smear with adjacent
+    /// fields. For example `cycle=["a|prog:b"]` previously hashed the same
+    /// bytes as `cycle=["a"], affected_programs=["b"]`.
     pub fn content_hash(&self) -> ContentHash {
+        fn write_bytes(h: &mut Sha256, bytes: &[u8]) {
+            h.update((bytes.len() as u64).to_le_bytes());
+            h.update(bytes);
+        }
+
         let mut h = Sha256::new();
-        h.update(b"hole_reference:");
-        h.update(self.hole_id.as_bytes());
-        h.update(b"|dim:");
+        h.update(b"hole_reference:v2:");
+        write_bytes(&mut h, self.hole_id.as_bytes());
         h.update(self.dimension.to_le_bytes());
-        h.update(b"|pers:");
         h.update(self.persistence_millionths.to_le_bytes());
-        h.update(b"|surf:");
-        h.update(format!("{}", self.surface).as_bytes());
+        write_bytes(&mut h, format!("{}", self.surface).as_bytes());
+
         let mut sorted_cycle: Vec<_> = self.representative_cycle.iter().collect();
         sorted_cycle.sort();
+        h.update((sorted_cycle.len() as u64).to_le_bytes());
         for v in &sorted_cycle {
-            h.update(b"|cyc:");
-            h.update(v.as_bytes());
+            write_bytes(&mut h, v.as_bytes());
         }
+
         let mut sorted_programs: Vec<_> = self.affected_programs.iter().collect();
         sorted_programs.sort();
+        h.update((sorted_programs.len() as u64).to_le_bytes());
         for p in &sorted_programs {
-            h.update(b"|prog:");
-            h.update(p.as_bytes());
+            write_bytes(&mut h, p.as_bytes());
         }
         ContentHash::compute(&h.finalize())
     }
@@ -190,11 +199,17 @@ impl WitnessSourceFile {
     }
 
     pub fn content_hash(&self) -> ContentHash {
+        // Length-prefix path and content so a path containing `|` cannot
+        // smear with content. Previously `{path: "a|b", content: "c"}` and
+        // `{path: "a", content: "b|c"}` produced identical hash inputs.
         let mut h = Sha256::new();
-        h.update(b"witness_source_file:");
-        h.update(self.path.as_bytes());
-        h.update(b"|");
-        h.update(self.content.as_bytes());
+        h.update(b"witness_source_file:v2:");
+        let path_bytes = self.path.as_bytes();
+        let content_bytes = self.content.as_bytes();
+        h.update((path_bytes.len() as u64).to_le_bytes());
+        h.update(path_bytes);
+        h.update((content_bytes.len() as u64).to_le_bytes());
+        h.update(content_bytes);
         ContentHash::compute(&h.finalize())
     }
 }
@@ -1170,6 +1185,31 @@ mod tests {
     }
 
     #[test]
+    fn hole_reference_distinguishes_cycle_program_smear() {
+        // Regression: with the old `|prog:` delimiter strings embedded in
+        // the hash input, a cycle entry containing the literal text
+        // `|prog:foo` would smear with a separate affected_programs entry
+        // and produce the same hash as splitting it across both fields.
+        let smeared = HoleReference {
+            hole_id: "h".into(),
+            dimension: 1,
+            persistence_millionths: 0,
+            surface: HoleSurface::Parser,
+            representative_cycle: vec!["a|prog:b".into()],
+            affected_programs: vec![],
+        };
+        let split = HoleReference {
+            hole_id: "h".into(),
+            dimension: 1,
+            persistence_millionths: 0,
+            surface: HoleSurface::Parser,
+            representative_cycle: vec!["a".into()],
+            affected_programs: vec!["b".into()],
+        };
+        assert_ne!(smeared.content_hash(), split.content_hash());
+    }
+
+    #[test]
     fn hole_reference_serde_roundtrip() {
         let hole = make_hole("test", HoleSurface::Runtime, 500_000);
         let json = serde_json::to_string(&hole).expect("serde deserialization should succeed");
@@ -1197,6 +1237,16 @@ mod tests {
         let f1 = WitnessSourceFile::new("a.js", "hello");
         let f2 = WitnessSourceFile::new("a.js", "hello");
         assert_eq!(f1.content_hash(), f2.content_hash());
+    }
+
+    #[test]
+    fn source_file_content_hash_distinguishes_path_content_boundary() {
+        // Regression: the old `path || "|" || content` encoding made
+        // `{path: "a|b", content: "c"}` hash identically to
+        // `{path: "a", content: "b|c"}` because both serialize to "a|b|c".
+        let a = WitnessSourceFile::new("a|b", "c");
+        let b = WitnessSourceFile::new("a", "b|c");
+        assert_ne!(a.content_hash(), b.content_hash());
     }
 
     // --- WitnessProgram ---

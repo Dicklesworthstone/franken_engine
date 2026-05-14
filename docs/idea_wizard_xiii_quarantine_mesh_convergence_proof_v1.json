@@ -1,0 +1,51 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-quarantine-mesh-convergence-proof.contract.v1",
+  "bead_id": "bd-ly6hp.3",
+  "claim_id": "FE-CLAIM-005",
+  "promotion_subset": "live_quarantine_mesh_bounded_convergence_only",
+  "source_surfaces": [
+    "examples/07_quarantine_mesh/demo.sh",
+    "crates/franken-engine/src/bin/franken_quarantine_mesh_demo.rs",
+    "crates/franken-engine/src/fleet_immune_protocol.rs",
+    "crates/franken-engine/src/revocation_chain.rs"
+  ],
+  "runtime_policy": {
+    "live_command": "./examples/07_quarantine_mesh/demo.sh",
+    "heavy_cargo_policy": "rch_wrapped_only",
+    "requires_no_local_heavy_cargo_transcript": true,
+    "runs_rch_for_live_refresh": true
+  },
+  "required_artifacts": [
+    "live_quarantine_mesh_convergence_report_json",
+    "runtime_or_cli_command_transcript",
+    "peer_attempts_jsonl",
+    "partial_failure_degraded_fixture",
+    "total_failure_degraded_fixture",
+    "permanent_ratchet_limitation_note",
+    "replay_verifier_report_json",
+    "events_jsonl",
+    "commands_txt",
+    "run_manifest_json",
+    "human_report"
+  ],
+  "required_report_fields": [
+    "peer_count",
+    "attempted_targets",
+    "failed_targets",
+    "convergence_ms",
+    "slo_threshold_ms",
+    "permanent_ratchet",
+    "de_escalation_supported"
+  ],
+  "negative_fixture_policy": {
+    "partial_failure_degraded_fixture": "must remain degraded and non-promoting",
+    "total_failure_degraded_fixture": "must remain degraded and non-promoting",
+    "tampered_or_missing_live_log": "must fail closed"
+  },
+  "downgrade_boundary": {
+    "permanent_ratchet": true,
+    "de_escalation_supported": false,
+    "downgrade_text_required": true,
+    "note": "The live proof covers bounded convergence of signed quarantine mesh evidence only. It does not promote de-escalation, recovery, or re-attestation semantics."
+  }
+}

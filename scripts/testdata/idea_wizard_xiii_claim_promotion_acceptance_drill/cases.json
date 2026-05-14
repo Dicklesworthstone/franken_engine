@@ -1,0 +1,67 @@
+{
+  "schema_version": "franken-engine.idea-wizard-xiii-claim-promotion-acceptance-drill.fixtures.v1",
+  "cases": [
+    {
+      "case_id": "live_proof",
+      "expected_exit": 0,
+      "expected_core": {
+        "decision": "pass",
+        "gate_decision": "pass",
+        "summary": {
+          "green": 1,
+          "degraded": 2,
+          "fail_closed": 0,
+          "assertion_failures": 0
+        },
+        "claim_assertions": [
+          {
+            "claim_id": "FE-CLAIM-004",
+            "status": "pass",
+            "operator_status": "degraded",
+            "proven_subset_status": "green"
+          },
+          {
+            "claim_id": "FE-CLAIM-005",
+            "status": "pass",
+            "operator_status": "green",
+            "proven_subset_status": "green"
+          },
+          {
+            "claim_id": "FE-CLAIM-006",
+            "status": "pass",
+            "operator_status": "degraded",
+            "proven_subset_status": "green"
+          }
+        ],
+        "mutation_policy": {
+          "promotes_claims": false,
+          "rewrites_readme": false,
+          "mutates_claim_matrix": false,
+          "runs_cargo": false,
+          "runs_rch": false,
+          "repairs_agent_mail_db": false
+        }
+      }
+    },
+    {
+      "case_id": "stale_proof",
+      "expected_exit": 42,
+      "expected_failure_contains": "stale"
+    },
+    {
+      "case_id": "synthetic_proof",
+      "expected_exit": 42,
+      "expected_failure_contains": "synthetic"
+    },
+    {
+      "case_id": "missing_artifact",
+      "expected_exit": 42,
+      "expected_failure_contains": "missing"
+    },
+    {
+      "case_id": "overclaiming_readme_text",
+      "expected_exit": 42,
+      "expected_failure_contains": "overclaims"
+    }
+  ]
+}

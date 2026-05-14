@@ -39,6 +39,11 @@ The gate writes `claim_promotion_gate_report.json`, `operator_status.json`,
 not rewrite README, mutate the claim matrix, run Cargo, run `rch`, or repair
 Agent Mail state.
 
+The composed acceptance drill is
+`./scripts/idea_wizard_xiii_claim_promotion_acceptance_drill.sh`; it preserves
+the three source proof reports and nests this gate inside one aggregate
+operator bundle.
+
 ## Validation
 
 ```bash

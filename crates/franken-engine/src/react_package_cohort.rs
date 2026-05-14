@@ -266,17 +266,23 @@ impl SubpathEntry {
 
     /// Compute a stable fingerprint of this entry.
     fn fingerprint_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(self.subpath.as_bytes());
-        buf.push(b':');
-        for cond in &self.conditions {
-            buf.extend_from_slice(cond.condition_key().as_bytes());
-            buf.push(b',');
+        // Length-prefix every variable-length string (u64 LE byte count
+        // followed by the bytes) so a subpath containing `:` cannot smear
+        // with the conditions field, etc.
+        fn write_str(buf: &mut Vec<u8>, value: &str) {
+            let bytes = value.as_bytes();
+            buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(bytes);
         }
-        buf.push(b':');
-        buf.extend_from_slice(self.resolved_path.as_bytes());
-        buf.push(b':');
-        buf.extend_from_slice(self.format.as_str().as_bytes());
+
+        let mut buf = Vec::new();
+        write_str(&mut buf, &self.subpath);
+        buf.extend_from_slice(&(self.conditions.len() as u64).to_le_bytes());
+        for cond in &self.conditions {
+            write_str(&mut buf, cond.condition_key());
+        }
+        write_str(&mut buf, &self.resolved_path);
+        write_str(&mut buf, self.format.as_str());
         buf
     }
 }
@@ -698,28 +704,42 @@ pub fn build_manifest_with_aliases(
 }
 
 /// Compute a deterministic content hash for a package manifest.
+///
+/// Every variable-length input is length-prefixed (u64 LE) so a value
+/// containing the previous in-band delimiter bytes (`:`, `|`, `@`, `=`)
+/// cannot smear with adjacent fields. Previously, aliases
+/// `{"foo=bar": "baz"}` produced the same hash bytes as
+/// `{"foo": "bar=baz"}`.
 fn compute_manifest_hash(
     package: ReactPackage,
     version: &str,
     subpaths: &[SubpathEntry],
     aliases: &BTreeMap<String, String>,
 ) -> ContentHash {
+    fn write_str(hasher: &mut Sha256, value: &str) {
+        let bytes = value.as_bytes();
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+
     let mut hasher = Sha256::new();
-    hasher.update(REACT_COHORT_SCHEMA_VERSION.as_bytes());
-    hasher.update(b":");
-    hasher.update(package.as_str().as_bytes());
-    hasher.update(b":");
-    hasher.update(version.as_bytes());
+    write_str(&mut hasher, REACT_COHORT_SCHEMA_VERSION);
+    write_str(&mut hasher, package.as_str());
+    write_str(&mut hasher, version);
+
+    hasher.update((subpaths.len() as u64).to_le_bytes());
     for entry in subpaths {
-        hasher.update(b"|");
-        hasher.update(entry.fingerprint_bytes());
+        let bytes = entry.fingerprint_bytes();
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(&bytes);
     }
+
+    hasher.update((aliases.len() as u64).to_le_bytes());
     for (k, v) in aliases {
-        hasher.update(b"@");
-        hasher.update(k.as_bytes());
-        hasher.update(b"=");
-        hasher.update(v.as_bytes());
+        write_str(&mut hasher, k);
+        write_str(&mut hasher, v);
     }
+
     let result = hasher.finalize();
     ContentHash(result.into())
 }
@@ -792,20 +812,32 @@ pub fn build_cohort_matrix_with_edges(
         .map(|m| m.subpath_count())
         .fold(0u64, u64::saturating_add);
 
+    // Length-prefix every variable-length field. Without this, an
+    // edge-case id like `foo:pass|ec:bar` collided with two separate
+    // edge cases `foo` + `bar` because the in-band `|ec:` and `:pass`
+    // delimiters appeared inside the caller-controlled string.
+    fn write_str(hasher: &mut Sha256, value: &str) {
+        let bytes = value.as_bytes();
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+
     let mut hasher = Sha256::new();
-    hasher.update(REACT_COHORT_SCHEMA_VERSION.as_bytes());
-    hasher.update(b":matrix:");
+    write_str(&mut hasher, REACT_COHORT_SCHEMA_VERSION);
+    write_str(&mut hasher, "matrix");
     hasher.update(epoch.as_u64().to_le_bytes());
+
+    hasher.update((packages.len() as u64).to_le_bytes());
     for manifest in &packages {
-        hasher.update(b"|pkg:");
         hasher.update(manifest.content_hash.as_bytes());
     }
+
     let mut sorted_ecs: Vec<_> = edge_cases.iter().collect();
     sorted_ecs.sort_by(|a, b| a.case_id.cmp(&b.case_id));
+    hasher.update((sorted_ecs.len() as u64).to_le_bytes());
     for ec in &sorted_ecs {
-        hasher.update(b"|ec:");
-        hasher.update(ec.case_id.as_bytes());
-        hasher.update(if ec.passed { b":pass" } else { b":fail" });
+        write_str(&mut hasher, &ec.case_id);
+        hasher.update([if ec.passed { 1u8 } else { 0u8 }]);
     }
     let result = hasher.finalize();
     let content_hash = ContentHash(result.into());
@@ -1862,6 +1894,22 @@ mod tests {
         let m1 = build_manifest(ReactPackage::React, "18.3.0", subpaths.clone());
         let m2 = build_manifest(ReactPackage::React, "18.3.1", subpaths);
         assert_ne!(m1.content_hash, m2.content_hash);
+    }
+
+    #[test]
+    fn test_manifest_hash_distinguishes_alias_boundary_smear() {
+        // Regression: the old encoding wrote `@key=value` for each alias.
+        // `{"foo=bar": "baz"}` and `{"foo": "bar=baz"}` both produced the
+        // same byte stream `@foo=bar=baz`. Length-prefixed encoding must
+        // distinguish them.
+        let subpaths: Vec<SubpathEntry> = Vec::new();
+        let mut a = BTreeMap::new();
+        a.insert("foo=bar".to_string(), "baz".to_string());
+        let mut b = BTreeMap::new();
+        b.insert("foo".to_string(), "bar=baz".to_string());
+        let ma = build_manifest_with_aliases(ReactPackage::React, "18.3.1", subpaths.clone(), a);
+        let mb = build_manifest_with_aliases(ReactPackage::React, "18.3.1", subpaths, b);
+        assert_ne!(ma.content_hash, mb.content_hash);
     }
 
     #[test]

@@ -1,0 +1,159 @@
+{
+  "schema_version": "franken-engine.idea-wizard-iv-closed-bead-proof-integrity.v1",
+  "bead_id": "bd-vgj5t",
+  "source_revision": "smoke-semantic-contradiction",
+  "generated_at_utc": "2026-05-11T00:00:00Z",
+  "decision": "degraded",
+  "classification": "semantic_contradiction",
+  "source_freshness": {
+    "br_list_json_present": true,
+    "issues_jsonl_present": false,
+    "provided_git_log_json_present": true,
+    "live_git_log_used": false,
+    "artifact_manifest_json_present": true,
+    "source_marker_json_present": true,
+    "source_revision_required": true,
+    "source_revision_present": true
+  },
+  "closed_bead_count": 2,
+  "weak_evidence_count": 1,
+  "source_marker_count": 1,
+  "semantic_contradiction_count": 1,
+  "proof_strength_buckets": {
+    "direct_commit_reference": 2,
+    "validation_command_present": 2,
+    "artifact_manifest_present": 0,
+    "close_reason_only": 0,
+    "no_evidence": 0,
+    "stale_or_ambiguous_evidence": 0,
+    "semantic_contradiction_marker": 1,
+    "bare_heavy_cargo_present": 0
+  },
+  "degraded_reasons": [
+    {
+      "bead_id": "bd-zlvz8",
+      "risk_level": "high",
+      "reason_codes": [
+        "FE-IW4-CLOSED-BEAD-SEMANTIC-CONTRADICTION",
+        "closed_bead_source_marker_contradiction"
+      ],
+      "title": "[MOCK] CRITICAL: Implement async/await pending promise execution",
+      "semantic_contradictions": [
+        {
+          "file": "crates/franken-core/src/baseline_interpreter.rs",
+          "line": 5408,
+          "marker_class": "unsupported_semantic_marker",
+          "detail": "Closed bead claims pending async/await execution is implemented, but source still fails closed for pending promise scheduling.",
+          "confidence": "high",
+          "suggested_next_bead_title": "[IDEA-WIZARD-XII-C] Reopen real pending-promise await execution from source evidence"
+        }
+      ]
+    }
+  ],
+  "fail_closed_reasons": [],
+  "mutation_policy": {
+    "advisory_only": true,
+    "proof_only": true,
+    "mutates_br": false,
+    "claims_beads": false,
+    "reopens_beads": false,
+    "closes_beads": false,
+    "reassigns_beads": false,
+    "sends_agent_mail": false,
+    "repairs_agent_mail_db": false,
+    "runs_cargo": false,
+    "runs_rch": false,
+    "mutates_git": false,
+    "mutates_remote_workers": false,
+    "deletes_or_overwrites_target_dirs": false
+  },
+  "rch_policy": {
+    "runs_rch": false,
+    "emits_commands_only": true,
+    "required_heavy_cargo_prefix": "rch exec -- env CARGO_TARGET_DIR=",
+    "recommended_validation_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_iw4_closed_bead_proof CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine closed_bead_proof"
+  },
+  "sort_policy": {
+    "primary": "weak-evidence risk",
+    "secondary": "priority",
+    "tertiary": "updated_at",
+    "deterministic_tie_breaker": "id"
+  },
+  "beads": [
+    {
+      "id": "bd-zlvz8",
+      "title": "[MOCK] CRITICAL: Implement async/await pending promise execution",
+      "priority": 1,
+      "status": "closed",
+      "assignee": "ClaudeAlpha",
+      "labels": [
+        "async-await",
+        "franken-core"
+      ],
+      "close_reason": "Done in commit cafefeed. Validation passed: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target cargo test -p franken-core async_function_pending_await",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "evidence_classes": [
+        "direct_commit_reference",
+        "semantic_contradiction_marker",
+        "validation_command_present"
+      ],
+      "direct_commit_reference": true,
+      "validation_command_present": true,
+      "artifact_manifest_present": false,
+      "stale_or_ambiguous_evidence": false,
+      "source_marker_contradiction": true,
+      "semantic_contradictions": [
+        {
+          "bead_id": "bd-zlvz8",
+          "related_bead_ids": [],
+          "file": "crates/franken-core/src/baseline_interpreter.rs",
+          "line": 5408,
+          "marker": "pending promise requires full async scheduling (not yet implemented)",
+          "marker_class": "unsupported_semantic_marker",
+          "detail": "Closed bead claims pending async/await execution is implemented, but source still fails closed for pending promise scheduling.",
+          "confidence": "high",
+          "suggested_next_bead_title": "[IDEA-WIZARD-XII-C] Reopen real pending-promise await execution from source evidence",
+          "ignored": false,
+          "negative_fixture": false
+        }
+      ],
+      "bare_heavy_cargo_present": false,
+      "risk_level": "high",
+      "risk_sort": 0,
+      "weak_evidence": true,
+      "reason_codes": [
+        "FE-IW4-CLOSED-BEAD-SEMANTIC-CONTRADICTION",
+        "closed_bead_source_marker_contradiction"
+      ]
+    },
+    {
+      "id": "bd-negative",
+      "title": "[IW4] Legitimate negative unsupported fixture",
+      "priority": 2,
+      "status": "closed",
+      "assignee": "RainyBadger",
+      "labels": [
+        "testing"
+      ],
+      "close_reason": "Done in commit feedface. Validation passed: rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target cargo test -p frankenengine-engine negative_fixture",
+      "dependency_count": 0,
+      "dependent_count": 0,
+      "evidence_classes": [
+        "direct_commit_reference",
+        "validation_command_present"
+      ],
+      "direct_commit_reference": true,
+      "validation_command_present": true,
+      "artifact_manifest_present": false,
+      "stale_or_ambiguous_evidence": false,
+      "source_marker_contradiction": false,
+      "semantic_contradictions": [],
+      "bare_heavy_cargo_present": false,
+      "risk_level": "low",
+      "risk_sort": 2,
+      "weak_evidence": false,
+      "reason_codes": []
+    }
+  ]
+}

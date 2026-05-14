@@ -16,6 +16,7 @@ br_list_json=""
 issues_jsonl=""
 git_log_json=""
 artifact_manifest_json=""
+source_marker_json=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -29,6 +30,7 @@ Options:
   --issues-jsonl FILE
   --git-log-json FILE
   --artifact-manifest-json FILE
+  --source-marker-json FILE
   --source-revision REV
   --generated-at-utc TIMESTAMP
   --output-dir DIR
@@ -53,6 +55,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --artifact-manifest-json)
       artifact_manifest_json="${2:-}"
+      shift 2
+      ;;
+    --source-marker-json)
+      source_marker_json="${2:-}"
       shift 2
       ;;
     --source-revision)
@@ -127,6 +133,7 @@ validate_json_if_supplied() {
 validate_json_if_supplied "$br_list_json" "br-list"
 validate_json_if_supplied "$git_log_json" "git-log"
 validate_json_if_supplied "$artifact_manifest_json" "artifact-manifest"
+validate_json_if_supplied "$source_marker_json" "source-marker"
 if [[ -n "$issues_jsonl" ]]; then
   if [[ ! -f "$issues_jsonl" ]]; then
     printf 'issues JSONL not found: %s\n' "$issues_jsonl" >&2
@@ -145,6 +152,7 @@ all_beads_json="${run_dir}/all_beads.normalized.json"
 closed_beads_json="${run_dir}/closed_beads.normalized.json"
 git_log_normalized="${run_dir}/git_log.normalized.json"
 artifact_manifest_normalized="${run_dir}/artifact_manifest.normalized.json"
+source_markers_normalized="${run_dir}/source_markers.normalized.json"
 report_json="${run_dir}/closed_bead_proof_integrity.json"
 weak_jsonl="${run_dir}/weak_evidence.jsonl"
 manifest_path="${run_dir}/run_manifest.json"
@@ -162,6 +170,7 @@ for artifact_path in \
   "$closed_beads_json" \
   "$git_log_normalized" \
   "$artifact_manifest_normalized" \
+  "$source_markers_normalized" \
   "$report_json" \
   "$weak_jsonl" \
   "$manifest_path" \
@@ -277,11 +286,48 @@ else
   printf '[]\n' >"$artifact_manifest_normalized"
 fi
 
+if [[ -n "$source_marker_json" ]]; then
+  jq '
+    def arr($v): if ($v | type) == "array" then $v else [] end;
+    def rows:
+      if type == "array" then .
+      elif (.markers | type) == "array" then .markers
+      elif (.source_markers | type) == "array" then .source_markers
+      elif (.result | type) == "array" then .result
+      else []
+      end;
+    def line_value($v):
+      if ($v | type) == "number" then $v
+      elif (($v // "") | tostring | test("^[0-9]+$")) then (($v // "") | tonumber)
+      else 0
+      end;
+    rows
+    | map({
+        bead_id: (.bead_id // .issue_id // .id // ""),
+        related_bead_ids: arr(.related_bead_ids // .bead_ids // .covers),
+        file: (.file // .path // ""),
+        line: line_value(.line // .line_number),
+        marker: (.marker // .text // .match // ""),
+        marker_class: (.marker_class // .class // "unsupported_marker"),
+        detail: (.detail // .reason // .message // ""),
+        confidence: (.confidence // "medium"),
+        suggested_next_bead_title: (.suggested_next_bead_title // .suggested_title // ""),
+        ignored: (.ignored // false),
+        negative_fixture: (.negative_fixture // false)
+      })
+    | map(select((.ignored | not) and (.negative_fixture | not)))
+  ' "$source_marker_json" >"$source_markers_normalized"
+else
+  printf '[]\n' >"$source_markers_normalized"
+fi
+
+# shellcheck disable=SC2094 # report_json is passed as a string field, not read by jq.
 jq -n \
   --slurpfile all_beads "$all_beads_json" \
   --slurpfile closed_beads "$closed_beads_json" \
   --slurpfile git_log "$git_log_normalized" \
   --slurpfile artifact_manifests "$artifact_manifest_normalized" \
+  --slurpfile source_markers "$source_markers_normalized" \
   --arg schema_version "franken-engine.idea-wizard-iv-closed-bead-proof-integrity.v1" \
   --arg bead_id "$bead_id" \
   --arg source_revision "$source_revision" \
@@ -298,7 +344,9 @@ jq -n \
   --arg br_list_json "$br_list_json" \
   --arg issues_jsonl "$issues_jsonl" \
   --arg git_log_json "$git_log_json" \
-  --arg artifact_manifest_json "$artifact_manifest_json" '
+  --arg artifact_manifest_json "$artifact_manifest_json" \
+  --arg source_marker_json "$source_marker_json" \
+  --arg source_markers_normalized "$source_markers_normalized" '
     def arr($v): if ($v | type) == "array" then $v else [] end;
     def low($v): ($v // "" | tostring | ascii_downcase);
     def comment_text($c):
@@ -334,6 +382,7 @@ jq -n \
     | ($closed_beads[0] // []) as $closed
     | ($git_log[0] // []) as $commits
     | ($artifact_manifests[0] // []) as $manifests
+    | ($source_markers[0] // []) as $markers
     | ($commits | map(git_message(.)) | join("\n")) as $git_blob
     | def direct_git_match($id):
         ($id | ascii_downcase) as $needle
@@ -351,16 +400,23 @@ jq -n \
         );
       def dependent_count($id):
         [ $all[]? | arr(.dependencies)[]? | select((.depends_on_id // "") == $id) ] | length;
+      def source_markers_for($id):
+        [ $markers[]?
+          | select((.bead_id // "") == $id or (arr(.related_bead_ids) | index($id)))
+        ];
       def analyze($b):
         ($b.id // "") as $id
         | bead_text($b) as $text
+        | source_markers_for($id) as $semantic_markers
+        | (($semantic_markers | length) > 0) as $semantic_contradiction
         | (commit_hash_present($text) or direct_git_match($id)) as $direct
         | validation_present($text) as $validation
         | (artifact_present($text) or manifest_covers($id)) as $artifact
         | ((($direct | not) and ambiguous_git_match($b.title // ""))) as $ambiguous
         | (bare_heavy_cargo_present($text)) as $bare_heavy
         | (($b.close_reason // "" | tostring) != "") as $has_close_reason
-        | (if (($direct | not) and ($validation | not) and ($artifact | not)) then "high"
+        | (if $semantic_contradiction then "high"
+           elif (($direct | not) and ($validation | not) and ($artifact | not)) then "high"
            elif ($direct | not) then "medium"
            else "low"
            end) as $risk_level
@@ -382,12 +438,15 @@ jq -n \
               if $artifact then "artifact_manifest_present" else empty end,
               if ($has_close_reason and (($direct or $validation or $artifact or $ambiguous) | not)) then "close_reason_only" else empty end,
               if (($has_close_reason | not) and (($direct or $validation or $artifact or $ambiguous) | not)) then "no_evidence" else empty end,
-              if $ambiguous then "stale_or_ambiguous_evidence" else empty end
+              if $ambiguous then "stale_or_ambiguous_evidence" else empty end,
+              if $semantic_contradiction then "semantic_contradiction_marker" else empty end
             ] | sort),
             direct_commit_reference:$direct,
             validation_command_present:$validation,
             artifact_manifest_present:$artifact,
             stale_or_ambiguous_evidence:$ambiguous,
+            source_marker_contradiction:$semantic_contradiction,
+            semantic_contradictions:$semantic_markers,
             bare_heavy_cargo_present:$bare_heavy,
             risk_level:$risk_level,
             risk_sort:(if $risk_level == "high" then 0 elif $risk_level == "medium" then 1 else 2 end),
@@ -396,6 +455,8 @@ jq -n \
               if ($direct | not) then "FE-IW4-WEAK-CLOSED-BEAD-PROOF" else empty end,
               if (($validation | not) and ($artifact | not)) then "closed_bead_missing_validation_or_artifact" else empty end,
               if (($direct | not) and $validation) then "closed_bead_missing_direct_commit" else empty end,
+              if $semantic_contradiction then "FE-IW4-CLOSED-BEAD-SEMANTIC-CONTRADICTION" else empty end,
+              if $semantic_contradiction then "closed_bead_source_marker_contradiction" else empty end,
               if $bare_heavy then "FE-IW4-BARE-HEAVY-CARGO" else empty end,
               if $ambiguous then "closed_bead_title_only_git_match" else empty end
             ] | sort | unique)
@@ -405,24 +466,28 @@ jq -n \
           if (($closed | length) == 0) then {code:"FE-IW4-NO-CLOSED-BEADS", detail:"No closed beads were available in the supplied sources."} else empty end
         ]) as $fail_closed_reasons
       | ($rows | map(select(.weak_evidence == true))) as $weak
+      | ($rows | map(select(.source_marker_contradiction == true))) as $semantic_conflicts
       | {
           schema_version:$schema_version,
           bead_id:$bead_id,
           source_revision:$source_revision,
           generated_at_utc:$generated_at_utc,
           decision:(if ($fail_closed_reasons | length) > 0 then "degraded" elif ($weak | length) > 0 then "degraded" else "green" end),
-          classification:(if ($fail_closed_reasons | length) > 0 then "tracker_blind_spot" elif ($weak | length) > 0 then "proof_integrity_gap" else "true_saturation" end),
+          classification:(if ($fail_closed_reasons | length) > 0 then "tracker_blind_spot" elif ($semantic_conflicts | length) > 0 then "semantic_contradiction" elif ($weak | length) > 0 then "proof_integrity_gap" else "true_saturation" end),
           source_freshness:{
             br_list_json_present:($br_list_json != ""),
             issues_jsonl_present:($issues_jsonl != ""),
             provided_git_log_json_present:($git_log_json != ""),
             live_git_log_used:($git_log_json == ""),
             artifact_manifest_json_present:($artifact_manifest_json != ""),
+            source_marker_json_present:($source_marker_json != ""),
             source_revision_required:true,
             source_revision_present:($source_revision != "" and $source_revision != "unknown")
           },
           closed_bead_count:($rows | length),
           weak_evidence_count:($weak | length),
+          source_marker_count:($markers | length),
+          semantic_contradiction_count:($semantic_conflicts | length),
           proof_strength_buckets:{
             direct_commit_reference:($rows | map(select(.evidence_classes | index("direct_commit_reference"))) | length),
             validation_command_present:($rows | map(select(.evidence_classes | index("validation_command_present"))) | length),
@@ -430,9 +495,16 @@ jq -n \
             close_reason_only:($rows | map(select(.evidence_classes | index("close_reason_only"))) | length),
             no_evidence:($rows | map(select(.evidence_classes | index("no_evidence"))) | length),
             stale_or_ambiguous_evidence:($rows | map(select(.evidence_classes | index("stale_or_ambiguous_evidence"))) | length),
+            semantic_contradiction_marker:($rows | map(select(.evidence_classes | index("semantic_contradiction_marker"))) | length),
             bare_heavy_cargo_present:($rows | map(select(.bare_heavy_cargo_present == true)) | length)
           },
-          degraded_reasons:($weak | map({bead_id:.id, risk_level, reason_codes, title}) | .[0:50]),
+          degraded_reasons:($weak | map({
+            bead_id:.id,
+            risk_level,
+            reason_codes,
+            title,
+            semantic_contradictions:(.semantic_contradictions | map({file,line,marker_class,detail,confidence,suggested_next_bead_title}) | .[0:5])
+          }) | .[0:50]),
           fail_closed_reasons:$fail_closed_reasons,
           mutation_policy:{
             advisory_only:true,
@@ -472,13 +544,15 @@ jq -n \
             trace_ids_json:$trace_ids_path,
             report_md:$report_md,
             closed_beads_normalized_json:$closed_beads_json,
-            git_log_normalized_json:$git_log_normalized
+            git_log_normalized_json:$git_log_normalized,
+            source_markers_normalized_json:$source_markers_normalized
           }
         }
   ' >"$report_json"
 
 jq -c '.beads[]? | select(.weak_evidence == true)' "$report_json" >>"$weak_jsonl"
 jq -c '.beads[]? | {schema_version:"franken-engine.idea-wizard-iv-closed-bead-proof.event.v1",event:"closed_bead_evaluated",outcome:.risk_level,bead_id:.id,evidence_classes:.evidence_classes,reason_codes:.reason_codes}' "$report_json" >>"$events_path"
+jq -c '.beads[]? as $bead | $bead.semantic_contradictions[]? | {schema_version:"franken-engine.idea-wizard-iv-closed-bead-proof.event.v1",event:"semantic_contradiction_detected",outcome:"high",bead_id:$bead.id,file,line,marker_class,detail,confidence,suggested_next_bead_title}' "$report_json" >>"$events_path"
 
 jq -n \
   --arg schema_version "franken-engine.idea-wizard-iv-closed-bead-proof.run-manifest.v1" \
@@ -510,8 +584,13 @@ jq -n \
   printf -- "- Classification: \`%s\`\n" "$(jq -r '.classification' "$report_json")"
   printf -- "- Closed beads: \`%s\`\n" "$(jq '.closed_bead_count' "$report_json")"
   printf -- "- Weak evidence: \`%s\`\n\n" "$(jq '.weak_evidence_count' "$report_json")"
+  printf -- "- Semantic contradictions: \`%s\`\n\n" "$(jq '.semantic_contradiction_count' "$report_json")"
   printf '## Proof Buckets\n\n'
   jq -r '.proof_strength_buckets | to_entries[] | "- `" + .key + "`: `" + (.value | tostring) + "`"' "$report_json"
+  if [[ "$(jq '.semantic_contradiction_count' "$report_json")" -ne 0 ]]; then
+    printf '\n## Semantic Contradictions\n\n'
+    jq -r '.beads[]? | select(.source_marker_contradiction == true) as $bead | .semantic_contradictions[] | "- `" + $bead.id + "`: `" + .file + ":" + (.line | tostring) + "` `" + .marker_class + "` - " + .detail' "$report_json"
+  fi
   if [[ "$(jq '.weak_evidence_count' "$report_json")" -ne 0 ]]; then
     printf '\n## Weak Evidence\n\n'
     jq -r '.beads[]? | select(.weak_evidence == true) | "- `" + .id + "` (`" + .risk_level + "`): " + (.reason_codes | join(", "))' "$report_json"

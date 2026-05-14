@@ -1,0 +1,189 @@
+{
+  "schema_version": "franken-engine.optimization-demotion-replay-receipts-fixtures.v1",
+  "base_input": {
+    "schema_version": "franken-engine.optimization-demotion-replay-receipts.input.v1",
+    "source_revision": "rev-current",
+    "expected_source_revision": "rev-current",
+    "policy_epoch": "policy-epoch-42",
+    "expected_policy_epoch": "policy-epoch-42",
+    "candidate": {
+      "candidate_id": "candidate-proof-specialized-hostcall-elision",
+      "current_state": "observed",
+      "workload_regime": "real_runtime_hot_path",
+      "source_paths": ["crates/franken-engine/src/proof_specialization_receipt.rs"]
+    },
+    "evidence": {
+      "proof_specialization_receipt": {
+        "freshness": "fresh",
+        "proof_inputs_current": true,
+        "artifact_path": "artifacts/proof_specialization/receipt.json",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "policy_epoch": {
+        "freshness": "fresh",
+        "epoch": "policy-epoch-42",
+        "expected_epoch": "policy-epoch-42",
+        "artifact_path": "artifacts/policy_epoch/current.json",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "semantic_parity": {
+        "freshness": "fresh",
+        "outcome": "match",
+        "artifact_path": "artifacts/specialization_conformance/evidence.jsonl",
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+      },
+      "rollback_health": {
+        "freshness": "fresh",
+        "ready": true,
+        "rollback_token": "rollback-token-001",
+        "rollback_token_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "artifact_path": "artifacts/rollback/rollback_health.json",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "safe_mode_fallback": {
+        "freshness": "fresh",
+        "ready": true,
+        "replay_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_bd_or2e1 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test safe_mode_fallback_integration -- --nocapture",
+        "artifact_path": "artifacts/safe_mode/replay.json",
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+      },
+      "performance_regression": {
+        "freshness": "fresh",
+        "tail_budget_ok": true,
+        "throughput_delta_millionths": 180000,
+        "tail_delta_millionths": 20000,
+        "artifact_path": "artifacts/performance_regression/report.json",
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+      }
+    },
+    "contamination": {
+      "synthetic_only": false
+    }
+  },
+  "cases": [
+    {
+      "case_id": "current_evidence_keeps_observed",
+      "overrides": {},
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "keep_observed"
+      }
+    },
+    {
+      "case_id": "stale_proof_receipt_demotes_with_safe_mode",
+      "overrides": {
+        "evidence": {
+          "proof_specialization_receipt": {
+            "freshness": "stale",
+            "proof_inputs_current": false
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "demote_now",
+        "required_trigger_code": "OPT_DEMOTION_STALE_PROOF_RECEIPT",
+        "expected_safe_mode_required": true
+      }
+    },
+    {
+      "case_id": "policy_epoch_drift_demotes",
+      "overrides": {
+        "evidence": {
+          "policy_epoch": {
+            "epoch": "policy-epoch-41"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "demote_now",
+        "required_trigger_code": "OPT_DEMOTION_POLICY_EPOCH_DRIFT",
+        "expected_safe_mode_required": true
+      }
+    },
+    {
+      "case_id": "semantic_divergence_quarantines",
+      "overrides": {
+        "evidence": {
+          "semantic_parity": {
+            "outcome": "diverge"
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "quarantine_candidate",
+        "required_trigger_code": "OPT_DEMOTION_SEMANTIC_DIVERGENCE",
+        "expected_safe_mode_required": true
+      }
+    },
+    {
+      "case_id": "tail_regression_demotes",
+      "overrides": {
+        "evidence": {
+          "performance_regression": {
+            "tail_budget_ok": false,
+            "tail_delta_millionths": -120000
+          }
+        }
+      },
+      "expected": {
+        "decision": "pass",
+        "expected_exit_code": 0,
+        "required_recommended_state": "demote_now",
+        "required_trigger_code": "OPT_DEMOTION_TAIL_REGRESSION",
+        "expected_safe_mode_required": true
+      }
+    },
+    {
+      "case_id": "missing_rollback_token_fails_closed",
+      "overrides": {
+        "evidence": {
+          "proof_specialization_receipt": {
+            "freshness": "stale",
+            "proof_inputs_current": false
+          },
+          "rollback_health": {
+            "ready": true,
+            "rollback_token": null,
+            "rollback_token_sha256": null
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_recommended_state": "fail_closed",
+        "required_error_code": "FE-OPT-DEMOTION-MISSING-ROLLBACK-TOKEN",
+        "expected_safe_mode_required": true
+      }
+    },
+    {
+      "case_id": "safe_mode_unready_fails_closed",
+      "overrides": {
+        "evidence": {
+          "proof_specialization_receipt": {
+            "freshness": "stale",
+            "proof_inputs_current": false
+          },
+          "safe_mode_fallback": {
+            "ready": false,
+            "replay_command": ""
+          }
+        }
+      },
+      "expected": {
+        "decision": "fail_closed",
+        "expected_exit_code": 42,
+        "required_recommended_state": "fail_closed",
+        "required_error_code": "FE-OPT-DEMOTION-SAFE-MODE-UNREADY",
+        "expected_safe_mode_required": true
+      }
+    }
+  ]
+}

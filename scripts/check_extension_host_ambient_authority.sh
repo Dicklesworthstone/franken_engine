@@ -25,7 +25,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
 mode="${1:-ci}"
-artifact_dir="artifacts/extension_host_ambient_authority"
+artifact_dir="${EXTENSION_HOST_AMBIENT_AUTHORITY_ARTIFACT_DIR:-${ARTIFACT_DIR:-artifacts/extension_host_ambient_authority}}"
 mkdir -p "$artifact_dir"
 
 errors=0
@@ -70,6 +70,7 @@ echo "=== Check 2: Canonical type shadowing in extension-host ==="
 canonical_types=("TraceId" "DecisionId" "PolicyId" "SchemaVersion" "Budget" "Cx")
 
 shadow_errors=0
+shadow_violations=""
 for ctype in "${canonical_types[@]}"; do
   shadows="$(
     rg -n --glob '*.rs' \
@@ -80,6 +81,7 @@ for ctype in "${canonical_types[@]}"; do
   if [[ -n "$shadows" ]]; then
     echo "ERROR: Local definition shadows canonical type '${ctype}' in extension-host:"
     echo "$shadows"
+    shadow_violations+="type=${ctype}"$'\n'"${shadows}"$'\n'
     shadow_errors=1
   fi
 done
@@ -87,6 +89,7 @@ done
 if [[ "$shadow_errors" -eq 0 ]]; then
   echo "PASS: No canonical type shadowing in extension-host."
 else
+  printf '%s' "$shadow_violations" > "$artifact_dir/type_shadowing_violations.txt"
   errors=1
 fi
 
@@ -103,6 +106,7 @@ forbidden_patterns=(
 )
 
 io_errors=0
+io_violations=""
 for pat in "${forbidden_patterns[@]}"; do
   hits="$(
     rg -n --glob '*.rs' \
@@ -116,6 +120,7 @@ for pat in "${forbidden_patterns[@]}"; do
     if [[ -n "$real_hits" ]]; then
       echo "ERROR: Forbidden I/O pattern '${pat}' found in extension-host:"
       echo "$real_hits"
+      io_violations+="pattern=${pat}"$'\n'"${real_hits}"$'\n'
       io_errors=1
     fi
   fi
@@ -124,6 +129,7 @@ done
 if [[ "$io_errors" -eq 0 ]]; then
   echo "PASS: No forbidden I/O patterns in extension-host."
 else
+  printf '%s' "$io_violations" > "$artifact_dir/forbidden_io_violations.txt"
   errors=1
 fi
 

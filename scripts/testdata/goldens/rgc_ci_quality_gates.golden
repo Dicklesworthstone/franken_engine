@@ -5,11 +5,8 @@
   "mode": "fmt",
   "outcome": "fail",
   "error_code": "FE-RGC-CI-QUALITY-GATE-0000",
-  "planned_lanes": [
-    "fmt"
-  ],
-  "failed_lanes": [
-    "fmt"
+  "commands": [
+    "cargo fmt --check"
   ]
 }
 === CI GATE VERDICT ===

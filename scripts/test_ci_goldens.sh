@@ -19,15 +19,80 @@ cd "$root_dir"
 mode="${1:-test}"
 golden_dir="scripts/testdata/goldens"
 work_dir="/tmp/ci_golden_test_$$"
-timestamp="20260422T120000Z"  # Fixed timestamp for determinism
+keep_work_dir="${CI_GOLDEN_KEEP_WORKDIR:-false}"
+fake_bin_dir="$work_dir/bin"
 
 cleanup() {
-  rm -rf "$work_dir" 2>/dev/null || true
+  if [[ "$keep_work_dir" != "true" ]]; then
+    rm -rf "$work_dir" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
 mkdir -p "$work_dir"
 mkdir -p "$golden_dir"
+
+install_fake_rch() {
+  mkdir -p "$fake_bin_dir"
+  cat > "$fake_bin_dir/rch" <<'FAKE_RCH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" != "exec" ]]; then
+  echo "fake rch only supports exec" >&2
+  exit 2
+fi
+shift
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+
+if [[ "${1:-}" == "env" ]]; then
+  shift
+  while [[ $# -gt 0 && "${1:-}" == *=* ]]; do
+    export "$1"
+    shift
+  done
+fi
+
+command_text="$*"
+if [[ "${1:-}" == "cargo" ]]; then
+  case "$command_text" in
+    *"fmt --check"*)
+      echo "fake rch: simulated cargo fmt failure for golden fixture"
+      echo "Remote command finished: exit=1"
+      exit 1
+      ;;
+    *"test --package frankenengine-engine --lib extension_host_authority_guard"*)
+      echo "fake rch: simulated extension_host_authority_guard test pass"
+      echo "Remote command finished: exit=0"
+      exit 0
+      ;;
+    *)
+      echo "fake rch refusing unexpected cargo command: ${command_text}" >&2
+      echo "Remote command finished: exit=2"
+      exit 2
+      ;;
+  esac
+fi
+
+set +e
+"$@"
+status="$?"
+set -e
+echo "Remote command finished: exit=${status}"
+exit "$status"
+FAKE_RCH
+  chmod +x "$fake_bin_dir/rch"
+}
+
+cleanup_temp_file() {
+  local path="$1"
+  if [[ "$keep_work_dir" != "true" ]]; then
+    rm -f "$path"
+  fi
+}
 
 # Normalize dynamic content in CI outputs for comparison
 normalize_ci_output() {
@@ -49,7 +114,7 @@ normalize_ci_output() {
       -e 's/"trace_id": "trace-[^"]*"/"trace_id": "TRACE_ID"/g' \
       -e 's/"decision_id": "decision-[^"]*"/"decision_id": "DECISION_ID"/g' \
       -e 's/\/tmp\/[^"]*\/[^"]*"/\/tmp\/TEMP_PATH"/g' \
-      -e 's/\/tmp\/[^[:space:]]*/\/tmp\/TEMP_PATH/g' \
+      -e 's/\/tmp\/[^"[:space:]]*/\/tmp\/TEMP_PATH/g' \
       -e 's/_[0-9]+\.log/_PID.log/g' \
       -e 's/_[0-9]+"/}_PID"/g' \
     > "$output_file"
@@ -73,13 +138,12 @@ extract_rgc_golden() {
           mode,
           outcome,
           error_code,
-          planned_lanes: (.planned_lanes // []),
-          failed_lanes: (.failed_lanes // [])
+          commands: (.commands // [])
         }' "$temp_manifest" 2>/dev/null || echo "JSON parse error in manifest"
       else
         echo "Invalid JSON in manifest"
       fi
-      rm -f "$temp_manifest"
+      cleanup_temp_file "$temp_manifest"
     else
       echo "null"
     fi
@@ -102,7 +166,7 @@ extract_rgc_golden() {
       else
         echo "Invalid JSON in verdict"
       fi
-      rm -f "$temp_verdict"
+      cleanup_temp_file "$temp_verdict"
     else
       echo "null"
     fi
@@ -137,7 +201,7 @@ extract_authority_golden() {
       else
         echo "Invalid JSON in authority manifest"
       fi
-      rm -f "$temp_manifest"
+      cleanup_temp_file "$temp_manifest"
     else
       echo "null"
     fi
@@ -149,92 +213,51 @@ extract_authority_golden() {
     else
       echo "No direct import violations"
     fi
+
+    echo "=== TYPE SHADOWING ==="
+    if [[ -f "$artifact_dir/type_shadowing_violations.txt" ]]; then
+      echo "Type shadowing violations found"
+      head -5 "$artifact_dir/type_shadowing_violations.txt" 2>/dev/null || true
+    else
+      echo "No type shadowing violations"
+    fi
+
+    echo "=== FORBIDDEN IO ==="
+    if [[ -f "$artifact_dir/forbidden_io_violations.txt" ]]; then
+      echo "Forbidden I/O violations found"
+      head -8 "$artifact_dir/forbidden_io_violations.txt" 2>/dev/null || true
+    else
+      echo "No forbidden I/O violations"
+    fi
   } > "$golden_file"
 }
 
 # Test RGC CI quality gates (minimal mode to avoid heavy computation)
 test_rgc_gates() {
-  local test_mode="$1"
   echo "Testing RGC CI quality gates..."
 
-  # For quick golden testing, just verify the script exists and produces expected structure
-  if [[ "$test_mode" == "generate" ]]; then
-    # Set deterministic environment
-    export RGC_CI_QUALITY_GATES_ARTIFACT_ROOT="$work_dir/rgc_artifacts"
-    export CARGO_TARGET_DIR="$work_dir/target_rgc"
-    export RCH_EXEC_TIMEOUT_SECONDS=30
-    export FUZZ_TIME_SECONDS=1
+  install_fake_rch
+  export RGC_CI_QUALITY_GATES_ARTIFACT_ROOT="$work_dir/rgc_artifacts"
+  export CARGO_TARGET_DIR="$work_dir/target_rgc"
+  export RCH_EXEC_TIMEOUT_SECONDS=30
+  export RCH_MISSING_MARKER_RETRY_COUNT=0
+  export FUZZ_TIME_SECONDS=1
 
-    # Run check mode for faster execution
-    if timeout 120s ./scripts/run_rgc_ci_quality_gates.sh fmt 2>/dev/null || true; then
-      echo "RGC gates completed"
-    else
-      echo "RGC gates failed (expected for golden test)"
-    fi
-
-    # Find the most recent run dir
-    local latest_run_dir
-    latest_run_dir="$(find "$work_dir/rgc_artifacts" -type d -name '????????T??????Z' | sort | tail -1 || true)"
-
-    if [[ -n "$latest_run_dir" && -d "$latest_run_dir" ]]; then
-      extract_rgc_golden "$latest_run_dir" "$work_dir/rgc_golden.txt"
-    else
-      echo "=== RGC GATES FAILED TO PRODUCE ARTIFACTS ===" > "$work_dir/rgc_golden.txt"
-    fi
+  # Run the real producer script with a deterministic fake rch so golden tests
+  # validate producer output contracts without starting local Cargo work.
+  if PATH="$fake_bin_dir:$PATH" timeout 120s ./scripts/run_rgc_ci_quality_gates.sh fmt >/dev/null 2>&1; then
+    echo "RGC gates completed"
   else
-    # For test mode, simulate expected output structure without running heavy commands
-    cat > "$work_dir/rgc_golden.txt" <<'EOF'
-=== RUN MANIFEST ===
-{
-  "component": "rgc_ci_quality_gates",
-  "scenario_id": "rgc-055",
-  "mode": "fmt",
-  "outcome": "fail",
-  "error_code": "FE-RGC-CI-QUALITY-GATE-0000",
-  "planned_lanes": [
-    "fmt"
-  ],
-  "failed_lanes": [
-    "fmt"
-  ]
-}
-=== CI GATE VERDICT ===
-{
-  "outcome": "fail",
-  "is_blocking": true,
-  "planned_lanes": [
-    "fmt"
-  ],
-  "failed_lanes": [
-    "fmt"
-  ],
-  "failure": {
-    "lane": "fmt",
-    "owner_hint": "runtime-core"
-  }
-}
-=== GATE HEALTH SUMMARY ===
-# RGC CI Quality Gates Summary
+    echo "RGC gates failed (expected for golden test)"
+  fi
 
-- Outcome: `fail`
-- Mode: `fmt`
-- Failed lane: `fmt`
-- Owner hint: `runtime-core`
-- Replay command: `./scripts/e2e/rgc_ci_quality_gates_replay.sh fmt`
+  local latest_run_dir
+  latest_run_dir="$(find "$work_dir/rgc_artifacts" -type d -name '????????T??????Z' | sort | tail -1 || true)"
 
-## Lane Status
-- `fmt`: `fail`
-
-## Artifact Bundle
-- `run_manifest.json`
-- `events.jsonl`
-- `commands.txt`
-- `failure_summary.json`
-- `ci_gate_verdict.json`
-- `failure_routing_matrix.json`
-- `lane_repro_index.json`
-- `gate_health_summary.md`
-EOF
+  if [[ -n "$latest_run_dir" && -d "$latest_run_dir" ]]; then
+    extract_rgc_golden "$latest_run_dir" "$work_dir/rgc_golden.txt"
+  else
+    echo "=== RGC GATES FAILED TO PRODUCE ARTIFACTS ===" > "$work_dir/rgc_golden.txt"
   fi
 }
 
@@ -242,51 +265,23 @@ EOF
 test_authority_guard() {
   echo "Testing extension host ambient authority guard..."
 
-  if [[ "$mode" == "generate" ]]; then
-    # Set deterministic artifact path
-    export ARTIFACT_DIR="$work_dir/authority_artifacts"
-    mkdir -p "$ARTIFACT_DIR"
+  install_fake_rch
+  local artifact_dir="$work_dir/authority_artifacts"
+  export EXTENSION_HOST_AMBIENT_AUTHORITY_ARTIFACT_DIR="$artifact_dir"
+  mkdir -p "$artifact_dir"
 
-    # Run the authority guard (should find violations)
-    if timeout 60s ./scripts/check_extension_host_ambient_authority.sh ci 2>/dev/null || true; then
-      echo "Authority guard completed"
-    else
-      echo "Authority guard failed"
-    fi
-
-    local artifact_dir="$work_dir/authority_artifacts"
-    if [[ ! -d "$artifact_dir" ]]; then
-      artifact_dir="artifacts/extension_host_ambient_authority"
-    fi
-
-    if [[ -d "$artifact_dir" ]]; then
-      extract_authority_golden "$artifact_dir" "$work_dir/authority_golden.txt"
-    else
-      echo "=== AUTHORITY GUARD FAILED TO PRODUCE ARTIFACTS ===" > "$work_dir/authority_golden.txt"
-    fi
+  # Run the real guard script with a deterministic fake rch for its Rust unit
+  # test step; source scans still run against the live workspace.
+  if PATH="$fake_bin_dir:$PATH" timeout 60s ./scripts/check_extension_host_ambient_authority.sh ci >/dev/null 2>&1; then
+    echo "Authority guard completed"
   else
-    # For test mode, simulate expected output structure
-    cat > "$work_dir/authority_golden.txt" <<'EOF'
-=== AUTHORITY GUARD MANIFEST ===
-{
-  "bead_id": "bd-11z7",
-  "mode": "ci",
-  "checks": [
-    "direct_upstream_imports",
-    "canonical_type_shadowing",
-    "forbidden_io_patterns",
-    "unit_tests"
-  ],
-  "passed": false
-}
-=== VIOLATIONS ===
-Direct import violations found
-crates/franken-extension-host/src/lib.rs:7834:        std::fs::read_to_string("../../scripts/run_guardplane_policy_actions_suite.sh")
-crates/franken-extension-host/src/lib.rs:8839:                std::fs::create_dir_all(parent).expect("create guardplane decision log parent");
-crates/franken-extension-host/src/lib.rs:8841:            std::fs::write(&path, guardplane_lines.join("\n") + "\n")
-crates/franken-extension-host/src/lib.rs:8848:                std::fs::create_dir_all(parent).expect("create containment workflow log parent");
-crates/franken-extension-host/src/lib.rs:8850:            std::fs::write(&path, containment_lines.join("\n") + "\n")
-EOF
+    echo "Authority guard failed"
+  fi
+
+  if [[ -d "$artifact_dir" ]]; then
+    extract_authority_golden "$artifact_dir" "$work_dir/authority_golden.txt"
+  else
+    echo "=== AUTHORITY GUARD FAILED TO PRODUCE ARTIFACTS ===" > "$work_dir/authority_golden.txt"
   fi
 }
 
@@ -294,7 +289,7 @@ case "$mode" in
   generate)
     echo "Generating golden artifacts..."
 
-    test_rgc_gates "generate"
+    test_rgc_gates
     test_authority_guard
 
     # Copy normalized outputs to golden directory
@@ -321,7 +316,7 @@ case "$mode" in
       exit 1
     fi
 
-    test_rgc_gates "test"
+    test_rgc_gates
     test_authority_guard
 
     # Compare against golden files

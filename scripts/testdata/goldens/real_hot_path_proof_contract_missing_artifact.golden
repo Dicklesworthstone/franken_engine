@@ -1,0 +1,129 @@
+=== DIAGNOSTICS ===
+{
+  "schema_version": "franken-engine.real-hot-path-proof-contract-gate.v1",
+  "status": "fail",
+  "bundle_dir": "scripts/testdata/real_hot_path_proof_contract/missing_artifact",
+  "expected_source_revision": "golden-revision-20260514",
+  "failure_count": 1,
+  "checked_artifacts": [
+    {
+      "key": "commands",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/commands.txt",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "events",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/events.jsonl",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.commands",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/commands.txt",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.events",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/events.jsonl",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.first_step_log",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/step_logs/step_000_real_hot_path_proof.log",
+      "kind": "file",
+      "exists": false
+    },
+    {
+      "key": "manifest.artifacts.manifest",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/run_manifest.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.rch_log",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/rch-log.step_000.log",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.step_logs_dir",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/step_logs",
+      "kind": "dir",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.trace_ids",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/trace_ids.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "run_manifest",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/run_manifest.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "trace_ids",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/trace_ids.json",
+      "kind": "file",
+      "exists": true
+    }
+  ],
+  "contract": {
+    "workload_id": "real_runtime_hot_paths",
+    "source_revision": "golden-revision-20260514",
+    "command": "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test",
+    "rch_worker": "worker-golden",
+    "target_dir_policy": "off_repo_tmp_required",
+    "correctness_digest": "65b2467bcc2ca5bfec7b56df7b296f69edea4dc3a70ab7ef3b4ddbbe1a5add58",
+    "metric_fields": {
+      "remote_exit_code": 0,
+      "local_fallback_detected": false,
+      "queue_when_busy": true
+    },
+    "proof_state": {
+      "outcome": "pass",
+      "remote_execution_verified": true
+    }
+  },
+  "failures": [
+    {
+      "code": "FE-REAL-HOT-PATH-CONTRACT-MISSING-ARTIFACT",
+      "path": "scripts/testdata/real_hot_path_proof_contract/missing_artifact/step_logs/step_000_real_hot_path_proof.log",
+      "message": "declared artifact first_step_log is missing",
+      "remediation": "Preserve the complete proof bundle directory and every path declared by run_manifest.json."
+    }
+  ],
+  "remediation": [
+    "Use scripts/run_real_hot_path_proof.sh to generate the bundle.",
+    "Keep all manifest-declared artifacts with the bundle before publishing proof evidence.",
+    "Reject stale source revisions and any rch local-fallback contamination."
+  ]
+}
+=== REPORT ===
+# Real Hot Path Proof Contract Gate
+
+status: fail
+bundle: scripts/testdata/real_hot_path_proof_contract/missing_artifact
+failure_count: 1
+correctness_digest: 65b2467bcc2ca5bfec7b56df7b296f69edea4dc3a70ab7ef3b4ddbbe1a5add58
+
+## Contract Summary
+
+- workload_id: "real_runtime_hot_paths"
+- source_revision: "golden-revision-20260514"
+- command: "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
+- rch_worker: "worker-golden"
+- target_dir_policy: "off_repo_tmp_required"
+- correctness_digest: "65b2467bcc2ca5bfec7b56df7b296f69edea4dc3a70ab7ef3b4ddbbe1a5add58"
+- metric_fields: {"remote_exit_code":0,"local_fallback_detected":false,"queue_when_busy":true}
+- proof_state: {"outcome":"pass","remote_execution_verified":true}
+
+## Failures
+
+- FE-REAL-HOT-PATH-CONTRACT-MISSING-ARTIFACT scripts/testdata/real_hot_path_proof_contract/missing_artifact/step_logs/step_000_real_hot_path_proof.log: declared artifact first_step_log is missing
+  remediation: Preserve the complete proof bundle directory and every path declared by run_manifest.json.

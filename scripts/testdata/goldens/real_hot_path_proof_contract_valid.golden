@@ -1,0 +1,121 @@
+=== DIAGNOSTICS ===
+{
+  "schema_version": "franken-engine.real-hot-path-proof-contract-gate.v1",
+  "status": "pass",
+  "bundle_dir": "scripts/testdata/real_hot_path_proof_contract/valid",
+  "expected_source_revision": "golden-revision-20260514",
+  "failure_count": 0,
+  "checked_artifacts": [
+    {
+      "key": "commands",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/commands.txt",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "events",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/events.jsonl",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.commands",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/commands.txt",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.events",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/events.jsonl",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.first_step_log",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/step_logs/step_000_real_hot_path_proof.log",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.manifest",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.rch_log",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/rch-log.step_000.log",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.step_logs_dir",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/step_logs",
+      "kind": "dir",
+      "exists": true
+    },
+    {
+      "key": "manifest.artifacts.trace_ids",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/trace_ids.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "run_manifest",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "trace_ids",
+      "path": "scripts/testdata/real_hot_path_proof_contract/valid/trace_ids.json",
+      "kind": "file",
+      "exists": true
+    }
+  ],
+  "contract": {
+    "workload_id": "real_runtime_hot_paths",
+    "source_revision": "golden-revision-20260514",
+    "command": "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test",
+    "rch_worker": "worker-golden",
+    "target_dir_policy": "off_repo_tmp_required",
+    "correctness_digest": "e23b814f04e881a9e8d9ca90794448018fc10d8ef926bacdae7c48cf0f9c2528",
+    "metric_fields": {
+      "remote_exit_code": 0,
+      "local_fallback_detected": false,
+      "queue_when_busy": true
+    },
+    "proof_state": {
+      "outcome": "pass",
+      "remote_execution_verified": true
+    }
+  },
+  "failures": [],
+  "remediation": [
+    "Use scripts/run_real_hot_path_proof.sh to generate the bundle.",
+    "Keep all manifest-declared artifacts with the bundle before publishing proof evidence.",
+    "Reject stale source revisions and any rch local-fallback contamination."
+  ]
+}
+=== REPORT ===
+# Real Hot Path Proof Contract Gate
+
+status: pass
+bundle: scripts/testdata/real_hot_path_proof_contract/valid
+failure_count: 0
+correctness_digest: e23b814f04e881a9e8d9ca90794448018fc10d8ef926bacdae7c48cf0f9c2528
+
+## Contract Summary
+
+- workload_id: "real_runtime_hot_paths"
+- source_revision: "golden-revision-20260514"
+- command: "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
+- rch_worker: "worker-golden"
+- target_dir_policy: "off_repo_tmp_required"
+- correctness_digest: "e23b814f04e881a9e8d9ca90794448018fc10d8ef926bacdae7c48cf0f9c2528"
+- metric_fields: {"remote_exit_code":0,"local_fallback_detected":false,"queue_when_busy":true}
+- proof_state: {"outcome":"pass","remote_execution_verified":true}
+
+## Failures
+
+- none

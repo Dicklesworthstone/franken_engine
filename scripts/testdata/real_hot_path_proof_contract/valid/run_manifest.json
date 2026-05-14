@@ -1,0 +1,55 @@
+{
+  "schema_version": "franken-engine.real-hot-path-proof.run-manifest.v1",
+  "bead_id": "bd-t5k40.3",
+  "component": "real_hot_path_proof",
+  "mode": "smoke",
+  "generated_at_utc": "20260514T030000Z",
+  "git_commit": "golden-revision-20260514",
+  "dirty_worktree": false,
+  "trace_id": "trace-real-hot-path-proof-golden",
+  "decision_id": "decision-real-hot-path-proof-golden",
+  "policy_id": "policy-real-hot-path-proof-v1",
+  "toolchain": "nightly",
+  "cargo_target_dir": "/tmp/rch_target_franken_engine_real_hot_path_proof_golden",
+  "cargo_incremental": "0",
+  "cargo_build_jobs": "4",
+  "rustflags": "-Cdebuginfo=0",
+  "rch": {
+    "exec_timeout_seconds": 3900,
+    "test_timeout_seconds": 1800,
+    "wait_response_timeout_seconds": 3600,
+    "queue_when_busy": true,
+    "priority": "high",
+    "visibility": "verbose",
+    "local_fallback_detected": false,
+    "remote_exit_code": 0,
+    "selected_worker": {
+      "id": "worker-golden",
+      "user": "ubuntu",
+      "host": "worker.example.internal"
+    }
+  },
+  "outcome": "pass",
+  "error_code": null,
+  "failure_reason": null,
+  "commands": [
+    "RCH_DAEMON_WAIT_RESPONSE_TIMEOUT_SECS=3600 RCH_QUEUE_WHEN_BUSY=1 RCH_PRIORITY=high RCH_VISIBILITY=verbose RCH_TEST_TIMEOUT_SEC=1800 rch exec -- env RUSTUP_TOOLCHAIN=nightly CARGO_TARGET_DIR=/tmp/rch_target_franken_engine_real_hot_path_proof_golden CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTFLAGS=-Cdebuginfo=0 cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test"
+  ],
+  "artifacts": {
+    "manifest": "scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+    "trace_ids": "scripts/testdata/real_hot_path_proof_contract/valid/trace_ids.json",
+    "events": "scripts/testdata/real_hot_path_proof_contract/valid/events.jsonl",
+    "commands": "scripts/testdata/real_hot_path_proof_contract/valid/commands.txt",
+    "step_logs_dir": "scripts/testdata/real_hot_path_proof_contract/valid/step_logs",
+    "first_step_log": "scripts/testdata/real_hot_path_proof_contract/valid/step_logs/step_000_real_hot_path_proof.log",
+    "rch_log": "scripts/testdata/real_hot_path_proof_contract/valid/rch-log.step_000.log"
+  },
+  "operator_verification": [
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/run_manifest.json",
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/trace_ids.json",
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/events.jsonl",
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/commands.txt",
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/step_logs/step_000_real_hot_path_proof.log",
+    "cat scripts/testdata/real_hot_path_proof_contract/valid/rch-log.step_000.log"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "franken-engine.real-hot-path-proof.trace-ids.v1",
+  "bead_id": "bd-t5k40.3",
+  "component": "real_hot_path_proof",
+  "policy_id": "policy-real-hot-path-proof-v1",
+  "trace_ids": [
+    "trace-real-hot-path-proof-golden"
+  ],
+  "decision_ids": [
+    "decision-real-hot-path-proof-golden"
+  ]
+}

@@ -1,0 +1,5 @@
+[RCH] queue enabled
+Selected worker: worker-golden at ubuntu@worker.example.internal (warm)
+running cargo bench -p frankenengine-engine --no-default-features --bench hot_paths -- --test
+Remote command finished: exit=0 in 120000ms
+[RCH] remote worker-golden (120.0s)

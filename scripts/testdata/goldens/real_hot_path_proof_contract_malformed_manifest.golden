@@ -1,0 +1,83 @@
+=== DIAGNOSTICS ===
+{
+  "schema_version": "franken-engine.real-hot-path-proof-contract-gate.v1",
+  "status": "fail",
+  "bundle_dir": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest",
+  "expected_source_revision": "golden-revision-20260514",
+  "failure_count": 1,
+  "checked_artifacts": [
+    {
+      "key": "commands",
+      "path": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest/commands.txt",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "events",
+      "path": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest/events.jsonl",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "run_manifest",
+      "path": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest/run_manifest.json",
+      "kind": "file",
+      "exists": true
+    },
+    {
+      "key": "trace_ids",
+      "path": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest/trace_ids.json",
+      "kind": "file",
+      "exists": true
+    }
+  ],
+  "contract": {
+    "workload_id": "real_runtime_hot_paths",
+    "source_revision": null,
+    "command": null,
+    "rch_worker": null,
+    "target_dir_policy": "unknown",
+    "correctness_digest": null,
+    "metric_fields": {},
+    "proof_state": {
+      "outcome": null,
+      "remote_execution_verified": false
+    }
+  },
+  "failures": [
+    {
+      "code": "FE-REAL-HOT-PATH-CONTRACT-MALFORMED-MANIFEST",
+      "path": "scripts/testdata/real_hot_path_proof_contract/malformed_manifest/run_manifest.json",
+      "message": "run_manifest.json is not valid JSON",
+      "remediation": "Rewrite the manifest through scripts/run_real_hot_path_proof.sh instead of editing it by hand."
+    }
+  ],
+  "remediation": [
+    "Use scripts/run_real_hot_path_proof.sh to generate the bundle.",
+    "Keep all manifest-declared artifacts with the bundle before publishing proof evidence.",
+    "Reject stale source revisions and any rch local-fallback contamination."
+  ]
+}
+=== REPORT ===
+# Real Hot Path Proof Contract Gate
+
+status: fail
+bundle: scripts/testdata/real_hot_path_proof_contract/malformed_manifest
+failure_count: 1
+correctness_digest: <unavailable>
+
+## Contract Summary
+
+- workload_id: "real_runtime_hot_paths"
+- source_revision: null
+- command: null
+- rch_worker: null
+- target_dir_policy: "unknown"
+- correctness_digest: null
+- metric_fields: {}
+- proof_state: {"outcome":null,"remote_execution_verified":false}
+
+## Failures
+
+- FE-REAL-HOT-PATH-CONTRACT-MALFORMED-MANIFEST scripts/testdata/real_hot_path_proof_contract/malformed_manifest/run_manifest.json: run_manifest.json is not valid JSON
+  remediation: Rewrite the manifest through scripts/run_real_hot_path_proof.sh instead of editing it by hand.

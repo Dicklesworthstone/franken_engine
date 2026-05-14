@@ -2,10 +2,12 @@
   "schema_version": "franken-engine.rch-policy-compliance-gate.v1",
   "status": "pass",
   "checked_files": [
+    "[SMOKE_ROOT]/fixtures/no-fallback.md",
     "[SMOKE_ROOT]/fixtures/pass.sh",
-    "[SMOKE_ROOT]/fixtures/waiver.md"
+    "[SMOKE_ROOT]/fixtures/waiver.md",
+    "[SMOKE_ROOT]/fixtures/wrapper.sh"
   ],
-  "checked_file_count": 2,
+  "checked_file_count": 4,
   "violation_count": 0,
   "waiver_count": 1,
   "violations": [],

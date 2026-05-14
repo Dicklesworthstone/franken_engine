@@ -205,9 +205,118 @@ record_or_waive() {
   emit_violation "$file" "$line_no" "$kind" "$line" "$remediation"
 }
 
+function_body() {
+  local function_name="$1"
+  local path="$2"
+
+  awk -v fn="$function_name" '
+    function brace_delta(line, tmp, opens, closes) {
+      tmp = line
+      opens = gsub(/\{/, "{", tmp)
+      tmp = line
+      closes = gsub(/\}/, "}", tmp)
+      return opens - closes
+    }
+    {
+      if (!in_body && ($0 ~ "^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{" || $0 ~ "^[[:space:]]*function[[:space:]]+" fn "[[:space:]]*\\{")) {
+        in_body = 1
+      }
+      if (in_body) {
+        print
+        depth += brace_delta($0)
+        if (depth <= 0 && $0 ~ /\}/) {
+          exit
+        }
+      }
+    }
+  ' "$path"
+}
+
+trusted_rch_wrappers() {
+  local path="$1"
+  local candidate body wrapper
+  local -a direct_candidates=(
+    run_rch
+    run_rch_cargo
+    rch_cargo
+    run_remote_cargo
+    cargo_via_rch
+  )
+  local -a passthrough_candidates=(
+    run_step
+    run_rch_step
+    run_remote_step
+    run_cargo_step
+  )
+  local -a trusted=()
+
+  for candidate in "${direct_candidates[@]}"; do
+    body="$(function_body "$candidate" "$path")"
+    [[ -n "$body" ]] || continue
+    [[ "$body" == *"exec -- env"* ]] || continue
+    [[ "$body" == *"CARGO_TARGET_DIR="* ]] || continue
+    if [[ "$body" == *"\"\$@\""* || "$body" == *" \$@"* ]]; then
+      trusted+=("$candidate")
+    fi
+  done
+
+  for candidate in "${passthrough_candidates[@]}"; do
+    body="$(function_body "$candidate" "$path")"
+    [[ -n "$body" ]] || continue
+    for wrapper in "${trusted[@]}"; do
+      if [[ "$body" == *"${wrapper} \"\$@\""* || "$body" == *"${wrapper} \$@"* ]]; then
+        trusted+=("$candidate")
+        break
+      fi
+    done
+  done
+
+  printf '%s\n' "${trusted[@]}" | sort -u
+}
+
+line_starts_with_wrapper() {
+  local line="$1"
+  shift
+  local wrapper
+
+  for wrapper in "$@"; do
+    if [[ "$line" =~ ^[[:space:]]*${wrapper}([[:space:]]|$) ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+trusted_wrapper_cargo_context() {
+  local line="$1"
+  local previous_line="$2"
+  shift 2
+
+  line_starts_with_wrapper "$line" "$@" && return 0
+  if [[ "$previous_line" =~ \\[[:space:]]*$ ]] && line_starts_with_wrapper "$previous_line" "$@"; then
+    return 0
+  fi
+
+  return 1
+}
+
+local_fallback_rejected_line() {
+  local line="$1"
+
+  if [[ "$line" =~ (reject|refus|fail|scan|detect|marker|exit[[:space:]]+[1242]|return[[:space:]]+1) ]]; then
+    return 0
+  fi
+  if [[ "$line" =~ (no[[:space:]]+local[[:space:]-]*fallback|without[[:space:]]+local[[:space:]-]*fallback|must[[:space:]]+not[[:space:]]+fall[[:space:]]+back|never[[:space:]]+fall[[:space:]]+back) ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
 scan_file() {
   local path="$1"
   local rel_path scan_path line_no line previous_line previous_previous_line cargo_context
+  local -a trusted_wrappers=()
 
   rel_path="$(repo_relative_path "$path")"
   if [[ "$rel_path" = /* ]]; then
@@ -221,6 +330,8 @@ scan_file() {
     return
   fi
 
+  mapfile -t trusted_wrappers < <(trusted_rch_wrappers "$scan_path")
+
   line_no=0
   previous_line=""
   previous_previous_line=""
@@ -229,6 +340,12 @@ scan_file() {
     cargo_context="${previous_previous_line} ${previous_line} ${line}"
 
     if [[ "$line" =~ (^|[[:space:];|&])cargo[[:space:]]+(build|check|test|clippy|bench|run)([[:space:]]|$) ]]; then
+      if [[ "${#trusted_wrappers[@]}" -gt 0 ]] && trusted_wrapper_cargo_context "$line" "$previous_line" "${trusted_wrappers[@]}"; then
+        previous_previous_line="$previous_line"
+        previous_line="$line"
+        continue
+      fi
+
       if [[ "$cargo_context" == *"rch exec -- env"* && "$cargo_context" == *"CARGO_TARGET_DIR="* ]]; then
         previous_previous_line="$previous_line"
         previous_line="$line"
@@ -255,7 +372,7 @@ scan_file() {
     fi
 
     if [[ "$line" =~ (falling[[:space:]]+back[[:space:]]+to[[:space:]]+local|local[[:space:]-]*fallback|running[[:space:]]+locally) ]]; then
-      if [[ "$line" =~ (reject|refus|fail|scan|detect|marker|exit[[:space:]]+[1242]|return[[:space:]]+1) ]]; then
+      if local_fallback_rejected_line "$line"; then
         previous_line="$line"
         continue
       fi

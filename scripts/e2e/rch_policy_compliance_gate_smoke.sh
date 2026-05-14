@@ -120,13 +120,15 @@ run_gate_expect_fail() {
 }
 
 run_selftest() {
-  local tmp_parent tmp_root pass_file bare_file missing_target_file fallback_file waiver_file
+  local tmp_parent tmp_root pass_file wrapper_file no_fallback_doc bare_file missing_target_file fallback_file waiver_file
 
   tmp_parent="${RCH_POLICY_COMPLIANCE_SMOKE_ARTIFACT_ROOT:-${TMPDIR:-/tmp}}"
   mkdir -p "$tmp_parent"
   tmp_root="$(mktemp -d "${tmp_parent%/}/rch-policy-compliance.XXXXXX")"
 
   pass_file="${tmp_root}/fixtures/pass.sh"
+  wrapper_file="${tmp_root}/fixtures/wrapper.sh"
+  no_fallback_doc="${tmp_root}/fixtures/no-fallback.md"
   bare_file="${tmp_root}/fixtures/bare.sh"
   missing_target_file="${tmp_root}/fixtures/missing-target.sh"
   fallback_file="${tmp_root}/fixtures/local-fallback.sh"
@@ -140,6 +142,33 @@ if grep -q "falling back to local" "$log_path"; then # reject local fallback
   echo "refusing local fallback"
   exit 1
 fi'
+
+  # shellcheck disable=SC2016
+  write_fixture "$wrapper_file" '#!/usr/bin/env bash
+set -euo pipefail
+
+toolchain="${RUSTUP_TOOLCHAIN:-nightly}"
+target_dir="${CARGO_TARGET_DIR:-/tmp/rch_target_wrapper_fixture}"
+
+run_rch() {
+  rch exec -- env "RUSTUP_TOOLCHAIN=$toolchain" "CARGO_TARGET_DIR=$target_dir" "$@"
+}
+
+run_step() {
+  local command_text="$1"
+  shift
+  printf "==> %s\n" "$command_text"
+  run_rch "$@"
+}
+
+run_step "cargo check -p frankenengine-engine --all-targets" \
+  cargo check -p frankenengine-engine --all-targets
+run_step "cargo test -p frankenengine-engine --test storage_adapter" \
+  cargo test -p frankenengine-engine --test storage_adapter'
+
+  write_fixture "$no_fallback_doc" '# Operator policy
+
+Validation operations are rch only, no local fallback.'
 
   write_fixture "$bare_file" '#!/usr/bin/env bash
 set -euo pipefail
@@ -160,7 +189,7 @@ fi'
 # rch-policy-waive: bare_cargo reason=lightweight-doc-example-only
 cargo test --help'
 
-  run_gate_expect_pass "${tmp_root}/pass-output" "$pass_file" "$waiver_file"
+  run_gate_expect_pass "${tmp_root}/pass-output" "$no_fallback_doc" "$pass_file" "$waiver_file" "$wrapper_file"
   assert_case_golden \
     "pass" \
     "$tmp_root" \

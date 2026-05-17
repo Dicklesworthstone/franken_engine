@@ -55,11 +55,11 @@ The gate fails when the actual wording state of a README sentence is stronger th
 
 Most recent promotions and proof-bundle landings from the May 2026 cycle (see [`CHANGELOG.md`](./CHANGELOG.md) Wave 4 for the full list):
 
-- **Replay coverage proof metric gate** (`bd-2488a`) reached OBSERVED with the `FE-CLAIM-003` / `FE-CLAIM-013` byte-identical fixed-input artifact proof.
+- **README hypothesis-claim promotion campaign** (IDEA-WIZARD-XIII, `bd-ly6hp`) shipped its six-child series wiring live proof bundles for every previously-hypothesised README claim, plus a no-mock acceptance drill (`bd-ly6hp.6`) that rejects fixtures.
 - **Live quarantine-mesh proof wrapper** (`bd-ly6hp.3`) ships, narrowing the gap to OBSERVED on the fleet-immune SLO.
 - **Capability-typed authority proof pilot** (`bd-ly6hp.4`) lands the first end-to-end ambient-authority rejection lane.
-- **Demotion rollback + safe-mode replay receipts** (`bd-or2e1`) made the IDEA-WIZARD-XI promotion controller reversible under signed evidence.
-- **No-mock claim-promotion acceptance drill** (`bd-ly6hp.6`) closes the loop: README hypothesis-claim promotion now requires live proof bundles and the drill itself rejects fixtures.
+- **IDEA-WIZARD-XI promotion controller** (`bd-xg3d6` parent) closed all six children: eligibility composer (`bd-4j2ck`), workload-regime transfer guard (`bd-jp4r0`), promotion-control contract (`bd-sisok`), no-mock replay drill (`bd-xbesa`), operator-runbook status (`bd-yo0eh`), and demotion rollback + safe-mode replay receipts (`bd-or2e1`).
+- **Real (non-simulated) hot-path proof lanes** (IDEA-WIZARD-X, `bd-t5k40`): `MockCertificate` and `hot_paths_simulation` artifacts are now rejected by the contract gate.
 - **`franken-core` extracted modules** compile standalone for the first time (`bd-zsais` series): class semantics, async functions, async generators, accessor descriptors, heap-backed own-property storage.
 
 ### Versioning & Release Posture
@@ -1938,7 +1938,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 
 | Surface | Command / path | What it shows |
 |---|---|---|
-| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 14 of 21 claims that are not yet OBSERVED. Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
+| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 21 claims that are not yet OBSERVED (5 TARGETED, 7 HYPOTHESIS; 9 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION:`) + the *Persistence Surface & The Active DEVIATION* section | Currently exactly one: the typed-heavy persistence stores still routing through generic `storage_adapter.rs`. P0 follow-up bead filed. |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 

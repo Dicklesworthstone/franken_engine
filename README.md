@@ -1516,7 +1516,7 @@ Every claim that backs a release ships behind an explicit gate. The 243 `scripts
 | `run_rgc_*` | ~55 | Runtime Governance Compliance: cross-platform matrix, security enforcement, runtime/exception semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, fault-injection/chaos verification pack, certified-optimization harness, FrankenNode handoff bundle, etc. |
 | `run_parser_*` | ~32 | Parser oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory, missing-artifact contract. |
 | `run_frx_*` | ~32 | FrankenReact/FRX: canonical React corpus, SSR/hydration/RSC, local semantic atlas, Track D WASM lane, Track E verification/fuzz, online regret + change-point demotion controller. |
-| Claim/evidence top-level | several | `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_gate.sh`, `run_metamorphic_testing.sh`, `run_scientific_contribution_targets.sh`, `run_cross_repo_integration_suite.sh`, `run_deterministic_e2e_harness.sh`. |
+| Claim/evidence top-level | several | `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_suite.sh`, `run_metamorphic_testing.sh`, `run_scientific_contribution_targets.sh`, `run_cross_repo_integration_suite.sh`, `run_deterministic_e2e_harness.sh`. |
 | Build/CI plumbing | a handful | `verify_build_modes.sh`, `test_standalone_build.sh`, and shell-hygiene smoke (`bd-j2o4x`). |
 
 ### Canonical Gate Invocations
@@ -1538,7 +1538,7 @@ RGC_HANDOFF_BLOCKER_LEDGER_PATH=/abs/engine_product_blocker_ledger.json \
   ./scripts/run_rgc_franken_node_handoff_bundle.sh ci
 
 # Reproducibility bundle contract
-./scripts/run_reproducibility_contract_gate.sh
+./scripts/run_reproducibility_contract_suite.sh
 
 # Deterministic end-to-end harness
 ./scripts/run_deterministic_e2e_harness.sh ci
@@ -1796,15 +1796,11 @@ The runtime's evidence-before-claims posture extends into how tests themselves a
 
 `scripts/run_rgc_zero_placeholder_gate.sh ci` is the release-time gate. It scans protected surfaces for placeholder/mock/stub/TODO-like code and refuses release unless every finding is either absent or explicitly recorded in `waiver_manifest.json`. The emitted `placeholder_gate_report.json` bundle gives replayable evidence for any failure rather than anonymous placeholder backfills.
 
-The companion `placeholder_closure_verification` contract (`docs/rgc_placeholder_closure_verification_v1.json`) ensures that closing out the zero-placeholder workstream itself is auditable:
+The companion `placeholder_closure_verification` contract (`docs/rgc_placeholder_closure_verification_v1.json`) ensures that closing out the zero-placeholder workstream itself is auditable. The contract is exercised by:
 
 ```bash
 jq empty docs/rgc_placeholder_closure_verification_v1.json
 cargo test --test placeholder_closure_verification
-./scripts/run_placeholder_closure_matrix.sh generate
-./scripts/run_placeholder_closure_verification.sh verify
-./scripts/run_placeholder_closure_bundle.sh bundle
-./scripts/run_placeholder_waiver_validation.sh check
 ```
 
 ### No-mock test discipline

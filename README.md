@@ -159,7 +159,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 |---|---|
 | Source modules in `crates/franken-engine/src/` | ~500 (`baseline_interpreter.rs` alone is ~1.2 MB / ~31k LoC) |
 | Integration tests in `crates/franken-engine/tests/` | ~1,382 files |
-| Operator gate scripts in `scripts/run_*.sh` | 243 |
+| Operator gate scripts in `scripts/run_*.sh` | 241 |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | matched 1:1 to gates |
 | Architecture / contract docs in `docs/` | ~250 markdown + JSON contracts |
 | Impossible-by-default demos under `examples/` | 13 capabilities, 20 numbered demo directories (`01_…` – `22_…` with gaps) |
@@ -187,7 +187,7 @@ franken_engine/
 │   └── franken-core/                # In-progress extracted runtime; excluded from workspace
 ├── docs/                            # Charters, contracts, audits, gate specs (~250 files)
 ├── examples/                        # 13 impossible-by-default capability demos + live runtime examples
-├── scripts/                         # 243 run_*.sh gate runners + e2e/*_replay.sh wrappers
+├── scripts/                         # 241 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)
 ├── benchmarks/                      # Benchmark inputs and goldens
@@ -1509,7 +1509,7 @@ The reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`)
 
 ## Gate Scripts and Evidence Workflow
 
-Every claim that backs a release ships behind an explicit gate. The 243 `scripts/run_*.sh` runners are grouped into families; each runner has a 1:1 partner in `scripts/e2e/*_replay.sh` for preserved-bundle replay.
+Every claim that backs a release ships behind an explicit gate. The 241 `scripts/run_*.sh` runners are grouped into families; each runner has a 1:1 partner in `scripts/e2e/*_replay.sh` for preserved-bundle replay.
 
 | Family | Count | What it covers |
 |---|---|---|
@@ -1623,7 +1623,9 @@ The full layered stack is what enforces the project's *evidence-before-claims* p
 
 ## Fuzz Targets Catalogue
 
-Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root and `crates/franken-engine/fuzz/fuzz_targets/` crate-local. Together they ship sixteen coverage-guided harnesses, each targeting a specific failure class.
+Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `crates/franken-engine/fuzz/fuzz_targets/` crate-local (13 targets). 30 coverage-guided harnesses in total. Two target names appear in both trees (`parse_js_ts.rs`, `capability_profile_deserialize.rs`); they cover different fuzz dictionaries and corpus seeds.
+
+### Top-level `fuzz/fuzz_targets/`
 
 | Target | Surface |
 |---|---|
@@ -1632,6 +1634,7 @@ Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root and `crates/franke
 | `ir_lowering_fuzz.rs` | AST → IR lowering; targets the transition stage that synthesizes IR1/IR2/IR3 invariants. |
 | `ir3_instruction_fuzz.rs` | IR3 instruction dispatch; targets the baseline interpreter's match-arm exhaustiveness and overflow safety. |
 | `module_loader_fuzz.rs` | ESM/CJS module resolver; covers conditional-exports walks and extension-probing edges. |
+| `ts_module_resolution_resolve.rs` | TypeScript module resolution; covers `paths`, `baseUrl`, and project-reference walks (`bd-6fcpn`). |
 | `handshake_replay.rs` | Attestation handshake replay; covers replay-attack resistance on the attestation channel. |
 | `token_verification.rs` | Capability-token verification; catches signature-binding errors. |
 | `capability_profile_deserialize.rs` | Capability profile deserialization (`bd-…` series); guards against profile-kind smuggling. |
@@ -1644,10 +1647,29 @@ Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root and `crates/franke
 | `decode_dos.rs` | Decode-side DoS (deep nesting, repeated-pattern blowups). |
 | `shadow_panel_bundle.rs` | Shadow-daemon panel bundles (`bd-hbil1`); catches malformed-bundle handling. |
 
-Run any one with:
+### Crate-local `crates/franken-engine/fuzz/fuzz_targets/`
+
+| Target | Surface |
+|---|---|
+| `parse_js_ts.rs` | Same parser front-end as the top-level target, with a different dictionary and corpus. |
+| `parallel_parser.rs` | The parallel scoped-worker lex path (May 2026); covers chunk-boundary determinism. |
+| `jsx_tsx_parser.rs` | JSX/TSX-specific parser front-end. |
+| `audit_markdown_parser.rs` | The audit-closure-matrix markdown parser. |
+| `parse_fixture_with_migration.rs` | Fixture-parse + schema-migration round-trip. |
+| `capability_profile_deserialize.rs` | Crate-local variant of the capability-profile deserializer fuzz. |
+| `resource_certificate_consumer.rs` | AARA resource-certificate consumer path; targets budget-decrement edge cases. |
+| `revocation_check_event.rs` | Revocation-chain event ingestion. |
+| `baseline_object_to_string.rs` | Baseline interpreter's `Object.prototype.toString` family; catches prototype-coercion edges. |
+| `eval_route_classifier.rs` | `eval` / `Function()` route classification; targets the dynamic-code-execution capability gate. |
+| `deterministic_decode.rs` | Deterministic decoder round-trip; catches non-determinism in serde paths. |
+| `runtime_security_logs_jsonl.rs` | Runtime-security `events.jsonl` parser; catches malformed-line handling. |
+| `architecture_inventory.rs` | Architecture-inventory generation; catches drift in the inventory-regeneration path. |
+
+Run any target with:
 
 ```bash
-cargo +nightly fuzz run <target_name>
+cargo +nightly fuzz run <target_name>                   # top-level tree
+cargo +nightly fuzz run --fuzz-dir crates/franken-engine/fuzz <target_name>   # crate-local tree
 ```
 
 Coverage-guided fuzzing is part of the constitutional "evidence-before-claims" posture. The harnesses themselves are evidence that an attack surface has been *attempted*, not just contemplated.

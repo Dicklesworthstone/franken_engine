@@ -206,7 +206,7 @@ The project uses `br` (the Rust-port `beads_rust` tracker) with issues checked i
 
 ### Always-on gates layered onto every change
 
-`scripts/` ships 243 `run_*.sh` files. Major families:
+`scripts/` ships 241 `run_*.sh` files. Major families:
 
 - `run_rgc_*` — Runtime Governance Compliance (~55 scripts: cross-platform matrix, security enforcement, runtime semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, etc.)
 - `run_parser_*` — Parser (~32: oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory)

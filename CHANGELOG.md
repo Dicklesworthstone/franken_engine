@@ -22,11 +22,26 @@ The project ships a single `0.1.0` Cargo manifest across the workspace and has n
 
 The four chronological capability waves below are research-grouped, not release-tagged.
 
+### Per-Wave Metric Snapshot
+
+Counts at each wave's closing commit (`git ls-tree -r --name-only <sha>`-derived). Useful for "how much was built in this window?" without reading every commit. The HEAD column shows current state (some Wave-4 modules have since been consolidated/renamed).
+
+| Surface | End of Wave 1 (2026-02-28) | End of Wave 2 (2026-03-31) | End of Wave 3 (2026-04-30) | End of Wave 4 (2026-05-15) | HEAD |
+|---|---:|---:|---:|---:|---:|
+| `crates/franken-engine/src/*.rs` | 262 | 495 | 550 | 573 | 511 |
+| `crates/franken-engine/tests/*.rs` | 437 | 1,194 | 1,309 | 1,390 | 1,382 |
+| `crates/franken-engine/tests/rgc_*.rs` | 0 | 34 | 36 | 37 | 37 |
+| `scripts/run_*.sh` | 118 | 201 | 227 | 241 | 241 |
+| `.beads/issues.jsonl` entries | 951 | 1,118 | 1,739 | 2,584 | 2,584 |
+| Commits added in the wave | ~315 | ~670 | ~2,115 | ~1,346 | n/a |
+
+Read across rows for "growth per wave": notice Wave 2's near-doubling of the test surface (437 → 1,194) under the iterator-protocol + exception-epic landings, Wave 3's surge in beads (621 new entries, from 1,118 to 1,739) under the claim-to-proof matrix introduction, and Wave 4's continued bead growth (+845 to 2,584) tracking the IDEA-WIZARD series.
+
 ---
 
 ## Wave 1 — Bootstrap and scaffolding (2026-02-18 → 2026-02-28, ~315 commits)
 
-The first ten days laid the entire repository skeleton: workspace structure, the canonical-encoding/IR/lowering/parser scaffolding, the original RGC ("Runtime Governance Compliance") gate framework, and the first wave of integration tests. The codebase grew from an empty repository to roughly 450+ source modules and 100+ integration test files in this window.
+The first ten days laid the entire repository skeleton: workspace structure, the canonical-encoding/IR/lowering/parser scaffolding, the original RGC ("Runtime Governance Compliance") gate framework, and the first wave of integration tests. The codebase grew from an empty repository to 262 source modules and 437 integration test files in this window (see the per-wave metric snapshot above).
 
 ### Delivered capability
 

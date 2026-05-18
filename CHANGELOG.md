@@ -225,10 +225,10 @@ The project uses `br` (the Rust-port `beads_rust` tracker) with issues checked i
 
 `scripts/` ships 241 `run_*.sh` files. Major families:
 
-- `run_rgc_*` — Runtime Governance Compliance (~55 scripts: cross-platform matrix, security enforcement, runtime semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, etc.)
-- `run_parser_*` — Parser (~32: oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory)
-- `run_frx_*` — FrankenReact/FRX (~32: canonical React corpus, SSR/hydration/RSC, local semantic atlas, Track D WASM lane, Track E verification/fuzz, online regret + change-point demotion controller)
-- `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_gate.sh`, `run_metamorphic_testing.sh` and other top-level claim/evidence gates.
+- `run_rgc_*` — Runtime Governance Compliance (56 scripts: cross-platform matrix, security enforcement, runtime semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, etc.)
+- `run_parser_*` — Parser (36 scripts: oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory)
+- `run_frx_*` — FrankenReact/FRX (34 scripts: canonical React corpus, SSR/hydration/RSC, local semantic atlas, Track D WASM lane, Track E verification/fuzz, online regret + change-point demotion controller)
+- `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_suite.sh`, `run_metamorphic_suite.sh` and other top-level claim/evidence gates.
 
 Every gate has a matching `scripts/e2e/*_replay.sh` wrapper that can replay the latest preserved artifact bundle or a pinned timestamp under `artifacts/`.
 

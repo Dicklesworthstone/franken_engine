@@ -1563,7 +1563,7 @@ Every claim that backs a release ships behind an explicit gate. The 241 `scripts
 | `run_rgc_*` | 56 | Runtime Governance Compliance: cross-platform matrix, security enforcement, runtime/exception semantics, statistical validation, performance regression, JSON compound traversal, NPM compatibility matrix, observability publication policy, module interop matrix, CLI operator workflow, docs/help surface audit, zero-placeholder, fault-injection/chaos verification pack, certified-optimization harness, FrankenNode handoff bundle, etc. |
 | `run_parser_*` | 36 | Parser oracle, phase0 artifact, performance promotion, frontier harness, operator runbook, gap inventory, missing-artifact contract. |
 | `run_frx_*` | 34 | FrankenReact/FRX: canonical React corpus, SSR/hydration/RSC, local semantic atlas, Track D WASM lane, Track E verification/fuzz, online regret + change-point demotion controller. |
-| Claim/evidence top-level | several | `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_suite.sh`, `run_metamorphic_testing.sh`, `run_scientific_contribution_targets.sh`, `run_cross_repo_integration_suite.sh`, `run_deterministic_e2e_harness.sh`. |
+| Claim/evidence top-level | several | `run_claim_to_proof_matrix_gate.sh`, `run_real_hot_path_proof.sh`, `run_reproducibility_contract_suite.sh`, `run_metamorphic_suite.sh`, `run_scientific_contribution_targets.sh`, `run_cross_repo_integration_suite.sh`, `run_deterministic_e2e_harness.sh`. |
 | Build/CI plumbing | a handful | `verify_build_modes.sh`, `test_standalone_build.sh`, and shell-hygiene smoke (`bd-j2o4x`). |
 
 ### Canonical Gate Invocations
@@ -2132,7 +2132,7 @@ Operational target is at or below 250ms median from high-risk threshold crossing
 
 ### 9. Why is there no `install.sh` or prebuilt binary release?
 
-Because the project hasn't cut a release. There are no GitHub Releases or version tags; the workspace is at `0.1.0` and ships only source builds today. When a release ships, the install path will be documented here.
+Because the project hasn't cut a release. There are no GitHub Releases or version tags; the workspace is at `0.1.0` and ships only source builds today. The supported install path is `cargo build --release -p frankenengine-engine --bin frankenctl` against either Standalone Mode (no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above for the exact commands. A release would replace this with a `curl | bash` installer + binary tarballs, but neither exists yet and won't until the GA-exit evidence package is complete (see *Acceptance Ledger & GA Exit Evidence*).
 
 ### 10. How do I add a new claim to the README?
 

@@ -2132,7 +2132,7 @@ Operational target is at or below 250ms median from high-risk threshold crossing
 
 ### 9. Why is there no `install.sh` or prebuilt binary release?
 
-Because the project hasn't cut a release. There are no GitHub Releases or version tags; the workspace is at `0.1.0` and ships only source builds today. The supported install path is `cargo build --release -p frankenengine-engine --bin frankenctl` against either Standalone Mode (no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above for the exact commands. A release would replace this with a `curl | bash` installer + binary tarballs, but neither exists yet and won't until the GA-exit evidence package is complete (see *Acceptance Ledger & GA Exit Evidence*).
+Because the project hasn't cut a release. There are no GitHub Releases or version tags; the workspace is at `0.1.0` and ships only source builds today. The supported install path is `cargo build --release -p frankenengine-engine --bin frankenctl` against either Standalone Mode (no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above for the exact commands. The shape of any future release (binary tarballs, package-manager publication, an installer script, or none of those) is not yet decided; it depends on the GA-exit evidence package completing first (see *Acceptance Ledger & GA Exit Evidence*).
 
 ### 10. How do I add a new claim to the README?
 

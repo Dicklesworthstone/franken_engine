@@ -2138,7 +2138,10 @@ mod tests {
         let e = OverrideError::AlreadyConsumed {
             override_id: override_id.clone(),
         };
-        assert_eq!(e.to_string(), format!("override already consumed: {override_id}"));
+        assert_eq!(
+            e.to_string(),
+            format!("override already consumed: {override_id}")
+        );
     }
 
     #[test]

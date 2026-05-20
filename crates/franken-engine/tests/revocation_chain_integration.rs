@@ -3,6 +3,7 @@ use frankenengine_engine::engine_object_id::{self, EngineObjectId, ObjectDomain}
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::revocation_chain::*;
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
 };
@@ -544,6 +545,8 @@ fn rebuild_from_empty_events_with_head_fails() {
         latest_event: EngineObjectId([0; 32]),
         head_seq: 0,
         chain_hash: ContentHash::compute(b"bad"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: ZONE.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
@@ -1004,6 +1007,8 @@ fn revocation_head_serde_roundtrip() {
         latest_event: EngineObjectId([0x22; 32]),
         head_seq: 5,
         chain_hash: ContentHash::compute(b"test-hash"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: ZONE.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
@@ -1938,6 +1943,8 @@ fn revocation_head_clone_equals_original() {
         latest_event: EngineObjectId([0xE5; 32]),
         head_seq: 10,
         chain_hash: ContentHash::compute(b"clone-test"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: ZONE.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
@@ -1952,6 +1959,8 @@ fn revocation_head_debug_is_nonempty() {
         latest_event: EngineObjectId([0xE7; 32]),
         head_seq: 0,
         chain_hash: ContentHash::compute(b"debug-test"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: ZONE.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };

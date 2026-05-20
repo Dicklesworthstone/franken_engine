@@ -28,6 +28,7 @@ use frankenengine_engine::revocation_chain::{
     revocation_event_schema_id, revocation_head_schema, revocation_head_schema_id,
     revocation_schema, revocation_schema_id,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
 };
@@ -334,6 +335,8 @@ fn enrichment_rebuild_empty_with_head_fails() {
         latest_event: EngineObjectId([19; 32]),
         head_seq: 0,
         chain_hash: ContentHash::compute(b"x"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: TEST_ZONE.to_string(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };

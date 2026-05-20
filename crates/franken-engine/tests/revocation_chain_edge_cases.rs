@@ -29,6 +29,7 @@ use frankenengine_engine::revocation_chain::{
     revocation_event_schema_id, revocation_head_schema, revocation_head_schema_id,
     revocation_schema, revocation_schema_id,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
 };
@@ -499,6 +500,8 @@ fn revocation_head_serde_round_trip() {
         latest_event: EngineObjectId([0x22; 32]),
         head_seq: 5,
         chain_hash: ContentHash::compute(b"test"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: TEST_ZONE.into(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };
@@ -1130,6 +1133,8 @@ fn rebuild_from_empty_events_with_head_fails() {
         latest_event: EngineObjectId([0x22; 32]),
         head_seq: 0,
         chain_hash: ContentHash::compute(b"fake"),
+        epoch_id: SecurityEpoch::GENESIS,
+        issued_at: DeterministicTimestamp(0),
         zone: TEST_ZONE.into(),
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
     };

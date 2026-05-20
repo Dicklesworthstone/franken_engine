@@ -27,6 +27,7 @@ use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
 use crate::hash_tiers::ContentHash;
 use crate::policy_checkpoint::DeterministicTimestamp;
+use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
     verify_signature,
@@ -39,6 +40,15 @@ use crate::signature_preimage::{
 const REVOCATION_SCHEMA_DEF: &[u8] = b"FrankenEngine.Revocation.v1";
 const REVOCATION_EVENT_SCHEMA_DEF: &[u8] = b"FrankenEngine.RevocationEvent.v1";
 const REVOCATION_HEAD_SCHEMA_DEF: &[u8] = b"FrankenEngine.RevocationHead.v1";
+const MAX_REVOCATION_HEAD_EPOCH_STALENESS: u64 = 0;
+
+fn default_security_epoch() -> SecurityEpoch {
+    SecurityEpoch::GENESIS
+}
+
+fn default_deterministic_timestamp() -> DeterministicTimestamp {
+    DeterministicTimestamp(0)
+}
 
 pub fn revocation_schema() -> SchemaHash {
     SchemaHash::from_definition(REVOCATION_SCHEMA_DEF)
@@ -296,6 +306,12 @@ pub struct RevocationHead {
     pub head_seq: u64,
     /// Rolling hash of the entire chain for integrity verification.
     pub chain_hash: ContentHash,
+    /// Security epoch in which this head was produced.
+    #[serde(default = "default_security_epoch")]
+    pub epoch_id: SecurityEpoch,
+    /// Deterministic issuance tick for freshness-sensitive head signatures.
+    #[serde(default = "default_deterministic_timestamp")]
+    pub issued_at: DeterministicTimestamp,
     pub zone: String,
     pub signature: Signature,
 }
@@ -311,7 +327,15 @@ impl RevocationHead {
             "head_id".to_string(),
             CanonicalValue::Bytes(self.head_id.as_bytes().to_vec()),
         );
+        map.insert(
+            "epoch_id".to_string(),
+            CanonicalValue::U64(self.epoch_id.as_u64()),
+        );
         map.insert("head_seq".to_string(), CanonicalValue::U64(self.head_seq));
+        map.insert(
+            "issued_at_ns".to_string(),
+            CanonicalValue::U64(self.issued_at.0),
+        );
         map.insert(
             "latest_event".to_string(),
             CanonicalValue::Bytes(self.latest_event.as_bytes().to_vec()),
@@ -485,6 +509,8 @@ pub struct RevocationChain {
     revocation_index: BTreeMap<EngineObjectId, u64>,
     /// Rolling chain hash.
     chain_hash: ContentHash,
+    /// Current verifier epoch used to reject stale signed heads.
+    current_epoch: SecurityEpoch,
     /// Audit events.
     audit_events: Vec<ChainEvent>,
 }
@@ -500,6 +526,7 @@ impl RevocationChain {
             authorized_head_keys: BTreeMap::new(),
             revocation_index: BTreeMap::new(),
             chain_hash: ContentHash::compute(b"revocation-chain-genesis"),
+            current_epoch: SecurityEpoch::GENESIS,
             audit_events: Vec::new(),
         }
     }
@@ -563,6 +590,25 @@ impl RevocationChain {
     /// Current rolling chain hash.
     pub fn chain_hash(&self) -> &ContentHash {
         &self.chain_hash
+    }
+
+    /// Current verifier epoch used for revocation-head freshness checks.
+    pub fn current_epoch(&self) -> SecurityEpoch {
+        self.current_epoch
+    }
+
+    /// Advance the verifier epoch for fail-closed head freshness checks.
+    pub fn set_current_epoch(&mut self, epoch: SecurityEpoch) -> Result<(), ChainError> {
+        if epoch < self.current_epoch {
+            return Err(ChainError::ChainIntegrity {
+                detail: format!(
+                    "revocation chain epoch cannot regress from {} to {}",
+                    self.current_epoch, epoch
+                ),
+            });
+        }
+        self.current_epoch = epoch;
+        Ok(())
     }
 
     /// O(1) revocation lookup: check if a target has been revoked.
@@ -667,6 +713,8 @@ impl RevocationChain {
             latest_event: event_id,
             head_seq: event_seq,
             chain_hash: self.chain_hash,
+            epoch_id: self.current_epoch,
+            issued_at: revocation.issued_at,
             zone: self.zone.clone(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
@@ -728,6 +776,10 @@ impl RevocationChain {
             .map_err(|err| ChainError::ChainIntegrity {
                 detail: format!("epoch barrier rejected revocation append: {err}"),
             })?;
+        if let Err(err) = self.set_current_epoch(barrier.current_epoch()) {
+            let _ = barrier.release_guard(&guard);
+            return Err(err);
+        }
         let result = self.append(revocation, head_signing_key, trace_id);
         let _ = barrier.release_guard(&guard);
         result
@@ -897,7 +949,17 @@ impl RevocationChain {
         &self,
         verification_key: &VerificationKey,
     ) -> Result<(), ChainError> {
+        self.verify_head_signature_at_epoch(verification_key, self.current_epoch)
+    }
+
+    /// Verify the head signature against an explicit verifier epoch.
+    pub fn verify_head_signature_at_epoch(
+        &self,
+        verification_key: &VerificationKey,
+        current_epoch: SecurityEpoch,
+    ) -> Result<(), ChainError> {
         let head = self.head.as_ref().ok_or(ChainError::EmptyChain)?;
+        Self::verify_head_epoch_freshness(head, current_epoch)?;
         let preimage = head.preimage_bytes();
         verify_signature(verification_key, &preimage, &head.signature).map_err(|e| {
             ChainError::SignatureInvalid {
@@ -953,6 +1015,10 @@ impl RevocationChain {
             .map_err(|err| ChainError::ChainIntegrity {
                 detail: format!("epoch barrier rejected revocation lookup: {err}"),
             })?;
+        if let Err(err) = self.set_current_epoch(barrier.current_epoch()) {
+            let _ = barrier.release_guard(&guard);
+            return Err(err);
+        }
         let result = self.is_revoked_audited(target_id, trace_id);
         let _ = barrier.release_guard(&guard);
         Ok(result)
@@ -1132,6 +1198,7 @@ impl RevocationChain {
         &self,
         head: &RevocationHead,
     ) -> Result<(), ChainError> {
+        Self::verify_head_epoch_freshness(head, self.current_epoch)?;
         if self.authorized_head_keys.is_empty() {
             return Err(ChainError::SignatureInvalid {
                 detail: "no authorized head verification key configured".to_string(),
@@ -1149,6 +1216,26 @@ impl RevocationChain {
                 detail: "head signature did not verify with any authorized key".to_string(),
             })
         }
+    }
+
+    fn verify_head_epoch_freshness(
+        head: &RevocationHead,
+        current_epoch: SecurityEpoch,
+    ) -> Result<(), ChainError> {
+        if head
+            .epoch_id
+            .as_u64()
+            .saturating_add(MAX_REVOCATION_HEAD_EPOCH_STALENESS)
+            < current_epoch.as_u64()
+        {
+            return Err(ChainError::ChainIntegrity {
+                detail: format!(
+                    "revocation head epoch {} is stale for current verifier epoch {}",
+                    head.epoch_id, current_epoch
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn derive_event_id(
@@ -1686,7 +1773,7 @@ mod tests {
 
     #[test]
     fn verify_head_signature_succeeds() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let vk = sk.verification_key();
 
@@ -1704,8 +1791,54 @@ mod tests {
     }
 
     #[test]
+    fn revocation_head_preimage_binds_epoch_and_issued_at() {
+        let mut chain = trusted_test_chain();
+        let sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [0x31; 32],
+            &test_revocation_key(),
+        );
+        chain.append(rev, &sk, "t-head-epoch").expect("append");
+        let head = chain.head().expect("head").clone();
+
+        let mut epoch_rebound = head.clone();
+        epoch_rebound.epoch_id = SecurityEpoch::from_raw(1);
+        assert_ne!(head.preimage_bytes(), epoch_rebound.preimage_bytes());
+
+        let mut time_rebound = head.clone();
+        time_rebound.issued_at = DeterministicTimestamp(head.issued_at.0 + 1);
+        assert_ne!(head.preimage_bytes(), time_rebound.preimage_bytes());
+    }
+
+    #[test]
+    fn verify_head_signature_rejects_stale_epoch_replay() {
+        let mut chain = trusted_test_chain();
+        let sk = test_signing_key();
+        let vk = sk.verification_key();
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Expired,
+            [0x32; 32],
+            &test_revocation_key(),
+        );
+        chain.append(rev, &sk, "t-stale-head").expect("append");
+
+        let err = chain
+            .verify_head_signature_at_epoch(&vk, SecurityEpoch::from_raw(2))
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ChainError::ChainIntegrity { ref detail }
+                if detail.contains("stale") && detail.contains("epoch:2")
+        ));
+    }
+
+    #[test]
     fn verify_head_signature_fails_with_wrong_key() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2434,6 +2567,8 @@ mod tests {
             latest_event: EngineObjectId([19; 32]),
             head_seq: 10,
             chain_hash: ContentHash::compute(b"test-chain-hash"),
+            epoch_id: SecurityEpoch::GENESIS,
+            issued_at: DeterministicTimestamp(0),
             zone: TEST_ZONE.to_string(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
@@ -2955,6 +3090,8 @@ mod tests {
             latest_event: EngineObjectId([19; 32]),
             head_seq: 0,
             chain_hash: ContentHash::compute(b"x"),
+            epoch_id: SecurityEpoch::GENESIS,
+            issued_at: DeterministicTimestamp(0),
             zone: TEST_ZONE.to_string(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
@@ -3018,6 +3155,8 @@ mod tests {
             latest_event: EngineObjectId([19; 32]),
             head_seq: 5,
             chain_hash: ContentHash::compute(b"test"),
+            epoch_id: SecurityEpoch::GENESIS,
+            issued_at: DeterministicTimestamp(0),
             zone: TEST_ZONE.to_string(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
@@ -3099,6 +3238,8 @@ mod tests {
             latest_event: EngineObjectId([19; 32]),
             head_seq: 0,
             chain_hash: ContentHash::compute(b"x"),
+            epoch_id: SecurityEpoch::GENESIS,
+            issued_at: DeterministicTimestamp(0),
             zone: TEST_ZONE.to_string(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };

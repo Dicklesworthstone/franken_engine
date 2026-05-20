@@ -410,8 +410,9 @@ pub enum Value {
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
     Float(Float64),
-    /// String.
-    Str(String),
+    /// Shared string payload. Cloning a `Value::Str` bumps the refcount instead
+    /// of copying the string bytes on every register read/write.
+    Str(#[serde(with = "arc_str_serde")] Arc<str>),
     /// Object reference (heap index).
     Object(ObjectId),
     /// Function reference (function table index).
@@ -437,6 +438,25 @@ pub enum Value {
     Promise(u32),
     /// Builtin callable bound into the runtime environment.
     BuiltinFunction(BuiltinFunction),
+}
+
+mod arc_str_serde {
+    use super::*;
+
+    pub fn serialize<S>(value: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<str>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Arc::from(value))
+    }
 }
 
 /// Small set of builtin callable kinds the baseline interpreter exposes as
@@ -577,6 +597,10 @@ impl BuiltinFunction {
 }
 
 impl Value {
+    pub fn str(value: impl Into<Arc<str>>) -> Self {
+        Self::Str(value.into())
+    }
+
     /// Truthiness: Undefined, Null, Bool(false), Int(0), Float(0.0/-0.0/NaN), Str("") are falsy.
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -3015,7 +3039,7 @@ impl InterpreterCore {
             .map(|path| path.display().to_string())
             .or_else(|| self.config.module_root.clone())
             .unwrap_or_default();
-        (Value::Str(specifier.to_string()), Value::Str(dirname))
+        (Value::str(specifier), Value::str(dirname))
     }
 
     fn inject_active_cjs_bindings(&mut self) -> Result<(), InterpreterError> {
@@ -3954,7 +3978,7 @@ impl InterpreterCore {
 
     fn uncaught_exception_description(value: &Value) -> String {
         match value {
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Undefined => "undefined".to_string(),
@@ -4664,7 +4688,6 @@ impl InterpreterCore {
                 None
             };
 
-
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
                     self.write_reg(dst, Value::Int(value))?;
@@ -4676,15 +4699,13 @@ impl InterpreterCore {
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadStr { dst, pool_index } => {
-                    let s = module
-                        .constant_pool
-                        .get(pool_index as usize)
-                        .ok_or(InterpreterError::StringPoolOutOfBounds {
+                    let s = module.constant_pool.get(pool_index as usize).ok_or(
+                        InterpreterError::StringPoolOutOfBounds {
                             index: pool_index,
                             pool_size: module.constant_pool.len() as u32,
-                        })?
-                        .clone();
-                    self.write_reg(dst, Value::Str(s))?;
+                        },
+                    )?;
+                    self.write_reg(dst, Value::str(s.as_str()))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -5936,7 +5957,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, Value::Str(val.typeof_name().to_string()))?;
+                    self.write_reg(dst, Value::str(val.typeof_name()))?;
                     self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }
@@ -6194,7 +6215,7 @@ impl InterpreterCore {
                         )?;
                         let val = self.read_reg(reg)?;
                         let part_str = match val {
-                            Value::Str(s) => s,
+                            Value::Str(s) => s.to_string(),
                             Value::Int(n) => n.to_string(),
                             Value::Float(f) => f.to_string(),
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
@@ -6216,7 +6237,7 @@ impl InterpreterCore {
                         self.check_string_limit(result.len().saturating_add(part_str.len()))?;
                         result.push_str(&part_str);
                     }
-                    self.write_reg(dst, Value::Str(result))?;
+                    self.write_reg(dst, Value::str(result))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Halt => {
@@ -6305,7 +6326,7 @@ impl InterpreterCore {
                             // Re-throw the pending exception after finally completes.
                             if let Some(thrown) = self.pending_exception.clone() {
                                 let desc = match &thrown {
-                                    Value::Str(s) => s.clone(),
+                                    Value::Str(s) => s.to_string(),
                                     Value::Int(n) => n.to_string(),
                                     Value::Bool(b) => b.to_string(),
                                     Value::Undefined => "undefined".to_string(),
@@ -6755,7 +6776,7 @@ impl InterpreterCore {
             // String concatenation
             (Value::Str(x), Value::Str(y)) => {
                 self.check_string_limit(x.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{x}{y}")))
+                Ok(Value::str(format!("{x}{y}")))
             }
             (Value::Str(x), other) => {
                 let other_str = match other {
@@ -6770,7 +6791,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(x.len().saturating_add(other_str.len()))?;
-                Ok(Value::Str(format!("{x}{other_str}")))
+                Ok(Value::str(format!("{x}{other_str}")))
             }
             (other, Value::Str(y)) => {
                 let other_str = match other {
@@ -6785,7 +6806,7 @@ impl InterpreterCore {
                     _ => other.to_string(),
                 };
                 self.check_string_limit(other_str.len().saturating_add(y.len()))?;
-                Ok(Value::Str(format!("{other_str}{y}")))
+                Ok(Value::str(format!("{other_str}{y}")))
             }
             _ => {
                 // JS coercion: non-string primitives coerce to number for +.
@@ -7295,7 +7316,7 @@ impl InterpreterCore {
                 };
                 IteratorValue::FixedPoint(fixed)
             }
-            Value::Str(value) => IteratorValue::String(value.clone()),
+            Value::Str(value) => IteratorValue::String(value.to_string()),
             Value::Object(object_id) => {
                 IteratorValue::ObjectRef(self.iteration_ref_for_object(*object_id))
             }
@@ -7394,7 +7415,7 @@ impl InterpreterCore {
                         let key = state.keys[state.next_index].clone();
                         state.next_index += 1;
                         if !state.deleted_keys.contains(&key) {
-                            next_value = Some(Value::Str(key));
+                            next_value = Some(Value::str(key));
                             break;
                         }
                     }
@@ -8083,7 +8104,7 @@ impl InterpreterCore {
             .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
         if !matches!(
             object.properties.get("__type"),
-            Some(Value::Str(kind)) if kind == PROXY_TYPE_TAG
+            Some(Value::Str(kind)) if kind.as_ref() == PROXY_TYPE_TAG
         ) {
             return Ok(None);
         }
@@ -8133,11 +8154,7 @@ impl InterpreterCore {
         handler: ObjectId,
     ) -> Result<ObjectId, InterpreterError> {
         let proxy_id = self.alloc_object_with_prototype(None)?;
-        self.set_object_property(
-            proxy_id,
-            "__type".to_string(),
-            Value::Str(PROXY_TYPE_TAG.to_string()),
-        )?;
+        self.set_object_property(proxy_id, "__type".to_string(), Value::str(PROXY_TYPE_TAG))?;
         self.set_object_property(
             proxy_id,
             PROXY_TARGET_SLOT.to_string(),
@@ -8223,7 +8240,7 @@ impl InterpreterCore {
             module,
             handler,
             "get",
-            vec![Value::Object(target), Value::Str(key.to_string()), receiver],
+            vec![Value::Object(target), Value::str(key), receiver],
         )? {
             return Ok(value);
         }
@@ -8257,7 +8274,7 @@ impl InterpreterCore {
             "set",
             vec![
                 Value::Object(target),
-                Value::Str(key.to_string()),
+                Value::str(key),
                 value.clone(),
                 receiver,
             ],
@@ -8289,7 +8306,7 @@ impl InterpreterCore {
             module,
             handler,
             "has",
-            vec![Value::Object(target), Value::Str(key.to_string())],
+            vec![Value::Object(target), Value::str(key)],
         )? {
             return Ok(result.is_truthy());
         }
@@ -8318,7 +8335,7 @@ impl InterpreterCore {
             module,
             handler,
             "deleteProperty",
-            vec![Value::Object(target), Value::Str(key.to_string())],
+            vec![Value::Object(target), Value::str(key)],
         )? {
             return Ok(result.is_truthy());
         }
@@ -8337,7 +8354,7 @@ impl InterpreterCore {
             Value::Bool(b) => crate::object_model::JsValue::Bool(*b),
             Value::Int(n) => crate::object_model::JsValue::Int(*n),
             Value::Float(f) => crate::object_model::JsValue::Float(f.inner().to_bits()),
-            Value::Str(s) => crate::object_model::JsValue::Str(s.clone()),
+            Value::Str(s) => crate::object_model::JsValue::Str(s.to_string()),
             Value::Object(id) => {
                 crate::object_model::JsValue::Object(crate::object_model::ObjectHandle(id.0))
             }
@@ -8354,13 +8371,13 @@ impl InterpreterCore {
             crate::object_model::JsValue::Null => Value::Null,
             crate::object_model::JsValue::Bool(b) => Value::Bool(*b),
             crate::object_model::JsValue::Int(n) => Value::Int(*n),
-            crate::object_model::JsValue::Str(s) => Value::Str(s.clone()),
+            crate::object_model::JsValue::Str(s) => Value::str(s.as_str()),
             crate::object_model::JsValue::Float(bits) => {
                 Value::Float(Float64::new(f64::from_bits(*bits)))
             }
             crate::object_model::JsValue::Object(handle) => Value::Object(ObjectId(handle.0)),
             crate::object_model::JsValue::Function(idx) => Value::Function(*idx),
-            crate::object_model::JsValue::Symbol(sym) => Value::Str(format!("Symbol({})", sym.0)),
+            crate::object_model::JsValue::Symbol(sym) => Value::str(format!("Symbol({})", sym.0)),
         }
     }
 
@@ -8457,7 +8474,7 @@ impl InterpreterCore {
                         value: crate::object_model::JsValue::Undefined,
                     });
             let value = Self::js_value_to_value(&outcome.value);
-            let mut props = vec![("status", Value::Str(outcome.status.clone()))];
+            let mut props = vec![("status", Value::str(outcome.status.as_str()))];
             if outcome.status == "fulfilled" {
                 props.push(("value", value));
             } else {
@@ -8477,8 +8494,8 @@ impl InterpreterCore {
         let error_values: Vec<Value> = errors.iter().map(Self::js_value_to_value).collect();
         let errors_array = self.alloc_array_from_values(&error_values)?;
         let error_id = self.alloc_object_with_properties(&[
-            ("name", Value::Str("AggregateError".into())),
-            ("message", Value::Str("All promises were rejected".into())),
+            ("name", Value::str("AggregateError")),
+            ("message", Value::str("All promises were rejected")),
             ("errors", Value::Object(errors_array)),
         ])?;
         Ok(Self::value_to_js_value(&Value::Object(error_id)))
@@ -9390,7 +9407,7 @@ impl InterpreterCore {
 
     fn property_key(value: &Value) -> String {
         match value {
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
             _ => value.to_string(),
         }
@@ -9401,11 +9418,11 @@ impl InterpreterCore {
             if let Some(object) = self.heap.get(object_id.0 as usize) {
                 let is_symbol = matches!(
                     object.properties.get("__type"),
-                    Some(Value::Str(kind)) if kind == "Symbol"
+                    Some(Value::Str(kind)) if kind.as_ref() == "Symbol"
                 );
                 if is_symbol {
                     if let Some(Value::Str(key)) = object.properties.get("__key") {
-                        return key.clone();
+                        return key.to_string();
                     }
                 }
             }
@@ -9496,7 +9513,7 @@ impl InterpreterCore {
     /// have consistent behavior across all Value enum variants.
     fn value_to_primitive_string(value: &Value) -> String {
         match value {
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
             Value::Null => "null".to_string(),
             Value::Undefined => "undefined".to_string(),
             Value::Bool(b) => b.to_string(),
@@ -9563,13 +9580,13 @@ impl InterpreterCore {
         let string_val = Self::require_object_coercible_to_string(&receiver)?;
         let index = index.as_ref().and_then(Self::coerce_to_number).unwrap_or(0);
         if index < 0 {
-            return Ok(Value::Str(String::new()));
+            return Ok(Value::str(""));
         }
 
         let Some(unit) = string_val.encode_utf16().nth(index as usize) else {
-            return Ok(Value::Str(String::new()));
+            return Ok(Value::str(""));
         };
-        Ok(Value::Str(String::from_utf16_lossy(&[unit])))
+        Ok(Value::str(String::from_utf16_lossy(&[unit])))
     }
 
     fn string_prototype_char_code_at_value(
@@ -10013,7 +10030,7 @@ impl InterpreterCore {
                             index: pool_index,
                             pool_size: module.constant_pool.len() as u32,
                         })?;
-                    Self::write_local_register(&mut local_registers, dst, Value::Str(value))?;
+                    Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -10216,7 +10233,7 @@ impl InterpreterCore {
                             index: pool_index,
                             pool_size: module.constant_pool.len() as u32,
                         })?;
-                    Self::write_local_register(&mut local_registers, dst, Value::Str(value))?;
+                    Self::write_local_register(&mut local_registers, dst, Value::str(value))?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::LoadBool { dst, value } => {
@@ -10590,17 +10607,17 @@ impl InterpreterCore {
             ))),
             (Value::Str(left_string), Value::Str(right_string)) => {
                 self.check_string_limit(left_string.len().saturating_add(right_string.len()))?;
-                Ok(Value::Str(format!("{left_string}{right_string}")))
+                Ok(Value::str(format!("{left_string}{right_string}")))
             }
             (Value::Str(left_string), other) => {
                 let other_string = Self::value_to_primitive_string(other);
                 self.check_string_limit(left_string.len().saturating_add(other_string.len()))?;
-                Ok(Value::Str(format!("{left_string}{other_string}")))
+                Ok(Value::str(format!("{left_string}{other_string}")))
             }
             (other, Value::Str(right_string)) => {
                 let other_string = Self::value_to_primitive_string(other);
                 self.check_string_limit(other_string.len().saturating_add(right_string.len()))?;
-                Ok(Value::Str(format!("{other_string}{right_string}")))
+                Ok(Value::str(format!("{other_string}{right_string}")))
             }
             _ => {
                 let left_number =
@@ -11205,7 +11222,7 @@ impl InterpreterCore {
                     }
                     Value::Str(s) => {
                         // Convert string to array of characters
-                        s.chars().map(|ch| Value::Str(ch.to_string())).collect()
+                        s.chars().map(|ch| Value::str(ch.to_string())).collect()
                     }
                     _ => {
                         // Non-iterable value, create empty array
@@ -11239,7 +11256,7 @@ impl InterpreterCore {
             "builtin:ArrayPrototypeJoin" => {
                 // Array.prototype.join implementation - joins array elements into string
                 if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 // Get the array object (first argument should be the array)
@@ -11249,7 +11266,7 @@ impl InterpreterCore {
                 let separator = if args.count > 1 {
                     let sep_arg = self.read_reg(args.start + 1)?;
                     match sep_arg {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => ",".to_string(), // Default separator
                         Value::Int(n) => n.to_string(),
@@ -11280,7 +11297,7 @@ impl InterpreterCore {
 
                                         // Convert element to string
                                         let str_val = match element {
-                                            Value::Str(s) => s,
+                                            Value::Str(s) => s.to_string(),
                                             Value::Int(n) => n.to_string(),
                                             Value::Float(f) => f.inner().to_string(),
                                             Value::Bool(b) => b.to_string(),
@@ -11293,23 +11310,23 @@ impl InterpreterCore {
 
                                     // Join elements with separator
                                     let result = elements.join(&separator);
-                                    Ok(Value::Str(result))
+                                    Ok(Value::str(result))
                                 } else {
                                     // Invalid length, return empty string
-                                    Ok(Value::Str("".to_string()))
+                                    Ok(Value::str(""))
                                 }
                             } else {
                                 // No length property, return empty string
-                                Ok(Value::Str("".to_string()))
+                                Ok(Value::str(""))
                             }
                         } else {
                             // Object not found, return empty string
-                            Ok(Value::Str("".to_string()))
+                            Ok(Value::str(""))
                         }
                     }
                     _ => {
                         // Non-object argument, return empty string
-                        Ok(Value::Str("".to_string()))
+                        Ok(Value::str(""))
                     }
                 }
             }
@@ -11610,7 +11627,7 @@ impl InterpreterCore {
 
                             let key_values = keys
                                 .iter()
-                                .map(|key| Value::Str(key.clone()))
+                                .map(|key| Value::str(key.as_str()))
                                 .collect::<Vec<_>>();
                             let array_id = self.alloc_array_from_values(&key_values)?;
 
@@ -11677,7 +11694,7 @@ impl InterpreterCore {
                             // Set array elements as numeric properties, each containing a [key, value] pair
                             for (key, value) in &entries {
                                 let entry_array_id = self.alloc_array_from_values(&[
-                                    Value::Str(key.clone()),
+                                    Value::str(key.as_str()),
                                     value.clone(),
                                 ])?;
                                 entry_values.push(Value::Object(entry_array_id));
@@ -11851,7 +11868,7 @@ impl InterpreterCore {
                         } else {
                             let search_slice =
                                 Self::utf16_suffix_from(&haystack, start_pos, "indexOf")?;
-                            match search_slice.find(&needle) {
+                            match search_slice.find(needle.as_ref()) {
                                 Some(pos) => {
                                     let matched_units = search_slice[..pos].encode_utf16().count();
                                     Ok(Value::Int((start_pos + matched_units) as i64))
@@ -11870,12 +11887,12 @@ impl InterpreterCore {
             "builtin:StringPrototypeSlice" => {
                 // String.prototype.slice implementation - extracts part of string with different negative index behavior
                 if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 let string_arg = self.read_reg(args.start)?;
                 let string_val = match string_arg {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -11944,15 +11961,15 @@ impl InterpreterCore {
                 if start_idx < end_idx {
                     let chars: Vec<char> = string_val.chars().collect();
                     let substring: String = chars[start_idx..end_idx].iter().collect();
-                    Ok(Value::Str(substring))
+                    Ok(Value::str(substring))
                 } else {
-                    Ok(Value::Str("".to_string()))
+                    Ok(Value::str(""))
                 }
             }
             "builtin:StringPrototypeToLowerCase" => {
                 // String.prototype.toLowerCase implementation - converts string to lowercase
                 if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 let string_arg = self.read_reg(args.start)?;
@@ -11960,12 +11977,12 @@ impl InterpreterCore {
 
                 // Convert to lowercase using Unicode-aware conversion
                 let lowercase = string_val.to_lowercase();
-                Ok(Value::Str(lowercase))
+                Ok(Value::str(lowercase))
             }
             "builtin:StringPrototypeToUpperCase" => {
                 // String.prototype.toUpperCase implementation - converts string to uppercase
                 if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 let string_arg = self.read_reg(args.start)?;
@@ -11973,17 +11990,17 @@ impl InterpreterCore {
 
                 // Convert to uppercase using Unicode-aware conversion
                 let uppercase = string_val.to_uppercase();
-                Ok(Value::Str(uppercase))
+                Ok(Value::str(uppercase))
             }
             "builtin:StringPrototypeTrim" => {
                 // String.prototype.trim implementation - removes whitespace from both ends
                 if args.count == 0 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 let string_arg = self.read_reg(args.start)?;
                 let string_val = match string_arg {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -11994,7 +12011,7 @@ impl InterpreterCore {
 
                 // Remove whitespace from both ends using Unicode-aware trimming
                 let trimmed = string_val.trim();
-                Ok(Value::Str(trimmed.to_string()))
+                Ok(Value::str(trimmed))
             }
 
             // Math methods
@@ -12195,7 +12212,7 @@ impl InterpreterCore {
             "builtin:JsonStringify" => {
                 // JSON.stringify implementation - converts value to JSON string
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start)?;
@@ -12234,7 +12251,7 @@ impl InterpreterCore {
                     Value::AsyncGeneratorObject(_) => "{}".to_string(),
                     Value::BuiltinFunction(_) => "undefined".to_string(),
                 };
-                Ok(Value::Str(json_str))
+                Ok(Value::str(json_str))
             }
             "builtin:JsonParse" => {
                 // JSON.parse implementation - parses JSON string into JavaScript value
@@ -12255,7 +12272,7 @@ impl InterpreterCore {
                                 // String value - remove quotes and handle basic escape sequences
                                 let content = &s[1..s.len() - 1];
                                 let unescaped = content.replace("\\\"", "\"").replace("\\\\", "\\");
-                                Ok(Value::Str(unescaped))
+                                Ok(Value::str(unescaped))
                             }
                             s => {
                                 // Try to parse as number
@@ -12509,7 +12526,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12521,7 +12538,7 @@ impl InterpreterCore {
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12644,7 +12661,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12656,7 +12673,7 @@ impl InterpreterCore {
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12697,7 +12714,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12709,7 +12726,7 @@ impl InterpreterCore {
                 // Get search string
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12812,7 +12829,7 @@ impl InterpreterCore {
                 // String.prototype.replace() implementation - simplified version
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12823,12 +12840,12 @@ impl InterpreterCore {
                 };
 
                 if args.count < 2 {
-                    return Ok(Value::Str(str_text)); // No search string provided
+                    return Ok(Value::str(str_text)); // No search string provided
                 }
 
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -12841,7 +12858,7 @@ impl InterpreterCore {
                 let replace_str = if args.count >= 3 {
                     let replace_val = self.read_reg(args.start + 2)?;
                     match replace_val {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Null => "null".to_string(),
                         Value::Undefined => "undefined".to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -12865,7 +12882,7 @@ impl InterpreterCore {
                     str_text
                 };
 
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
             "builtin:MathLog" => {
                 // Math.log(x) implementation - returns natural logarithm of x
@@ -12940,19 +12957,19 @@ impl InterpreterCore {
             "builtin:StringPrototypeRepeat" => {
                 // String.prototype.repeat(count) implementation
                 if args.count == 0 {
-                    return Ok(Value::Str(String::new()));
+                    return Ok(Value::str(""));
                 }
 
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Str(String::new())),
+                    _ => return Ok(Value::str("")),
                 };
 
                 // Get repeat count
@@ -12963,16 +12980,16 @@ impl InterpreterCore {
                     Value::Bool(true) => 1,
                     Value::Bool(false) => 0,
                     Value::Null => 0,
-                    _ => return Ok(Value::Str(String::new())),
+                    _ => return Ok(Value::str("")),
                 };
 
                 // Prevent excessive memory usage
                 if count > 1000 {
-                    return Ok(Value::Str(String::new()));
+                    return Ok(Value::str(""));
                 }
 
                 let result = this_str.repeat(count);
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
             "builtin:PromiseResolve" => {
                 // Promise.resolve(value) implementation (simplified)
@@ -12987,7 +13004,7 @@ impl InterpreterCore {
                 self.set_object_property(
                     promise_id,
                     "__state".to_string(),
-                    Value::Str("fulfilled".to_string()),
+                    Value::str("fulfilled"),
                 )?;
                 self.set_object_property(promise_id, "__value".to_string(), value)?;
                 Ok(Value::Object(promise_id))
@@ -13002,7 +13019,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13027,7 +13044,7 @@ impl InterpreterCore {
                 let pad_str = if args.count > 2 {
                     let pad_val = self.read_reg(args.start + 2)?;
                     match pad_val {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(i) => i.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -13040,7 +13057,7 @@ impl InterpreterCore {
                 };
 
                 if target_length <= this_str.len() {
-                    Ok(Value::Str(this_str))
+                    Ok(Value::str(this_str))
                 } else {
                     let pad_needed = target_length - this_str.len();
                     let mut padding = String::new();
@@ -13053,7 +13070,7 @@ impl InterpreterCore {
                     // Truncate to exact length needed
                     padding.truncate(pad_needed);
                     let result = format!("{}{}", padding, this_str);
-                    Ok(Value::Str(result))
+                    Ok(Value::str(result))
                 }
             }
             "builtin:ObjectHasOwnProperty" => {
@@ -13071,7 +13088,7 @@ impl InterpreterCore {
                 // Get property name
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = match prop_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13132,7 +13149,7 @@ impl InterpreterCore {
                 // Sort by string representation while preserving original values
                 elements.sort_by(|a, b| {
                     let a_str = match a {
-                        Value::Str(s) => s.clone(),
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -13143,7 +13160,7 @@ impl InterpreterCore {
                     };
 
                     let b_str = match b {
-                        Value::Str(s) => s.clone(),
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -13176,7 +13193,7 @@ impl InterpreterCore {
                 let message = if args.count > 0 {
                     let msg_val = self.read_reg(args.start)?;
                     match msg_val {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(i) => i.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -13191,16 +13208,12 @@ impl InterpreterCore {
                 // Create a new Error object via the capability-checked
                 // allocator.
                 let error_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(
-                    error_id,
-                    "name".to_string(),
-                    Value::Str("Error".to_string()),
-                )?;
-                self.set_object_property(error_id, "message".to_string(), Value::Str(message))?;
+                self.set_object_property(error_id, "name".to_string(), Value::str("Error"))?;
+                self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
 
                 // Generate and set stack trace property (bd-2fx18)
                 let stack_trace = self.format_stack_trace();
-                self.set_object_property(error_id, "stack".to_string(), Value::Str(stack_trace))?;
+                self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
 
                 Ok(Value::Object(error_id))
             }
@@ -13213,7 +13226,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13238,7 +13251,7 @@ impl InterpreterCore {
                 let pad_str = if args.count > 2 {
                     let pad_val = self.read_reg(args.start + 2)?;
                     match pad_val {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(i) => i.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -13251,7 +13264,7 @@ impl InterpreterCore {
                 };
 
                 if target_length <= this_str.len() {
-                    Ok(Value::Str(this_str))
+                    Ok(Value::str(this_str))
                 } else {
                     let pad_needed = target_length - this_str.len();
                     let mut padding = String::new();
@@ -13264,7 +13277,7 @@ impl InterpreterCore {
                     // Truncate to exact length needed
                     padding.truncate(pad_needed);
                     let result = format!("{}{}", this_str, padding);
-                    Ok(Value::Str(result))
+                    Ok(Value::str(result))
                 }
             }
             "builtin:MathTrunc" => {
@@ -13476,7 +13489,7 @@ impl InterpreterCore {
                 // Get the this value (should be a string)
                 let this_val = self.read_reg(args.start)?;
                 let this_str = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13488,7 +13501,7 @@ impl InterpreterCore {
                 // Get pattern (simplified - treat as literal string)
                 let pattern_val = self.read_reg(args.start + 1)?;
                 let pattern_str = match pattern_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13506,14 +13519,14 @@ impl InterpreterCore {
                     self.set_object_property(
                         result_id,
                         "0".to_string(),
-                        Value::Str(pattern_str.clone()),
+                        Value::str(pattern_str.clone()),
                     )?;
                     self.set_object_property(
                         result_id,
                         "index".to_string(),
                         Value::Int(index as i64),
                     )?;
-                    self.set_object_property(result_id, "input".to_string(), Value::Str(this_str))?;
+                    self.set_object_property(result_id, "input".to_string(), Value::str(this_str))?;
                     self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
 
                     Ok(Value::Object(result_id))
@@ -13526,7 +13539,7 @@ impl InterpreterCore {
                 let description = if args.count > 0 {
                     let desc_val = self.read_reg(args.start)?;
                     match desc_val {
-                        Value::Str(s) => Some(s),
+                        Value::Str(s) => Some(s.to_string()),
                         Value::Int(i) => Some(i.to_string()),
                         Value::Float(f) => Some(f.inner().to_string()),
                         Value::Bool(b) => Some(b.to_string()),
@@ -13542,16 +13555,12 @@ impl InterpreterCore {
                 let symbol_id = self.alloc_object_with_prototype(None)?;
 
                 // Store symbol metadata
-                self.set_object_property(
-                    symbol_id,
-                    "__type".to_string(),
-                    Value::Str("symbol".to_string()),
-                )?;
+                self.set_object_property(symbol_id, "__type".to_string(), Value::str("symbol"))?;
                 if let Some(desc) = description {
                     self.set_object_property(
                         symbol_id,
                         "__description".to_string(),
-                        Value::Str(desc),
+                        Value::str(desc),
                     )?;
                 }
                 self.set_object_property(
@@ -13579,7 +13588,11 @@ impl InterpreterCore {
                         if let Some(obj) = self.heap.get(id.0 as usize) {
                             if obj.properties.contains_key("__type") {
                                 if let Some(Value::Str(t)) = obj.properties.get("__type") {
-                                    if t == "symbol" { "symbol" } else { "object" }
+                                    if t.as_ref() == "symbol" {
+                                        "symbol"
+                                    } else {
+                                        "object"
+                                    }
                                 } else {
                                     "object"
                                 }
@@ -13597,7 +13610,7 @@ impl InterpreterCore {
                     _ => "object",
                 };
 
-                Ok(Value::Str(type_string.to_string()))
+                Ok(Value::str(type_string))
             }
             "builtin:ArrayPrototypeFlat" => {
                 // Array.prototype.flat([depth]) implementation (simplified)
@@ -13782,7 +13795,7 @@ impl InterpreterCore {
                 // Get property name
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = match prop_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(i) => i.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -13940,11 +13953,7 @@ impl InterpreterCore {
                 let entries_id = self.alloc_object_with_prototype(None)?;
 
                 // Mark as Map type
-                self.set_object_property(
-                    map_id,
-                    "__type".to_string(),
-                    Value::Str("Map".to_string()),
-                )?;
+                self.set_object_property(map_id, "__type".to_string(), Value::str("Map"))?;
                 self.set_object_property(
                     map_id,
                     "__entries".to_string(),
@@ -13964,11 +13973,7 @@ impl InterpreterCore {
                 let set_id = self.alloc_object_with_prototype(None)?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
-                self.set_object_property(
-                    set_id,
-                    "__type".to_string(),
-                    Value::Str("Set".to_string()),
-                )?;
+                self.set_object_property(set_id, "__type".to_string(), Value::str("Set"))?;
                 self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
                 self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
 
@@ -13982,11 +13987,7 @@ impl InterpreterCore {
             "builtin:WeakMap" => {
                 let weakmap_id = self.alloc_object_with_prototype(None)?;
 
-                self.set_object_property(
-                    weakmap_id,
-                    "__type".to_string(),
-                    Value::Str("WeakMap".to_string()),
-                )?;
+                self.set_object_property(weakmap_id, "__type".to_string(), Value::str("WeakMap"))?;
 
                 // Initialize weak reference storage for this WeakMap
                 self.weakmap_storage
@@ -14005,11 +14006,7 @@ impl InterpreterCore {
                 let weakset_id = self.alloc_object_with_prototype(None)?;
                 let values_id = self.alloc_object_with_prototype(None)?;
 
-                self.set_object_property(
-                    weakset_id,
-                    "__type".to_string(),
-                    Value::Str("WeakSet".to_string()),
-                )?;
+                self.set_object_property(weakset_id, "__type".to_string(), Value::str("WeakSet"))?;
                 self.set_object_property(
                     weakset_id,
                     "__values".to_string(),
@@ -14038,7 +14035,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
                     {
                         return Ok(Value::Undefined);
                     }
@@ -14101,7 +14098,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
                     {
                         return Ok(Value::Undefined);
                     }
@@ -14148,7 +14145,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Undefined);
                     }
@@ -14220,7 +14217,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Bool(false));
                     }
@@ -14268,7 +14265,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
                     {
                         return Ok(Value::Bool(false));
                     }
@@ -14316,7 +14313,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Map
                 if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
-                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Map")
+                    if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
                     {
                         return Ok(Value::Bool(false));
                     }
@@ -14386,7 +14383,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Bool(false));
                     }
@@ -14452,7 +14449,7 @@ impl InterpreterCore {
 
                 // Check if it's actually a Set
                 if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s == "Set")
+                    if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Undefined);
                     }
@@ -14616,7 +14613,7 @@ impl InterpreterCore {
                     }
                 }
 
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:ObjectGetOwnPropertyNames" => {
@@ -14635,7 +14632,7 @@ impl InterpreterCore {
 
                             let property_name_values = property_names
                                 .iter()
-                                .map(|name| Value::Str(name.clone()))
+                                .map(|name| Value::str(name.as_str()))
                                 .collect::<Vec<_>>();
                             let array_id = self.alloc_array_from_values(&property_name_values)?;
 
@@ -14693,15 +14690,11 @@ impl InterpreterCore {
                 let promise_id = self.alloc_object_with_prototype(None)?;
 
                 // Set Promise metadata
-                self.set_object_property(
-                    promise_id,
-                    "__type".to_string(),
-                    Value::Str("Promise".to_string()),
-                )?;
+                self.set_object_property(promise_id, "__type".to_string(), Value::str("Promise"))?;
                 self.set_object_property(
                     promise_id,
                     "__state".to_string(),
-                    Value::Str("rejected".to_string()),
+                    Value::str("rejected"),
                 )?;
                 self.set_object_property(promise_id, "__value".to_string(), reason)?;
 
@@ -14789,7 +14782,7 @@ impl InterpreterCore {
                 // RegExp constructor implementation
                 let pattern = if args.count >= 1 {
                     match self.read_reg(args.start)? {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Undefined => String::new(),
                         Value::Null => "null".to_string(),
                         _ => String::new(),
@@ -14800,7 +14793,7 @@ impl InterpreterCore {
 
                 let flags = if args.count >= 2 {
                     match self.read_reg(args.start + 1)? {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Undefined => String::new(),
                         _ => String::new(),
                     }
@@ -14812,13 +14805,9 @@ impl InterpreterCore {
                 let regexp_id = self.alloc_object_with_prototype(None)?;
 
                 // Set RegExp metadata
-                self.set_object_property(
-                    regexp_id,
-                    "__type".to_string(),
-                    Value::Str("RegExp".to_string()),
-                )?;
-                self.set_object_property(regexp_id, "source".to_string(), Value::Str(pattern))?;
-                self.set_object_property(regexp_id, "flags".to_string(), Value::Str(flags))?;
+                self.set_object_property(regexp_id, "__type".to_string(), Value::str("RegExp"))?;
+                self.set_object_property(regexp_id, "source".to_string(), Value::str(pattern))?;
+                self.set_object_property(regexp_id, "flags".to_string(), Value::str(flags))?;
 
                 Ok(Value::Object(regexp_id))
             }
@@ -14829,7 +14818,7 @@ impl InterpreterCore {
                 // String.prototype.substr(start, length) implementation
                 let this_val = self.read_reg(args.start)?;
                 let string_val = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => {
                         // Try to convert to string
                         match this_val {
@@ -14838,7 +14827,7 @@ impl InterpreterCore {
                             Value::Bool(b) => b.to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
+                            _ => return Ok(Value::str("")),
                         }
                     }
                 };
@@ -14875,7 +14864,7 @@ impl InterpreterCore {
                 // Calculate length
                 let actual_length = if let Some(len) = length_param {
                     if len == 0 {
-                        return Ok(Value::Str(String::new()));
+                        return Ok(Value::str(""));
                     }
                     len as usize
                 } else {
@@ -14887,10 +14876,10 @@ impl InterpreterCore {
                 let end_pos = (actual_start + actual_length).min(chars.len());
 
                 if actual_start >= chars.len() {
-                    Ok(Value::Str(String::new()))
+                    Ok(Value::str(""))
                 } else {
                     let result: String = chars[actual_start..end_pos].iter().collect();
-                    Ok(Value::Str(result))
+                    Ok(Value::str(result))
                 }
             }
 
@@ -14901,7 +14890,7 @@ impl InterpreterCore {
                 let number_val = match this_val {
                     Value::Int(n) => n as f64,
                     Value::Float(f) => f.inner(),
-                    _ => return Ok(Value::Str("NaN".to_string())),
+                    _ => return Ok(Value::str("NaN")),
                 };
 
                 let radix = if args.count >= 2 {
@@ -14911,8 +14900,8 @@ impl InterpreterCore {
                 };
 
                 match self.number_to_string_impl(number_val, radix) {
-                    Ok(result) => Ok(Value::Str(result)),
-                    Err(_) => Ok(Value::Str("RangeError".to_string())),
+                    Ok(result) => Ok(Value::str(result)),
+                    Err(_) => Ok(Value::str("RangeError")),
                 }
             }
 
@@ -14944,7 +14933,7 @@ impl InterpreterCore {
                 // String.prototype.localeCompare(that) implementation
                 let this_val = self.read_reg(args.start)?;
                 let this_string = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => {
                         // Try to convert to string
                         match this_val {
@@ -14960,7 +14949,7 @@ impl InterpreterCore {
 
                 let that_string = if args.count >= 2 {
                     match self.read_reg(args.start + 1)? {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -14994,7 +14983,7 @@ impl InterpreterCore {
                 // Check if it's actually a Date
                 if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
                     if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                        if type_val == "Date" {
+                        if type_val.as_ref() == "Date" {
                             // Get the timestamp value
                             if let Some(Value::Float(timestamp)) =
                                 date_obj.properties.get("__timestamp")
@@ -15019,11 +15008,11 @@ impl InterpreterCore {
                 let locale_arg = if args.count > 0 {
                     self.read_reg(args.start + 1)?
                 } else {
-                    Value::Str("en-US".to_string())
+                    Value::str("en-US")
                 };
 
                 let locale = match locale_arg {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => "en-US".to_string(),
                 };
 
@@ -15035,11 +15024,11 @@ impl InterpreterCore {
                 let locale_arg = if args.count > 0 {
                     self.read_reg(args.start + 1)?
                 } else {
-                    Value::Str("en-US".to_string())
+                    Value::str("en-US")
                 };
 
                 let locale = match locale_arg {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => "en-US".to_string(),
                 };
 
@@ -15051,11 +15040,11 @@ impl InterpreterCore {
                 let locale_arg = if args.count > 0 {
                     self.read_reg(args.start + 1)?
                 } else {
-                    Value::Str("en-US".to_string())
+                    Value::str("en-US")
                 };
 
                 let locale = match locale_arg {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => "en-US".to_string(),
                 };
 
@@ -15067,13 +15056,13 @@ impl InterpreterCore {
                 let this_val = self.read_reg(args.start)?;
                 let date_id = match this_val {
                     Value::Object(id) => id,
-                    _ => return Ok(Value::Str("Invalid Date".to_string())), // Non-objects can't be dates
+                    _ => return Ok(Value::str("Invalid Date")), // Non-objects can't be dates
                 };
 
                 // Check if it's actually a Date
                 if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
                     if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                        if type_val == "Date" {
+                        if type_val.as_ref() == "Date" {
                             // Use locale-aware formatting with default en-US locale
                             return self.format_date_with_locale(
                                 this_val,
@@ -15085,7 +15074,7 @@ impl InterpreterCore {
                 }
 
                 // Invalid date or not a date object
-                Ok(Value::Str("Invalid Date".to_string()))
+                Ok(Value::str("Invalid Date"))
             }
 
             "builtin:ObjectPrototypeValueOf" => {
@@ -15101,7 +15090,7 @@ impl InterpreterCore {
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                             // Check for special object types that have primitive values
                             if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
-                                match type_val.as_str() {
+                                match type_val.as_ref() {
                                     "Number" => {
                                         // For Number wrapper objects, return the primitive number
                                         if let Some(value) = obj.properties.get("__value") {
@@ -15249,7 +15238,7 @@ impl InterpreterCore {
                 // String.prototype.codePointAt(index) implementation
                 let this_val = self.read_reg(args.start)?;
                 let string_val = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => {
                         // Try to convert to string
                         match this_val {
@@ -15293,23 +15282,23 @@ impl InterpreterCore {
                     let code_point = match code_point_val {
                         Value::Int(n) => n as u32,
                         Value::Float(f) => f.inner() as u32,
-                        _ => return Ok(Value::Str(result)), // Invalid code point, return partial result
+                        _ => return Ok(Value::str(result)), // Invalid code point, return partial result
                     };
 
                     // Validate Unicode code point range (0 to 0x10FFFF)
                     if code_point > 0x10FFFF {
-                        return Ok(Value::Str(result)); // RangeError equivalent, return partial result
+                        return Ok(Value::str(result)); // RangeError equivalent, return partial result
                     }
 
                     // Convert to character
                     if let Some(ch) = std::char::from_u32(code_point) {
                         result.push(ch);
                     } else {
-                        return Ok(Value::Str(result)); // Invalid code point, return partial result
+                        return Ok(Value::str(result)); // Invalid code point, return partial result
                     }
                 }
 
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:MathImul" => {
@@ -15355,7 +15344,7 @@ impl InterpreterCore {
 
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_name = match prop_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     _ => return Ok(Value::Undefined),
@@ -15420,7 +15409,7 @@ impl InterpreterCore {
 
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_key = match prop_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => return Ok(Value::Undefined), // Non-string property keys not supported yet
                 };
 
@@ -15469,22 +15458,14 @@ impl InterpreterCore {
                 let symbol_id = self.alloc_object_with_prototype(None)?;
 
                 // Set symbol metadata
-                self.set_object_property(
-                    symbol_id,
-                    "__type".to_string(),
-                    Value::Str("Symbol".to_string()),
-                )?;
+                self.set_object_property(symbol_id, "__type".to_string(), Value::str("Symbol"))?;
                 self.set_object_property(
                     symbol_id,
                     "__description".to_string(),
-                    Value::Str("Symbol.iterator".to_string()),
+                    Value::str("Symbol.iterator"),
                 )?;
                 self.set_object_property(symbol_id, "__wellKnown".to_string(), Value::Bool(true))?;
-                self.set_object_property(
-                    symbol_id,
-                    "__key".to_string(),
-                    Value::Str("@@iterator".to_string()),
-                )?;
+                self.set_object_property(symbol_id, "__key".to_string(), Value::str("@@iterator"))?;
 
                 Ok(Value::Object(symbol_id))
             }
@@ -15506,14 +15487,14 @@ impl InterpreterCore {
                 let normalized = normalize_unicode_string(&string_val, &form)
                     .map_err(|message| InterpreterError::RangeError { message })?;
 
-                Ok(Value::Str(normalized))
+                Ok(Value::str(normalized))
             }
 
             "builtin:StringPrototypeTrimStart" => {
                 // String.prototype.trimStart() implementation - remove leading whitespace
                 let this_val = self.read_reg(args.start)?;
                 let string_val = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     _ => {
                         // Try to convert to string
                         match this_val {
@@ -15522,14 +15503,14 @@ impl InterpreterCore {
                             Value::Bool(b) => b.to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
+                            _ => return Ok(Value::str("")),
                         }
                     }
                 };
 
                 // Remove leading whitespace
                 let trimmed = string_val.trim_start();
-                Ok(Value::Str(trimmed.to_string()))
+                Ok(Value::str(trimmed))
             }
 
             // Removed duplicate StringPrototypeTrimEnd - implementation at line ~13975 is more JS-compliant
@@ -15722,7 +15703,7 @@ impl InterpreterCore {
 
                 let prop_val = self.read_reg(args.start + 1)?;
                 let prop_key = match prop_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     _ => return Ok(Value::Bool(false)),
@@ -15740,7 +15721,7 @@ impl InterpreterCore {
                 // String.prototype.concat(...strings) implementation
                 let this_val = self.read_reg(args.start)?;
                 let mut result = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -15753,7 +15734,7 @@ impl InterpreterCore {
                 for i in 1..args.count {
                     let arg_val = self.read_reg(args.start + i)?;
                     let arg_str = match arg_val {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -15764,7 +15745,7 @@ impl InterpreterCore {
                     result.push_str(&arg_str);
                 }
 
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             // Removed duplicate MathAtan2 - implementation at line ~10995 has correct argument handling
@@ -15819,15 +15800,15 @@ impl InterpreterCore {
                         // Check explicit array metadata first.
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                             if obj.is_array {
-                                Ok(Value::Str("[object Array]".to_string()))
+                                Ok(Value::str("[object Array]"))
                             } else {
-                                Ok(Value::Str("[object Object]".to_string()))
+                                Ok(Value::str("[object Object]"))
                             }
                         } else {
-                            Ok(Value::Str("[object Object]".to_string()))
+                            Ok(Value::str("[object Object]"))
                         }
                     }
-                    _ => Ok(Value::Str(InterpreterCore::value_to_object_to_string_tag(
+                    _ => Ok(Value::str(InterpreterCore::value_to_object_to_string_tag(
                         &this_val,
                     ))),
                 }
@@ -15848,7 +15829,7 @@ impl InterpreterCore {
                 }
 
                 let test_string = match self.read_reg(args.start + 1)? {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -15861,7 +15842,7 @@ impl InterpreterCore {
                 if let Value::Object(regexp_id) = this_val {
                     if let Some(regexp_obj) = self.heap.get(regexp_id.0 as usize) {
                         if let Some(Value::Str(pattern)) = regexp_obj.properties.get("source") {
-                            return Ok(Value::Bool(test_string.contains(pattern)));
+                            return Ok(Value::Bool(test_string.contains(pattern.as_ref())));
                         }
                     }
                 }
@@ -15905,12 +15886,12 @@ impl InterpreterCore {
             "builtin:StringPrototypeReplaceAll" => {
                 // String.prototype.replaceAll(searchValue, replaceValue) implementation
                 if args.count < 3 {
-                    return Ok(Value::Str("".to_string()));
+                    return Ok(Value::str(""));
                 }
 
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -15921,7 +15902,7 @@ impl InterpreterCore {
 
                 let search_val = self.read_reg(args.start + 1)?;
                 let search_str = match search_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -15932,7 +15913,7 @@ impl InterpreterCore {
 
                 let replace_val = self.read_reg(args.start + 2)?;
                 let replace_str = match replace_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -15943,7 +15924,7 @@ impl InterpreterCore {
 
                 // Replace all occurrences
                 let result = str_text.replace(&search_str, &replace_str);
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:MathClz32" => {
@@ -16034,7 +16015,7 @@ impl InterpreterCore {
                 // String.prototype.at(index) implementation (ES2022)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -16060,7 +16041,7 @@ impl InterpreterCore {
                 let actual_index = if index < 0 { len + index } else { index };
 
                 if actual_index >= 0 && (actual_index as usize) < chars.len() {
-                    Ok(Value::Str(chars[actual_index as usize].to_string()))
+                    Ok(Value::str(chars[actual_index as usize].to_string()))
                 } else {
                     Ok(Value::Undefined)
                 }
@@ -16136,7 +16117,7 @@ impl InterpreterCore {
                 // String.prototype.toWellFormed() implementation (ES2024)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -16159,7 +16140,7 @@ impl InterpreterCore {
                     })
                     .collect::<String>();
 
-                Ok(Value::Str(well_formed))
+                Ok(Value::str(well_formed))
             }
 
             "builtin:MathAcosh" => {
@@ -16293,7 +16274,7 @@ impl InterpreterCore {
                 // String.prototype.isWellFormed() implementation (ES2024)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -16559,7 +16540,7 @@ impl InterpreterCore {
                 // Simple string-based sort (like default Array.sort)
                 elements_with_indices.sort_by(|(_i1, a), (_i2, b)| {
                     let a_str = match a {
-                        Value::Str(s) => s.clone(),
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -16568,7 +16549,7 @@ impl InterpreterCore {
                         _ => "[object Object]".to_string(),
                     };
                     let b_str = match b {
-                        Value::Str(s) => s.clone(),
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -16747,7 +16728,7 @@ impl InterpreterCore {
                 // String.prototype.trimEnd() implementation (ES2019)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -16758,7 +16739,7 @@ impl InterpreterCore {
 
                 // Trim whitespace from the end (right side)
                 let trimmed = str_text.trim_end().to_string();
-                Ok(Value::Str(trimmed))
+                Ok(Value::str(trimmed))
             }
 
             // Removed duplicate MathSign - implementation at line ~10088 is identical
@@ -16869,7 +16850,7 @@ impl InterpreterCore {
                 // String.prototype.search(regexp) implementation (simplified)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -16886,7 +16867,7 @@ impl InterpreterCore {
 
                 // Simplified implementation: treat as string search
                 let pattern = match pattern_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17036,16 +17017,16 @@ impl InterpreterCore {
                 };
 
                 if num.is_nan() {
-                    Ok(Value::Str("NaN".to_string()))
+                    Ok(Value::str("NaN"))
                 } else if num.is_infinite() {
                     if num.is_sign_positive() {
-                        Ok(Value::Str("Infinity".to_string()))
+                        Ok(Value::str("Infinity"))
                     } else {
-                        Ok(Value::Str("-Infinity".to_string()))
+                        Ok(Value::str("-Infinity"))
                     }
                 } else {
                     let formatted = format!("{:.precision$}", num, precision = digits);
-                    Ok(Value::Str(formatted))
+                    Ok(Value::str(formatted))
                 }
             }
 
@@ -17145,7 +17126,7 @@ impl InterpreterCore {
                 // String.prototype.anchor(name) implementation (deprecated HTML wrapper)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17156,7 +17137,7 @@ impl InterpreterCore {
 
                 let name = if args.count > 1 {
                     match self.read_reg(args.start + 1)? {
-                        Value::Str(s) => s,
+                        Value::Str(s) => s.to_string(),
                         Value::Int(n) => n.to_string(),
                         Value::Float(f) => f.inner().to_string(),
                         Value::Bool(b) => b.to_string(),
@@ -17169,7 +17150,7 @@ impl InterpreterCore {
                 };
 
                 let result = format!("<a name=\"{}\">{}</a>", name, str_text);
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:NumberPrototypeToExponential" => {
@@ -17196,12 +17177,12 @@ impl InterpreterCore {
                 };
 
                 if num.is_nan() {
-                    Ok(Value::Str("NaN".to_string()))
+                    Ok(Value::str("NaN"))
                 } else if num.is_infinite() {
                     if num.is_sign_positive() {
-                        Ok(Value::Str("Infinity".to_string()))
+                        Ok(Value::str("Infinity"))
                     } else {
-                        Ok(Value::Str("-Infinity".to_string()))
+                        Ok(Value::str("-Infinity"))
                     }
                 } else {
                     let formatted = if let Some(digits) = fraction_digits {
@@ -17209,7 +17190,7 @@ impl InterpreterCore {
                     } else {
                         format!("{:e}", num)
                     };
-                    Ok(Value::Str(formatted))
+                    Ok(Value::str(formatted))
                 }
             }
 
@@ -17245,7 +17226,7 @@ impl InterpreterCore {
                 // String.prototype.big() implementation (deprecated HTML wrapper)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17255,7 +17236,7 @@ impl InterpreterCore {
                 };
 
                 let result = format!("<big>{}</big>", str_text);
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:NumberPrototypeToPrecision" => {
@@ -17282,12 +17263,12 @@ impl InterpreterCore {
                 };
 
                 if num.is_nan() {
-                    Ok(Value::Str("NaN".to_string()))
+                    Ok(Value::str("NaN"))
                 } else if num.is_infinite() {
                     if num.is_sign_positive() {
-                        Ok(Value::Str("Infinity".to_string()))
+                        Ok(Value::str("Infinity"))
                     } else {
-                        Ok(Value::Str("-Infinity".to_string()))
+                        Ok(Value::str("-Infinity"))
                     }
                 } else {
                     let formatted = if let Some(prec) = precision {
@@ -17301,7 +17282,7 @@ impl InterpreterCore {
                     } else {
                         num.to_string()
                     };
-                    Ok(Value::Str(formatted))
+                    Ok(Value::str(formatted))
                 }
             }
 
@@ -17337,7 +17318,7 @@ impl InterpreterCore {
                 // String.prototype.blink() implementation (deprecated HTML wrapper)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Int(n) => n.to_string(),
                     Value::Float(f) => f.inner().to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17347,7 +17328,7 @@ impl InterpreterCore {
                 };
 
                 let result = format!("<blink>{}</blink>", str_text);
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             "builtin:NumberPrototypeValueOf" => {
@@ -17361,7 +17342,7 @@ impl InterpreterCore {
                         // Check if it's a Number object wrapper
                         if let Some(obj) = self.heap.get(obj_id.0 as usize) {
                             if let Some(Value::Str(type_val)) = obj.properties.get("__type") {
-                                if type_val == "Number" {
+                                if type_val.as_ref() == "Number" {
                                     if let Some(primitive_val) = obj.properties.get("__value") {
                                         return Ok(primitive_val.clone());
                                     }
@@ -17478,7 +17459,7 @@ impl InterpreterCore {
                 // String.prototype.substring() implementation - returns substring between indices
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17516,12 +17497,12 @@ impl InterpreterCore {
                 } else {
                     (end, start)
                 };
-                let result = str_text
+                let result: String = str_text
                     .chars()
                     .skip(actual_start)
                     .take(actual_end - actual_start)
                     .collect();
-                Ok(Value::Str(result))
+                Ok(Value::str(result))
             }
 
             // Removed duplicate ArrayPrototypeReduce - implementation at line ~9273 properly fails-closed
@@ -17531,7 +17512,7 @@ impl InterpreterCore {
                 // String.prototype.split() implementation - splits string into array
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
-                    Value::Str(s) => s,
+                    Value::Str(s) => s.to_string(),
                     Value::Null => "null".to_string(),
                     Value::Undefined => "undefined".to_string(),
                     Value::Bool(b) => b.to_string(),
@@ -17548,7 +17529,7 @@ impl InterpreterCore {
                     self.set_object_property(
                         result_array_id,
                         "0".to_string(),
-                        Value::Str(str_text),
+                        Value::str(str_text),
                     )?;
                     self.set_object_property(result_array_id, "length".to_string(), Value::Int(1))?;
                 } else {
@@ -17559,7 +17540,7 @@ impl InterpreterCore {
                                 // Empty separator splits each character
                                 vec![] // We'll handle this case below
                             } else {
-                                str_text.split(&sep).collect()
+                                str_text.split(sep.as_ref()).collect()
                             };
 
                             if sep.is_empty() {
@@ -17570,7 +17551,7 @@ impl InterpreterCore {
                                     self.set_object_property(
                                         result_array_id,
                                         index.to_string(),
-                                        Value::Str(char_str.clone()),
+                                        Value::str(char_str.as_str()),
                                     )?;
                                 }
                                 self.set_object_property(
@@ -17584,7 +17565,7 @@ impl InterpreterCore {
                                     self.set_object_property(
                                         result_array_id,
                                         index.to_string(),
-                                        Value::Str(part.to_string()),
+                                        Value::str(*part),
                                     )?;
                                 }
                                 self.set_object_property(
@@ -17599,7 +17580,7 @@ impl InterpreterCore {
                             self.set_object_property(
                                 result_array_id,
                                 "0".to_string(),
-                                Value::Str(str_text),
+                                Value::str(str_text),
                             )?;
                             self.set_object_property(
                                 result_array_id,
@@ -17765,20 +17746,20 @@ impl InterpreterCore {
             "builtin:EncodeURIComponent" => {
                 // encodeURIComponent() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
                 let input_str = value_to_string_for_uri(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri_component);
 
-                Ok(Value::Str(encoded))
+                Ok(Value::str(encoded))
             }
 
             "builtin:DecodeURIComponent" => {
                 // decodeURIComponent() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
@@ -17793,26 +17774,26 @@ impl InterpreterCore {
                     }
                 };
 
-                Ok(Value::Str(decoded))
+                Ok(Value::str(decoded))
             }
 
             "builtin:EncodeURI" => {
                 // encodeURI() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
                 let input_str = value_to_string_for_uri(&value);
                 let encoded = percent_encode_utf8(&input_str, should_encode_uri);
 
-                Ok(Value::Str(encoded))
+                Ok(Value::str(encoded))
             }
 
             "builtin:DecodeURI" => {
                 // decodeURI() implementation using shared UTF-8 percent codec
                 if args.count == 0 {
-                    return Ok(Value::Str("undefined".to_string()));
+                    return Ok(Value::str("undefined"));
                 }
 
                 let value = self.read_reg(args.start + 1)?;
@@ -17827,7 +17808,7 @@ impl InterpreterCore {
                     }
                 };
 
-                Ok(Value::Str(decoded))
+                Ok(Value::str(decoded))
             }
 
             "builtin:SetTimeout" => {
@@ -18023,7 +18004,7 @@ impl InterpreterCore {
                 let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 // Simplified: use standard lowercase (full locale support would require ICU)
-                Ok(Value::Str(str_text.to_lowercase()))
+                Ok(Value::str(str_text.to_lowercase()))
             }
 
             "builtin:StringPrototypeToLocaleUpperCase" => {
@@ -18032,7 +18013,7 @@ impl InterpreterCore {
                 let str_text = Self::require_object_coercible_to_string(&this_val)?;
 
                 // Simplified: use standard uppercase (full locale support would require ICU)
-                Ok(Value::Str(str_text.to_uppercase()))
+                Ok(Value::str(str_text.to_uppercase()))
             }
 
             _ => {
@@ -18427,7 +18408,7 @@ impl InterpreterCore {
             .get(weakmap_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
 
-        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap")
+        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "WeakMap")
         {
             return Err(InterpreterError::TypeError {
                 expected: "WeakMap".to_string(),
@@ -18463,7 +18444,7 @@ impl InterpreterCore {
             .get(weakmap_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: weakmap_id.0 })?;
 
-        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind == "WeakMap")
+        if !matches!(weakmap_obj.properties.get("__type"), Some(Value::Str(kind)) if kind.as_ref() == "WeakMap")
         {
             return Err(InterpreterError::TypeError {
                 expected: "WeakMap".to_string(),
@@ -19164,7 +19145,7 @@ impl InterpreterCore {
                     format!("{v}")
                 }
             }
-            Value::Str(s) => s.clone(),
+            Value::Str(s) => s.to_string(),
             Value::Object(id) => {
                 // Try to get a simple string representation
                 if let Some(_obj) = self.heap.get(id.0 as usize) {
@@ -19632,7 +19613,7 @@ impl InterpreterCore {
 
     fn collect_for_of_values(&self, iterable: &Value) -> Result<Vec<Value>, InterpreterError> {
         match iterable {
-            Value::Str(text) => Ok(text.chars().map(|ch| Value::Str(ch.to_string())).collect()),
+            Value::Str(text) => Ok(text.chars().map(|ch| Value::str(ch.to_string())).collect()),
             Value::Object(object_id) => {
                 let object = self
                     .heap
@@ -20466,7 +20447,7 @@ impl LaneRouter {
 /// Convert a JavaScript value to string for URI encoding.
 fn value_to_string_for_uri(value: &Value) -> String {
     match value {
-        Value::Str(s) => s.clone(),
+        Value::Str(s) => s.to_string(),
         Value::Null => "null".to_string(),
         Value::Undefined => "undefined".to_string(),
         Value::Bool(b) => b.to_string(),
@@ -20678,13 +20659,13 @@ impl InterpreterCore {
     ) -> Result<Value, InterpreterError> {
         let date_id = match date_val {
             Value::Object(id) => id,
-            _ => return Ok(Value::Str("Invalid Date".to_string())),
+            _ => return Ok(Value::str("Invalid Date")),
         };
 
         // Check if it's actually a Date object
         if let Some(date_obj) = self.heap.get(date_id.0 as usize) {
             if let Some(Value::Str(type_val)) = date_obj.properties.get("__type") {
-                if type_val == "Date" {
+                if type_val.as_ref() == "Date" {
                     let timestamp = if let Some(Value::Float(timestamp)) =
                         date_obj.properties.get("__timestamp")
                     {
@@ -20694,18 +20675,18 @@ impl InterpreterCore {
                     {
                         *timestamp
                     } else {
-                        return Ok(Value::Str("Invalid Date".to_string()));
+                        return Ok(Value::str("Invalid Date"));
                     };
 
                     let locale_data = Self::get_locale_data(locale);
                     let formatted =
                         self.format_timestamp_with_locale(timestamp, locale_data, format_type);
-                    return Ok(Value::Str(formatted));
+                    return Ok(Value::str(formatted));
                 }
             }
         }
 
-        Ok(Value::Str("Invalid Date".to_string()))
+        Ok(Value::str("Invalid Date"))
     }
 
     /// Format a Unix timestamp (milliseconds) according to locale rules

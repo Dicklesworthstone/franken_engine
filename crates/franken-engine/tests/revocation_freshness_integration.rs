@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::revocation_freshness::{
     DegradedDenial, DegradedModeDecisionEvent, DegradedModeOverride, FreshnessConfig,
@@ -33,6 +34,10 @@ use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 // ---------------------------------------------------------------------------
 
 const TEST_ZONE: &str = "integration-zone";
+
+fn test_policy_id() -> EngineObjectId {
+    EngineObjectId([0x61; 32])
+}
 
 /// Operator signing key: bytes 0xA1..=0xBE padded to 32.
 fn operator_signing_key() -> SigningKey {
@@ -70,7 +75,7 @@ fn test_config() -> FreshnessConfig {
 }
 
 fn make_controller() -> RevocationFreshnessController {
-    RevocationFreshnessController::new(test_config(), TEST_ZONE)
+    RevocationFreshnessController::new_with_policy_id(test_config(), TEST_ZONE, test_policy_id())
 }
 
 fn make_override_token(op: OperationType, expiry_tick: u64) -> DegradedModeOverride {
@@ -80,6 +85,7 @@ fn make_override_token(op: OperationType, expiry_tick: u64) -> DegradedModeOverr
         "emergency maintenance",
         DeterministicTimestamp(expiry_tick),
         TEST_ZONE,
+        &test_policy_id(),
         &operator_signing_key(),
     )
 }
@@ -112,14 +118,12 @@ fn initial_config_matches() {
     assert_eq!(cfg.staleness_threshold, 5);
     assert_eq!(cfg.holdoff_ticks, 10);
     assert!(cfg.authorized_operators.contains("ops-admin-01"));
-    assert!(
-        cfg.override_eligible
-            .contains(&OperationType::ExtensionActivation)
-    );
-    assert!(
-        cfg.override_eligible
-            .contains(&OperationType::TokenAcceptance)
-    );
+    assert!(cfg
+        .override_eligible
+        .contains(&OperationType::ExtensionActivation));
+    assert!(cfg
+        .override_eligible
+        .contains(&OperationType::TokenAcceptance));
 }
 
 // =========================================================================
@@ -367,14 +371,12 @@ fn operations_proceed_in_stale() {
     assert_eq!(ctrl.state(), FreshnessState::Stale);
 
     assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_ok());
-    assert!(
-        ctrl.evaluate(OperationType::ExtensionActivation, "t2")
-            .is_ok()
-    );
-    assert!(
-        ctrl.evaluate(OperationType::HighRiskOperation, "t3")
-            .is_ok()
-    );
+    assert!(ctrl
+        .evaluate(OperationType::ExtensionActivation, "t2")
+        .is_ok());
+    assert!(ctrl
+        .evaluate(OperationType::HighRiskOperation, "t3")
+        .is_ok());
 }
 
 #[test]
@@ -386,14 +388,12 @@ fn revocation_dependent_operations_denied_in_recovering() {
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
     assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_err());
-    assert!(
-        ctrl.evaluate(OperationType::ExtensionActivation, "t2")
-            .is_err()
-    );
-    assert!(
-        ctrl.evaluate(OperationType::HighRiskOperation, "t3")
-            .is_err()
-    );
+    assert!(ctrl
+        .evaluate(OperationType::ExtensionActivation, "t2")
+        .is_err());
+    assert!(ctrl
+        .evaluate(OperationType::HighRiskOperation, "t3")
+        .is_err());
 }
 
 // =========================================================================
@@ -534,6 +534,7 @@ fn override_unauthorized_operator() {
         "unauthorized attempt",
         DeterministicTimestamp(2000),
         TEST_ZONE,
+        &test_policy_id(),
         &sk,
     );
     let vk = sk.verification_key();
@@ -695,14 +696,44 @@ fn override_create_produces_signed_token() {
     assert_eq!(token.justification, "emergency maintenance");
     assert_eq!(token.expiry, DeterministicTimestamp(5000));
     assert_eq!(token.zone, TEST_ZONE);
+    assert_eq!(token.target_policy_id, test_policy_id());
     // Signature is not sentinel (was actually signed)
     assert!(!token.signature.is_sentinel());
 }
 
 #[test]
-fn override_id_is_deterministic() {
+fn override_id_is_unique_for_each_nonce() {
     let t1 = make_override_token(OperationType::ExtensionActivation, 5000);
     let t2 = make_override_token(OperationType::ExtensionActivation, 5000);
+    assert_ne!(t1.nonce, t2.nonce);
+    assert_ne!(t1.override_id, t2.override_id);
+    assert_ne!(t1.signature, t2.signature);
+}
+
+#[test]
+fn override_id_is_deterministic_with_fixed_nonce() {
+    let sk = operator_signing_key();
+    let nonce = [0xD4; 32];
+    let t1 = DegradedModeOverride::create_with_nonce(
+        OperationType::ExtensionActivation,
+        "ops-admin-01",
+        "emergency maintenance",
+        DeterministicTimestamp(5000),
+        TEST_ZONE,
+        &test_policy_id(),
+        nonce,
+        &sk,
+    );
+    let t2 = DegradedModeOverride::create_with_nonce(
+        OperationType::ExtensionActivation,
+        "ops-admin-01",
+        "emergency maintenance",
+        DeterministicTimestamp(5000),
+        TEST_ZONE,
+        &test_policy_id(),
+        nonce,
+        &sk,
+    );
     assert_eq!(t1.override_id, t2.override_id);
     assert_eq!(t1.signature, t2.signature);
 }
@@ -911,6 +942,17 @@ fn serde_override_error_roundtrip() {
         OverrideError::UnauthorizedOperator {
             operator_id: "intruder".to_string(),
         },
+        OverrideError::AlreadyConsumed {
+            override_id: EngineObjectId([0xB0; 32]),
+        },
+        OverrideError::PolicyMismatch {
+            controller_policy_id: test_policy_id(),
+            override_policy_id: EngineObjectId([0xB1; 32]),
+        },
+        OverrideError::ZoneMismatch {
+            controller_zone: "zone-a".to_string(),
+            override_zone: "zone-b".to_string(),
+        },
         OverrideError::NotDegraded {
             current_state: FreshnessState::Fresh,
         },
@@ -1017,16 +1059,12 @@ fn freshness_config_default_values() {
     let config = FreshnessConfig::default();
     assert_eq!(config.staleness_threshold, 5);
     assert_eq!(config.holdoff_ticks, 10);
-    assert!(
-        config
-            .override_eligible
-            .contains(&OperationType::ExtensionActivation)
-    );
-    assert!(
-        !config
-            .override_eligible
-            .contains(&OperationType::TokenAcceptance)
-    );
+    assert!(config
+        .override_eligible
+        .contains(&OperationType::ExtensionActivation));
+    assert!(!config
+        .override_eligible
+        .contains(&OperationType::TokenAcceptance));
     assert!(config.authorized_operators.is_empty());
 }
 

@@ -66,8 +66,16 @@ fn make_config() -> FreshnessConfig {
     }
 }
 
+fn test_policy_id() -> EngineObjectId {
+    EngineObjectId([0x61; 32])
+}
+
+fn other_policy_id() -> EngineObjectId {
+    EngineObjectId([0x62; 32])
+}
+
 fn make_controller() -> RevocationFreshnessController {
-    RevocationFreshnessController::new(make_config(), "test-zone")
+    RevocationFreshnessController::new_with_policy_id(make_config(), "test-zone", test_policy_id())
 }
 
 fn make_override(operation: OperationType, expiry_tick: u64) -> DegradedModeOverride {
@@ -78,6 +86,7 @@ fn make_override(operation: OperationType, expiry_tick: u64) -> DegradedModeOver
         "emergency deploy",
         DeterministicTimestamp(expiry_tick),
         "test-zone",
+        &test_policy_id(),
         &sk,
     )
 }
@@ -238,6 +247,17 @@ fn enrichment_override_error_all_variants_error_trait() {
         OverrideError::UnauthorizedOperator {
             operator_id: "rogue-op".to_string(),
         },
+        OverrideError::AlreadyConsumed {
+            override_id: EngineObjectId([0xA0; 32]),
+        },
+        OverrideError::ZoneMismatch {
+            controller_zone: "zone-a".to_string(),
+            override_zone: "zone-b".to_string(),
+        },
+        OverrideError::PolicyMismatch {
+            controller_policy_id: test_policy_id(),
+            override_policy_id: other_policy_id(),
+        },
         OverrideError::NotDegraded {
             current_state: FreshnessState::Fresh,
         },
@@ -266,12 +286,23 @@ fn enrichment_override_error_display_strings_distinct() {
         OverrideError::UnauthorizedOperator {
             operator_id: "rogue-op".to_string(),
         },
+        OverrideError::AlreadyConsumed {
+            override_id: EngineObjectId([0xA0; 32]),
+        },
+        OverrideError::ZoneMismatch {
+            controller_zone: "zone-a".to_string(),
+            override_zone: "zone-b".to_string(),
+        },
+        OverrideError::PolicyMismatch {
+            controller_policy_id: test_policy_id(),
+            override_policy_id: other_policy_id(),
+        },
         OverrideError::NotDegraded {
             current_state: FreshnessState::Fresh,
         },
     ];
     let displays: BTreeSet<String> = errors.iter().map(|e| e.to_string()).collect();
-    assert_eq!(displays.len(), 5);
+    assert_eq!(displays.len(), 8);
 }
 
 // =========================================================================
@@ -307,27 +338,23 @@ fn enrichment_debug_operation_type_distinct() {
 fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", FreshnessState::Fresh).is_empty());
     assert!(!format!("{:?}", OperationType::SafeOperation).is_empty());
-    assert!(
-        !format!(
-            "{:?}",
-            DegradedDenial {
-                operation_type: OperationType::TokenAcceptance,
-                local_head_seq: 0,
-                expected_head_seq: 5,
-                staleness_gap: 5,
-            }
-        )
-        .is_empty()
-    );
-    assert!(
-        !format!(
-            "{:?}",
-            OverrideError::NotDegraded {
-                current_state: FreshnessState::Fresh,
-            }
-        )
-        .is_empty()
-    );
+    assert!(!format!(
+        "{:?}",
+        DegradedDenial {
+            operation_type: OperationType::TokenAcceptance,
+            local_head_seq: 0,
+            expected_head_seq: 5,
+            staleness_gap: 5,
+        }
+    )
+    .is_empty());
+    assert!(!format!(
+        "{:?}",
+        OverrideError::NotDegraded {
+            current_state: FreshnessState::Fresh,
+        }
+    )
+    .is_empty());
     assert!(!format!("{:?}", FreshnessConfig::default()).is_empty());
     let ctrl = make_controller();
     assert!(!format!("{ctrl:?}").is_empty());
@@ -340,29 +367,63 @@ fn enrichment_debug_nonempty_all_types() {
 #[test]
 fn enrichment_override_different_zones_produce_different_ids() {
     let sk = operator_key();
-    let t1 = DegradedModeOverride::create(
+    let nonce = [0xC3; 32];
+    let t1 = DegradedModeOverride::create_with_nonce(
         OperationType::ExtensionActivation,
         "ops-admin-01",
         "emergency",
         DeterministicTimestamp(2000),
         "zone-alpha",
+        &test_policy_id(),
+        nonce,
         &sk,
     );
-    let t2 = DegradedModeOverride::create(
+    let t2 = DegradedModeOverride::create_with_nonce(
         OperationType::ExtensionActivation,
         "ops-admin-01",
         "emergency",
         DeterministicTimestamp(2000),
         "zone-beta",
+        &test_policy_id(),
+        nonce,
         &sk,
     );
     assert_ne!(t1.override_id, t2.override_id);
 }
 
 #[test]
-fn enrichment_override_same_params_same_id() {
+fn enrichment_override_same_params_use_unique_nonce() {
     let t1 = make_override(OperationType::ExtensionActivation, 5000);
     let t2 = make_override(OperationType::ExtensionActivation, 5000);
+    assert_ne!(t1.nonce, t2.nonce);
+    assert_ne!(t1.override_id, t2.override_id);
+    assert_ne!(t1.signature, t2.signature);
+}
+
+#[test]
+fn enrichment_override_fixed_nonce_is_deterministic() {
+    let sk = operator_key();
+    let nonce = [0xD4; 32];
+    let t1 = DegradedModeOverride::create_with_nonce(
+        OperationType::ExtensionActivation,
+        "ops-admin-01",
+        "emergency",
+        DeterministicTimestamp(5000),
+        "test-zone",
+        &test_policy_id(),
+        nonce,
+        &sk,
+    );
+    let t2 = DegradedModeOverride::create_with_nonce(
+        OperationType::ExtensionActivation,
+        "ops-admin-01",
+        "emergency",
+        DeterministicTimestamp(5000),
+        "test-zone",
+        &test_policy_id(),
+        nonce,
+        &sk,
+    );
     assert_eq!(t1.override_id, t2.override_id);
     assert_eq!(t1.signature, t2.signature);
 }
@@ -391,14 +452,12 @@ fn enrichment_recovering_allows_safe_and_health() {
     ctrl.update_local_head(10, "t-recover");
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
-    assert!(
-        ctrl.evaluate(OperationType::SafeOperation, "t-rec-safe")
-            .is_ok()
-    );
-    assert!(
-        ctrl.evaluate(OperationType::HealthCheck, "t-rec-hc")
-            .is_ok()
-    );
+    assert!(ctrl
+        .evaluate(OperationType::SafeOperation, "t-rec-safe")
+        .is_ok());
+    assert!(ctrl
+        .evaluate(OperationType::HealthCheck, "t-rec-hc")
+        .is_ok());
 }
 
 // =========================================================================
@@ -650,7 +709,8 @@ fn enrichment_empty_override_eligible_rejects_all_overrides() {
             operator_key().verification_key(),
         )]),
     };
-    let mut ctrl = RevocationFreshnessController::new(config, "test-zone");
+    let mut ctrl =
+        RevocationFreshnessController::new_with_policy_id(config, "test-zone", test_policy_id());
     ctrl.set_tick(1000);
     ctrl.update_expected_head(10, "t-degrade");
 
@@ -844,6 +904,7 @@ fn enrichment_override_unauthorized_operator_rejected() {
         "evil plan",
         DeterministicTimestamp(5000),
         "test-zone",
+        &test_policy_id(),
         &sk,
     );
     let vk = sk.verification_key();
@@ -857,6 +918,36 @@ fn enrichment_override_unauthorized_operator_rejected() {
         msg.contains("rogue-operator"),
         "error should name the operator: {msg}"
     );
+}
+
+#[test]
+fn enrichment_override_policy_mismatch_rejected() {
+    let mut ctrl = make_controller();
+    ctrl.set_tick(1000);
+    ctrl.update_expected_head(10, "t-degrade");
+    assert!(ctrl.is_degraded());
+
+    let sk = operator_key();
+    let token = DegradedModeOverride::create(
+        OperationType::ExtensionActivation,
+        "ops-admin-01",
+        "wrong policy cell",
+        DeterministicTimestamp(5000),
+        "test-zone",
+        &other_policy_id(),
+        &sk,
+    );
+    let vk = sk.verification_key();
+
+    let result =
+        ctrl.evaluate_with_override(OperationType::ExtensionActivation, &token, &vk, "t-policy");
+    assert!(matches!(
+        result,
+        Err(OverrideError::PolicyMismatch {
+            controller_policy_id,
+            override_policy_id,
+        }) if controller_policy_id == test_policy_id() && override_policy_id == other_policy_id()
+    ));
 }
 
 // =========================================================================
@@ -946,10 +1037,9 @@ fn enrichment_freshness_config_default_values() {
     assert_eq!(cfg.staleness_threshold, 5);
     assert_eq!(cfg.holdoff_ticks, 10);
     // Default has ExtensionActivation as override-eligible.
-    assert!(
-        cfg.override_eligible
-            .contains(&OperationType::ExtensionActivation)
-    );
+    assert!(cfg
+        .override_eligible
+        .contains(&OperationType::ExtensionActivation));
     assert_eq!(cfg.override_eligible.len(), 1);
     // No authorized operators by default.
     assert!(cfg.authorized_operators.is_empty());

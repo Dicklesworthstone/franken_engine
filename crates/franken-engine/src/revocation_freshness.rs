@@ -16,13 +16,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::signature_preimage::{
-    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
-    verify_signature,
+    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
+    SIGNATURE_SENTINEL,
 };
 
 // ---------------------------------------------------------------------------
@@ -30,9 +31,17 @@ use crate::signature_preimage::{
 // ---------------------------------------------------------------------------
 
 const OVERRIDE_SCHEMA_DEF: &[u8] = b"FrankenEngine.DegradedModeOverride.v1";
+const CONTROLLER_SCHEMA_DEF: &[u8] = b"FrankenEngine.RevocationFreshnessController.v1";
+const OVERRIDE_NONCE_LEN: usize = 32;
+
+pub type OverrideNonce = [u8; OVERRIDE_NONCE_LEN];
 
 fn override_schema_id() -> SchemaId {
     SchemaId::from_definition(OVERRIDE_SCHEMA_DEF)
+}
+
+fn controller_schema_id() -> SchemaId {
+    SchemaId::from_definition(CONTROLLER_SCHEMA_DEF)
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +173,11 @@ pub enum OverrideError {
         controller_zone: String,
         override_zone: String,
     },
+    /// Override token was minted for a different controller policy/cell.
+    PolicyMismatch {
+        controller_policy_id: EngineObjectId,
+        override_policy_id: EngineObjectId,
+    },
     /// Not in degraded mode — override not applicable.
     NotDegraded { current_state: FreshnessState },
 }
@@ -199,6 +213,13 @@ impl fmt::Display for OverrideError {
                 f,
                 "override zone mismatch: controller={controller_zone}, override={override_zone}"
             ),
+            Self::PolicyMismatch {
+                controller_policy_id,
+                override_policy_id,
+            } => write!(
+                f,
+                "override policy mismatch: controller={controller_policy_id}, override={override_policy_id}"
+            ),
             Self::NotDegraded { current_state } => {
                 write!(f, "not in degraded mode: state={current_state}")
             }
@@ -228,6 +249,12 @@ pub struct DegradedModeOverride {
     pub expiry: DeterministicTimestamp,
     /// Zone this override applies to.
     pub zone: String,
+    /// One-time nonce bound into both the override id and signature.
+    #[serde(default)]
+    pub nonce: OverrideNonce,
+    /// Controller policy/cell id this override is authorized for.
+    #[serde(default)]
+    pub target_policy_id: EngineObjectId,
     /// Signature of the override.
     pub signature: Signature,
 }
@@ -240,9 +267,45 @@ impl DegradedModeOverride {
         justification: &str,
         expiry: DeterministicTimestamp,
         zone: &str,
+        target_policy_id: &EngineObjectId,
         signing_key: &SigningKey,
     ) -> Self {
-        let canonical_bytes = Self::build_canonical(operation_type, operator_id, expiry, zone);
+        let mut nonce = [0u8; OVERRIDE_NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce);
+        Self::create_with_nonce(
+            operation_type,
+            operator_id,
+            justification,
+            expiry,
+            zone,
+            target_policy_id,
+            nonce,
+            signing_key,
+        )
+    }
+
+    /// Create a new override token with a caller-supplied nonce for deterministic
+    /// replay fixtures.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_with_nonce(
+        operation_type: OperationType,
+        operator_id: &str,
+        justification: &str,
+        expiry: DeterministicTimestamp,
+        zone: &str,
+        target_policy_id: &EngineObjectId,
+        nonce: OverrideNonce,
+        signing_key: &SigningKey,
+    ) -> Self {
+        let canonical_bytes = Self::build_canonical(
+            operation_type,
+            operator_id,
+            justification,
+            expiry,
+            zone,
+            target_policy_id,
+            &nonce,
+        );
         let override_id = engine_object_id::derive_id(
             ObjectDomain::PolicyObject,
             zone,
@@ -258,6 +321,8 @@ impl DegradedModeOverride {
             justification: justification.to_string(),
             expiry,
             zone: zone.to_string(),
+            nonce,
+            target_policy_id: target_policy_id.clone(),
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
 
@@ -270,15 +335,27 @@ impl DegradedModeOverride {
     fn build_canonical(
         operation_type: OperationType,
         operator_id: &str,
+        justification: &str,
         expiry: DeterministicTimestamp,
         zone: &str,
+        target_policy_id: &EngineObjectId,
+        nonce: &OverrideNonce,
     ) -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(operation_type.to_string().as_bytes());
-        buf.extend_from_slice(operator_id.as_bytes());
+        Self::push_len_prefixed(&mut buf, operation_type.to_string().as_bytes());
+        Self::push_len_prefixed(&mut buf, operator_id.as_bytes());
+        Self::push_len_prefixed(&mut buf, justification.as_bytes());
         buf.extend_from_slice(&expiry.0.to_be_bytes());
-        buf.extend_from_slice(zone.as_bytes());
+        Self::push_len_prefixed(&mut buf, zone.as_bytes());
+        buf.extend_from_slice(target_policy_id.as_bytes());
+        buf.extend_from_slice(nonce);
         buf
+    }
+
+    fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+        let len = u32::try_from(bytes.len()).expect("canonical field length exceeds u32");
+        buf.extend_from_slice(&len.to_be_bytes());
+        buf.extend_from_slice(bytes);
     }
 }
 
@@ -304,12 +381,24 @@ impl SignaturePreimage for DegradedModeOverride {
             CanonicalValue::String(self.operator_id.clone()),
         );
         map.insert(
+            "justification".to_string(),
+            CanonicalValue::String(self.justification.clone()),
+        );
+        map.insert(
+            "nonce".to_string(),
+            CanonicalValue::Bytes(self.nonce.to_vec()),
+        );
+        map.insert(
             "override_id".to_string(),
             CanonicalValue::Bytes(self.override_id.as_bytes().to_vec()),
         );
         map.insert(
             "signature".to_string(),
             CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()),
+        );
+        map.insert(
+            "target_policy_id".to_string(),
+            CanonicalValue::Bytes(self.target_policy_id.as_bytes().to_vec()),
         );
         map.insert(
             "zone".to_string(),
@@ -406,6 +495,7 @@ impl Default for FreshnessConfig {
 #[derive(Debug)]
 pub struct RevocationFreshnessController {
     config: FreshnessConfig,
+    policy_id: EngineObjectId,
     state: FreshnessState,
     local_head_seq: u64,
     expected_head_seq: u64,
@@ -427,8 +517,28 @@ pub struct RevocationFreshnessController {
 impl RevocationFreshnessController {
     /// Create a new controller.
     pub fn new(config: FreshnessConfig, zone: &str) -> Self {
+        let mut nonce = [0u8; OVERRIDE_NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce);
+        let policy_id = engine_object_id::derive_id(
+            ObjectDomain::PolicyObject,
+            zone,
+            &controller_schema_id(),
+            &nonce,
+        )
+        .expect("controller policy id derivation should succeed");
+        Self::new_with_policy_id(config, zone, policy_id)
+    }
+
+    /// Create a controller with a caller-supplied policy id for deterministic
+    /// fixtures and externally identified policy cells.
+    pub fn new_with_policy_id(
+        config: FreshnessConfig,
+        zone: &str,
+        policy_id: EngineObjectId,
+    ) -> Self {
         Self {
             config,
+            policy_id,
             state: FreshnessState::Fresh,
             local_head_seq: 0,
             expected_head_seq: 0,
@@ -440,6 +550,11 @@ impl RevocationFreshnessController {
             outcome_counts: BTreeMap::new(),
             zone: zone.to_string(),
         }
+    }
+
+    /// Policy/cell id override tokens must target.
+    pub fn policy_id(&self) -> &EngineObjectId {
+        &self.policy_id
     }
 
     /// The zone this controller manages.
@@ -556,6 +671,13 @@ impl RevocationFreshnessController {
             return Err(OverrideError::ZoneMismatch {
                 controller_zone: self.zone.clone(),
                 override_zone: override_token.zone.clone(),
+            });
+        }
+
+        if override_token.target_policy_id != self.policy_id {
+            return Err(OverrideError::PolicyMismatch {
+                controller_policy_id: self.policy_id.clone(),
+                override_policy_id: override_token.target_policy_id.clone(),
             });
         }
 
@@ -796,8 +918,20 @@ mod tests {
         }
     }
 
+    fn test_policy_id() -> EngineObjectId {
+        EngineObjectId([0x61; 32])
+    }
+
+    fn other_policy_id() -> EngineObjectId {
+        EngineObjectId([0x62; 32])
+    }
+
     fn make_controller() -> RevocationFreshnessController {
-        RevocationFreshnessController::new(make_config(), TEST_ZONE)
+        RevocationFreshnessController::new_with_policy_id(
+            make_config(),
+            TEST_ZONE,
+            test_policy_id(),
+        )
     }
 
     fn make_override(operation: OperationType, expiry_tick: u64) -> DegradedModeOverride {
@@ -808,6 +942,7 @@ mod tests {
             "emergency deploy",
             DeterministicTimestamp(expiry_tick),
             TEST_ZONE,
+            &test_policy_id(),
             &sk,
         )
     }
@@ -824,6 +959,7 @@ mod tests {
             "emergency deploy",
             DeterministicTimestamp(expiry_tick),
             zone,
+            &test_policy_id(),
             &sk,
         )
     }
@@ -1061,6 +1197,40 @@ mod tests {
     }
 
     #[test]
+    fn override_token_for_other_policy_is_rejected() {
+        let mut ctrl = make_controller();
+        ctrl.set_tick(1000);
+        ctrl.update_expected_head(10, "t-degrade");
+
+        let sk = operator_key();
+        let override_token = DegradedModeOverride::create(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &other_policy_id(),
+            &sk,
+        );
+        let vk = sk.verification_key();
+
+        let result = ctrl.evaluate_with_override(
+            OperationType::ExtensionActivation,
+            &override_token,
+            &vk,
+            "t-override-policy-replay",
+        );
+
+        assert!(matches!(
+            result,
+            Err(OverrideError::PolicyMismatch {
+                controller_policy_id,
+                override_policy_id,
+            }) if controller_policy_id == test_policy_id() && override_policy_id == other_policy_id()
+        ));
+    }
+
+    #[test]
     fn authorized_operator_id_signed_by_unpinned_key_is_rejected() {
         let mut ctrl = make_controller();
         ctrl.set_tick(1000);
@@ -1073,6 +1243,7 @@ mod tests {
             "forged authorized operator id",
             DeterministicTimestamp(2000),
             TEST_ZONE,
+            &test_policy_id(),
             &unpinned,
         );
 
@@ -1141,6 +1312,7 @@ mod tests {
             "trying to sneak in",
             DeterministicTimestamp(2000),
             TEST_ZONE,
+            &test_policy_id(),
             &sk,
         );
         let vk = sk.verification_key();
@@ -1588,13 +1760,42 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Override token signature determinism
+    // Override token nonce binding
     // ---------------------------------------------------------------
 
     #[test]
-    fn override_token_signature_is_deterministic() {
+    fn override_token_signature_binds_nonce() {
         let t1 = make_override(OperationType::ExtensionActivation, 2000);
         let t2 = make_override(OperationType::ExtensionActivation, 2000);
+        assert_ne!(t1.nonce, t2.nonce);
+        assert_ne!(t1.signature, t2.signature);
+        assert_ne!(t1.override_id, t2.override_id);
+    }
+
+    #[test]
+    fn override_token_signature_is_deterministic_with_fixed_nonce() {
+        let sk = operator_key();
+        let nonce = [0xD4; OVERRIDE_NONCE_LEN];
+        let t1 = DegradedModeOverride::create_with_nonce(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &test_policy_id(),
+            nonce,
+            &sk,
+        );
+        let t2 = DegradedModeOverride::create_with_nonce(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &test_policy_id(),
+            nonce,
+            &sk,
+        );
         assert_eq!(t1.signature, t2.signature);
         assert_eq!(t1.override_id, t2.override_id);
     }
@@ -1626,6 +1827,10 @@ mod tests {
             OverrideError::ZoneMismatch {
                 controller_zone: "zone-a".to_string(),
                 override_zone: "zone-b".to_string(),
+            },
+            OverrideError::PolicyMismatch {
+                controller_policy_id: EngineObjectId([10; 32]),
+                override_policy_id: EngineObjectId([11; 32]),
             },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
@@ -1662,11 +1867,9 @@ mod tests {
         let config = FreshnessConfig::default();
         assert_eq!(config.staleness_threshold, 5);
         assert_eq!(config.holdoff_ticks, 10);
-        assert!(
-            config
-                .override_eligible
-                .contains(&OperationType::ExtensionActivation)
-        );
+        assert!(config
+            .override_eligible
+            .contains(&OperationType::ExtensionActivation));
         assert!(config.authorized_operators.is_empty());
         assert!(config.authorized_operator_keys.is_empty());
     }
@@ -1721,8 +1924,28 @@ mod tests {
 
     #[test]
     fn override_preimage_is_deterministic() {
-        let t1 = make_override(OperationType::ExtensionActivation, 2000);
-        let t2 = make_override(OperationType::ExtensionActivation, 2000);
+        let sk = operator_key();
+        let nonce = [0xAB; OVERRIDE_NONCE_LEN];
+        let t1 = DegradedModeOverride::create_with_nonce(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &test_policy_id(),
+            nonce,
+            &sk,
+        );
+        let t2 = DegradedModeOverride::create_with_nonce(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &test_policy_id(),
+            nonce,
+            &sk,
+        );
         assert_eq!(t1.preimage_bytes(), t2.preimage_bytes());
     }
 
@@ -1918,12 +2141,16 @@ mod tests {
                 controller_zone: "controller".to_string(),
                 override_zone: "token".to_string(),
             },
+            OverrideError::PolicyMismatch {
+                controller_policy_id: EngineObjectId([5; 32]),
+                override_policy_id: EngineObjectId([6; 32]),
+            },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
             },
         ];
         let set: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
-        assert_eq!(set.len(), 7);
+        assert_eq!(set.len(), 8);
     }
 
     #[test]
@@ -1981,6 +2208,10 @@ mod tests {
                 controller_zone: "a".to_string(),
                 override_zone: "b".to_string(),
             },
+            OverrideError::PolicyMismatch {
+                controller_policy_id: EngineObjectId([5; 32]),
+                override_policy_id: EngineObjectId([6; 32]),
+            },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
             },
@@ -1989,7 +2220,7 @@ mod tests {
             .iter()
             .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
-        assert_eq!(set.len(), 7);
+        assert_eq!(set.len(), 8);
     }
 
     #[test]
@@ -2153,6 +2384,22 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "override zone mismatch: controller=zone-a, override=zone-b"
+        );
+    }
+
+    #[test]
+    fn override_error_display_policy_mismatch() {
+        let controller_policy_id = EngineObjectId([0x11; 32]);
+        let override_policy_id = EngineObjectId([0x22; 32]);
+        let e = OverrideError::PolicyMismatch {
+            controller_policy_id: controller_policy_id.clone(),
+            override_policy_id: override_policy_id.clone(),
+        };
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "override policy mismatch: controller={controller_policy_id}, override={override_policy_id}"
+            )
         );
     }
 
@@ -2349,9 +2596,8 @@ mod tests {
         let c = FreshnessConfig::default();
         assert_eq!(c.staleness_threshold, 5);
         assert_eq!(c.holdoff_ticks, 10);
-        assert!(
-            c.override_eligible
-                .contains(&OperationType::ExtensionActivation)
-        );
+        assert!(c
+            .override_eligible
+            .contains(&OperationType::ExtensionActivation));
     }
 }

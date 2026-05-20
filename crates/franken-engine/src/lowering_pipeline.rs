@@ -6504,6 +6504,125 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // Optional method call: `obj?.method(args)` and `obj?.[expr](args)`.
+            // The parser models `obj?.method()` as Call { callee:
+            // OptionalMember(obj, method) }. Lowering Member without the
+            // wrapping nullish guard makes a null base throw "expected
+            // function, got undefined" instead of short-circuiting per
+            // ES2020 §12.3.2.1 (bd-itxl9 / method-call-null).
+            if let Expression::OptionalMember {
+                object,
+                property,
+                computed,
+            } = callee.as_ref()
+            {
+                let temp_obj = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "opt_method_obj",
+                )?;
+                let result_binding = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "opt_method_result",
+                )?;
+                let skip_label = alloc_label(label_counter);
+                let end_label = alloc_label(label_counter);
+
+                // Evaluate the receiver and store into temp_obj.
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: temp_obj,
+                });
+                ops.push(Ir1Op::Pop);
+
+                // Short-circuit when the receiver is nullish.
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_obj,
+                });
+                ops.push(Ir1Op::JumpIfNullish {
+                    label_id: skip_label,
+                });
+
+                // Not-nullish path: receiver.method(args)
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_obj,
+                });
+                let key = lower_member_property_key_to_ir1(
+                    property,
+                    *computed,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::GetProperty { key });
+                // Stack: [..., method]. Push the receiver again for CallMethod
+                // so the callee sees `this === temp_obj`.
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_obj,
+                });
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                ops.push(Ir1Op::CallMethod {
+                    arg_count: arg_count as u32,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+                ops.push(Ir1Op::Jump {
+                    label_id: end_label,
+                });
+
+                // Nullish path: result = undefined.
+                ops.push(Ir1Op::Label { id: skip_label });
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::Undefined,
+                });
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: result_binding,
+                });
+                ops.push(Ir1Op::Pop);
+
+                // End: load the result.
+                ops.push(Ir1Op::Label { id: end_label });
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: result_binding,
+                });
+                return Ok(());
+            }
+
             // Detect method calls: obj.method(args) → CallMethod with receiver
             let is_method = matches!(
                 callee.as_ref(),

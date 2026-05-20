@@ -91,14 +91,38 @@ pub fn evaluate_test262_result(
     match eval_result {
         Ok(outcome) => match expected {
             ExpectedResult::Success { output } => {
-                // FIX: Actually compare output instead of ignoring it
-                if outcome.value.trim() == output.trim() {
+                // Compare against console output when the program produced any
+                // (Test262 ExpectedResult::Success.output is stdout-shaped —
+                // expected fixtures consistently end with "\n" because the
+                // tests use `console.log(...)`, which prints and then returns
+                // undefined). Falling back to outcome.value preserves prior
+                // behaviour for pure-expression fixtures that don't log.
+                //
+                // [bd-itxl9] Previously this compared outcome.value to output,
+                // which made every `console.log(expr)` fixture spuriously fail
+                // (outcome.value is the eval-completion value — undefined —
+                // not the printed text). 12 of 18 MUST-tier optional-chaining
+                // cases failed by this mechanism even though the engine
+                // returned the correct value via console.log.
+                let actual = if outcome.console_output.is_empty() {
+                    outcome.value.clone()
+                } else {
+                    let mut joined = String::new();
+                    for (i, entry) in outcome.console_output.iter().enumerate() {
+                        if i > 0 {
+                            joined.push('\n');
+                        }
+                        joined.push_str(&entry.message);
+                    }
+                    joined
+                };
+                if actual.trim() == output.trim() {
                     Test262Result::Pass
                 } else {
                     Test262Result::Fail {
                         reason: format!(
-                            "Output mismatch in {}: expected '{}', got '{}'",
-                            test_id, output, outcome.value
+                            "Output mismatch in {}: expected '{}', got '{}' (completion value: '{}')",
+                            test_id, output, actual, outcome.value
                         ),
                     }
                 }

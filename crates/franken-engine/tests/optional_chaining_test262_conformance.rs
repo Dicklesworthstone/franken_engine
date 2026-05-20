@@ -666,24 +666,15 @@ mod tests {
     /// missing); a test passing again will also fail (forcing list cleanup),
     /// keeping the list honest.
     ///
-    /// All current entries trace to bd-itxl9 (engine returns `undefined` for
-    /// basic `obj?.x` style expressions). They are NOT spec waivers — they are
-    /// known-bug acknowledgements; the goal is to drain this list as the
-    /// engine bug is fixed, not to grow it.
-    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[
-        ("ES2020-12.3.2.1-basic-property-access", "bd-itxl9"),
-        ("ES2020-12.3.2.1-basic-bracket-access", "bd-itxl9"),
-        ("ES2020-12.3.2.1-method-call-existing", "bd-itxl9"),
-        ("ES2020-12.3.2.1-method-call-null", "bd-itxl9"),
-        ("ES2020-12.3.2.1-chained-property", "bd-itxl9"),
-        ("ES2020-12.3.2.1-mixed-chaining", "bd-itxl9"),
-        ("ES2020-12.3.2.1-dynamic-property", "bd-itxl9"),
-        ("ES2020-12.3.2.1-optional-call", "bd-itxl9"),
-        ("ES2020-12.3.2.1-complex-bracket", "bd-itxl9"),
-        ("ES2020-12.3.2.1-number-property", "bd-itxl9"),
-        ("ES2020-12.3.2.1-parentheses-grouping", "bd-itxl9"),
-        ("ES2020-12.3.2.1-side-effects", "bd-itxl9"),
-    ];
+    /// bd-itxl9 drained the original 12 entries: 11 of them were the Test262
+    /// helper comparing `outcome.value` (eval-completion value — `undefined`
+    /// for `console.log(...)` programs) against the printed-output expected
+    /// strings (e.g. "42\n"), so every console.log fixture spuriously failed.
+    /// The 12th (method-call-null) was a real engine gap — `obj?.method()`
+    /// with a null receiver threw a TypeError instead of short-circuiting per
+    /// ES2020 §12.3.2.1. Both are fixed; this allow-list is intentionally
+    /// empty.
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[];
 
     fn must_tests(harness: &OptionalChainingHarness) -> Vec<&OptionalChainingTest> {
         harness

@@ -31,18 +31,6 @@ use crate::trust_economics::{
 const MILLION: i64 = 1_000_000;
 const RUNTIME_DECISION_SCORING_COMPONENT: &str = "runtime_decision_scoring";
 const ALIEN_TAIL_CONFIDENCE_MILLIONTHS: i64 = 900_000; // 90%
-/// Default elevated p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_ELEVATED_PVALUE_MILLIONTHS: i64 = 100_000; // 10%
-/// Default critical p-value threshold (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_CRITICAL_PVALUE_MILLIONTHS: i64 = 50_000; // 5%
-/// Default elevated regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_ELEVATED_REGIME_SHIFT_MILLIONTHS: i64 = 2_500_000; // 2.5 sigma-equivalent
-/// Default critical regime-shift sigma (now read from RuntimeConfig in `_with_thresholds` variant).
-#[allow(dead_code)]
-const ALIEN_CRITICAL_REGIME_SHIFT_MILLIONTHS: i64 = 4_000_000; // 4.0 sigma-equivalent
 
 // ---------------------------------------------------------------------------
 // ContainmentAction — the action space

@@ -27002,6 +27002,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "stub: super() call lowering not exercised; needs SuperCall IR3 path and real parent-state assertion (bd-8yjxf)"]
     fn super_call_invokes_parent_constructor() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27012,13 +27013,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "super-constructor-test");
 
-        // TODO: implement test for super() calls
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: super.method() dispatch not exercised; IR3 has LoadSuper but no super-method-call lowering wired here (bd-8yjxf)"]
     fn super_method_calls_parent_method() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27029,13 +27030,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "super-method-test");
 
-        // TODO: implement test for super.method() calls
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: static method dispatch on constructor not exercised; needs DefineConstructor + CallMethod path with observable assertion (bd-8yjxf)"]
     fn static_method_on_constructor() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27046,13 +27047,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "static-method-test");
 
-        // TODO: implement test for static methods - this should work with current implementation
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: computed method name `[expr]()` lowering not exercised; needs DefineComputedMethod-style IR3 flow (bd-8yjxf)"]
     fn computed_method_name() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27063,13 +27064,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "computed-method-test");
 
-        // TODO: implement test for computed method names like [expr]()
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: accessor descriptor (get/set) invocation not exercised; no DefineAccessor IR3 op wired here (bd-8yjxf)"]
     fn getter_setter() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27080,13 +27081,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "getter-setter-test");
 
-        // TODO: implement test for getter/setter methods
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: class-as-expression evaluation not exercised; needs callable-constructor Value assertion (bd-8yjxf)"]
     fn class_expression() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27097,13 +27098,13 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "class-expression-test");
 
-        // TODO: implement test for class expressions
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());
     }
 
     #[test]
+    #[ignore = "stub: new.target meta-property read not exercised; no IR3 op resolving NewTarget in constructor frame (bd-8yjxf)"]
     fn new_target_in_constructor() {
         let mut config = InterpreterConfig::quickjs_defaults();
         config
@@ -27114,7 +27115,6 @@ mod tests {
             .insert(RuntimeCapability::HeapAllocate);
         let mut core = InterpreterCore::new(config, "new-target-test");
 
-        // TODO: implement test for new.target meta-property
         let module = test_module(vec![Ir3Instruction::Halt]);
         let result = core.execute(&module);
         assert!(result.is_ok());

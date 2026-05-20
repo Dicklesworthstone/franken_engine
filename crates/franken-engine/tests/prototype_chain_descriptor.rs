@@ -9,8 +9,11 @@ use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
 
+const PROTOTYPE_DESCRIPTOR_TEST_BUDGET: u64 = 512;
+
 fn config() -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
+    config.instruction_budget = PROTOTYPE_DESCRIPTOR_TEST_BUDGET;
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
@@ -751,24 +754,104 @@ fn shadowed_descriptor_value_module(own_only: bool) -> Ir3Module {
     )
 }
 
+/// Run a single conformance case end-to-end. Factored out so each per-case
+/// `#[test]` below can isolate hangs / panics to its own line of the matrix.
+/// (bd-f4ycb)
+fn run_conformance_case(case_id: &'static str) {
+    let case = conformance_cases()
+        .into_iter()
+        .find(|c| c.id == case_id)
+        .unwrap_or_else(|| panic!("no conformance case named `{case_id}`"));
+    assert!(
+        !case.spec_ref.is_empty(),
+        "{} has no spec reference",
+        case.id
+    );
+    let module = (case.module)();
+    let result = execute(&module).unwrap_or_else(|err| {
+        panic!(
+            "{} ({}) should execute, got {err:?}",
+            case.id, case.requirement
+        )
+    });
+    case.expected.assert_matches(&result.value, &case);
+}
+
+// bd-f4ycb: the original aggregate `prototype_property_descriptor_conformance_matrix`
+// looped through `conformance_cases()` in a single `#[test]`. One case
+// (suspected `proxy-get-no-trap-fallback`) hung the matrix indefinitely
+// under rch test runs, masking the other 11 cases' coverage. Splitting the
+// matrix into per-case tests means a hang or panic is contained to one
+// row; cargo's per-test thread isolates each case, and the offender is
+// trivially identifiable via `cargo test --list` / `--test-threads=1`.
+// Each helper preserves the spec-ref + requirement assertions. The
+// remaining-suspect `proxy-get-no-trap-fallback` case stays `#[ignore]`
+// with a pointer to bd-f4ycb until the hang is root-caused.
+
 #[test]
-#[ignore = "investigation: hangs on bd-f4ycb"]
-fn prototype_property_descriptor_conformance_matrix() {
-    for case in conformance_cases() {
-        assert!(
-            !case.spec_ref.is_empty(),
-            "{} has no spec reference",
-            case.id
-        );
-        let module = (case.module)();
-        let result = execute(&module).unwrap_or_else(|err| {
-            panic!(
-                "{} ({}) should execute, got {err:?}",
-                case.id, case.requirement
-            )
-        });
-        case.expected.assert_matches(&result.value, &case);
-    }
+fn prototype_conformance_get_own_data() {
+    run_conformance_case("get-own-data");
+}
+
+#[test]
+fn prototype_conformance_get_inherited_data() {
+    run_conformance_case("get-inherited-data");
+}
+
+#[test]
+fn prototype_conformance_get_own_shadows_inherited() {
+    run_conformance_case("get-own-shadows-inherited");
+}
+
+#[test]
+fn prototype_conformance_set_creates_own_shadow() {
+    run_conformance_case("set-creates-own-shadow");
+}
+
+#[test]
+fn prototype_conformance_delete_own_reveals_inherited() {
+    run_conformance_case("delete-own-reveals-inherited");
+}
+
+#[test]
+fn prototype_conformance_in_finds_inherited() {
+    run_conformance_case("in-finds-inherited");
+}
+
+#[test]
+fn prototype_conformance_in_missing_false() {
+    run_conformance_case("in-missing-false");
+}
+
+#[test]
+fn prototype_conformance_descriptor_own_value() {
+    run_conformance_case("descriptor-own-value");
+}
+
+#[test]
+fn prototype_conformance_descriptor_inherited_value() {
+    run_conformance_case("descriptor-inherited-value");
+}
+
+#[test]
+fn prototype_conformance_own_descriptor_excludes_inherited() {
+    run_conformance_case("own-descriptor-excludes-inherited");
+}
+
+#[test]
+fn prototype_conformance_descriptor_frozen_non_configurable() {
+    run_conformance_case("descriptor-frozen-non-configurable");
+}
+
+#[test]
+#[ignore = "bd-f4ycb: suspected to hang the matrix; isolate-then-fix before re-enabling"]
+fn prototype_conformance_proxy_get_no_trap_fallback() {
+    // The Proxy [[Get]] target-fallback path goes through
+    // baseline_interpreter::proxy_aware_get_property → recursive call on the
+    // target. The recursion is bounded by MAX_PROTOTYPE_CHAIN_DEPTH but the
+    // exact source of the prior hang has not been root-caused yet. Stays
+    // ignored until a focused rch run reproduces it and the fix lands.
+    run_conformance_case("proxy-get-no-trap-fallback");
 }
 
 #[test]

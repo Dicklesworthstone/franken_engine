@@ -71,11 +71,7 @@ fn epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(4_209)
 }
 
-fn live_object(
-    object_type: ReconcileObjectType,
-    epoch: SecurityEpoch,
-    label: &str,
-) -> LiveObject {
+fn live_object(object_type: ReconcileObjectType, epoch: SecurityEpoch, label: &str) -> LiveObject {
     let payload = format!("{object_type}:{label}");
     LiveObject {
         object_id: ObjectId {
@@ -315,7 +311,8 @@ fn run_live_anti_entropy_gate(reverse_input_order: bool) -> GateExecution {
 }
 
 fn write_live_anti_entropy_gate_bundle(run_dir: &Path) -> Result<IntegrationReport, String> {
-    fs::create_dir_all(run_dir).map_err(|error| format!("create {}: {error}", run_dir.display()))?;
+    fs::create_dir_all(run_dir)
+        .map_err(|error| format!("create {}: {error}", run_dir.display()))?;
     let execution = run_live_anti_entropy_gate(false);
 
     let report_path = run_dir.join("live_anti_entropy_report.json");
@@ -401,10 +398,16 @@ fn live_anti_entropy_gate_emits_verified_forced_reconciliation_artifact() {
         "iblt_then_deterministic_fallback_then_verified_recovery_artifact"
     );
     assert!(execution.report.fallback_triggered);
-    assert_eq!(execution.report.compact_reconciliation_event, "reconcile_fallback");
+    assert_eq!(
+        execution.report.compact_reconciliation_event,
+        "reconcile_fallback"
+    );
     assert_eq!(execution.report.local_only.len(), 2);
     assert_eq!(execution.report.remote_only.len(), 2);
-    assert_eq!(execution.report.recovery_artifact_type, "forced_reconciliation");
+    assert_eq!(
+        execution.report.recovery_artifact_type,
+        "forced_reconciliation"
+    );
     assert_eq!(execution.report.recovery_verdict, "valid");
     assert_eq!(execution.report.proof_element_count, 4);
     assert_eq!(execution.fallback_evidence.differences_found, 4);
@@ -452,19 +455,30 @@ fn live_anti_entropy_gate_writes_machine_verifiable_bundle() {
     assert_eq!(report_json["fallback_triggered"], true);
     assert_eq!(report_json["recovery_verdict"], "valid");
 
-    let recovery_json: Value = serde_json::from_slice(
-        &fs::read(recovery_path).expect("read recovery artifact"),
-    )
-    .expect("recovery json");
+    let recovery_json: Value =
+        serde_json::from_slice(&fs::read(recovery_path).expect("read recovery artifact"))
+            .expect("recovery json");
     assert_eq!(recovery_json["artifact_type"], "ForcedReconciliation");
     assert_eq!(recovery_json["proof_bundle"].as_array().unwrap().len(), 4);
 
     let events = fs::read_to_string(events_path).expect("read events");
     let event_lines = events.lines().collect::<Vec<_>>();
     assert_eq!(event_lines.len(), report.event_count);
-    assert!(event_lines.iter().any(|line| line.contains("reconcile_fallback")));
-    assert!(event_lines.iter().any(|line| line.contains("fallback_executed")));
-    assert!(event_lines.iter().any(|line| line.contains("artifact_verified")));
+    assert!(
+        event_lines
+            .iter()
+            .any(|line| line.contains("reconcile_fallback"))
+    );
+    assert!(
+        event_lines
+            .iter()
+            .any(|line| line.contains("fallback_executed"))
+    );
+    assert!(
+        event_lines
+            .iter()
+            .any(|line| line.contains("artifact_verified"))
+    );
     for line in event_lines {
         let event: Value = serde_json::from_str(line).expect("event json");
         assert_eq!(event["schema_version"], EVENT_SCHEMA_VERSION);

@@ -1,0 +1,36 @@
+{
+  "schema_id": "franken-engine.anti-entropy-repair-artifact.example.v1",
+  "reconciliation_id": "trace-anti-entropy-001:peer-bravo",
+  "trace_id": "trace-anti-entropy-001",
+  "machine_verifiable": true,
+  "mutation_policy": "fixture_only_no_live_state_mutation",
+  "inputs": {
+    "local_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remote_snapshot_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sorted_hash_lists": true,
+    "epoch_id": 42
+  },
+  "repair_actions": [
+    {
+      "action": "send_local_only",
+      "object_type": "revocation_event",
+      "object_hash": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "action": "fetch_remote_only",
+      "object_type": "evidence_entry",
+      "object_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "action": "send_local_only",
+      "object_type": "checkpoint_marker",
+      "object_hash": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "determinism_checks": {
+    "object_hashes_sorted": true,
+    "fallback_seq": 1,
+    "duration_ms": 0
+  },
+  "signature_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}

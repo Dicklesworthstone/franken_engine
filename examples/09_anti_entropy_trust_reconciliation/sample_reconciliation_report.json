@@ -1,0 +1,42 @@
+{
+  "schema_id": "franken-engine.anti-entropy-trust-reconciliation.example.v1",
+  "capability_number": 9,
+  "reconciliation_id": "trace-anti-entropy-001:peer-bravo",
+  "trace_id": "trace-anti-entropy-001",
+  "peer": "peer-bravo",
+  "epoch_id": 42,
+  "object_scope": [
+    "checkpoint_marker",
+    "evidence_entry",
+    "revocation_event"
+  ],
+  "strategy": "iblt_then_deterministic_fallback",
+  "iblt_attempt": {
+    "cells": 4,
+    "hashes": 3,
+    "result": "peel_failed",
+    "remaining_cells": 3
+  },
+  "local_only": [
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "3333333333333333333333333333333333333333333333333333333333333333"
+  ],
+  "remote_only": [
+    "2222222222222222222222222222222222222222222222222222222222222222"
+  ],
+  "fallback_triggered": true,
+  "repair_artifact": "repair_artifact.json",
+  "events": [
+    {
+      "event": "reconcile_fallback",
+      "objects_conflicting": 3,
+      "fallback_triggered": true
+    },
+    {
+      "event": "fallback_executed",
+      "objects_transferred": 3,
+      "fallback_triggered": true
+    }
+  ],
+  "content_hash_hex": "9999999999999999999999999999999999999999999999999999999999999999"
+}

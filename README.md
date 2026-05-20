@@ -1522,7 +1522,7 @@ The thirteen "impossible-by-default" capabilities from [`docs/plans/PLAN_TO_CREA
 | 6 | Capability-typed rejection boundary | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
 | 7 | Deterministic resource-exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
 | 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
-| 9 | Distributed anti-entropy trust reconciliation | — | No dedicated example directory ships today. |
+| 9 | Distributed anti-entropy trust reconciliation | `09_anti_entropy_trust_reconciliation` | `./examples/09_anti_entropy_trust_reconciliation/verify.sh` |
 | 10 | Red/blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` |
 | 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` |
 | 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` |

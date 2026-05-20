@@ -36,6 +36,12 @@ const OVERRIDE_NONCE_LEN: usize = 32;
 
 pub type OverrideNonce = [u8; OVERRIDE_NONCE_LEN];
 
+fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u32::try_from(bytes.len()).expect("canonical field length exceeds u32");
+    buf.extend_from_slice(&len.to_be_bytes());
+    buf.extend_from_slice(bytes);
+}
+
 fn override_schema_id() -> SchemaId {
     SchemaId::from_definition(OVERRIDE_SCHEMA_DEF)
 }
@@ -342,20 +348,14 @@ impl DegradedModeOverride {
         nonce: &OverrideNonce,
     ) -> Vec<u8> {
         let mut buf = Vec::new();
-        Self::push_len_prefixed(&mut buf, operation_type.to_string().as_bytes());
-        Self::push_len_prefixed(&mut buf, operator_id.as_bytes());
-        Self::push_len_prefixed(&mut buf, justification.as_bytes());
+        push_len_prefixed(&mut buf, operation_type.to_string().as_bytes());
+        push_len_prefixed(&mut buf, operator_id.as_bytes());
+        push_len_prefixed(&mut buf, justification.as_bytes());
         buf.extend_from_slice(&expiry.0.to_be_bytes());
-        Self::push_len_prefixed(&mut buf, zone.as_bytes());
+        push_len_prefixed(&mut buf, zone.as_bytes());
         buf.extend_from_slice(target_policy_id.as_bytes());
         buf.extend_from_slice(nonce);
         buf
-    }
-
-    fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
-        let len = u32::try_from(bytes.len()).expect("canonical field length exceeds u32");
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(bytes);
     }
 }
 
@@ -517,16 +517,50 @@ pub struct RevocationFreshnessController {
 impl RevocationFreshnessController {
     /// Create a new controller.
     pub fn new(config: FreshnessConfig, zone: &str) -> Self {
-        let mut nonce = [0u8; OVERRIDE_NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
-        let policy_id = engine_object_id::derive_id(
+        let policy_id = Self::derive_policy_id(&config, zone);
+        Self::new_with_policy_id(config, zone, policy_id)
+    }
+
+    fn derive_policy_id(config: &FreshnessConfig, zone: &str) -> EngineObjectId {
+        let canonical = Self::policy_id_canonical_bytes(config, zone);
+        engine_object_id::derive_id(
             ObjectDomain::PolicyObject,
             zone,
             &controller_schema_id(),
-            &nonce,
+            &canonical,
         )
-        .expect("controller policy id derivation should succeed");
-        Self::new_with_policy_id(config, zone, policy_id)
+        .expect("controller policy id derivation should succeed")
+    }
+
+    fn policy_id_canonical_bytes(config: &FreshnessConfig, zone: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        push_len_prefixed(&mut buf, zone.as_bytes());
+        buf.extend_from_slice(&config.staleness_threshold.to_be_bytes());
+        buf.extend_from_slice(&config.holdoff_ticks.to_be_bytes());
+
+        let eligible_len = u32::try_from(config.override_eligible.len())
+            .expect("override eligibility count exceeds u32");
+        buf.extend_from_slice(&eligible_len.to_be_bytes());
+        for operation in &config.override_eligible {
+            push_len_prefixed(&mut buf, operation.to_string().as_bytes());
+        }
+
+        let operator_len =
+            u32::try_from(config.authorized_operators.len()).expect("operator count exceeds u32");
+        buf.extend_from_slice(&operator_len.to_be_bytes());
+        for operator_id in &config.authorized_operators {
+            push_len_prefixed(&mut buf, operator_id.as_bytes());
+        }
+
+        let key_len = u32::try_from(config.authorized_operator_keys.len())
+            .expect("operator key count exceeds u32");
+        buf.extend_from_slice(&key_len.to_be_bytes());
+        for (operator_id, verification_key) in &config.authorized_operator_keys {
+            push_len_prefixed(&mut buf, operator_id.as_bytes());
+            buf.extend_from_slice(verification_key.as_bytes());
+        }
+
+        buf
     }
 
     /// Create a controller with a caller-supplied policy id for deterministic
@@ -932,6 +966,29 @@ mod tests {
             TEST_ZONE,
             test_policy_id(),
         )
+    }
+
+    #[test]
+    fn controller_new_derives_stable_policy_id_for_same_config_and_zone() {
+        let config = make_config();
+        let first = RevocationFreshnessController::new(config.clone(), TEST_ZONE);
+        let second = RevocationFreshnessController::new(config, TEST_ZONE);
+
+        assert_eq!(first.policy_id(), second.policy_id());
+    }
+
+    #[test]
+    fn controller_new_policy_id_binds_zone_and_config() {
+        let config = make_config();
+        let same_zone = RevocationFreshnessController::new(config.clone(), TEST_ZONE);
+        let other_zone = RevocationFreshnessController::new(config.clone(), "other-zone");
+
+        let mut changed_config = config;
+        changed_config.staleness_threshold += 1;
+        let changed_policy = RevocationFreshnessController::new(changed_config, TEST_ZONE);
+
+        assert_ne!(same_zone.policy_id(), other_zone.policy_id());
+        assert_ne!(same_zone.policy_id(), changed_policy.policy_id());
     }
 
     fn make_override(operation: OperationType, expiry_tick: u64) -> DegradedModeOverride {

@@ -1,0 +1,23 @@
+[
+  {
+    "surface_a": "Parser",
+    "surface_b": "TypeScript",
+    "restriction": "ReconciliationRequired",
+    "scope_prefix": "ts.",
+    "rationale": "TypeScript syntax accepted by the parser must reconcile with TypeScript normalization."
+  },
+  {
+    "surface_a": "Parser",
+    "surface_b": "React",
+    "restriction": "ReconciliationRequired",
+    "scope_prefix": "jsx.",
+    "rationale": "JSX syntax accepted by the parser must reconcile with React semantics."
+  },
+  {
+    "surface_a": "Module",
+    "surface_b": "TypeScript",
+    "restriction": "ReconciliationRequired",
+    "scope_prefix": "ts.module.",
+    "rationale": "TypeScript module resolution must reconcile with runtime module semantics."
+  }
+]

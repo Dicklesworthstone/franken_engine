@@ -1,0 +1,9 @@
+[
+  {
+    "surface_a": "Runtime",
+    "surface_b": "Cli",
+    "restriction": "Exclusive",
+    "scope_prefix": null,
+    "rationale": "CLI command handling and runtime execution must not both own the same feature."
+  }
+]

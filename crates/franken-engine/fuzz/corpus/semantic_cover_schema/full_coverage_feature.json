@@ -1,0 +1,16 @@
+{
+  "key": "es2015.arrowFunction",
+  "description": "Arrow function expressions fully covered across parser, lowering, and runtime.",
+  "spec_area": "es2015",
+  "relevant_surfaces": ["Parser", "Lowering", "Runtime"],
+  "support_map": {
+    "Parser": "Supported",
+    "Lowering": "Supported",
+    "Runtime": "Supported"
+  },
+  "evidence_keys": [
+    "parser.arrow_function",
+    "lowering.arrow_function",
+    "runtime.arrow_function"
+  ]
+}

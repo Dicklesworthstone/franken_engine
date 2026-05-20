@@ -1,0 +1,31 @@
+[
+  {
+    "key": "es2021.weakRef",
+    "description": "WeakRef syntax and lowering are present while runtime semantics remain unsupported.",
+    "spec_area": "es2021",
+    "relevant_surfaces": ["Parser", "Lowering", "Runtime"],
+    "support_map": {
+      "Parser": "Supported",
+      "Lowering": "Supported",
+      "Runtime": "Unsupported"
+    },
+    "evidence_keys": [
+      "parser.weak_ref",
+      "lowering.weak_ref"
+    ]
+  },
+  {
+    "key": "stage3.decorators",
+    "description": "Decorators have parser evidence and unknown lowering/runtime status.",
+    "spec_area": "stage3",
+    "relevant_surfaces": ["Parser", "Lowering", "Runtime"],
+    "support_map": {
+      "Parser": "Supported",
+      "Lowering": "Unknown",
+      "Runtime": "Unknown"
+    },
+    "evidence_keys": [
+      "parser.decorators"
+    ]
+  }
+]

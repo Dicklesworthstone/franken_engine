@@ -111,4 +111,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "semantic_cover_schema"
+path = "fuzz_targets/semantic_cover_schema.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

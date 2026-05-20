@@ -777,16 +777,12 @@ fn run_conformance_case(case_id: &'static str) {
     case.expected.assert_matches(&result.value, &case);
 }
 
-// bd-f4ycb: the original aggregate `prototype_property_descriptor_conformance_matrix`
-// looped through `conformance_cases()` in a single `#[test]`. One case
-// (suspected `proxy-get-no-trap-fallback`) hung the matrix indefinitely
-// under rch test runs, masking the other 11 cases' coverage. Splitting the
-// matrix into per-case tests means a hang or panic is contained to one
-// row; cargo's per-test thread isolates each case, and the offender is
-// trivially identifiable via `cargo test --list` / `--test-threads=1`.
-// Each helper preserves the spec-ref + requirement assertions. The
-// remaining-suspect `proxy-get-no-trap-fallback` case stays `#[ignore]`
-// with a pointer to bd-f4ycb until the hang is root-caused.
+#[test]
+fn prototype_property_descriptor_conformance_matrix() {
+    for case in conformance_cases() {
+        run_conformance_case(case.id);
+    }
+}
 
 #[test]
 fn prototype_conformance_get_own_data() {
@@ -844,13 +840,7 @@ fn prototype_conformance_descriptor_frozen_non_configurable() {
 }
 
 #[test]
-#[ignore = "bd-f4ycb: suspected to hang the matrix; isolate-then-fix before re-enabling"]
 fn prototype_conformance_proxy_get_no_trap_fallback() {
-    // The Proxy [[Get]] target-fallback path goes through
-    // baseline_interpreter::proxy_aware_get_property → recursive call on the
-    // target. The recursion is bounded by MAX_PROTOTYPE_CHAIN_DEPTH but the
-    // exact source of the prior hang has not been root-caused yet. Stays
-    // ignored until a focused rch run reproduces it and the fix lands.
     run_conformance_case("proxy-get-no-trap-fallback");
 }
 

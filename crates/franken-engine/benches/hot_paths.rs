@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter};
+use frankenengine_engine::baseline_interpreter::{LaneChoice, LaneRouter, Value};
 use frankenengine_engine::benchmark_evidence_bundle::{
     BenchmarkRun, EnvironmentSnapshot, EvidenceBundle, WorkloadCategory, WorkloadProvenance,
     export_bundle_json,
@@ -112,6 +112,37 @@ fn real_runtime_baseline_interpreter_digest() -> ContentHash {
         routed.result.instructions_executed
     );
     ContentHash::compute(digest_input.as_bytes())
+}
+
+fn baseline_value_string_clone_digest() -> ContentHash {
+    let payload = "frankenengine-string-hot-path:".repeat(128);
+    let values = (0..256)
+        .map(|idx| Value::Str(format!("{payload}{idx}").into()))
+        .collect::<Vec<_>>();
+
+    let mut clones = Vec::with_capacity(values.len() * 32);
+    for value in &values {
+        for _ in 0..32 {
+            clones.push(value.clone());
+        }
+    }
+
+    let total_bytes = clones
+        .iter()
+        .map(|value| match value {
+            Value::Str(text) => text.len(),
+            _ => 0,
+        })
+        .sum::<usize>();
+    ContentHash::compute(
+        format!(
+            "values={};clones={};bytes={}",
+            values.len(),
+            clones.len(),
+            total_bytes
+        )
+        .as_bytes(),
+    )
 }
 
 fn deterministic_object_id(seed: u8) -> EngineObjectId {
@@ -324,6 +355,10 @@ fn bench_real_runtime_hot_paths(c: &mut Criterion) {
 
     group.bench_function("baseline_interpreter_eval", |b| {
         b.iter(|| black_box(real_runtime_baseline_interpreter_digest()));
+    });
+
+    group.bench_function("baseline_value_string_clone", |b| {
+        b.iter(|| black_box(baseline_value_string_clone_digest()));
     });
 
     group.bench_function("iterator_protocol_trace", |b| {

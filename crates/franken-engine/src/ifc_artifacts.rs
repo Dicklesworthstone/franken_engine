@@ -652,6 +652,24 @@ pub struct DeclassificationRoute {
     pub conditions: Vec<String>,
 }
 
+/// Enforcement strategy for [`FlowPolicy`] checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum FlowPolicyEnforcement {
+    /// Preserve legacy lattice-open behavior: explicit denials win, explicit
+    /// allows win, configured declassification routes produce obligations, and
+    /// otherwise lattice-legal flows are admitted.
+    LatticeOpen,
+    /// Fail closed unless a flow is explicitly allowed or routed through a
+    /// declassification obligation.
+    AllowlistOnly,
+}
+
+impl Default for FlowPolicyEnforcement {
+    fn default() -> Self {
+        Self::AllowlistOnly
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FlowPolicy — defines allowed information flows
 // ---------------------------------------------------------------------------
@@ -667,12 +685,15 @@ pub struct FlowPolicy {
     pub label_classes: BTreeSet<Label>,
     /// Sink authorization clearance classes.
     pub clearance_classes: BTreeSet<Label>,
-    /// Allowed flows (lattice-legal by default if source <= sink).
+    /// Allowed flows. In `AllowlistOnly` mode, this is the direct allowlist.
     pub allowed_flows: Vec<FlowRule>,
     /// Explicitly prohibited flows (override lattice legality).
     pub prohibited_flows: Vec<FlowRule>,
     /// Approved cross-label declassification routes.
     pub declassification_routes: Vec<DeclassificationRoute>,
+    /// Flow enforcement behavior. Missing legacy fields default fail-closed.
+    #[serde(default)]
+    pub enforcement_mode: FlowPolicyEnforcement,
     /// Security epoch this policy is valid for.
     pub epoch_id: u64,
     /// Schema version.
@@ -690,6 +711,22 @@ impl FlowPolicy {
 
     /// Check whether a flow from source to sink is allowed under this policy.
     pub fn is_flow_allowed(&self, source: &Label, sink: &Label) -> FlowCheckResult {
+        self.is_flow_allowed_with_enforcement(source, sink, self.enforcement_mode)
+    }
+
+    /// Check whether a flow is allowed using allowlist-only enforcement.
+    pub fn is_flow_allowed_strict(&self, source: &Label, sink: &Label) -> FlowCheckResult {
+        self.is_flow_allowed_with_enforcement(source, sink, FlowPolicyEnforcement::AllowlistOnly)
+    }
+
+    /// Check whether a flow from source to sink is allowed under the selected
+    /// enforcement strategy.
+    pub fn is_flow_allowed_with_enforcement(
+        &self,
+        source: &Label,
+        sink: &Label,
+        enforcement: FlowPolicyEnforcement,
+    ) -> FlowCheckResult {
         // Check explicit prohibitions first
         for rule in &self.prohibited_flows {
             if rule.source_label == *source && rule.sink_clearance == *sink {
@@ -704,18 +741,19 @@ impl FlowPolicy {
             }
         }
 
-        // Check lattice legality
-        if source.can_flow_to(sink) {
-            return FlowCheckResult::LatticeAllowed;
-        }
-
-        // Check declassification routes
+        // Check declassification routes before lattice legality so explicit
+        // obligation policy cannot be bypassed by a lattice-legal pair.
         for route in &self.declassification_routes {
             if route.source_label == *source && route.target_clearance == *sink {
                 return FlowCheckResult::DeclassificationRequired {
                     route_id: route.route_id.clone(),
                 };
             }
+        }
+
+        // Check lattice legality when the policy is not in allowlist-only mode.
+        if enforcement == FlowPolicyEnforcement::LatticeOpen && source.can_flow_to(sink) {
+            return FlowCheckResult::LatticeAllowed;
         }
 
         FlowCheckResult::Denied
@@ -1614,6 +1652,7 @@ mod tests {
                 target_clearance: Label::Internal,
                 conditions: vec!["audit_approval".to_string()],
             }],
+            enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
             epoch_id: 1,
             schema_version: IfcSchemaVersion::CURRENT,
             signature: sentinel_sig(),
@@ -1856,6 +1895,62 @@ mod tests {
         assert_eq!(
             policy.is_flow_allowed(&Label::Public, &Label::Internal),
             FlowCheckResult::LatticeAllowed
+        );
+    }
+
+    #[test]
+    fn flow_check_strict_mode_denies_lattice_only_flow() {
+        let mut policy = make_flow_policy();
+        policy.enforcement_mode = FlowPolicyEnforcement::AllowlistOnly;
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Public, &Label::Internal),
+            FlowCheckResult::Denied,
+            "allowlist-only policies must not bypass the allowlist via lattice legality"
+        );
+        assert_eq!(
+            policy.is_flow_allowed_strict(&Label::Public, &Label::Internal),
+            FlowCheckResult::Denied
+        );
+    }
+
+    #[test]
+    fn flow_policy_missing_enforcement_mode_defaults_fail_closed() {
+        let mut json =
+            serde_json::to_value(make_flow_policy()).expect("serde serialization should succeed");
+        json.as_object_mut()
+            .expect("policy JSON should be an object")
+            .remove("enforcement_mode");
+
+        let policy: FlowPolicy =
+            serde_json::from_value(json).expect("legacy policy should deserialize");
+
+        assert_eq!(
+            policy.enforcement_mode,
+            FlowPolicyEnforcement::AllowlistOnly
+        );
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Public, &Label::Internal),
+            FlowCheckResult::Denied,
+            "legacy policies without an enforcement mode must fail closed"
+        );
+    }
+
+    #[test]
+    fn flow_check_declassification_route_preempts_lattice_short_circuit() {
+        let mut policy = make_flow_policy();
+        policy.declassification_routes.push(DeclassificationRoute {
+            route_id: "public-internal-review".to_string(),
+            source_label: Label::Public,
+            target_clearance: Label::Internal,
+            conditions: vec!["operator_review".to_string()],
+        });
+
+        assert_eq!(
+            policy.is_flow_allowed(&Label::Public, &Label::Internal),
+            FlowCheckResult::DeclassificationRequired {
+                route_id: "public-internal-review".to_string()
+            },
+            "explicit declassification routes must not be hidden by lattice-legal flows"
         );
     }
 

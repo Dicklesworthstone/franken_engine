@@ -58,6 +58,7 @@ fn make_policy() -> FlowPolicy {
             target_clearance: Label::Internal,
             conditions: vec!["audit_approval".into()],
         }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),

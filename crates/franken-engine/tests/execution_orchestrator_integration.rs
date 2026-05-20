@@ -37,7 +37,7 @@ use frankenengine_engine::execution_orchestrator::{
 };
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+    DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
@@ -140,6 +140,7 @@ fn declassification_policy(extension_id: &str) -> FlowPolicy {
             target_clearance: Label::Public,
             conditions: vec!["audit_approval".to_string()],
         }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),

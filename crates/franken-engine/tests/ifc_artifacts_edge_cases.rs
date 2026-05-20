@@ -19,8 +19,8 @@ use std::collections::BTreeSet;
 use frankenengine_engine::ifc_artifacts::{
     ClaimStrength, ClearanceClass, ConfinementClaim, DeclassificationDecision,
     DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute,
-    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
-    IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
+    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowPolicyEnforcement,
+    FlowProof, FlowRule, IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -58,6 +58,7 @@ fn make_flow_policy() -> FlowPolicy {
             target_clearance: Label::Internal,
             conditions: vec!["audit_approval".into()],
         }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
@@ -465,6 +466,7 @@ fn flow_policy_empty_rules_defaults_to_lattice() {
         allowed_flows: vec![],
         prohibited_flows: vec![],
         declassification_routes: vec![],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
@@ -504,6 +506,7 @@ fn flow_policy_multiple_declassification_routes() {
                 conditions: vec!["ciso".into()],
             },
         ],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
@@ -994,6 +997,7 @@ fn policy_evaluation_priority_order() {
             sink_clearance: Label::Internal,
         }],
         declassification_routes: vec![],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
@@ -1201,6 +1205,7 @@ fn policy_with_many_rules_evaluates_correctly() {
         allowed_flows: allowed,
         prohibited_flows: prohibited,
         declassification_routes: vec![],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),

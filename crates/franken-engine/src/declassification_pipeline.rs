@@ -650,7 +650,7 @@ pub struct PipelineStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ifc_artifacts::DeclassificationRoute;
+    use crate::ifc_artifacts::{DeclassificationRoute, FlowPolicyEnforcement};
 
     fn test_key() -> SigningKey {
         SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
@@ -692,6 +692,7 @@ mod tests {
                     conditions: vec!["redaction_applied".to_string()],
                 },
             ],
+            enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
             epoch_id: 1,
             schema_version: IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),

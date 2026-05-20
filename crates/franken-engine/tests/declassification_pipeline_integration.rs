@@ -24,7 +24,8 @@ use frankenengine_engine::declassification_pipeline::{
     PipelineConfig, PipelineError, PipelineEvent, PipelineStats, PolicyEvalResult,
 };
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationDecision, DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+    DeclassificationDecision, DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement,
+    IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -76,6 +77,7 @@ fn make_policy() -> FlowPolicy {
                 conditions: vec!["redaction_applied".to_string()],
             },
         ],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),
@@ -1650,6 +1652,7 @@ fn empty_policy_no_routes() {
         allowed_flows: vec![],
         prohibited_flows: vec![],
         declassification_routes: vec![],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 0,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),

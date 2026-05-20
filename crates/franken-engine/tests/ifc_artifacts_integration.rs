@@ -26,8 +26,8 @@ use std::collections::BTreeSet;
 use frankenengine_engine::ifc_artifacts::{
     ClaimStrength, ClearanceClass, ConfinementClaim, DeclassificationDecision,
     DeclassificationObligation, DeclassificationReceipt, DeclassificationRoute,
-    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
-    IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
+    FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowPolicyEnforcement,
+    FlowProof, FlowRule, IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey,
@@ -69,6 +69,7 @@ fn make_flow_policy() -> FlowPolicy {
             target_clearance: Label::Internal,
             conditions: vec!["audit_approval".to_string()],
         }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),

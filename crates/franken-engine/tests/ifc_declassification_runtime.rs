@@ -21,7 +21,7 @@ use frankenengine_engine::flow_lattice::{
     LabelClass,
 };
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+    DeclassificationRoute, FlowPolicy, FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
@@ -55,6 +55,7 @@ fn make_policy() -> FlowPolicy {
             target_clearance: Label::Public,
             conditions: vec!["audit_approval".to_string()],
         }],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 7,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: Signature::from_bytes(SIGNATURE_SENTINEL),

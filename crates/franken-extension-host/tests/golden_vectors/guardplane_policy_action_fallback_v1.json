@@ -1,0 +1,59 @@
+{
+  "fixture_schema_version": "franken-engine.extension-host.guardplane-policy-action-fallback.v1",
+  "action_cases": [
+    {
+      "case_id": "allow_fallback",
+      "action": "allow",
+      "action_display": "allow",
+      "fail_closed_fallback": "sandbox",
+      "fallback_display": "sandbox",
+      "is_containment_action": false,
+      "fallback_is_containment_action": true
+    },
+    {
+      "case_id": "challenge_fallback",
+      "action": "challenge",
+      "action_display": "challenge",
+      "fail_closed_fallback": "sandbox",
+      "fallback_display": "sandbox",
+      "is_containment_action": false,
+      "fallback_is_containment_action": true
+    },
+    {
+      "case_id": "sandbox_fallback",
+      "action": "sandbox",
+      "action_display": "sandbox",
+      "fail_closed_fallback": "suspend",
+      "fallback_display": "suspend",
+      "is_containment_action": true,
+      "fallback_is_containment_action": true
+    },
+    {
+      "case_id": "suspend_fallback",
+      "action": "suspend",
+      "action_display": "suspend",
+      "fail_closed_fallback": "terminate",
+      "fallback_display": "terminate",
+      "is_containment_action": true,
+      "fallback_is_containment_action": true
+    },
+    {
+      "case_id": "terminate_fallback",
+      "action": "terminate",
+      "action_display": "terminate",
+      "fail_closed_fallback": "quarantine",
+      "fallback_display": "quarantine",
+      "is_containment_action": true,
+      "fallback_is_containment_action": true
+    },
+    {
+      "case_id": "quarantine_fallback",
+      "action": "quarantine",
+      "action_display": "quarantine",
+      "fail_closed_fallback": "quarantine",
+      "fallback_display": "quarantine",
+      "is_containment_action": true,
+      "fallback_is_containment_action": true
+    }
+  ]
+}

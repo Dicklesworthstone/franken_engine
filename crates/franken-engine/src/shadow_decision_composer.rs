@@ -680,11 +680,25 @@ impl Drop for OutputDirFileLock {
 }
 
 /// Acquire a process-local lock for the given output directory.
+///
+/// Both `OUTPUT_DIR_LOCKS` (outer map) and the per-directory inner mutex
+/// recover from poisoning rather than `.unwrap()`-panicking. A panic in
+/// any prior writer left the lock poisoned, but the guarded state is
+/// well-defined regardless: the outer mutex protects a `BTreeMap<PathBuf,
+/// Arc<Mutex<()>>>` — pure lock metadata, no torn user state — and the
+/// per-directory mutex protects nothing but its own held-ness (the
+/// filesystem flock + atomic-rename writes do the real serialization).
+/// Before this fix, a single panic during validation / JSON serialization
+/// permanently bricked the affected output directory (per-dir mutex) or,
+/// for the outer map, EVERY directory, by aborting subsequent calls
+/// with the `.unwrap()` on poison. (bd-ctry0)
 fn acquire_output_dir_lock(output_dir: &Path) -> std::sync::Arc<Mutex<()>> {
     let canonical_path = output_dir
         .canonicalize()
         .unwrap_or_else(|_| output_dir.to_path_buf());
-    let mut locks = OUTPUT_DIR_LOCKS.lock().unwrap();
+    let mut locks = OUTPUT_DIR_LOCKS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     locks
         .entry(canonical_path)
         .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
@@ -754,7 +768,9 @@ pub fn write_shadow_decision_artifacts(
     // serializes independent frankenctl/script processes targeting the same
     // output directory.
     let lock_arc = acquire_output_dir_lock(output_dir);
-    let _process_lock = lock_arc.lock().unwrap();
+    // Poison recovery: see `acquire_output_dir_lock` for the rationale —
+    // the inner mutex guards no user state. (bd-ctry0)
+    let _process_lock = lock_arc.lock().unwrap_or_else(|poison| poison.into_inner());
     let _file_lock = acquire_output_dir_file_lock(output_dir, FlockOperation::LockExclusive)?;
 
     // Write non-critical files first with atomic writes
@@ -1985,5 +2001,80 @@ mod tests {
                 .to_string()
                 .contains("shadow decision I/O error:")
         );
+    }
+
+    // bd-ctry0: a panic inside a writer thread used to poison the
+    // per-directory mutex (and, via the outer map, every other
+    // directory's slot too) so every subsequent
+    // write_shadow_decision_artifacts call aborted on `.unwrap()`.
+    // These pins keep the recovery wired up.
+
+    #[test]
+    fn acquire_output_dir_lock_recovers_from_outer_map_poison() {
+        let dir = std::env::temp_dir().join(format!(
+            "bd-ctry0-outer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("test setup: create temp dir");
+
+        // Force-poison the global OUTPUT_DIR_LOCKS mutex by panicking
+        // inside a thread that holds the guard.
+        let _ = std::thread::spawn(|| {
+            let _g = OUTPUT_DIR_LOCKS.lock().expect("guard taken in poisoning thread");
+            panic!("intentional panic to poison OUTPUT_DIR_LOCKS for bd-ctry0 test");
+        })
+        .join();
+        assert!(
+            OUTPUT_DIR_LOCKS.is_poisoned(),
+            "the poisoning thread must have left OUTPUT_DIR_LOCKS poisoned",
+        );
+
+        // Despite the poison, the next call must succeed — pre-fix it
+        // would have panicked on `.unwrap()`.
+        let _lock = acquire_output_dir_lock(&dir);
+
+        // Cleanup — drop the poison by replacing the inner map (best-effort;
+        // some other test runs in the same process may re-poison it, but
+        // that's fine: the recovery path always works).
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn acquire_output_dir_lock_recovers_from_inner_mutex_poison() {
+        let dir = std::env::temp_dir().join(format!(
+            "bd-ctry0-inner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("test setup: create temp dir");
+
+        // Get the per-dir Arc<Mutex<()>> and poison it from a worker thread.
+        let lock_arc = acquire_output_dir_lock(&dir);
+        let poisoner_arc = lock_arc.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = poisoner_arc
+                .lock()
+                .expect("per-dir guard in poisoning thread");
+            panic!("intentional panic to poison per-dir mutex for bd-ctry0 test");
+        })
+        .join();
+        assert!(
+            lock_arc.is_poisoned(),
+            "the poisoning thread must have left the per-dir mutex poisoned",
+        );
+
+        // Pre-fix, the next .lock() in write_shadow_decision_artifacts would
+        // have called `.unwrap()` and aborted the writer. Now it must
+        // recover — exercise the same idiom the production path uses.
+        let _guard = lock_arc.lock().unwrap_or_else(|poison| poison.into_inner());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

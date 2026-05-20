@@ -58,3 +58,29 @@ Findings:
 Verification:
 - `cargo check --tests -p frankenengine-engine --target-dir target_rch_review` clean (1m 06s, `Finished dev profile`). One remaining warning (line 573 unused_mut) is pre-existing.
 - Code changes committed as `19e606ef`.
+
+---
+
+## 2026-05-20 Review Round 2 - P3 Cross-Review (PearlTower)
+
+Focused on other agents' security-cluster commits: 61d4fbed (evidence ledger signing), 95f12ab2 (revocation epoch binding), 29f6b85e (capability witness keygen), cb84b29d (FlowPolicy enforcement), and the recent perf/migration cluster (9e55a0fe Ir3 profiling, a86d8a01 scope name borrow, 45fd085d SourceSpan Copy, 1c8e9b4c lowering pop fix).
+
+Findings:
+
+- [HIGH] `crates/franken-engine/src/evidence_ledger.rs:58-66` + `crates/franken-engine/src/capability_witness.rs:3397,3920` — **Evidence-ledger default signing key was a public constant**. The 61d4fbed commit added `EvidenceSignatureEnvelope` and a `validate_entry` path that requires every emitted entry to be signed by an authorized producer, but `EvidenceEntryBuilder::new()` defaults to `producer_id = DEFAULT_EVIDENCE_PRODUCER_ID = "franken-engine.evidence-ledger.builder"` + `signing_key = DEFAULT_EVIDENCE_SIGNING_KEY_BYTES = [0x7B; 32]`, and `InMemoryLedger::new()` pre-authorizes that exact pair (lines 526-538). `WitnessPublicationPipeline::emit_evidence_entry` (line 3917+) never overrides `.signed_by(...)`, so production-side witness emission was relying entirely on the well-known constant key. Any caller anywhere in the workspace could mint entries that pass the default ledger's validation — i.e. the bd-i7ke2 "require signed ledger entries" guarantee was structurally present but provided zero origin authentication for the pipeline path. **Fixed** in commit `1975db42`: `WitnessPublicationPipeline::new` now derives a per-policy producer id (`franken-engine.witness-pipeline:<policy_id>`) and registers the pipeline's real `head_signing_key.verification_key()` for it; `emit_evidence_entry` attaches `.signed_by(producer_id, self.head_signing_key.clone())` so emissions are signed by the actual head key the pipeline already uses for tree-head signatures. Forging entries that pass validation now requires possessing the pipeline's head key.
+
+- [HIGH] `crates/franken-engine/tests/capability_witness.rs:171,198` — Concurrent (likely `cargo clippy --fix`) sweep removed `mut` from two `let witness = WitnessBuilder::new(...)` bindings, but lines 189/214 still pass `&mut witness` to `apply_passing_promotion_theorems`. Broke `cargo check --tests`. **Fixed** in commit `1975db42`: restored `let mut witness` at both sites with a comment naming the `&mut`-taking call line below so the next clippy sweep doesn't re-break it.
+
+- [MEDIUM] `crates/franken-engine/src/profiling.rs:139,182,291` — `instruction_name()` uses `format!("{:?}", instruction)` to extract a variant name, allocating a full Debug-rendered String of the instruction's contents (incl. possibly several fields), then truncating to before `" {"` or `"("`. Called twice per executed instruction when profiling is on (record_instruction + record_instruction_time). The execution_orchestrator already has a full `instruction_mnemonic` match returning `&'static str` (line 1739+) — the profiler could share that or use the same shape. **Not fixed** this round: the simple-looking change requires a ~80-arm match touching the same enum many concurrent perf/migration commits already edit; lower risk to file as follow-up than to land mid-stream. Filed in REVIEW_SUMMARY for owner pickup.
+
+- [LOW] `crates/franken-engine/src/iterator_protocol.rs:443` (carried from Round 1b) — `deleted_keys: BTreeMap<String, bool>` is structurally a `BTreeSet<String>` (only `(k, true)` insert + `contains_key` reads). Sibling `RuntimeForInState` in `baseline_interpreter.rs:754` already uses `BTreeSet<String>` correctly. Still not fixed — `pub` field + serde, breaking change.
+
+- [INFO] `crates/franken-engine/src/revocation_chain.rs::verify_head_epoch_freshness` (95f12ab2) — `head.epoch_id.as_u64() + MAX_REVOCATION_HEAD_EPOCH_STALENESS(=0) < current_epoch.as_u64()` rejects PAST-epoch heads but accepts FUTURE-epoch heads. Intentional given the threat model (a forged future-epoch head still needs a valid signature, and authorized_head_keys gates that); not a finding, but documented here so a future epoch-binding tightening doesn't have to re-derive the rationale.
+
+- [INFO] `crates/franken-engine/src/ifc_artifacts.rs::FlowPolicy::is_flow_allowed_with_enforcement` (cb84b29d) — `pub` API lets a consumer override the policy author's chosen `enforcement_mode` at the call site (e.g. pass `LatticeOpen` against an `AllowlistOnly` policy). Reviewed and confirmed this is by design — different surfaces within the engine have different enforcement needs. The default-fail-closed serde migration test pins the security-relevant case.
+
+- [INFO] `crates/franken-engine/src/baseline_interpreter.rs:4656` — per-dispatch `.clone()` of `Ir3Instruction` remains. Blocked from `Copy` derive because `Ir3Instruction::HostCall` owns a `CapabilityTag(String)`. Documented in bd-9tcjr; the secondary profiling clone is already removed.
+
+Verification:
+- `cargo check --tests -p frankenengine-engine --target-dir target_rch_review` clean (14.83s, `Finished dev profile`) — verifies both the security fix and the restored `let mut` lines.
+- Production code change committed as `1975db42` (security hardening) + `b488af74` (Round 1c notes).

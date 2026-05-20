@@ -1,0 +1,107 @@
+{
+  "fixture_schema_version": "franken-engine.extension-host.delegate-policy-wire-cases.v1",
+  "delegate_cell_policy_cases": [
+    {
+      "case_id": "delegate_policy_default",
+      "payload": {
+        "schema_version": "franken-engine.delegate-cell-policy.v1",
+        "initial_posterior_micros": 200000,
+        "capability_escalation_penalty_micros": 220000,
+        "flow_violation_penalty_micros": 150000,
+        "declassification_denial_penalty_micros": 110000,
+        "false_positive_cost_micros": 400000,
+        "false_negative_cost_micros": 850000
+      }
+    },
+    {
+      "case_id": "delegate_policy_high_risk_penalties",
+      "payload": {
+        "schema_version": "franken-engine.delegate-cell-policy.v1",
+        "initial_posterior_micros": 850000,
+        "capability_escalation_penalty_micros": 1000000,
+        "flow_violation_penalty_micros": 750000,
+        "declassification_denial_penalty_micros": 650000,
+        "false_positive_cost_micros": 50000,
+        "false_negative_cost_micros": 1000000
+      }
+    }
+  ],
+  "guardplane_decision_log_cases": [
+    {
+      "case_id": "guardplane_allow_running",
+      "payload": {
+        "schema_version": "franken-engine.guardplane-decision-log.v1",
+        "trace_id": "trace-allow",
+        "decision_id": "decision-allow",
+        "policy_id": "policy-wire-v1",
+        "component": "delegate_cell_policy",
+        "event": "delegate_guardplane_action",
+        "outcome": "allow",
+        "error_code": null,
+        "source_event": "delegate_flow",
+        "delegate_id": "delegate-allow",
+        "timestamp_ns": 10,
+        "posterior_micros": 200000,
+        "action": "allow",
+        "safe_mode_fallback": false,
+        "lifecycle_transition": null,
+        "resulting_state": "running"
+      }
+    },
+    {
+      "case_id": "guardplane_quarantine_safe_mode",
+      "payload": {
+        "schema_version": "franken-engine.guardplane-decision-log.v1",
+        "trace_id": "trace-quarantine",
+        "decision_id": "decision-quarantine",
+        "policy_id": "policy-wire-v1",
+        "component": "delegate_cell_policy",
+        "event": "delegate_guardplane_action",
+        "outcome": "quarantine",
+        "error_code": "FE-DELEGATE-0008",
+        "source_event": "delegate_capability_escalation",
+        "delegate_id": "delegate-quarantine",
+        "timestamp_ns": 11,
+        "posterior_micros": 950000,
+        "action": "quarantine",
+        "safe_mode_fallback": true,
+        "lifecycle_transition": "quarantine",
+        "resulting_state": "quarantined"
+      }
+    }
+  ],
+  "containment_workflow_log_cases": [
+    {
+      "case_id": "containment_mesh_degraded_quarantine",
+      "payload": {
+        "schema_version": "franken-engine.containment-workflow-log.v1",
+        "trace_id": "trace-containment",
+        "decision_id": "decision-containment",
+        "policy_id": "policy-wire-v1",
+        "component": "delegate_cell_policy",
+        "event": "delegate_containment_action",
+        "outcome": "degraded",
+        "error_code": "FE-DELEGATE-0008",
+        "source_event": "delegate_guardplane_action",
+        "delegate_id": "delegate-quarantine",
+        "timestamp_ns": 12,
+        "action": "quarantine",
+        "lifecycle_transition": "quarantine",
+        "resulting_state": "quarantined",
+        "mesh_attempted_targets": [
+          "peer-a",
+          "peer-b",
+          "peer-c"
+        ],
+        "mesh_targets": [
+          "peer-a",
+          "peer-c"
+        ],
+        "mesh_failed_targets": [
+          "peer-b"
+        ],
+        "mesh_propagated": false
+      }
+    }
+  ]
+}

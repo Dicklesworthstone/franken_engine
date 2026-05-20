@@ -2410,11 +2410,27 @@ fn lower_statement_to_ir1_with_flow(
             .map_err(LoweringPipelineError::SemanticViolation)?;
 
             // Lower function body with its own fresh scope.
-            let param_names: Vec<String> = func
-                .params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
+            //
+            // Each FunctionParam contributes one positional slot. Identifier
+            // params reuse their own name; destructuring patterns get a
+            // synthetic `__param_N` slot and have their inner names
+            // allocated + destructured at body entry so the runtime
+            // positional-binding contract (one slot per FormalParameter)
+            // stays intact. Without this, an `f({a, b})` declaration lost
+            // its argument entirely — the destructuring's inner names were
+            // never allocated and never received any value (bd-hld87).
+            let mut param_names: Vec<String> = Vec::with_capacity(func.params.len());
+            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
+            for (index, param) in func.params.iter().enumerate() {
+                match param.name() {
+                    Some(name) => param_names.push(name.to_string()),
+                    None => {
+                        let synthetic = format!("__param_{index}");
+                        param_names.push(synthetic.clone());
+                        destructure_params.push((synthetic, &param.pattern));
+                    }
+                }
+            }
             // perf: pre-size body_ops Vec based on function body statement count
             let estimated_body_ops = func.body.body.len().saturating_mul(2).max(8);
             let mut body_ops = Vec::with_capacity(estimated_body_ops);
@@ -2435,8 +2451,40 @@ fn lower_statement_to_ir1_with_flow(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
             }
+            // For destructuring-pattern params, allocate inner identifier
+            // bindings and emit destructuring ops that copy from each
+            // `__param_N` slot into the inner names. Must run before body
+            // statement lowering so the body sees the inner bindings.
+            for (synthetic_name, pattern) in &destructure_params {
+                for inner_name in pattern.binding_names() {
+                    let _ = alloc_binding(
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        inner_name,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                let source_bid = *body_lookup
+                    .get(synthetic_name.as_str())
+                    .expect("synthetic param binding allocated above");
+                lower_destructuring_to_ir1(
+                    pattern,
+                    source_bid,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
+            }
             // Snapshot which binding names already exist before body lowering
-            // (just the parameters at this point).
+            // (parameter slots + any inner names just allocated for
+            // destructuring patterns). Anything new in the lookup after this
+            // point is treated as a free variable below.
             let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
             for stmt in &func.body.body {
                 lower_statement_to_ir1(

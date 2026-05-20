@@ -10579,7 +10579,7 @@ fn test_array_prototype_some_fail_closed_validation() {
 }
 
 #[test]
-#[ignore = "eval-path gap: charAt UTF-16 indexing semantics are covered by regression_tests_charat_utf16_integration.rs (6 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
+#[ignore = "test asserts non-spec behavior: line 10607 expects `'ABC'.charAt(-1) == 'A'` (claiming -1 normalizes to 0), but JS spec returns '' for negative indices. The eval shim IS wired correctly — direct-runtime coverage in regression_tests_charat_utf16_integration.rs::test_charat_utf16_out_of_bounds_regression confirms charAt(-1) == ''. Test bodies need rewriting to match spec before re-enabling (bd-lnkmc)"]
 fn test_string_char_at_utf16_indexing() {
     // Regression test for commit 3b448a39: charAt UTF-16 indexing semantics
     let mut interpreter = make_default_interpreter();
@@ -10636,7 +10636,7 @@ fn test_string_char_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "eval-path gap: charCodeAt UTF-16 code-unit semantics are covered by regression_tests_charcodeat_utf16_integration.rs (7 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
+#[ignore = "test asserts non-spec behavior: line 10678 expects `'ABC'.charCodeAt(-1) == 65` (claiming -1 normalizes to 0), but JS spec returns NaN for negative indices. The eval shim IS wired correctly — direct-runtime coverage in regression_tests_charcodeat_utf16_integration.rs confirms spec semantics. Test bodies need rewriting to match spec before re-enabling (bd-lnkmc)"]
 fn test_string_char_code_at_utf16_indexing() {
     // Regression test for commit 5ab2773a: charCodeAt UTF-16 code unit semantics
     let mut interpreter = make_default_interpreter();
@@ -10715,7 +10715,7 @@ fn test_string_char_code_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "eval-path gap: deterministic Math.random replay is covered by baseline_interpreter_refactor_coverage.rs::math_random_uses_deterministic_xorshift64_prng / math_random_different_execution_states_produce_different_values / math_random_xorshift64_produces_full_precision. Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
+#[ignore = "test design issue, not an eval-path gap: the local `evaluate_expression` trait impl (line 127) builds a *fresh* QuickJsInspiredNativeEngine on every call, so the `interpreter1`/`interpreter2` InterpreterCore instances and the `let z = 42` divergence have no effect on the eval engine's PRNG seed — the test would need either (a) a session-scoped engine that threads state across evaluate_expression calls, or (b) rewriting to compare deterministic single-shot outputs (which is what baseline_interpreter_refactor_coverage.rs::math_random_uses_deterministic_xorshift64_prng already covers). The xorshift64 PRNG behavior is wired correctly; this test asserts a property the harness can't observe (bd-lnkmc)"]
 fn test_math_random_deterministic_replay() {
     // Regression test for commit 8df95361: SHA-256 deterministic replay
     let config = InterpreterConfig::quickjs_defaults();
@@ -10986,7 +10986,6 @@ fn test_array_some_callback_invocation_integration() {
 }
 
 #[test]
-#[ignore = "eval-path gap: Math.round semantics (incl. negative-half floor(x+0.5)) are covered by regression_tests_math_round_console_info_integration.rs::test_math_round_basic_regression / test_math_round_edge_cases_regression / test_math_round_type_coercion_regression and regression_tests_math_console_integration.rs::test_math_round_comprehensive_integration_regression. Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn test_math_round_negative_half_semantics_integration() {
     // Regression test for commit 5e20ceac: Math.round negative half semantics
     // Validates JavaScript Math.round uses floor(x + 0.5) not round-away-from-zero

@@ -1044,7 +1044,7 @@ fn emergency_policy_extension_mismatch_fails_closed() {
 
     match err {
         PipelineError::PolicyUnavailable { reason } => {
-            assert!(reason.contains("No policy for extension"));
+            assert!(reason.contains("does not match request extension"));
         }
         other => panic!("expected PolicyUnavailable, got {other:?}"),
     }

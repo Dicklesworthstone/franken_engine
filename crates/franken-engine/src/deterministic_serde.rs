@@ -181,6 +181,39 @@ pub enum CanonicalValue {
     Float(CanonicalF64),
 }
 
+impl CanonicalValue {
+    /// Construct a `CanonicalValue::String` from anything string-like.
+    ///
+    /// Mostly sugar for `CanonicalValue::String(s.into())`, but a single
+    /// constructor lets call sites swap `"foo".to_string()` for
+    /// `CanonicalValue::str("foo")` and gives the future Cow-based
+    /// migration a single funnel to update. (bd-22ibx)
+    pub fn str(value: impl Into<String>) -> Self {
+        Self::String(value.into())
+    }
+
+    /// Build a `CanonicalValue::Map` from `&'static str` keys without
+    /// requiring each callsite to write `.to_string()` on the key.
+    ///
+    /// Today each entry still incurs one key allocation — the underlying
+    /// `BTreeMap<String, _>` requires owned keys. The 77 existing
+    /// `canonical_value` impls (bd-22ibx) can migrate to this helper as
+    /// a single call instead of N+1 `.to_string()` sites; that move
+    /// gives the helper a single point at which a future
+    /// `BTreeMap<Cow<'static, str>, _>` migration would zero-allocate
+    /// the static key cases.
+    pub fn map_from_entries<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (&'static str, CanonicalValue)>,
+    {
+        let map: BTreeMap<String, CanonicalValue> = entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        Self::Map(map)
+    }
+}
+
 // Tag bytes for each variant to ensure unambiguous decoding.
 const TAG_U64: u8 = 0x01;
 const TAG_I64: u8 = 0x02;

@@ -1315,16 +1315,14 @@ pub struct RegRange {
 
 impl RegRange {
     pub fn canonical_value(self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "count".to_string(),
-            CanonicalValue::U64(u64::from(self.count)),
-        );
-        map.insert(
-            "start".to_string(),
-            CanonicalValue::U64(u64::from(self.start)),
-        );
-        CanonicalValue::Map(map)
+        // bd-22ibx: 2 string allocations + manual BTreeMap collapsed
+        // into one `map_from_entries`. Same template as ast.rs
+        // SourceSpan; remaining 75 canonical_value impls tracked
+        // under bd-22ibx-followup.
+        CanonicalValue::map_from_entries([
+            ("count", CanonicalValue::U64(u64::from(self.count))),
+            ("start", CanonicalValue::U64(u64::from(self.start))),
+        ])
     }
 }
 

@@ -70,29 +70,18 @@ impl SourceSpan {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "start_offset".to_string(),
-            CanonicalValue::U64(self.start_offset),
-        );
-        map.insert(
-            "end_offset".to_string(),
-            CanonicalValue::U64(self.end_offset),
-        );
-        map.insert(
-            "start_line".to_string(),
-            CanonicalValue::U64(self.start_line),
-        );
-        map.insert(
-            "start_column".to_string(),
-            CanonicalValue::U64(self.start_column),
-        );
-        map.insert("end_line".to_string(), CanonicalValue::U64(self.end_line));
-        map.insert(
-            "end_column".to_string(),
-            CanonicalValue::U64(self.end_column),
-        );
-        CanonicalValue::Map(map)
+        // bd-22ibx: collapse 6 `.to_string()` allocations + a manual
+        // BTreeMap into a single `map_from_entries` call. The same
+        // shape can be lifted to the other 76 canonical_value impls
+        // (tracked under bd-22ibx-followup).
+        CanonicalValue::map_from_entries([
+            ("start_offset", CanonicalValue::U64(self.start_offset)),
+            ("end_offset", CanonicalValue::U64(self.end_offset)),
+            ("start_line", CanonicalValue::U64(self.start_line)),
+            ("start_column", CanonicalValue::U64(self.start_column)),
+            ("end_line", CanonicalValue::U64(self.end_line)),
+            ("end_column", CanonicalValue::U64(self.end_column)),
+        ])
     }
 }
 

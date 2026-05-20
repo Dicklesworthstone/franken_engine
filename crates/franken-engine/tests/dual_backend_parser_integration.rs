@@ -555,7 +555,7 @@ fn span_mapping_exact() {
     let span = make_span(0, 10);
     let entry = SpanMappingEntry {
         node_index: 0,
-        canonical_span: span.clone(),
+        canonical_span: span,
         backend_span: span,
         deviation_bytes: 0,
     };

@@ -928,11 +928,7 @@ fn enrichment_semantic_error_new_with_span() {
     use frankenengine_engine::ast::SourceSpan;
     use frankenengine_engine::parser::{SemanticError, SemanticErrorCode};
     let span = SourceSpan::new(10, 20, 2, 5, 2, 15);
-    let err = SemanticError::new(
-        SemanticErrorCode::TemporalDeadZone,
-        None,
-        Some(span.clone()),
-    );
+    let err = SemanticError::new(SemanticErrorCode::TemporalDeadZone, None, Some(span));
     assert_eq!(err.span, Some(span));
 }
 

@@ -245,7 +245,7 @@ fn unsupported_syntax_diagnostic_from_site_has_correct_fields() {
     let diag = UnsupportedSyntaxDiagnostic::from_site(
         ParserGapSiteId::NewExpressionCallPlaceholder,
         "test-source",
-        Some(span.clone()),
+        Some(span),
     );
     assert_eq!(diag.diagnostic_code, "FE-PARSER-GAP-NEW-0001");
     assert_eq!(diag.source_label, "test-source");
@@ -282,7 +282,7 @@ fn unsupported_syntax_diagnostic_canonical_hash_is_stable() {
     let d1 = UnsupportedSyntaxDiagnostic::from_site(
         ParserGapSiteId::ForInStatementPlaceholder,
         "source-a",
-        Some(span.clone()),
+        Some(span),
     );
     let d2 = UnsupportedSyntaxDiagnostic::from_site(
         ParserGapSiteId::ForInStatementPlaceholder,

@@ -39,4 +39,22 @@ Findings:
 
 Verification:
 - `cargo check --all-targets -p frankenengine-engine --target-dir target_rch_review` was queued for the entire review window behind 5 active builds on the rch worker fleet (queue showed cargo check at 7m51s+ when this round closed); the only code change this round (`parser_arena.rs:389`) is a strict deref of `&SourceSpan` to `SourceSpan` and cannot fail to compile (Copy type, no trait dependencies).
-- Not committed in-tree; appending to REVIEW_SUMMARY.md as instructed.
+- Round 1b code change landed as commit `fe277978`.
+
+---
+
+## 2026-05-20 Review Round 1c - cargo-check sweep (PearlTower)
+
+When `cargo check --all-targets --target-dir target_rch_review` finally cleared the rch queue, it surfaced 8 leftover compile errors from the bd-pysup `Value::Str(String)` → `Value::Str(Arc<str>)` migration that the bd-pysup commit + Round 1's prior sweep missed.
+
+Findings:
+
+- [HIGH] `crates/franken-engine/tests/baseline_interpreter_refactor_coverage.rs:749,776,805,845,665,715,881` — 7 `assert_eq!(s, "literal", ...)` sites where `s: Arc<str>` was unwrapped from `Value::Str(_)`. `Arc<str>` does not implement `PartialEq<&str>`, so each one fails with `E0308: expected struct Arc<str>, found &str`. Root cause: bd-pysup migrated the runtime type but didn't sweep every test file that pattern-matches the Arc out. Fix: replace `s` with `s.as_ref()` at the comparison site (same pattern Round 1 used for `baseline_interpreter_edge_cases.rs`). Commit `19e606ef`.
+
+- [HIGH] `crates/franken-engine/tests/capability_witness.rs:821` — `theorem_merge_legality_fails_for_unjustified_capability` declared `let witness = ...` but then called `trust_theorem_report_signer(&mut witness, ...)`. Failed compile with `E0596: cannot borrow as mutable`. Fix: add `mut` to the binding. Commit `19e606ef`.
+
+- [LOW] `crates/franken-engine/tests/capability_witness.rs:573` — sibling test in the same file uses `let mut witness = ...` but does not actually mutate. This `unused_mut` warning was hidden while line 821 failed to compile; now visible. Pre-existing; flagged for cleanup pass.
+
+Verification:
+- `cargo check --tests -p frankenengine-engine --target-dir target_rch_review` clean (1m 06s, `Finished dev profile`). One remaining warning (line 573 unused_mut) is pre-existing.
+- Code changes committed as `19e606ef`.

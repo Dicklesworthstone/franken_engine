@@ -130,8 +130,8 @@ impl AbstractOperationsHarness {
             // ─── §7.1.4 ToNumber ─────────────────────────────────────────────
             AbstractOperationTest {
                 id: "ES2020-7.1.4-tonumber-string-numeric".to_string(),
-                description:
-                    "ToNumber('42') is 42; unary `+` is a runtime use of ToNumber.".to_string(),
+                description: "ToNumber('42') is 42; unary `+` is a runtime use of ToNumber."
+                    .to_string(),
                 es_section: "7.1.4".to_string(),
                 requirement_level: RequirementLevel::Must,
                 category: AbstractOperationCategory::ToNumber,
@@ -192,9 +192,8 @@ impl AbstractOperationsHarness {
             // ─── §7.2.14 Abstract Equality ───────────────────────────────────
             AbstractOperationTest {
                 id: "ES2020-7.2.14-abstract-equality-coerces-string-number".to_string(),
-                description:
-                    "Abstract equality '1' == 1 returns true via ToNumber coercion."
-                        .to_string(),
+                description: "Abstract equality '1' == 1 returns true via ToNumber coercion."
+                    .to_string(),
                 es_section: "7.2.14".to_string(),
                 requirement_level: RequirementLevel::Must,
                 category: AbstractOperationCategory::AbstractEquality,
@@ -218,9 +217,8 @@ impl AbstractOperationsHarness {
             // ─── §6.1.6.1.13 / §7.2.15 numeric edge cases ────────────────────
             AbstractOperationTest {
                 id: "ES2020-7.2.15-nan-not-equal-to-itself".to_string(),
-                description:
-                    "NaN === NaN returns false — Number type's only non-reflexive value."
-                        .to_string(),
+                description: "NaN === NaN returns false — Number type's only non-reflexive value."
+                    .to_string(),
                 es_section: "7.2.15".to_string(),
                 requirement_level: RequirementLevel::Must,
                 category: AbstractOperationCategory::NumericEdgeCases,
@@ -478,7 +476,10 @@ mod tests {
         let json = serde_json::to_string(&report).expect("serialize");
         let back: AbstractOperationsReport = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(report, back, "report must round-trip");
-        assert_eq!(report.schema_version, ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA);
+        assert_eq!(
+            report.schema_version,
+            ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA
+        );
         assert_eq!(report.statistics.total_tests, harness.tests.len() as u64);
     }
 }

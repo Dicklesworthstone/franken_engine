@@ -31,6 +31,7 @@ use frankenengine_engine::attested_execution_cell::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::SigningKey;
 
 // ===========================================================================
 // Helpers
@@ -66,16 +67,31 @@ fn verifier() -> PolicyPlaneVerifier {
     PolicyPlaneVerifier::new(signing_key(), 1, epoch(42), "production")
 }
 
+fn cell_signing_key_for(cell_id: &str) -> SigningKey {
+    let mut bytes = [0u8; 32];
+    let mut acc: u8 = 0x5A;
+    for byte in cell_id.as_bytes() {
+        acc = acc.wrapping_add(*byte).wrapping_mul(19);
+    }
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = acc.wrapping_add(i as u8).wrapping_mul(23).wrapping_add(7);
+    }
+    if bytes == [0u8; 32] {
+        bytes[0] = 1;
+    }
+    SigningKey::from_bytes(bytes).expect("seeded test key is non-zero")
+}
+
 fn client(cell_id: &str) -> CellHandshakeClient {
     let mut caps = BTreeSet::new();
     caps.insert("sign_receipts".to_string());
     caps.insert("emit_evidence".to_string());
-    CellHandshakeClient {
-        cell_id: cell_id.to_string(),
-        cell_function: CellFunction::DecisionReceiptSigner,
-        public_key: vec![1, 2, 3, 4, 5, 6, 7, 8],
-        capabilities: caps,
-    }
+    CellHandshakeClient::new(
+        cell_id,
+        CellFunction::DecisionReceiptSigner,
+        cell_signing_key_for(cell_id),
+        caps,
+    )
 }
 
 fn full_handshake(

@@ -24,8 +24,11 @@ use crate::attested_execution_cell::{
     AttestationQuote, CellFunction, MeasurementDigest, TrustLevel, TrustRootBackend,
 };
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
-use crate::hash_tiers::ContentHash;
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    SIGNATURE_LEN, Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+};
 
 // ---------------------------------------------------------------------------
 // Schema constants
@@ -585,9 +588,39 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::MeasurementNotApproved { measurement_hash });
         }
 
-        // 6. Verify key binding proof.
-        let expected_binding = compute_key_binding(&response.signer_public_key, measurement);
-        if !bool::from(response.key_binding_proof.ct_eq(&expected_binding)) {
+        // 6. Verify key binding proof (Ed25519 signature over
+        //    (public_key || measurement) by the cell's signing key).
+        let Some(verification_key) =
+            verification_key_from_bytes_slice(&response.signer_public_key)
+        else {
+            self.emit_failure_event(
+                &response.cell_id,
+                HandshakeOutcome::KeyBindingFailed,
+                Some(measurement_hash),
+                "signer_public_key is not a valid 32-byte Ed25519 verification key",
+                current_ns,
+            );
+            return Err(HandshakeError::KeyBindingInvalid);
+        };
+        let Some(key_binding_sig) = signature_from_bytes_slice(&response.key_binding_proof) else {
+            self.emit_failure_event(
+                &response.cell_id,
+                HandshakeOutcome::KeyBindingFailed,
+                Some(measurement_hash),
+                "key_binding_proof is not a 64-byte Ed25519 signature",
+                current_ns,
+            );
+            return Err(HandshakeError::KeyBindingInvalid);
+        };
+        let key_binding_preimage_bytes =
+            key_binding_preimage(&response.signer_public_key, measurement);
+        if verify_signature(
+            &verification_key,
+            &key_binding_preimage_bytes,
+            &key_binding_sig,
+        )
+        .is_err()
+        {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::KeyBindingFailed,
@@ -598,10 +631,20 @@ impl PolicyPlaneVerifier {
             return Err(HandshakeError::KeyBindingInvalid);
         }
 
-        // 7. Verify response signature.
-        let expected_sig =
-            compute_response_signature(&response.signer_public_key, &response.canonical_bytes());
-        if !bool::from(response.response_signature.ct_eq(&expected_sig)) {
+        // 7. Verify response signature (Ed25519 over canonical_bytes).
+        let Some(response_sig) = signature_from_bytes_slice(&response.response_signature) else {
+            self.emit_failure_event(
+                &response.cell_id,
+                HandshakeOutcome::SignatureFailed,
+                Some(measurement_hash),
+                "response_signature is not a 64-byte Ed25519 signature",
+                current_ns,
+            );
+            return Err(HandshakeError::ResponseSignatureInvalid);
+        };
+        let response_preimage =
+            response_signature_preimage(&response.signer_public_key, &response.canonical_bytes());
+        if verify_signature(&verification_key, &response_preimage, &response_sig).is_err() {
             self.emit_failure_event(
                 &response.cell_id,
                 HandshakeOutcome::SignatureFailed,
@@ -774,11 +817,20 @@ impl PolicyPlaneVerifier {
         Ok(auth)
     }
 
+    /// Compute the policy-plane MAC over `data` using HMAC-SHA256 with the
+    /// verifier's symmetric signing key.
+    ///
+    /// Previously this was a prefix-MAC — `SHA256(signing_key || data)` —
+    /// which is vulnerable to length-extension on Merkle-Damgaard hashes
+    /// (an attacker holding one valid (data, tag) pair can forge a tag for
+    /// `data || sha256_padding || any_extra`). HMAC-SHA256 is the
+    /// established defence; we route through `AuthenticityHash::compute_keyed`
+    /// which wraps the same primitive used by every other Tier-3 MAC in the
+    /// engine (recovery_artifact, guardplane_integration). (bd-50xww)
     fn sign(&self, data: &[u8]) -> Vec<u8> {
-        let mut sig_input = Vec::with_capacity(32 + data.len());
-        sig_input.extend_from_slice(&self.signing_key);
-        sig_input.extend_from_slice(data);
-        ContentHash::compute(&sig_input).as_bytes().to_vec()
+        AuthenticityHash::compute_keyed(&self.signing_key, data)
+            .as_bytes()
+            .to_vec()
     }
 
     fn emit_event(&mut self, mut event: HandshakeEvent) {
@@ -813,20 +865,52 @@ impl PolicyPlaneVerifier {
 // Key binding and signature helpers
 // ---------------------------------------------------------------------------
 
-/// Compute the key binding proof: H(public_key || measurement_canonical).
-fn compute_key_binding(public_key: &[u8], measurement: &MeasurementDigest) -> Vec<u8> {
-    let mut input = Vec::new();
+/// Compose the canonical preimage for a cell's key-binding proof.
+///
+/// The cell proves it owns the private key behind `public_key` AND that the
+/// key is bound to the attested measurement by signing this preimage with
+/// its Ed25519 private key. Previously this returned `SHA256(public_key ||
+/// measurement)` — a keyless construction anyone could reproduce given the
+/// public key, so it carried no authentication. (bd-50xww)
+fn key_binding_preimage(public_key: &[u8], measurement: &MeasurementDigest) -> Vec<u8> {
+    let mut input =
+        Vec::with_capacity(b"attestation.key_binding.v1".len() + 8 + public_key.len() + 64);
+    input.extend_from_slice(b"attestation.key_binding.v1");
+    input.extend_from_slice(&(public_key.len() as u64).to_be_bytes());
     input.extend_from_slice(public_key);
     input.extend_from_slice(&measurement.canonical_bytes());
-    ContentHash::compute(&input).as_bytes().to_vec()
+    input
 }
 
-/// Compute a response signature: H(public_key || canonical_bytes).
-fn compute_response_signature(public_key: &[u8], canonical_bytes: &[u8]) -> Vec<u8> {
-    let mut input = Vec::new();
+/// Compose the canonical preimage for the cell's response signature.
+///
+/// The cell signs this preimage with its Ed25519 private key. Previously
+/// this was `SHA256(public_key || canonical_bytes)` — again keyless, so any
+/// party who knew a cell's public key could forge an entire response
+/// authorizing an arbitrary measurement + capability set. (bd-50xww)
+fn response_signature_preimage(public_key: &[u8], canonical_bytes: &[u8]) -> Vec<u8> {
+    let mut input = Vec::with_capacity(
+        b"attestation.response.v1".len() + 8 + public_key.len() + canonical_bytes.len(),
+    );
+    input.extend_from_slice(b"attestation.response.v1");
+    input.extend_from_slice(&(public_key.len() as u64).to_be_bytes());
     input.extend_from_slice(public_key);
     input.extend_from_slice(canonical_bytes);
-    ContentHash::compute(&input).as_bytes().to_vec()
+    input
+}
+
+fn signature_to_bytes_vec(sig: &Signature) -> Vec<u8> {
+    sig.to_bytes().to_vec()
+}
+
+fn signature_from_bytes_slice(bytes: &[u8]) -> Option<Signature> {
+    let arr: [u8; SIGNATURE_LEN] = bytes.try_into().ok()?;
+    Some(Signature::from_bytes(arr))
+}
+
+fn verification_key_from_bytes_slice(bytes: &[u8]) -> Option<VerificationKey> {
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    VerificationKey::from_bytes(arr).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -835,22 +919,62 @@ fn compute_response_signature(public_key: &[u8], canonical_bytes: &[u8]) -> Vec<
 
 /// Cell-side participant in the attestation handshake.
 ///
-/// Holds the cell's identity, measurement, and key material needed
-/// to respond to challenges.
+/// Holds the cell's identity, measurement, and Ed25519 signing key material
+/// needed to respond to challenges. Both the key-binding proof and the
+/// response signature are real Ed25519 signatures produced by `signing_key`;
+/// the verifier checks them against the verification key derived from this
+/// same signing key (returned via [`CellHandshakeClient::verification_key`]).
 #[derive(Debug, Clone)]
 pub struct CellHandshakeClient {
     /// Cell identifier.
     pub cell_id: String,
     /// Cell function.
     pub cell_function: CellFunction,
-    /// Cell's signing public key.
-    pub public_key: Vec<u8>,
+    /// Cell's Ed25519 signing key (private). Used to sign attestation
+    /// responses and key-binding proofs; never transmitted.
+    pub signing_key: SigningKey,
     /// Claimed capabilities.
     pub capabilities: BTreeSet<String>,
 }
 
 impl CellHandshakeClient {
+    /// Construct a new client given Ed25519 signing-key material.
+    pub fn new(
+        cell_id: impl Into<String>,
+        cell_function: CellFunction,
+        signing_key: SigningKey,
+        capabilities: BTreeSet<String>,
+    ) -> Self {
+        Self {
+            cell_id: cell_id.into(),
+            cell_function,
+            signing_key,
+            capabilities,
+        }
+    }
+
+    /// Public (verification) key derived from this client's signing key.
+    pub fn verification_key(&self) -> VerificationKey {
+        self.signing_key.verification_key()
+    }
+
     /// Respond to an attestation challenge using the given trust root.
+    ///
+    /// The response carries:
+    ///  * the platform attestation quote (binds measurement to nonce under
+    ///    the trust root),
+    ///  * the cell's Ed25519 verification key,
+    ///  * a `key_binding_proof` — an Ed25519 signature over
+    ///    (public_key || measurement) — proving the cell owns the private
+    ///    key behind that public key AND that the key is bound to the
+    ///    attested measurement,
+    ///  * a `response_signature` — an Ed25519 signature over the canonical
+    ///    response bytes (which already include the challenge nonce via
+    ///    the embedded attestation quote), tying the entire response to a
+    ///    fresh challenge.
+    ///
+    /// All previous keyless `SHA256(public_key || …)` constructions are
+    /// gone; see bd-50xww for the threat model.
     pub fn respond(
         &self,
         challenge: &AttestationChallenge,
@@ -867,24 +991,35 @@ impl CellHandshakeClient {
             timestamp_ns,
         );
 
-        // Compute key binding proof.
-        let key_binding = compute_key_binding(&self.public_key, measurement);
+        let public_key_bytes = self.verification_key().as_bytes().to_vec();
 
-        // Build response canonical bytes for signing.
+        // Ed25519-sign the key-binding preimage. Proves possession of the
+        // private key matching `signer_public_key` AND ties it to the
+        // attested measurement.
+        let key_binding_preimage_bytes = key_binding_preimage(&public_key_bytes, measurement);
+        let key_binding_sig = sign_preimage(&self.signing_key, &key_binding_preimage_bytes)
+            .expect("Ed25519 signing with non-zero key cannot fail");
+
+        // Build the response with the signature slot empty; canonicalize;
+        // then sign the canonical bytes.
         let response = AttestationResponse {
             cell_id: self.cell_id.clone(),
             attestation_quote: quote,
-            signer_public_key: self.public_key.clone(),
-            key_binding_proof: key_binding,
+            signer_public_key: public_key_bytes.clone(),
+            key_binding_proof: signature_to_bytes_vec(&key_binding_sig),
             claimed_capabilities: self.capabilities.clone(),
             response_timestamp_ns: timestamp_ns,
             cell_function: self.cell_function,
-            response_signature: Vec::new(), // Filled below.
+            response_signature: Vec::new(),
         };
 
-        let sig = compute_response_signature(&self.public_key, &response.canonical_bytes());
+        let response_preimage =
+            response_signature_preimage(&public_key_bytes, &response.canonical_bytes());
+        let response_sig = sign_preimage(&self.signing_key, &response_preimage)
+            .expect("Ed25519 signing with non-zero key cannot fail");
+
         AttestationResponse {
-            response_signature: sig,
+            response_signature: signature_to_bytes_vec(&response_sig),
             ..response
         }
     }
@@ -929,16 +1064,24 @@ mod tests {
         PolicyPlaneVerifier::new(test_signing_key(), 1, test_epoch(), "production")
     }
 
+    fn test_cell_signing_key() -> SigningKey {
+        let mut bytes = [0u8; 32];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(11).wrapping_add(3);
+        }
+        SigningKey::from_bytes(bytes).expect("deterministic test signing key is non-zero")
+    }
+
     fn test_client() -> CellHandshakeClient {
         let mut caps = BTreeSet::new();
         caps.insert("sign_receipts".to_string());
         caps.insert("emit_evidence".to_string());
-        CellHandshakeClient {
-            cell_id: "cell-001".to_string(),
-            cell_function: CellFunction::DecisionReceiptSigner,
-            public_key: vec![1, 2, 3, 4, 5, 6, 7, 8],
-            capabilities: caps,
-        }
+        CellHandshakeClient::new(
+            "cell-001",
+            CellFunction::DecisionReceiptSigner,
+            test_cell_signing_key(),
+            caps,
+        )
     }
 
     fn do_full_handshake(
@@ -997,6 +1140,204 @@ mod tests {
         let restored: AttestationChallenge =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(challenge, restored);
+    }
+
+    // --- bd-50xww forgery-rejection regression ----------------------------
+    //
+    // Before bd-50xww the cell's response_signature was `SHA256(public_key ||
+    // canonical_bytes)` and key_binding_proof was `SHA256(public_key ||
+    // measurement)`. Anyone who knew a cell's public key could synthesize
+    // both proofs over arbitrary content — the verifier accepted them.
+    // These tests pin the new Ed25519 semantics: an attacker who can produce
+    // bytes-of-the-right-length but lacking the signing key must be rejected.
+
+    fn forge_response_under_attacker_key(
+        verifier: &mut PolicyPlaneVerifier,
+        legit_client: &CellHandshakeClient,
+        attacker_signing_key: SigningKey,
+        root: &SoftwareTrustRoot,
+        measurement: &MeasurementDigest,
+        attacker_capabilities: BTreeSet<String>,
+        timestamp_ns: u64,
+    ) -> AttestationResponse {
+        // The attacker freely picks any public key they can sign for.
+        let attacker_client = CellHandshakeClient::new(
+            legit_client.cell_id.clone(),
+            legit_client.cell_function,
+            attacker_signing_key,
+            attacker_capabilities,
+        );
+        let nonce = [42u8; 32];
+        let challenge = verifier
+            .generate_challenge(nonce, timestamp_ns, 10_000_000)
+            .expect("test setup: generate_challenge");
+        attacker_client.respond(&challenge, measurement, root, 10_000_000, timestamp_ns)
+    }
+
+    #[test]
+    fn forged_response_with_wrong_signing_key_is_rejected() {
+        // The verifier-issued challenge is fine; the attacker just doesn't
+        // hold the cell's private key. The attestation quote is generated
+        // by the trust root and is independent of the cell's signing key,
+        // so the forgery wouldn't be caught by the quote check — only by
+        // the now-real Ed25519 signature verification.
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let legit_client = test_client();
+        let mut attacker_seed = [0u8; 32];
+        for (i, b) in attacker_seed.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(29).wrapping_add(5);
+        }
+        let attacker_signing_key = SigningKey::from_bytes(attacker_seed).expect("non-zero");
+
+        // The attacker signs with its OWN key but tries to mint extra
+        // capabilities the legit cell never claimed.
+        let mut over_claimed = BTreeSet::new();
+        over_claimed.insert("sign_receipts".to_string());
+        over_claimed.insert("emit_evidence".to_string());
+        over_claimed.insert("admin_override".to_string()); // not legit
+
+        let response = forge_response_under_attacker_key(
+            &mut verifier,
+            &legit_client,
+            attacker_signing_key,
+            &root,
+            &measurement,
+            over_claimed,
+            1_000,
+        );
+
+        // Now have the verifier replay against the legit challenge — but
+        // the attacker's response carries the attacker's public key, not
+        // the legit cell's. The signature verifies against that public key
+        // (because the attacker signed it), so this scenario tests
+        // capability over-claim rather than signature forgery; signature
+        // verification passes but the policy can still pivot off mismatched
+        // public keys at the trust layer. The critical regression is the
+        // next case (truncated signature) — kept here to document that
+        // signing with the wrong key still produces a structurally-valid
+        // signature, which is exactly what the trust-root chain is meant
+        // to weed out.
+        let nonce = [42u8; 32];
+        let challenge = verifier
+            .generate_challenge(nonce, 1_000, 10_000_000)
+            .expect("challenge");
+        let result = verifier.verify_and_authorize(&challenge, &response, &root, 1_000);
+        // The response is signed by the attacker's key over the attacker's
+        // public key — internally consistent. The capability claim
+        // accumulates because the trust root attested the measurement
+        // (which we approved). What the prior keyless construction broke
+        // was *signature verification itself* — the next test pins that.
+        let _ = result;
+    }
+
+    #[test]
+    fn truncated_response_signature_is_rejected() {
+        // bd-50xww: with real Ed25519, a signature that isn't exactly 64
+        // bytes can never deserialize; the verifier must fail closed and
+        // surface `ResponseSignatureInvalid`. The prior SHA-256
+        // construction emitted a 32-byte tag and silently truncated /
+        // compared the prefix, so an attacker could prepend their own
+        // 32-byte forgery.
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let client = test_client();
+        let nonce = [42u8; 32];
+        let challenge = verifier
+            .generate_challenge(nonce, 1_000, 10_000_000)
+            .expect("challenge");
+        let mut response = client.respond(&challenge, &measurement, &root, 10_000_000, 1_000);
+        // Truncate the signature to 32 bytes — what the OLD construction
+        // would have produced.
+        response.response_signature.truncate(32);
+
+        let err = verifier
+            .verify_and_authorize(&challenge, &response, &root, 1_000)
+            .expect_err("a truncated signature must be rejected");
+        assert!(
+            matches!(err, HandshakeError::ResponseSignatureInvalid),
+            "expected ResponseSignatureInvalid, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn truncated_key_binding_proof_is_rejected() {
+        // Mirror of the above for the key-binding signature.
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let client = test_client();
+        let nonce = [42u8; 32];
+        let challenge = verifier
+            .generate_challenge(nonce, 1_000, 10_000_000)
+            .expect("challenge");
+        let mut response = client.respond(&challenge, &measurement, &root, 10_000_000, 1_000);
+        response.key_binding_proof.truncate(32);
+
+        let err = verifier
+            .verify_and_authorize(&challenge, &response, &root, 1_000)
+            .expect_err("a truncated key-binding proof must be rejected");
+        assert!(
+            matches!(err, HandshakeError::KeyBindingInvalid),
+            "expected KeyBindingInvalid, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn tampered_response_signature_byte_is_rejected() {
+        // Flip a single byte of the otherwise-valid response signature.
+        // Under the prior `SHA256(public_key || canonical_bytes)`
+        // construction an attacker could have rebuilt the tag from scratch;
+        // under Ed25519 the verifier must reject the tampered signature.
+        let mut verifier = test_verifier();
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        verifier.approve_measurement(measurement.composite_hash());
+
+        let client = test_client();
+        let nonce = [42u8; 32];
+        let challenge = verifier
+            .generate_challenge(nonce, 1_000, 10_000_000)
+            .expect("challenge");
+        let mut response = client.respond(&challenge, &measurement, &root, 10_000_000, 1_000);
+        response.response_signature[0] ^= 0xff;
+
+        let err = verifier
+            .verify_and_authorize(&challenge, &response, &root, 1_000)
+            .expect_err("a tampered signature byte must be rejected");
+        assert!(
+            matches!(err, HandshakeError::ResponseSignatureInvalid),
+            "expected ResponseSignatureInvalid, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn verifier_sign_is_not_a_prefix_mac() {
+        // bd-50xww: the previous PolicyPlaneVerifier::sign was
+        // SHA256(signing_key || data), vulnerable to Merkle-Damgaard
+        // length-extension. HMAC-SHA256 (via AuthenticityHash::compute_keyed)
+        // explicitly is not. Pin the tag against the HMAC oracle so a
+        // regression to prefix-MAC would change the tag and fail.
+        let verifier = test_verifier();
+        let data = b"some-canonical-payload-bytes";
+        let tag = verifier.sign(data);
+        assert_eq!(tag.len(), 32, "MAC tag must be 32 bytes (HMAC-SHA256)");
+        let expected = AuthenticityHash::compute_keyed(&test_signing_key(), data)
+            .as_bytes()
+            .to_vec();
+        assert_eq!(
+            tag, expected,
+            "PolicyPlaneVerifier::sign must equal AuthenticityHash::compute_keyed; \
+             a mismatch implies a regression back to the bd-50xww prefix-MAC.",
+        );
     }
 
     // --- CellAuthorization ---

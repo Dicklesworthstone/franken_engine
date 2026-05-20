@@ -250,57 +250,42 @@ impl PackageRecord {
     }
 
     fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "name".to_string(),
-            CanonicalValue::String(self.name.clone()),
-        );
-        map.insert(
-            "version".to_string(),
-            CanonicalValue::String(self.version.clone()),
-        );
-        map.insert(
-            "tier".to_string(),
-            CanonicalValue::String(self.tier.as_str().to_string()),
-        );
-        map.insert(
-            "category".to_string(),
-            CanonicalValue::String(self.category.as_str().to_string()),
-        );
-        map.insert(
-            "module_system".to_string(),
-            CanonicalValue::String(self.module_system.as_str().to_string()),
-        );
-        map.insert(
-            "weekly_downloads".to_string(),
-            CanonicalValue::I64(self.weekly_downloads as i64),
-        );
-        map.insert(
-            "dependency_fanout".to_string(),
-            CanonicalValue::I64(i64::from(self.dependency_fanout)),
-        );
-        map.insert(
-            "node_api_deps".to_string(),
-            CanonicalValue::Array(
-                self.node_api_deps
-                    .iter()
-                    .map(|d| CanonicalValue::String(d.clone()))
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            ("name", CanonicalValue::str(self.name.clone())),
+            ("version", CanonicalValue::str(self.version.clone())),
+            ("tier", CanonicalValue::str(self.tier.as_str())),
+            ("category", CanonicalValue::str(self.category.as_str())),
+            (
+                "module_system",
+                CanonicalValue::str(self.module_system.as_str()),
             ),
-        );
-        map.insert(
-            "native_addon_mode".to_string(),
-            CanonicalValue::String(self.native_addon_mode.as_str().to_string()),
-        );
-        map.insert(
-            "capability_safe_membrane_fallback".to_string(),
-            CanonicalValue::Bool(self.capability_safe_membrane_fallback),
-        );
-        map.insert(
-            "types_only".to_string(),
-            CanonicalValue::Bool(self.types_only),
-        );
-        CanonicalValue::Map(map)
+            (
+                "weekly_downloads",
+                CanonicalValue::I64(self.weekly_downloads as i64),
+            ),
+            (
+                "dependency_fanout",
+                CanonicalValue::I64(i64::from(self.dependency_fanout)),
+            ),
+            (
+                "node_api_deps",
+                CanonicalValue::Array(
+                    self.node_api_deps
+                        .iter()
+                        .map(|d| CanonicalValue::str(d.clone()))
+                        .collect(),
+                ),
+            ),
+            (
+                "native_addon_mode",
+                CanonicalValue::str(self.native_addon_mode.as_str()),
+            ),
+            (
+                "capability_safe_membrane_fallback",
+                CanonicalValue::Bool(self.capability_safe_membrane_fallback),
+            ),
+            ("types_only", CanonicalValue::Bool(self.types_only)),
+        ])
     }
 }
 
@@ -509,65 +494,53 @@ impl IncompatibilityRecord {
     }
 
     fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "incompatibility_id".to_string(),
-            CanonicalValue::String(self.incompatibility_id.clone()),
-        );
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.clone()),
-        );
-        map.insert(
-            "root_cause".to_string(),
-            CanonicalValue::String(self.root_cause.as_str().to_string()),
-        );
-        map.insert(
-            "severity".to_string(),
-            CanonicalValue::String(self.severity.as_str().to_string()),
-        );
-        map.insert(
-            "summary".to_string(),
-            CanonicalValue::String(self.summary.clone()),
-        );
-        map.insert(
-            "minimized_repro".to_string(),
-            CanonicalValue::String(self.minimized_repro.clone()),
-        );
-        map.insert(
-            "expected_behavior".to_string(),
-            CanonicalValue::String(self.expected_behavior.clone()),
-        );
-        map.insert(
-            "actual_behavior".to_string(),
-            CanonicalValue::String(self.actual_behavior.clone()),
-        );
-        map.insert(
-            "remediation_state".to_string(),
-            CanonicalValue::String(self.remediation_state.as_str().to_string()),
-        );
-        map.insert(
-            "owner".to_string(),
-            CanonicalValue::String(self.owner.clone()),
-        );
-        map.insert(
-            "related_beads".to_string(),
-            CanonicalValue::Array(
-                self.related_beads
-                    .iter()
-                    .map(|b| CanonicalValue::String(b.clone()))
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "incompatibility_id",
+                CanonicalValue::str(self.incompatibility_id.clone()),
             ),
-        );
-        map.insert(
-            "discovered_epoch".to_string(),
-            CanonicalValue::I64(self.discovered_epoch as i64),
-        );
-        map.insert(
-            "last_updated_epoch".to_string(),
-            CanonicalValue::I64(self.last_updated_epoch as i64),
-        );
-        CanonicalValue::Map(map)
+            (
+                "package_name",
+                CanonicalValue::str(self.package_name.clone()),
+            ),
+            ("root_cause", CanonicalValue::str(self.root_cause.as_str())),
+            ("severity", CanonicalValue::str(self.severity.as_str())),
+            ("summary", CanonicalValue::str(self.summary.clone())),
+            (
+                "minimized_repro",
+                CanonicalValue::str(self.minimized_repro.clone()),
+            ),
+            (
+                "expected_behavior",
+                CanonicalValue::str(self.expected_behavior.clone()),
+            ),
+            (
+                "actual_behavior",
+                CanonicalValue::str(self.actual_behavior.clone()),
+            ),
+            (
+                "remediation_state",
+                CanonicalValue::str(self.remediation_state.as_str()),
+            ),
+            ("owner", CanonicalValue::str(self.owner.clone())),
+            (
+                "related_beads",
+                CanonicalValue::Array(
+                    self.related_beads
+                        .iter()
+                        .map(|b| CanonicalValue::str(b.clone()))
+                        .collect(),
+                ),
+            ),
+            (
+                "discovered_epoch",
+                CanonicalValue::I64(self.discovered_epoch as i64),
+            ),
+            (
+                "last_updated_epoch",
+                CanonicalValue::I64(self.last_updated_epoch as i64),
+            ),
+        ])
     }
 }
 
@@ -632,45 +605,36 @@ pub struct PackageTestResult {
 
 impl PackageTestResult {
     fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "package_name".to_string(),
-            CanonicalValue::String(self.package_name.clone()),
-        );
-        map.insert(
-            "version".to_string(),
-            CanonicalValue::String(self.version.clone()),
-        );
-        map.insert(
-            "outcome".to_string(),
-            CanonicalValue::String(self.outcome.as_str().to_string()),
-        );
-        map.insert(
-            "total_tests".to_string(),
-            CanonicalValue::I64(i64::from(self.total_tests)),
-        );
-        map.insert(
-            "passed_tests".to_string(),
-            CanonicalValue::I64(i64::from(self.passed_tests)),
-        );
-        map.insert(
-            "failed_tests".to_string(),
-            CanonicalValue::I64(i64::from(self.failed_tests)),
-        );
-        map.insert(
-            "skipped_tests".to_string(),
-            CanonicalValue::I64(i64::from(self.skipped_tests)),
-        );
         let hash_val = match &self.output_hash {
-            Some(h) => CanonicalValue::String(h.clone()),
+            Some(h) => CanonicalValue::str(h.clone()),
             None => CanonicalValue::Null,
         };
-        map.insert("output_hash".to_string(), hash_val);
-        map.insert(
-            "test_epoch".to_string(),
-            CanonicalValue::I64(self.test_epoch as i64),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "package_name",
+                CanonicalValue::str(self.package_name.clone()),
+            ),
+            ("version", CanonicalValue::str(self.version.clone())),
+            ("outcome", CanonicalValue::str(self.outcome.as_str())),
+            (
+                "total_tests",
+                CanonicalValue::I64(i64::from(self.total_tests)),
+            ),
+            (
+                "passed_tests",
+                CanonicalValue::I64(i64::from(self.passed_tests)),
+            ),
+            (
+                "failed_tests",
+                CanonicalValue::I64(i64::from(self.failed_tests)),
+            ),
+            (
+                "skipped_tests",
+                CanonicalValue::I64(i64::from(self.skipped_tests)),
+            ),
+            ("output_hash", hash_val),
+            ("test_epoch", CanonicalValue::I64(self.test_epoch as i64)),
+        ])
     }
 
     /// Pass rate in millionths (1_000_000 = 100%).
@@ -711,56 +675,50 @@ pub struct CohortSummary {
 impl CohortSummary {
     /// Canonical value for deterministic hashing.
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "tier".to_string(),
-            CanonicalValue::String(self.tier.as_str().to_string()),
-        );
-        map.insert(
-            "total_packages".to_string(),
-            CanonicalValue::I64(i64::from(self.total_packages)),
-        );
-        map.insert(
-            "compatible_count".to_string(),
-            CanonicalValue::I64(i64::from(self.compatible_count)),
-        );
-        map.insert(
-            "partially_compatible_count".to_string(),
-            CanonicalValue::I64(i64::from(self.partially_compatible_count)),
-        );
-        map.insert(
-            "incompatible_count".to_string(),
-            CanonicalValue::I64(i64::from(self.incompatible_count)),
-        );
-        map.insert(
-            "skipped_count".to_string(),
-            CanonicalValue::I64(i64::from(self.skipped_count)),
-        );
-        map.insert(
-            "untested_count".to_string(),
-            CanonicalValue::I64(i64::from(self.untested_count)),
-        );
-        map.insert(
-            "compatibility_rate_millionths".to_string(),
-            CanonicalValue::I64(self.compatibility_rate_millionths as i64),
-        );
-        map.insert(
-            "unblock_threshold_millionths".to_string(),
-            CanonicalValue::I64(self.unblock_threshold_millionths as i64),
-        );
-        map.insert(
-            "unblocked".to_string(),
-            CanonicalValue::Bool(self.unblocked),
-        );
-        map.insert(
-            "open_incompatibilities".to_string(),
-            CanonicalValue::I64(i64::from(self.open_incompatibilities)),
-        );
-        map.insert(
-            "blocker_count".to_string(),
-            CanonicalValue::I64(i64::from(self.blocker_count)),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("tier", CanonicalValue::str(self.tier.as_str())),
+            (
+                "total_packages",
+                CanonicalValue::I64(i64::from(self.total_packages)),
+            ),
+            (
+                "compatible_count",
+                CanonicalValue::I64(i64::from(self.compatible_count)),
+            ),
+            (
+                "partially_compatible_count",
+                CanonicalValue::I64(i64::from(self.partially_compatible_count)),
+            ),
+            (
+                "incompatible_count",
+                CanonicalValue::I64(i64::from(self.incompatible_count)),
+            ),
+            (
+                "skipped_count",
+                CanonicalValue::I64(i64::from(self.skipped_count)),
+            ),
+            (
+                "untested_count",
+                CanonicalValue::I64(i64::from(self.untested_count)),
+            ),
+            (
+                "compatibility_rate_millionths",
+                CanonicalValue::I64(self.compatibility_rate_millionths as i64),
+            ),
+            (
+                "unblock_threshold_millionths",
+                CanonicalValue::I64(self.unblock_threshold_millionths as i64),
+            ),
+            ("unblocked", CanonicalValue::Bool(self.unblocked)),
+            (
+                "open_incompatibilities",
+                CanonicalValue::I64(i64::from(self.open_incompatibilities)),
+            ),
+            (
+                "blocker_count",
+                CanonicalValue::I64(i64::from(self.blocker_count)),
+            ),
+        ])
     }
 }
 
@@ -1208,42 +1166,39 @@ impl NpmCompatibilityMatrix {
     }
 
     fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "bead_id".to_string(),
-            CanonicalValue::String(self.bead_id.clone()),
-        );
-        map.insert(
-            "packages".to_string(),
-            CanonicalValue::Array(self.packages.iter().map(|p| p.canonical_value()).collect()),
-        );
-        map.insert(
-            "test_results".to_string(),
-            CanonicalValue::Array(
-                self.test_results
-                    .iter()
-                    .map(|r| r.canonical_value())
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
             ),
-        );
-        map.insert(
-            "incompatibilities".to_string(),
-            CanonicalValue::Array(
-                self.incompatibilities
-                    .iter()
-                    .map(|i| i.canonical_value())
-                    .collect(),
+            ("bead_id", CanonicalValue::str(self.bead_id.clone())),
+            (
+                "packages",
+                CanonicalValue::Array(self.packages.iter().map(|p| p.canonical_value()).collect()),
             ),
-        );
-        map.insert(
-            "snapshot_epoch".to_string(),
-            CanonicalValue::I64(self.snapshot_epoch as i64),
-        );
-        CanonicalValue::Map(map)
+            (
+                "test_results",
+                CanonicalValue::Array(
+                    self.test_results
+                        .iter()
+                        .map(|r| r.canonical_value())
+                        .collect(),
+                ),
+            ),
+            (
+                "incompatibilities",
+                CanonicalValue::Array(
+                    self.incompatibilities
+                        .iter()
+                        .map(|i| i.canonical_value())
+                        .collect(),
+                ),
+            ),
+            (
+                "snapshot_epoch",
+                CanonicalValue::I64(self.snapshot_epoch as i64),
+            ),
+        ])
     }
 
     /// Packages in a specific tier.

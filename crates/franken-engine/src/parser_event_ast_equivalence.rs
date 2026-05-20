@@ -182,68 +182,56 @@ pub struct SpecimenEvidence {
 
 impl SpecimenEvidence {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "corpus_tier".to_string(),
-            CanonicalValue::String(self.corpus_tier.as_str().to_string()),
-        );
-        map.insert(
-            "event_ir_hash".to_string(),
-            CanonicalValue::String(self.event_ir_hash.clone()),
-        );
-        map.insert(
-            "hash_parity".to_string(),
-            CanonicalValue::Bool(self.hash_parity),
-        );
-        map.insert(
-            "materialization_error_code".to_string(),
-            self.materialization_error_code
-                .as_ref()
-                .map(|v| CanonicalValue::String(v.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "materialized_ast_hash".to_string(),
-            self.materialized_ast_hash
-                .as_ref()
-                .map(|v| CanonicalValue::String(v.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "original_ast_hash".to_string(),
-            self.original_ast_hash
-                .as_ref()
-                .map(|v| CanonicalValue::String(v.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "parse_error_code".to_string(),
-            self.parse_error_code
-                .as_ref()
-                .map(|v| CanonicalValue::String(v.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "replay_stable".to_string(),
-            CanonicalValue::Bool(self.replay_stable),
-        );
-        map.insert(
-            "specimen_id".to_string(),
-            CanonicalValue::String(self.specimen_id.clone()),
-        );
-        map.insert(
-            "statement_count".to_string(),
-            CanonicalValue::U64(self.statement_count as u64),
-        );
-        map.insert(
-            "tamper_kind".to_string(),
-            CanonicalValue::String(self.tamper_kind.as_str().to_string()),
-        );
-        map.insert(
-            "verdict".to_string(),
-            CanonicalValue::String(self.verdict.as_str().to_string()),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "corpus_tier",
+                CanonicalValue::str(self.corpus_tier.as_str()),
+            ),
+            (
+                "event_ir_hash",
+                CanonicalValue::str(self.event_ir_hash.clone()),
+            ),
+            ("hash_parity", CanonicalValue::Bool(self.hash_parity)),
+            (
+                "materialization_error_code",
+                self.materialization_error_code
+                    .as_ref()
+                    .map(|v| CanonicalValue::str(v.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "materialized_ast_hash",
+                self.materialized_ast_hash
+                    .as_ref()
+                    .map(|v| CanonicalValue::str(v.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "original_ast_hash",
+                self.original_ast_hash
+                    .as_ref()
+                    .map(|v| CanonicalValue::str(v.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "parse_error_code",
+                self.parse_error_code
+                    .as_ref()
+                    .map(|v| CanonicalValue::str(v.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("replay_stable", CanonicalValue::Bool(self.replay_stable)),
+            ("specimen_id", CanonicalValue::str(self.specimen_id.clone())),
+            (
+                "statement_count",
+                CanonicalValue::U64(self.statement_count as u64),
+            ),
+            (
+                "tamper_kind",
+                CanonicalValue::str(self.tamper_kind.as_str()),
+            ),
+            ("verdict", CanonicalValue::str(self.verdict.as_str())),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -290,54 +278,45 @@ impl EquivalenceInventory {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "component".to_string(),
-            CanonicalValue::String(self.component.clone()),
-        );
-        map.insert(
-            "evidence".to_string(),
-            CanonicalValue::Array(self.evidence.iter().map(|e| e.canonical_value()).collect()),
-        );
-        map.insert(
-            "failed".to_string(),
-            CanonicalValue::U64(self.failed as u64),
-        );
-        map.insert(
-            "parity_verified".to_string(),
-            CanonicalValue::U64(self.parity_verified as u64),
-        );
         let mut tiers = BTreeMap::new();
         for (k, v) in &self.per_tier {
-            let mut tier_map = BTreeMap::new();
-            tier_map.insert("failed".to_string(), CanonicalValue::U64(v.failed as u64));
-            tier_map.insert("passed".to_string(), CanonicalValue::U64(v.passed as u64));
-            tier_map.insert("total".to_string(), CanonicalValue::U64(v.total as u64));
-            tiers.insert(k.clone(), CanonicalValue::Map(tier_map));
+            tiers.insert(
+                k.clone(),
+                CanonicalValue::map_from_entries([
+                    ("failed", CanonicalValue::U64(v.failed as u64)),
+                    ("passed", CanonicalValue::U64(v.passed as u64)),
+                    ("total", CanonicalValue::U64(v.total as u64)),
+                ]),
+            );
         }
-        map.insert("per_tier".to_string(), CanonicalValue::Map(tiers));
-        map.insert(
-            "passed".to_string(),
-            CanonicalValue::U64(self.passed as u64),
-        );
-        map.insert(
-            "policy_id".to_string(),
-            CanonicalValue::String(self.policy_id.clone()),
-        );
-        map.insert(
-            "replay_stable_count".to_string(),
-            CanonicalValue::U64(self.replay_stable_count as u64),
-        );
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "tamper_detected".to_string(),
-            CanonicalValue::U64(self.tamper_detected as u64),
-        );
-        map.insert("total".to_string(), CanonicalValue::U64(self.total as u64));
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("component", CanonicalValue::str(self.component.clone())),
+            (
+                "evidence",
+                CanonicalValue::Array(self.evidence.iter().map(|e| e.canonical_value()).collect()),
+            ),
+            ("failed", CanonicalValue::U64(self.failed as u64)),
+            (
+                "parity_verified",
+                CanonicalValue::U64(self.parity_verified as u64),
+            ),
+            ("per_tier", CanonicalValue::Map(tiers)),
+            ("passed", CanonicalValue::U64(self.passed as u64)),
+            ("policy_id", CanonicalValue::str(self.policy_id.clone())),
+            (
+                "replay_stable_count",
+                CanonicalValue::U64(self.replay_stable_count as u64),
+            ),
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+            (
+                "tamper_detected",
+                CanonicalValue::U64(self.tamper_detected as u64),
+            ),
+            ("total", CanonicalValue::U64(self.total as u64)),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -369,45 +348,30 @@ pub struct EquivalenceRunManifest {
 
 impl EquivalenceRunManifest {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "artifact_paths".to_string(),
-            CanonicalValue::Array(
-                self.artifact_paths
-                    .iter()
-                    .map(|p| CanonicalValue::String(p.clone()))
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "artifact_paths",
+                CanonicalValue::Array(
+                    self.artifact_paths
+                        .iter()
+                        .map(|p| CanonicalValue::str(p.clone()))
+                        .collect(),
+                ),
             ),
-        );
-        map.insert(
-            "bead_id".to_string(),
-            CanonicalValue::String(self.bead_id.clone()),
-        );
-        map.insert(
-            "component".to_string(),
-            CanonicalValue::String(self.component.clone()),
-        );
-        map.insert(
-            "decision_id".to_string(),
-            CanonicalValue::String(self.decision_id.clone()),
-        );
-        map.insert(
-            "inventory_hash".to_string(),
-            CanonicalValue::String(self.inventory_hash.clone()),
-        );
-        map.insert(
-            "policy_id".to_string(),
-            CanonicalValue::String(self.policy_id.clone()),
-        );
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "trace_id".to_string(),
-            CanonicalValue::String(self.trace_id.clone()),
-        );
-        CanonicalValue::Map(map)
+            ("bead_id", CanonicalValue::str(self.bead_id.clone())),
+            ("component", CanonicalValue::str(self.component.clone())),
+            ("decision_id", CanonicalValue::str(self.decision_id.clone())),
+            (
+                "inventory_hash",
+                CanonicalValue::str(self.inventory_hash.clone()),
+            ),
+            ("policy_id", CanonicalValue::str(self.policy_id.clone())),
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+            ("trace_id", CanonicalValue::str(self.trace_id.clone())),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {

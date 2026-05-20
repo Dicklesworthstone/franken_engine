@@ -6,8 +6,6 @@
 //! evolution policy, and provides deterministic compatibility checks that
 //! integration consumers can run to detect breaking changes.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -169,45 +167,39 @@ impl ApiStabilityManifest {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "contract_version".into(),
-            CanonicalValue::String(self.contract_version.clone()),
-        );
-        map.insert(
-            "schema_version".into(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
         let entries_cv: Vec<CanonicalValue> = self
             .entries
             .iter()
             .map(|e| {
-                let mut m = BTreeMap::new();
-                m.insert(
-                    "current_version".into(),
-                    CanonicalValue::String(e.current_version.clone()),
-                );
-                m.insert(
-                    "description".into(),
-                    CanonicalValue::String(e.description.clone()),
-                );
-                m.insert(
-                    "evolution_rule".into(),
-                    CanonicalValue::String(e.evolution_rule.canonical_json_string().to_string()),
-                );
-                m.insert(
-                    "minimum_compatible_version".into(),
-                    CanonicalValue::String(e.minimum_compatible_version.clone()),
-                );
-                m.insert(
-                    "surface_id".into(),
-                    CanonicalValue::String(e.surface_id.clone()),
-                );
-                CanonicalValue::Map(m)
+                CanonicalValue::map_from_entries([
+                    (
+                        "current_version",
+                        CanonicalValue::str(e.current_version.clone()),
+                    ),
+                    ("description", CanonicalValue::str(e.description.clone())),
+                    (
+                        "evolution_rule",
+                        CanonicalValue::str(e.evolution_rule.canonical_json_string()),
+                    ),
+                    (
+                        "minimum_compatible_version",
+                        CanonicalValue::str(e.minimum_compatible_version.clone()),
+                    ),
+                    ("surface_id", CanonicalValue::str(e.surface_id.clone())),
+                ])
             })
             .collect();
-        map.insert("entries".into(), CanonicalValue::Array(entries_cv));
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "contract_version",
+                CanonicalValue::str(self.contract_version.clone()),
+            ),
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+            ("entries", CanonicalValue::Array(entries_cv)),
+        ])
     }
 
     pub fn canonical_hash(&self) -> String {
@@ -276,42 +268,33 @@ impl CompatibilityReport {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "contract_version".into(),
-            CanonicalValue::String(self.contract_version.clone()),
-        );
-        map.insert(
-            "fail_count".into(),
-            CanonicalValue::U64(self.fail_count() as u64),
-        );
-        map.insert(
-            "pass_count".into(),
-            CanonicalValue::U64(self.pass_count() as u64),
-        );
         let results_cv: Vec<CanonicalValue> = self
             .results
             .iter()
             .map(|r| {
-                let mut m = BTreeMap::new();
-                m.insert(
-                    "check_id".into(),
-                    CanonicalValue::String(r.check_id.clone()),
-                );
-                m.insert("detail".into(), CanonicalValue::String(r.detail.clone()));
-                m.insert(
-                    "verdict".into(),
-                    CanonicalValue::String(r.verdict.canonical_json_string().to_string()),
-                );
-                CanonicalValue::Map(m)
+                CanonicalValue::map_from_entries([
+                    ("check_id", CanonicalValue::str(r.check_id.clone())),
+                    ("detail", CanonicalValue::str(r.detail.clone())),
+                    (
+                        "verdict",
+                        CanonicalValue::str(r.verdict.canonical_json_string()),
+                    ),
+                ])
             })
             .collect();
-        map.insert("results".into(), CanonicalValue::Array(results_cv));
-        map.insert(
-            "schema_version".into(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "contract_version",
+                CanonicalValue::str(self.contract_version.clone()),
+            ),
+            ("fail_count", CanonicalValue::U64(self.fail_count() as u64)),
+            ("pass_count", CanonicalValue::U64(self.pass_count() as u64)),
+            ("results", CanonicalValue::Array(results_cv)),
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+        ])
     }
 
     pub fn canonical_hash(&self) -> String {
@@ -837,49 +820,40 @@ impl IntegrationLogEntry {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "ast_hash".into(),
-            self.ast_hash
-                .as_ref()
-                .map(|h| CanonicalValue::String(h.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("detail".into(), CanonicalValue::String(self.detail.clone()));
-        map.insert(
-            "diagnostic_code".into(),
-            self.diagnostic_code
-                .as_ref()
-                .map(|c| CanonicalValue::String(c.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "event_count".into(),
-            self.event_count
-                .map(CanonicalValue::U64)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "goal".into(),
-            CanonicalValue::String(self.goal.as_str().into()),
-        );
-        map.insert(
-            "mode".into(),
-            CanonicalValue::String(self.mode.as_str().into()),
-        );
-        map.insert(
-            "operation".into(),
-            CanonicalValue::String(self.operation.clone()),
-        );
-        map.insert(
-            "outcome".into(),
-            CanonicalValue::String(self.outcome.canonical_json_string().to_string()),
-        );
-        map.insert(
-            "source_label".into(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "ast_hash",
+                self.ast_hash
+                    .as_ref()
+                    .map(|h| CanonicalValue::str(h.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("detail", CanonicalValue::str(self.detail.clone())),
+            (
+                "diagnostic_code",
+                self.diagnostic_code
+                    .as_ref()
+                    .map(|c| CanonicalValue::str(c.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "event_count",
+                self.event_count
+                    .map(CanonicalValue::U64)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("goal", CanonicalValue::str(self.goal.as_str())),
+            ("mode", CanonicalValue::str(self.mode.as_str())),
+            ("operation", CanonicalValue::str(self.operation.clone())),
+            (
+                "outcome",
+                CanonicalValue::str(self.outcome.canonical_json_string()),
+            ),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+        ])
     }
 }
 

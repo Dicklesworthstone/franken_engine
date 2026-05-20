@@ -111,17 +111,14 @@ impl SyntaxTree {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "goal".to_string(),
-            CanonicalValue::String(self.goal.as_str().to_string()),
-        );
-        map.insert(
-            "body".to_string(),
-            CanonicalValue::Array(self.body.iter().map(Statement::canonical_value).collect()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("goal", CanonicalValue::str(self.goal.as_str())),
+            (
+                "body",
+                CanonicalValue::Array(self.body.iter().map(Statement::canonical_value).collect()),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -186,151 +183,36 @@ impl Statement {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        match self {
-            Self::Import(import) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("import".to_string()),
-                );
-                map.insert("payload".to_string(), import.canonical_value());
-            }
-            Self::Export(export) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("export".to_string()),
-                );
-                map.insert("payload".to_string(), export.canonical_value());
-            }
-            Self::VariableDeclaration(variable_declaration) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("variable_declaration".to_string()),
-                );
-                map.insert(
-                    "payload".to_string(),
-                    variable_declaration.canonical_value(),
-                );
-            }
-            Self::Expression(expr) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("expression".to_string()),
-                );
-                map.insert("payload".to_string(), expr.canonical_value());
-            }
-            Self::Block(block) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("block".to_string()),
-                );
-                map.insert("payload".to_string(), block.canonical_value());
-            }
-            Self::If(if_stmt) => {
-                map.insert("kind".to_string(), CanonicalValue::String("if".to_string()));
-                map.insert("payload".to_string(), if_stmt.canonical_value());
-            }
-            Self::For(for_stmt) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("for".to_string()),
-                );
-                map.insert("payload".to_string(), for_stmt.canonical_value());
-            }
-            Self::While(while_stmt) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("while".to_string()),
-                );
-                map.insert("payload".to_string(), while_stmt.canonical_value());
-            }
-            Self::With(with_stmt) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("with".to_string()),
-                );
-                map.insert("payload".to_string(), with_stmt.canonical_value());
-            }
-            Self::DoWhile(do_while) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("do_while".to_string()),
-                );
-                map.insert("payload".to_string(), do_while.canonical_value());
-            }
-            Self::Return(ret) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("return".to_string()),
-                );
-                map.insert("payload".to_string(), ret.canonical_value());
-            }
-            Self::Throw(throw) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("throw".to_string()),
-                );
-                map.insert("payload".to_string(), throw.canonical_value());
-            }
-            Self::TryCatch(tc) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("try_catch".to_string()),
-                );
-                map.insert("payload".to_string(), tc.canonical_value());
-            }
-            Self::Switch(sw) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("switch".to_string()),
-                );
-                map.insert("payload".to_string(), sw.canonical_value());
-            }
-            Self::Break(brk) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("break".to_string()),
-                );
-                map.insert("payload".to_string(), brk.canonical_value());
-            }
-            Self::Continue(cont) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("continue".to_string()),
-                );
-                map.insert("payload".to_string(), cont.canonical_value());
-            }
-            Self::FunctionDeclaration(func) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("function_declaration".to_string()),
-                );
-                map.insert("payload".to_string(), func.canonical_value());
-            }
-            Self::ClassDeclaration(cls) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("class_declaration".to_string()),
-                );
-                map.insert("payload".to_string(), cls.canonical_value());
-            }
-            Self::ForIn(stmt) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("for_in".to_string()),
-                );
-                map.insert("payload".to_string(), stmt.canonical_value());
-            }
-            Self::ForOf(stmt) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("for_of".to_string()),
-                );
-                map.insert("payload".to_string(), stmt.canonical_value());
-            }
-        }
-        map.insert("span".to_string(), self.span().canonical_value());
-        CanonicalValue::Map(map)
+        let (kind, payload) = match self {
+            Self::Import(import) => ("import", import.canonical_value()),
+            Self::Export(export) => ("export", export.canonical_value()),
+            Self::VariableDeclaration(variable_declaration) => (
+                "variable_declaration",
+                variable_declaration.canonical_value(),
+            ),
+            Self::Expression(expr) => ("expression", expr.canonical_value()),
+            Self::Block(block) => ("block", block.canonical_value()),
+            Self::If(if_stmt) => ("if", if_stmt.canonical_value()),
+            Self::For(for_stmt) => ("for", for_stmt.canonical_value()),
+            Self::While(while_stmt) => ("while", while_stmt.canonical_value()),
+            Self::With(with_stmt) => ("with", with_stmt.canonical_value()),
+            Self::DoWhile(do_while) => ("do_while", do_while.canonical_value()),
+            Self::Return(ret) => ("return", ret.canonical_value()),
+            Self::Throw(throw) => ("throw", throw.canonical_value()),
+            Self::TryCatch(tc) => ("try_catch", tc.canonical_value()),
+            Self::Switch(sw) => ("switch", sw.canonical_value()),
+            Self::Break(brk) => ("break", brk.canonical_value()),
+            Self::Continue(cont) => ("continue", cont.canonical_value()),
+            Self::FunctionDeclaration(func) => ("function_declaration", func.canonical_value()),
+            Self::ClassDeclaration(cls) => ("class_declaration", cls.canonical_value()),
+            Self::ForIn(stmt) => ("for_in", stmt.canonical_value()),
+            Self::ForOf(stmt) => ("for_of", stmt.canonical_value()),
+        };
+        CanonicalValue::map_from_entries([
+            ("kind", CanonicalValue::str(kind)),
+            ("payload", payload),
+            ("span", self.span().canonical_value()),
+        ])
     }
 }
 
@@ -342,16 +224,10 @@ pub struct ImportSpecifier {
 
 impl ImportSpecifier {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "import_name".to_string(),
-            CanonicalValue::String(self.import_name.clone()),
-        );
-        map.insert(
-            "local_name".to_string(),
-            CanonicalValue::String(self.local_name.clone()),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("import_name", CanonicalValue::str(self.import_name.clone())),
+            ("local_name", CanonicalValue::str(self.local_name.clone())),
+        ])
     }
 }
 
@@ -379,81 +255,52 @@ pub enum ImportClause {
 
 impl ImportClause {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
             Self::SideEffect => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("side_effect".to_string()),
-                );
+                CanonicalValue::map_from_entries([("kind", CanonicalValue::str("side_effect"))])
             }
-            Self::Default { local } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("default".to_string()),
-                );
-                map.insert("local".to_string(), CanonicalValue::String(local.clone()));
-            }
-            Self::Namespace { local } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("namespace".to_string()),
-                );
-                map.insert("local".to_string(), CanonicalValue::String(local.clone()));
-            }
-            Self::Named { specifiers } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("named".to_string()),
-                );
-                map.insert(
-                    "specifiers".to_string(),
+            Self::Default { local } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("default")),
+                ("local", CanonicalValue::str(local.clone())),
+            ]),
+            Self::Namespace { local } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("namespace")),
+                ("local", CanonicalValue::str(local.clone())),
+            ]),
+            Self::Named { specifiers } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("named")),
+                (
+                    "specifiers",
                     CanonicalValue::Array(
                         specifiers
                             .iter()
                             .map(ImportSpecifier::canonical_value)
                             .collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::DefaultAndNamed {
                 default,
                 specifiers,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("default_named".to_string()),
-                );
-                map.insert(
-                    "default".to_string(),
-                    CanonicalValue::String(default.clone()),
-                );
-                map.insert(
-                    "specifiers".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("default_named")),
+                ("default", CanonicalValue::str(default.clone())),
+                (
+                    "specifiers",
                     CanonicalValue::Array(
                         specifiers
                             .iter()
                             .map(ImportSpecifier::canonical_value)
                             .collect(),
                     ),
-                );
-            }
-            Self::DefaultAndNamespace { default, namespace } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("default_namespace".to_string()),
-                );
-                map.insert(
-                    "default".to_string(),
-                    CanonicalValue::String(default.clone()),
-                );
-                map.insert(
-                    "namespace".to_string(),
-                    CanonicalValue::String(namespace.clone()),
-                );
-            }
+                ),
+            ]),
+            Self::DefaultAndNamespace { default, namespace } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("default_namespace")),
+                ("default", CanonicalValue::str(default.clone())),
+                ("namespace", CanonicalValue::str(namespace.clone())),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 
     pub fn primary_binding(&self) -> Option<&str> {
@@ -500,21 +347,18 @@ pub struct ImportDeclaration {
 
 impl ImportDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("clause".to_string(), self.clause.canonical_value());
-        map.insert(
-            "binding".to_string(),
-            match &self.binding {
-                Some(value) => CanonicalValue::String(value.clone()),
-                None => CanonicalValue::Null,
-            },
-        );
-        map.insert(
-            "source".to_string(),
-            CanonicalValue::String(self.source.clone()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("clause", self.clause.canonical_value()),
+            (
+                "binding",
+                match &self.binding {
+                    Some(value) => CanonicalValue::str(value.clone()),
+                    None => CanonicalValue::Null,
+                },
+            ),
+            ("source", CanonicalValue::str(self.source.clone())),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -526,24 +370,16 @@ pub enum ExportKind {
 
 impl ExportKind {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
-            Self::Default(expr) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("default".to_string()),
-                );
-                map.insert("value".to_string(), expr.canonical_value());
-            }
-            Self::NamedClause(clause) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("named".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::String(clause.clone()));
-            }
+            Self::Default(expr) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("default")),
+                ("value", expr.canonical_value()),
+            ]),
+            Self::NamedClause(clause) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("named")),
+                ("value", CanonicalValue::str(clause.clone())),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 }
 
@@ -555,10 +391,10 @@ pub struct ExportDeclaration {
 
 impl ExportDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("kind".to_string(), self.kind.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("kind", self.kind.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -581,15 +417,12 @@ pub struct ObjectPatternProperty {
 
 impl ObjectPatternProperty {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("key".to_string(), self.key.canonical_value());
-        map.insert("value".to_string(), self.value.canonical_value());
-        map.insert("computed".to_string(), CanonicalValue::Bool(self.computed));
-        map.insert(
-            "shorthand".to_string(),
-            CanonicalValue::Bool(self.shorthand),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("key", self.key.canonical_value()),
+            ("value", self.value.canonical_value()),
+            ("computed", CanonicalValue::Bool(self.computed)),
+            ("shorthand", CanonicalValue::Bool(self.shorthand)),
+        ])
     }
 }
 
@@ -642,32 +475,22 @@ impl BindingPattern {
 
     /// Canonical value for deterministic hashing.
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
-            Self::Identifier(name) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("identifier".to_string()),
-                );
-                map.insert("name".to_string(), CanonicalValue::String(name.clone()));
-            }
-            Self::ObjectPattern(props) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("object_pattern".to_string()),
-                );
-                map.insert(
-                    "properties".to_string(),
+            Self::Identifier(name) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("identifier")),
+                ("name", CanonicalValue::str(name.clone())),
+            ]),
+            Self::ObjectPattern(props) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("object_pattern")),
+                (
+                    "properties",
                     CanonicalValue::Array(props.iter().map(|p| p.canonical_value()).collect()),
-                );
-            }
-            Self::ArrayPattern(elements) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("array_pattern".to_string()),
-                );
-                map.insert(
-                    "elements".to_string(),
+                ),
+            ]),
+            Self::ArrayPattern(elements) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("array_pattern")),
+                (
+                    "elements",
                     CanonicalValue::Array(
                         elements
                             .iter()
@@ -678,25 +501,18 @@ impl BindingPattern {
                             })
                             .collect(),
                     ),
-                );
-            }
-            Self::Rest(inner) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("rest_element".to_string()),
-                );
-                map.insert("argument".to_string(), inner.canonical_value());
-            }
-            Self::AssignmentPattern { left, right } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("assignment_pattern".to_string()),
-                );
-                map.insert("left".to_string(), left.canonical_value());
-                map.insert("right".to_string(), right.canonical_value());
-            }
+                ),
+            ]),
+            Self::Rest(inner) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("rest_element")),
+                ("argument", inner.canonical_value()),
+            ]),
+            Self::AssignmentPattern { left, right } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("assignment_pattern")),
+                ("left", left.canonical_value()),
+                ("right", right.canonical_value()),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 }
 
@@ -767,17 +583,17 @@ impl VariableDeclarator {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("pattern".to_string(), self.pattern.canonical_value());
-        map.insert(
-            "initializer".to_string(),
-            self.initializer
-                .as_ref()
-                .map(Expression::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("pattern", self.pattern.canonical_value()),
+            (
+                "initializer",
+                self.initializer
+                    .as_ref()
+                    .map(Expression::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -790,22 +606,19 @@ pub struct VariableDeclaration {
 
 impl VariableDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "kind".to_string(),
-            CanonicalValue::String(self.kind.as_str().to_string()),
-        );
-        map.insert(
-            "declarations".to_string(),
-            CanonicalValue::Array(
-                self.declarations
-                    .iter()
-                    .map(VariableDeclarator::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            ("kind", CanonicalValue::str(self.kind.as_str())),
+            (
+                "declarations",
+                CanonicalValue::Array(
+                    self.declarations
+                        .iter()
+                        .map(VariableDeclarator::canonical_value)
+                        .collect(),
+                ),
             ),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -817,10 +630,10 @@ pub struct ExpressionStatement {
 
 impl ExpressionStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("expression".to_string(), self.expression.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("expression", self.expression.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -836,13 +649,13 @@ pub struct BlockStatement {
 
 impl BlockStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "body".to_string(),
-            CanonicalValue::Array(self.body.iter().map(Statement::canonical_value).collect()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "body",
+                CanonicalValue::Array(self.body.iter().map(Statement::canonical_value).collect()),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -856,18 +669,18 @@ pub struct IfStatement {
 
 impl IfStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("condition".to_string(), self.condition.canonical_value());
-        map.insert("consequent".to_string(), self.consequent.canonical_value());
-        map.insert(
-            "alternate".to_string(),
-            self.alternate
-                .as_ref()
-                .map(|s| s.canonical_value())
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("condition", self.condition.canonical_value()),
+            ("consequent", self.consequent.canonical_value()),
+            (
+                "alternate",
+                self.alternate
+                    .as_ref()
+                    .map(|s| s.canonical_value())
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -882,31 +695,31 @@ pub struct ForStatement {
 
 impl ForStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "init".to_string(),
-            self.init
-                .as_ref()
-                .map(|s| s.canonical_value())
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "condition".to_string(),
-            self.condition
-                .as_ref()
-                .map(Expression::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "update".to_string(),
-            self.update
-                .as_ref()
-                .map(Expression::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "init",
+                self.init
+                    .as_ref()
+                    .map(|s| s.canonical_value())
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "condition",
+                self.condition
+                    .as_ref()
+                    .map(Expression::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "update",
+                self.update
+                    .as_ref()
+                    .map(Expression::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -921,19 +734,19 @@ pub struct ForInStatement {
 
 impl ForInStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("binding".to_string(), self.binding.canonical_value());
-        map.insert(
-            "binding_kind".to_string(),
-            self.binding_kind
-                .as_ref()
-                .map(|k| CanonicalValue::String(k.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("object".to_string(), self.object.canonical_value());
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("binding", self.binding.canonical_value()),
+            (
+                "binding_kind",
+                self.binding_kind
+                    .as_ref()
+                    .map(|k| CanonicalValue::str(k.as_str()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("object", self.object.canonical_value()),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -948,19 +761,19 @@ pub struct ForOfStatement {
 
 impl ForOfStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("binding".to_string(), self.binding.canonical_value());
-        map.insert(
-            "binding_kind".to_string(),
-            self.binding_kind
-                .as_ref()
-                .map(|k| CanonicalValue::String(k.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("iterable".to_string(), self.iterable.canonical_value());
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("binding", self.binding.canonical_value()),
+            (
+                "binding_kind",
+                self.binding_kind
+                    .as_ref()
+                    .map(|k| CanonicalValue::str(k.as_str()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("iterable", self.iterable.canonical_value()),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -973,11 +786,11 @@ pub struct WhileStatement {
 
 impl WhileStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("condition".to_string(), self.condition.canonical_value());
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("condition", self.condition.canonical_value()),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -990,11 +803,11 @@ pub struct WithStatement {
 
 impl WithStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("object".to_string(), self.object.canonical_value());
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("object", self.object.canonical_value()),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1007,11 +820,11 @@ pub struct DoWhileStatement {
 
 impl DoWhileStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("condition".to_string(), self.condition.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("body", self.body.canonical_value()),
+            ("condition", self.condition.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1023,16 +836,16 @@ pub struct ReturnStatement {
 
 impl ReturnStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "argument".to_string(),
-            self.argument
-                .as_ref()
-                .map(Expression::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "argument",
+                self.argument
+                    .as_ref()
+                    .map(Expression::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1044,10 +857,10 @@ pub struct ThrowStatement {
 
 impl ThrowStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("argument".to_string(), self.argument.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("argument", self.argument.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1060,17 +873,17 @@ pub struct CatchClause {
 
 impl CatchClause {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "parameter".to_string(),
-            self.parameter
-                .as_ref()
-                .map(|p| CanonicalValue::String(p.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "parameter",
+                self.parameter
+                    .as_ref()
+                    .map(|p| CanonicalValue::str(p.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("body", self.body.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1084,24 +897,24 @@ pub struct TryCatchStatement {
 
 impl TryCatchStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("block".to_string(), self.block.canonical_value());
-        map.insert(
-            "handler".to_string(),
-            self.handler
-                .as_ref()
-                .map(CatchClause::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "finalizer".to_string(),
-            self.finalizer
-                .as_ref()
-                .map(BlockStatement::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("block", self.block.canonical_value()),
+            (
+                "handler",
+                self.handler
+                    .as_ref()
+                    .map(CatchClause::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "finalizer",
+                self.finalizer
+                    .as_ref()
+                    .map(BlockStatement::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1114,25 +927,25 @@ pub struct SwitchCase {
 
 impl SwitchCase {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "test".to_string(),
-            self.test
-                .as_ref()
-                .map(Expression::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "consequent".to_string(),
-            CanonicalValue::Array(
-                self.consequent
-                    .iter()
-                    .map(Statement::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "test",
+                self.test
+                    .as_ref()
+                    .map(Expression::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
             ),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+            (
+                "consequent",
+                CanonicalValue::Array(
+                    self.consequent
+                        .iter()
+                        .map(Statement::canonical_value)
+                        .collect(),
+                ),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1145,17 +958,14 @@ pub struct SwitchStatement {
 
 impl SwitchStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "discriminant".to_string(),
-            self.discriminant.canonical_value(),
-        );
-        map.insert(
-            "cases".to_string(),
-            CanonicalValue::Array(self.cases.iter().map(SwitchCase::canonical_value).collect()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("discriminant", self.discriminant.canonical_value()),
+            (
+                "cases",
+                CanonicalValue::Array(self.cases.iter().map(SwitchCase::canonical_value).collect()),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1167,16 +977,16 @@ pub struct BreakStatement {
 
 impl BreakStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "label".to_string(),
-            self.label
-                .as_ref()
-                .map(|l| CanonicalValue::String(l.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "label",
+                self.label
+                    .as_ref()
+                    .map(|l| CanonicalValue::str(l.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1188,16 +998,16 @@ pub struct ContinueStatement {
 
 impl ContinueStatement {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "label".to_string(),
-            self.label
-                .as_ref()
-                .map(|l| CanonicalValue::String(l.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "label",
+                self.label
+                    .as_ref()
+                    .map(|l| CanonicalValue::str(l.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1214,10 +1024,10 @@ impl FunctionParam {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("pattern".to_string(), self.pattern.canonical_value());
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("pattern", self.pattern.canonical_value()),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1233,31 +1043,28 @@ pub struct FunctionDeclaration {
 
 impl FunctionDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "name".to_string(),
-            self.name
-                .as_ref()
-                .map(|n| CanonicalValue::String(n.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "params".to_string(),
-            CanonicalValue::Array(
-                self.params
-                    .iter()
-                    .map(FunctionParam::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "name",
+                self.name
+                    .as_ref()
+                    .map(|n| CanonicalValue::str(n.clone()))
+                    .unwrap_or(CanonicalValue::Null),
             ),
-        );
-        map.insert("body".to_string(), self.body.canonical_value());
-        map.insert("is_async".to_string(), CanonicalValue::Bool(self.is_async));
-        map.insert(
-            "is_generator".to_string(),
-            CanonicalValue::Bool(self.is_generator),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+            (
+                "params",
+                CanonicalValue::Array(
+                    self.params
+                        .iter()
+                        .map(FunctionParam::canonical_value)
+                        .collect(),
+                ),
+            ),
+            ("body", self.body.canonical_value()),
+            ("is_async", CanonicalValue::Bool(self.is_async)),
+            ("is_generator", CanonicalValue::Bool(self.is_generator)),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1297,16 +1104,12 @@ pub struct ClassDeclaration {
 
 impl ClassDeclaration {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "kind".to_string(),
-            CanonicalValue::String("class_declaration".to_string()),
-        );
+        let mut entries = vec![("kind", CanonicalValue::str("class_declaration"))];
         if let Some(n) = &self.name {
-            map.insert("name".to_string(), CanonicalValue::String(n.clone()));
+            entries.push(("name", CanonicalValue::str(n.clone())));
         }
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        entries.push(("span", self.span.canonical_value()));
+        CanonicalValue::map_from_entries(entries)
     }
 }
 
@@ -1485,15 +1288,12 @@ pub struct ObjectProperty {
 
 impl ObjectProperty {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("key".to_string(), self.key.canonical_value());
-        map.insert("value".to_string(), self.value.canonical_value());
-        map.insert("computed".to_string(), CanonicalValue::Bool(self.computed));
-        map.insert(
-            "shorthand".to_string(),
-            CanonicalValue::Bool(self.shorthand),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("key", self.key.canonical_value()),
+            ("value", self.value.canonical_value()),
+            ("computed", CanonicalValue::Bool(self.computed)),
+            ("shorthand", CanonicalValue::Bool(self.shorthand)),
+        ])
     }
 }
 
@@ -1506,24 +1306,16 @@ pub enum ArrowBody {
 
 impl ArrowBody {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
-            Self::Expression(expr) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("expression".to_string()),
-                );
-                map.insert("value".to_string(), expr.canonical_value());
-            }
-            Self::Block(block) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("block".to_string()),
-                );
-                map.insert("value".to_string(), block.canonical_value());
-            }
+            Self::Expression(expr) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("expression")),
+                ("value", expr.canonical_value()),
+            ]),
+            Self::Block(block) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("block")),
+                ("value", block.canonical_value()),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 }
 

@@ -167,21 +167,15 @@ impl StaticError {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "diagnostic_code".to_string(),
-            CanonicalValue::String(self.kind.diagnostic_code().to_string()),
-        );
-        map.insert(
-            "kind".to_string(),
-            CanonicalValue::String(self.kind.as_str().to_string()),
-        );
-        map.insert(
-            "message".to_string(),
-            CanonicalValue::String(self.message.clone()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "diagnostic_code",
+                CanonicalValue::str(self.kind.diagnostic_code()),
+            ),
+            ("kind", CanonicalValue::str(self.kind.as_str())),
+            ("message", CanonicalValue::str(self.message.clone())),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -227,38 +221,35 @@ impl StaticAnalysisResult {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "bindings".to_string(),
-            CanonicalValue::Array(
-                self.bindings
-                    .iter()
-                    .map(ResolvedBinding::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "bindings",
+                CanonicalValue::Array(
+                    self.bindings
+                        .iter()
+                        .map(ResolvedBinding::canonical_value)
+                        .collect(),
+                ),
             ),
-        );
-        map.insert(
-            "errors".to_string(),
-            CanonicalValue::Array(
-                self.errors
-                    .iter()
-                    .map(StaticError::canonical_value)
-                    .collect(),
+            (
+                "errors",
+                CanonicalValue::Array(
+                    self.errors
+                        .iter()
+                        .map(StaticError::canonical_value)
+                        .collect(),
+                ),
             ),
-        );
-        map.insert(
-            "is_module".to_string(),
-            CanonicalValue::Bool(self.is_module),
-        );
-        map.insert(
-            "has_top_level_await".to_string(),
-            CanonicalValue::Bool(self.has_top_level_await),
-        );
-        map.insert(
-            "scopes".to_string(),
-            CanonicalValue::Array(self.scopes.iter().map(ScopeNode::canonical_value).collect()),
-        );
-        CanonicalValue::Map(map)
+            ("is_module", CanonicalValue::Bool(self.is_module)),
+            (
+                "has_top_level_await",
+                CanonicalValue::Bool(self.has_top_level_await),
+            ),
+            (
+                "scopes",
+                CanonicalValue::Array(self.scopes.iter().map(ScopeNode::canonical_value).collect()),
+            ),
+        ])
     }
 }
 
@@ -1735,36 +1726,15 @@ impl StaticSemanticsEvent {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "binding_count".to_string(),
-            CanonicalValue::U64(self.binding_count),
-        );
-        map.insert(
-            "component".to_string(),
-            CanonicalValue::String(self.component.clone()),
-        );
-        map.insert(
-            "error_count".to_string(),
-            CanonicalValue::U64(self.error_count),
-        );
-        map.insert(
-            "event".to_string(),
-            CanonicalValue::String(self.event.clone()),
-        );
-        map.insert(
-            "is_module".to_string(),
-            CanonicalValue::Bool(self.is_module),
-        );
-        map.insert(
-            "outcome".to_string(),
-            CanonicalValue::String(self.outcome.clone()),
-        );
-        map.insert(
-            "scope_count".to_string(),
-            CanonicalValue::U64(self.scope_count),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("binding_count", CanonicalValue::U64(self.binding_count)),
+            ("component", CanonicalValue::str(self.component.clone())),
+            ("error_count", CanonicalValue::U64(self.error_count)),
+            ("event", CanonicalValue::str(self.event.clone())),
+            ("is_module", CanonicalValue::Bool(self.is_module)),
+            ("outcome", CanonicalValue::str(self.outcome.clone())),
+            ("scope_count", CanonicalValue::U64(self.scope_count)),
+        ])
     }
 }
 

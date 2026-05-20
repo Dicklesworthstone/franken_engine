@@ -196,60 +196,41 @@ impl ModuleRecord {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("id".to_string(), CanonicalValue::String(self.id.clone()));
-        map.insert(
-            "syntax".to_string(),
-            CanonicalValue::String(self.syntax.as_str().to_string()),
-        );
-        map.insert(
-            "source".to_string(),
-            CanonicalValue::String(self.source.clone()),
-        );
-
         let dependencies = self
             .dependencies
             .iter()
             .map(|dep| {
-                let mut entry = BTreeMap::new();
-                entry.insert(
-                    "specifier".to_string(),
-                    CanonicalValue::String(dep.specifier.clone()),
-                );
-                entry.insert(
-                    "style".to_string(),
-                    CanonicalValue::String(dep.style.as_str().to_string()),
-                );
-                CanonicalValue::Map(entry)
+                CanonicalValue::map_from_entries([
+                    ("specifier", CanonicalValue::str(dep.specifier.clone())),
+                    ("style", CanonicalValue::str(dep.style.as_str())),
+                ])
             })
             .collect();
-        map.insert(
-            "dependencies".to_string(),
-            CanonicalValue::Array(dependencies),
-        );
-
         let required_caps = self
             .required_capabilities
             .iter()
-            .map(|cap| CanonicalValue::String(cap.to_string()))
+            .map(|cap| CanonicalValue::str(cap.to_string()))
             .collect();
-        map.insert(
-            "required_capabilities".to_string(),
-            CanonicalValue::Array(required_caps),
-        );
-
-        let mut provenance = BTreeMap::new();
-        provenance.insert(
-            "kind".to_string(),
-            CanonicalValue::String(self.provenance.kind.as_str().to_string()),
-        );
-        provenance.insert(
-            "origin".to_string(),
-            CanonicalValue::String(self.provenance.origin.clone()),
-        );
-        map.insert("provenance".to_string(), CanonicalValue::Map(provenance));
-
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("id", CanonicalValue::str(self.id.clone())),
+            ("syntax", CanonicalValue::str(self.syntax.as_str())),
+            ("source", CanonicalValue::str(self.source.clone())),
+            ("dependencies", CanonicalValue::Array(dependencies)),
+            (
+                "required_capabilities",
+                CanonicalValue::Array(required_caps),
+            ),
+            (
+                "provenance",
+                CanonicalValue::map_from_entries([
+                    ("kind", CanonicalValue::str(self.provenance.kind.as_str())),
+                    (
+                        "origin",
+                        CanonicalValue::str(self.provenance.origin.clone()),
+                    ),
+                ]),
+            ),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {

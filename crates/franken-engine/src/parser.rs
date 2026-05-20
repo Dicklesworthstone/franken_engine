@@ -330,42 +330,30 @@ pub struct ParseFailureWitness {
 
 impl ParseFailureWitness {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "mode".to_string(),
-            CanonicalValue::String(self.mode.as_str().to_string()),
-        );
-        map.insert(
-            "budget_kind".to_string(),
-            self.budget_kind
-                .map(|kind| CanonicalValue::String(kind.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "source_bytes".to_string(),
-            CanonicalValue::U64(self.source_bytes),
-        );
-        map.insert(
-            "token_count".to_string(),
-            CanonicalValue::U64(self.token_count),
-        );
-        map.insert(
-            "max_recursion_observed".to_string(),
-            CanonicalValue::U64(self.max_recursion_observed),
-        );
-        map.insert(
-            "max_source_bytes".to_string(),
-            CanonicalValue::U64(self.max_source_bytes),
-        );
-        map.insert(
-            "max_token_count".to_string(),
-            CanonicalValue::U64(self.max_token_count),
-        );
-        map.insert(
-            "max_recursion_depth".to_string(),
-            CanonicalValue::U64(self.max_recursion_depth),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("mode", CanonicalValue::str(self.mode.as_str())),
+            (
+                "budget_kind",
+                self.budget_kind
+                    .map(|kind| CanonicalValue::str(kind.as_str()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("source_bytes", CanonicalValue::U64(self.source_bytes)),
+            ("token_count", CanonicalValue::U64(self.token_count)),
+            (
+                "max_recursion_observed",
+                CanonicalValue::U64(self.max_recursion_observed),
+            ),
+            (
+                "max_source_bytes",
+                CanonicalValue::U64(self.max_source_bytes),
+            ),
+            ("max_token_count", CanonicalValue::U64(self.max_token_count)),
+            (
+                "max_recursion_depth",
+                CanonicalValue::U64(self.max_recursion_depth),
+            ),
+        ])
     }
 }
 
@@ -507,68 +495,59 @@ impl ParseDiagnosticEnvelope {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "taxonomy_version".to_string(),
-            CanonicalValue::String(self.taxonomy_version.clone()),
-        );
-        map.insert(
-            "hash_algorithm".to_string(),
-            CanonicalValue::String(self.hash_algorithm.clone()),
-        );
-        map.insert(
-            "hash_prefix".to_string(),
-            CanonicalValue::String(self.hash_prefix.clone()),
-        );
-        map.insert(
-            "parse_error_code".to_string(),
-            CanonicalValue::String(self.parse_error_code.as_str().to_string()),
-        );
-        map.insert(
-            "diagnostic_code".to_string(),
-            CanonicalValue::String(self.diagnostic_code.clone()),
-        );
-        map.insert(
-            "category".to_string(),
-            CanonicalValue::String(self.category.as_str().to_string()),
-        );
-        map.insert(
-            "severity".to_string(),
-            CanonicalValue::String(self.severity.as_str().to_string()),
-        );
-        map.insert(
-            "message_template".to_string(),
-            CanonicalValue::String(self.message_template.clone()),
-        );
-        map.insert(
-            "source_label".to_string(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        map.insert(
-            "span".to_string(),
-            self.span
-                .as_ref()
-                .map(SourceSpan::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "budget_kind".to_string(),
-            self.budget_kind
-                .map(|kind| CanonicalValue::String(kind.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "witness".to_string(),
-            self.witness
-                .as_ref()
-                .map(ParseFailureWitness::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+            (
+                "taxonomy_version",
+                CanonicalValue::str(self.taxonomy_version.clone()),
+            ),
+            (
+                "hash_algorithm",
+                CanonicalValue::str(self.hash_algorithm.clone()),
+            ),
+            ("hash_prefix", CanonicalValue::str(self.hash_prefix.clone())),
+            (
+                "parse_error_code",
+                CanonicalValue::str(self.parse_error_code.as_str()),
+            ),
+            (
+                "diagnostic_code",
+                CanonicalValue::str(self.diagnostic_code.clone()),
+            ),
+            ("category", CanonicalValue::str(self.category.as_str())),
+            ("severity", CanonicalValue::str(self.severity.as_str())),
+            (
+                "message_template",
+                CanonicalValue::str(self.message_template.clone()),
+            ),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+            (
+                "span",
+                self.span
+                    .as_ref()
+                    .map(SourceSpan::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "budget_kind",
+                self.budget_kind
+                    .map(|kind| CanonicalValue::str(kind.as_str()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "witness",
+                self.witness
+                    .as_ref()
+                    .map(ParseFailureWitness::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -650,7 +629,7 @@ impl ParseEventKind {
     }
 
     pub fn canonical_value(self) -> CanonicalValue {
-        CanonicalValue::String(self.as_str().to_string())
+        CanonicalValue::str(self.as_str())
     }
 }
 
@@ -681,75 +660,57 @@ pub struct ParseEvent {
 
 impl ParseEvent {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert("sequence".to_string(), CanonicalValue::U64(self.sequence));
-        map.insert("kind".to_string(), self.kind.canonical_value());
-        map.insert(
-            "parser_mode".to_string(),
-            CanonicalValue::String(self.parser_mode.as_str().to_string()),
-        );
-        map.insert(
-            "goal".to_string(),
-            CanonicalValue::String(self.goal.as_str().to_string()),
-        );
-        map.insert(
-            "source_label".to_string(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        map.insert(
-            "trace_id".to_string(),
-            CanonicalValue::String(self.trace_id.clone()),
-        );
-        map.insert(
-            "decision_id".to_string(),
-            CanonicalValue::String(self.decision_id.clone()),
-        );
-        map.insert(
-            "policy_id".to_string(),
-            CanonicalValue::String(self.policy_id.clone()),
-        );
-        map.insert(
-            "component".to_string(),
-            CanonicalValue::String(self.component.clone()),
-        );
-        map.insert(
-            "outcome".to_string(),
-            CanonicalValue::String(self.outcome.clone()),
-        );
-        map.insert(
-            "error_code".to_string(),
-            self.error_code
-                .map(|code| CanonicalValue::String(code.as_str().to_string()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "statement_index".to_string(),
-            self.statement_index
-                .map(CanonicalValue::U64)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "span".to_string(),
-            self.span
-                .as_ref()
-                .map(SourceSpan::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "payload_kind".to_string(),
-            self.payload_kind
-                .as_ref()
-                .map(|value| CanonicalValue::String(value.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "payload_hash".to_string(),
-            self.payload_hash
-                .as_ref()
-                .map(|value| CanonicalValue::String(value.clone()))
-                .unwrap_or(CanonicalValue::Null),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("sequence", CanonicalValue::U64(self.sequence)),
+            ("kind", self.kind.canonical_value()),
+            (
+                "parser_mode",
+                CanonicalValue::str(self.parser_mode.as_str()),
+            ),
+            ("goal", CanonicalValue::str(self.goal.as_str())),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+            ("trace_id", CanonicalValue::str(self.trace_id.clone())),
+            ("decision_id", CanonicalValue::str(self.decision_id.clone())),
+            ("policy_id", CanonicalValue::str(self.policy_id.clone())),
+            ("component", CanonicalValue::str(self.component.clone())),
+            ("outcome", CanonicalValue::str(self.outcome.clone())),
+            (
+                "error_code",
+                self.error_code
+                    .map(|code| CanonicalValue::str(code.as_str()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "statement_index",
+                self.statement_index
+                    .map(CanonicalValue::U64)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "span",
+                self.span
+                    .as_ref()
+                    .map(SourceSpan::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "payload_kind",
+                self.payload_kind
+                    .as_ref()
+                    .map(|value| CanonicalValue::str(value.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            (
+                "payload_hash",
+                self.payload_hash
+                    .as_ref()
+                    .map(|value| CanonicalValue::str(value.clone()))
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+        ])
     }
 }
 
@@ -949,49 +910,43 @@ impl ParseEventIr {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "contract_version".to_string(),
-            CanonicalValue::String(self.contract_version.clone()),
-        );
-        map.insert(
-            "hash_algorithm".to_string(),
-            CanonicalValue::String(Self::canonical_hash_algorithm().to_string()),
-        );
-        map.insert(
-            "hash_prefix".to_string(),
-            CanonicalValue::String(Self::canonical_hash_prefix().to_string()),
-        );
-        map.insert(
-            "parser_mode".to_string(),
-            CanonicalValue::String(self.parser_mode.as_str().to_string()),
-        );
-        map.insert(
-            "goal".to_string(),
-            CanonicalValue::String(self.goal.as_str().to_string()),
-        );
-        map.insert(
-            "source_label".to_string(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        map.insert(
-            "event_count".to_string(),
-            CanonicalValue::U64(self.events.len() as u64),
-        );
-        map.insert(
-            "events".to_string(),
-            CanonicalValue::Array(
-                self.events
-                    .iter()
-                    .map(ParseEvent::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
             ),
-        );
-        CanonicalValue::Map(map)
+            (
+                "contract_version",
+                CanonicalValue::str(self.contract_version.clone()),
+            ),
+            (
+                "hash_algorithm",
+                CanonicalValue::str(Self::canonical_hash_algorithm()),
+            ),
+            (
+                "hash_prefix",
+                CanonicalValue::str(Self::canonical_hash_prefix()),
+            ),
+            (
+                "parser_mode",
+                CanonicalValue::str(self.parser_mode.as_str()),
+            ),
+            ("goal", CanonicalValue::str(self.goal.as_str())),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+            ("event_count", CanonicalValue::U64(self.events.len() as u64)),
+            (
+                "events",
+                CanonicalValue::Array(
+                    self.events
+                        .iter()
+                        .map(ParseEvent::canonical_value)
+                        .collect(),
+                ),
+            ),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -1438,22 +1393,16 @@ pub struct MaterializedStatementNode {
 
 impl MaterializedStatementNode {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "node_id".to_string(),
-            CanonicalValue::String(self.node_id.clone()),
-        );
-        map.insert("sequence".to_string(), CanonicalValue::U64(self.sequence));
-        map.insert(
-            "statement_index".to_string(),
-            CanonicalValue::U64(self.statement_index),
-        );
-        map.insert(
-            "payload_hash".to_string(),
-            CanonicalValue::String(self.payload_hash.clone()),
-        );
-        map.insert("span".to_string(), self.span.canonical_value());
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            ("node_id", CanonicalValue::str(self.node_id.clone())),
+            ("sequence", CanonicalValue::U64(self.sequence)),
+            ("statement_index", CanonicalValue::U64(self.statement_index)),
+            (
+                "payload_hash",
+                CanonicalValue::str(self.payload_hash.clone()),
+            ),
+            ("span", self.span.canonical_value()),
+        ])
     }
 }
 
@@ -1484,61 +1433,43 @@ impl MaterializedSyntaxTree {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "contract_version".to_string(),
-            CanonicalValue::String(self.contract_version.clone()),
-        );
-        map.insert(
-            "trace_id".to_string(),
-            CanonicalValue::String(self.trace_id.clone()),
-        );
-        map.insert(
-            "decision_id".to_string(),
-            CanonicalValue::String(self.decision_id.clone()),
-        );
-        map.insert(
-            "policy_id".to_string(),
-            CanonicalValue::String(self.policy_id.clone()),
-        );
-        map.insert(
-            "component".to_string(),
-            CanonicalValue::String(self.component.clone()),
-        );
-        map.insert(
-            "parser_mode".to_string(),
-            CanonicalValue::String(self.parser_mode.as_str().to_string()),
-        );
-        map.insert(
-            "goal".to_string(),
-            CanonicalValue::String(self.goal.as_str().to_string()),
-        );
-        map.insert(
-            "source_label".to_string(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        map.insert(
-            "root_node_id".to_string(),
-            CanonicalValue::String(self.root_node_id.clone()),
-        );
-        map.insert(
-            "statement_nodes".to_string(),
-            CanonicalValue::Array(
-                self.statement_nodes
-                    .iter()
-                    .map(MaterializedStatementNode::canonical_value)
-                    .collect(),
+        CanonicalValue::map_from_entries([
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
             ),
-        );
-        map.insert(
-            "syntax_tree".to_string(),
-            self.syntax_tree.canonical_value(),
-        );
-        CanonicalValue::Map(map)
+            (
+                "contract_version",
+                CanonicalValue::str(self.contract_version.clone()),
+            ),
+            ("trace_id", CanonicalValue::str(self.trace_id.clone())),
+            ("decision_id", CanonicalValue::str(self.decision_id.clone())),
+            ("policy_id", CanonicalValue::str(self.policy_id.clone())),
+            ("component", CanonicalValue::str(self.component.clone())),
+            (
+                "parser_mode",
+                CanonicalValue::str(self.parser_mode.as_str()),
+            ),
+            ("goal", CanonicalValue::str(self.goal.as_str())),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+            (
+                "root_node_id",
+                CanonicalValue::str(self.root_node_id.clone()),
+            ),
+            (
+                "statement_nodes",
+                CanonicalValue::Array(
+                    self.statement_nodes
+                        .iter()
+                        .map(MaterializedStatementNode::canonical_value)
+                        .collect(),
+                ),
+            ),
+            ("syntax_tree", self.syntax_tree.canonical_value()),
+        ])
     }
 
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -1561,7 +1492,7 @@ fn canonical_value_hash(value: &CanonicalValue) -> String {
 }
 
 fn canonical_string_hash(value: &str) -> String {
-    canonical_value_hash(&CanonicalValue::String(value.to_string()))
+    canonical_value_hash(&CanonicalValue::str(value))
 }
 
 fn parse_event_provenance_ids(

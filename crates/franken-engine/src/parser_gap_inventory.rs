@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
@@ -419,75 +418,54 @@ impl UnsupportedSyntaxDiagnostic {
     }
 
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "schema_version".to_string(),
-            CanonicalValue::String(self.schema_version.clone()),
-        );
-        map.insert(
-            "taxonomy_version".to_string(),
-            CanonicalValue::String(self.taxonomy_version.clone()),
-        );
-        map.insert(
-            "hash_algorithm".to_string(),
-            CanonicalValue::String(self.hash_algorithm.clone()),
-        );
-        map.insert(
-            "hash_prefix".to_string(),
-            CanonicalValue::String(self.hash_prefix.clone()),
-        );
-        map.insert(
-            "parse_error_code".to_string(),
-            CanonicalValue::String(self.parse_error_code.as_str().to_string()),
-        );
-        map.insert(
-            "diagnostic_code".to_string(),
-            CanonicalValue::String(self.diagnostic_code.clone()),
-        );
-        map.insert(
-            "category".to_string(),
-            CanonicalValue::String(self.category.as_str().to_string()),
-        );
-        map.insert(
-            "severity".to_string(),
-            CanonicalValue::String(self.severity.as_str().to_string()),
-        );
-        map.insert(
-            "message_template".to_string(),
-            CanonicalValue::String(self.message_template.clone()),
-        );
-        map.insert(
-            "source_label".to_string(),
-            CanonicalValue::String(self.source_label.clone()),
-        );
-        map.insert(
-            "span".to_string(),
-            self.span
-                .as_ref()
-                .map(SourceSpan::canonical_value)
-                .unwrap_or(CanonicalValue::Null),
-        );
-        map.insert(
-            "site_id".to_string(),
-            CanonicalValue::String(self.site_id.clone()),
-        );
-        map.insert(
-            "stage".to_string(),
-            CanonicalValue::String(self.stage.as_str().to_string()),
-        );
-        map.insert(
-            "owner".to_string(),
-            CanonicalValue::String(self.owner.clone()),
-        );
-        map.insert(
-            "feature_family".to_string(),
-            CanonicalValue::String(self.feature_family.clone()),
-        );
-        map.insert(
-            "api_surface".to_string(),
-            CanonicalValue::String(self.api_surface.clone()),
-        );
-        CanonicalValue::Map(map)
+        CanonicalValue::map_from_entries([
+            (
+                "schema_version",
+                CanonicalValue::str(self.schema_version.clone()),
+            ),
+            (
+                "taxonomy_version",
+                CanonicalValue::str(self.taxonomy_version.clone()),
+            ),
+            (
+                "hash_algorithm",
+                CanonicalValue::str(self.hash_algorithm.clone()),
+            ),
+            ("hash_prefix", CanonicalValue::str(self.hash_prefix.clone())),
+            (
+                "parse_error_code",
+                CanonicalValue::str(self.parse_error_code.as_str()),
+            ),
+            (
+                "diagnostic_code",
+                CanonicalValue::str(self.diagnostic_code.clone()),
+            ),
+            ("category", CanonicalValue::str(self.category.as_str())),
+            ("severity", CanonicalValue::str(self.severity.as_str())),
+            (
+                "message_template",
+                CanonicalValue::str(self.message_template.clone()),
+            ),
+            (
+                "source_label",
+                CanonicalValue::str(self.source_label.clone()),
+            ),
+            (
+                "span",
+                self.span
+                    .as_ref()
+                    .map(SourceSpan::canonical_value)
+                    .unwrap_or(CanonicalValue::Null),
+            ),
+            ("site_id", CanonicalValue::str(self.site_id.clone())),
+            ("stage", CanonicalValue::str(self.stage.as_str())),
+            ("owner", CanonicalValue::str(self.owner.clone())),
+            (
+                "feature_family",
+                CanonicalValue::str(self.feature_family.clone()),
+            ),
+            ("api_surface", CanonicalValue::str(self.api_surface.clone())),
+        ])
     }
 
     pub fn canonical_hash(&self) -> String {

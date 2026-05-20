@@ -6,7 +6,16 @@ use std::fmt;
 
 pub mod aara_resource_certificate;
 pub mod aara_resource_consumer;
-pub mod acceptance_ledger;
+// `acceptance_ledger` had zero non-test callers across the workspace
+// (verified bd-xun59: `use acceptance_ledger`, `AcceptanceLedger`,
+// and `AcceptanceGate` all zero non-self matches; only the unrelated
+// `RiskAcceptanceLedger` in `rgc_planning_track` shows up). The module
+// is the generic predecessor of `rgc_planning_track::RiskAcceptanceLedger`.
+// Kept compiled under `#[cfg(test)]` so its 56 internal tests still run,
+// but removed from the public crate API and from the non-test build so
+// a future caller goes through the live `RiskAcceptanceLedger` instead.
+#[cfg(test)]
+mod acceptance_ledger;
 pub mod acquisition_experiment_oracle;
 pub mod activation_lifecycle;
 pub mod adversarial_campaign;
@@ -866,11 +875,6 @@ boundaries.";
 const MAX_ERROR_MSG_LEN: usize = 4096;
 
 const ERROR_TRUNCATION_SUFFIX: &str = "... (truncated for security)";
-
-/// Maximum total aggregated error bytes per batch to prevent accumulation attacks.
-/// Reserved for future batch processing where multiple errors are aggregated.
-#[allow(dead_code)]
-const MAX_AGGREGATED_ERROR_BYTES: usize = 65536; // 64KB
 
 struct BoundedErrorMessage {
     rendered: String,

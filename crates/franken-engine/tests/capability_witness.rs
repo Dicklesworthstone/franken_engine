@@ -168,6 +168,8 @@ fn build_test_witness() -> CapabilityWitness {
     let cap_read = Capability::new("read-data");
     let cap_write = Capability::new("write-data");
     let cap_admin = Capability::new("admin-access");
+    // `mut` is required: line 189 below calls
+    // `apply_passing_promotion_theorems(&mut witness)`.
     let mut witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
@@ -193,6 +195,8 @@ fn build_test_witness() -> CapabilityWitness {
 fn build_promoted_witness(seed: u64) -> CapabilityWitness {
     let cap_name = format!("read-{seed}");
     let cap = Capability::new(&cap_name);
+    // `mut` is required: line 214 below calls
+    // `apply_passing_promotion_theorems(&mut witness)`.
     let mut witness = WitnessBuilder::new(
         test_extension_id_seeded(seed),
         test_policy_id(),
@@ -570,7 +574,7 @@ fn confidence_serde_roundtrip() {
 #[test]
 fn builder_minimal_witness_starts_as_draft() {
     let cap = Capability::new("read");
-    let mut witness = WitnessBuilder::new(
+    let witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
         SecurityEpoch::from_raw(1),

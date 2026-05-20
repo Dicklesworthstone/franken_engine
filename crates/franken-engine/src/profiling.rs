@@ -376,8 +376,10 @@ mod tests {
 
     #[test]
     fn hotspot_sampling_ticks_at_configured_interval() {
-        let mut config = ProfilingConfig::default();
-        config.hotspot_sampling_interval = 4;
+        let config = ProfilingConfig {
+            hotspot_sampling_interval: 4,
+            ..Default::default()
+        };
         let mut profiler = Profiler::new(config);
         assert_eq!(profiler.sample_count(), 0);
 
@@ -401,9 +403,11 @@ mod tests {
 
     #[test]
     fn hotspot_sampling_inactive_when_disabled() {
-        let mut config = ProfilingConfig::default();
-        config.enable_hotspot_profiling = false;
-        config.hotspot_sampling_interval = 1; // would otherwise tick every instruction
+        let config = ProfilingConfig {
+            enable_hotspot_profiling: false,
+            hotspot_sampling_interval: 1, // would otherwise tick every instruction
+            ..Default::default()
+        };
         let mut profiler = Profiler::new(config);
 
         let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
@@ -418,8 +422,10 @@ mod tests {
         // A zero interval is a misconfiguration — silently treating it as
         // "sample never" is more useful than dividing-by-zero or sampling
         // every instruction.
-        let mut config = ProfilingConfig::default();
-        config.hotspot_sampling_interval = 0;
+        let config = ProfilingConfig {
+            hotspot_sampling_interval: 0,
+            ..Default::default()
+        };
         let mut profiler = Profiler::new(config);
 
         let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
@@ -431,8 +437,10 @@ mod tests {
 
     #[test]
     fn last_sample_time_advances_with_samples() {
-        let mut config = ProfilingConfig::default();
-        config.hotspot_sampling_interval = 1; // sample every instruction
+        let config = ProfilingConfig {
+            hotspot_sampling_interval: 1, // sample every instruction
+            ..Default::default()
+        };
         let mut profiler = Profiler::new(config);
         let before = profiler.last_sample_time();
 

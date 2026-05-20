@@ -68,10 +68,7 @@ fn cell_signing_key_from_seed(seed: u8) -> SigningKey {
     // Deterministic Ed25519 signing key derived from a single-byte seed.
     let mut bytes = [0u8; 32];
     for (i, b) in bytes.iter_mut().enumerate() {
-        *b = seed
-            .wrapping_add(i as u8)
-            .wrapping_mul(17)
-            .wrapping_add(1);
+        *b = seed.wrapping_add(i as u8).wrapping_mul(17).wrapping_add(1);
     }
     if bytes == [0u8; 32] {
         bytes[0] = 1;

@@ -3,6 +3,8 @@
 //! This module defines a deterministic AST hierarchy for ES2020 script/module
 //! goal symbols. The parser in `parser.rs` emits this representation.
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

@@ -4053,7 +4053,7 @@ fn require_module_nested_cjs_filename_binding_is_inner_module() {
     let expected_file = inner_path.canonicalize().unwrap_or(inner_path);
     assert_eq!(
         result.value,
-        Value::str(expected_file.display())
+        Value::str(expected_file.display().to_string())
     );
 }
 
@@ -9295,7 +9295,7 @@ fn cjs_module_exposes_filename_binding() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::str(expected_file.display())
+        Value::str(expected_file.display().to_string())
     );
 }
 
@@ -9420,7 +9420,7 @@ fn cjs_module_exports_module_filename() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::str(expected_file.display())
+        Value::str(expected_file.display().to_string())
     );
 }
 
@@ -9480,7 +9480,7 @@ fn cjs_module_exports_module_id() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::str(expected_file.display())
+        Value::str(expected_file.display().to_string())
     );
 }
 
@@ -9602,7 +9602,7 @@ fn cjs_module_parent_tracks_require_chain() {
     let expected_parent = parent_path.canonicalize().unwrap_or(parent_path);
     assert_eq!(
         result.value,
-        Value::str(expected_parent.display())
+        Value::str(expected_parent.display().to_string())
     );
 }
 

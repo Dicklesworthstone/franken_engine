@@ -20,8 +20,8 @@ use frankenengine_engine::declassification_pipeline::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationDecision, DeclassificationRoute, FlowCheckResult, FlowPolicy, IfcSchemaVersion,
-    Label,
+    DeclassificationDecision, DeclassificationRoute, FlowCheckResult, FlowPolicy,
+    FlowPolicyEnforcement, IfcSchemaVersion, Label,
 };
 use frankenengine_engine::signature_preimage::{
     Signature, SigningKey, generate_keypair, generate_keypair_from_seed,
@@ -290,6 +290,7 @@ pub fn create_flow_policy(signing_key: &SigningKey) -> FlowPolicy {
             },
             // Note: No route for internal->public, so that should be denied
         ],
+        enforcement_mode: FlowPolicyEnforcement::LatticeOpen,
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: Signature::from_bytes([0u8; 64]),

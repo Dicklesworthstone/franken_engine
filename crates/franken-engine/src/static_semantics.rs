@@ -17,6 +17,8 @@
 //! - Empty declarator list
 //! - Strict-mode reserved words used as bindings
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

@@ -4,6 +4,8 @@
 //! multiple parser implementations and comparing results. Used for conformance
 //! testing and regression detection across parser backends.
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
@@ -2285,7 +2287,7 @@ mod tests {
                 expression: Expression::Await(Box::new(Expression::Await(Box::new(
                     Expression::Identifier("value".to_string()),
                 )))),
-                span: span.clone(),
+                span,
             })],
             span,
         };

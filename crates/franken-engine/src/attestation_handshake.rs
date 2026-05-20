@@ -596,8 +596,7 @@ impl PolicyPlaneVerifier {
 
         // 6. Verify key binding proof (Ed25519 signature over
         //    (public_key || measurement) by the cell's signing key).
-        let Some(verification_key) =
-            verification_key_from_bytes_slice(&response.signer_public_key)
+        let Some(verification_key) = verification_key_from_bytes_slice(&response.signer_public_key)
         else {
             self.emit_failure_event(
                 &response.cell_id,

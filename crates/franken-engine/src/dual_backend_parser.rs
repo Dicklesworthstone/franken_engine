@@ -17,6 +17,8 @@
 //!
 //! Plan references: FRX-03.1, FRX-03 (Compiler Architecture).
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -1227,7 +1229,7 @@ mod tests {
         let span = make_span(0, 10);
         let entry = SpanMappingEntry {
             node_index: 0,
-            canonical_span: span.clone(),
+            canonical_span: span,
             backend_span: span,
             deviation_bytes: 0,
         };

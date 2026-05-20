@@ -2024,7 +2024,9 @@ mod tests {
         // Force-poison the global OUTPUT_DIR_LOCKS mutex by panicking
         // inside a thread that holds the guard.
         let _ = std::thread::spawn(|| {
-            let _g = OUTPUT_DIR_LOCKS.lock().expect("guard taken in poisoning thread");
+            let _g = OUTPUT_DIR_LOCKS
+                .lock()
+                .expect("guard taken in poisoning thread");
             panic!("intentional panic to poison OUTPUT_DIR_LOCKS for bd-ctry0 test");
         })
         .join();

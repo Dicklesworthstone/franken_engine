@@ -435,7 +435,8 @@ fn invalid_date_handling() {
     let formatted = result.unwrap().value;
     if let Value::Str(error_str) = formatted {
         assert_eq!(
-            error_str, "Invalid Date",
+            error_str.as_ref(),
+            "Invalid Date",
             "Should return 'Invalid Date' for non-date objects"
         );
     } else {

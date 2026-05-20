@@ -200,12 +200,8 @@ fn integration_with_gc_cycle() {
     assert!(!core.gc_is_remembered(obj2));
 
     // After GC, new writes should rebuild remembered set
-    core.set_object_property(
-        obj1,
-        "new_prop".to_string(),
-        Value::str("post_gc"),
-    )
-    .unwrap();
+    core.set_object_property(obj1, "new_prop".to_string(), Value::str("post_gc"))
+        .unwrap();
 
     assert_eq!(core.gc_remembered_set_size(), 1);
     assert!(core.gc_is_remembered(obj1));

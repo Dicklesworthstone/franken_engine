@@ -218,7 +218,7 @@ fuzz_target!(|data: &[u8]| {
 
     let value = execute(instructions, pool, functions)
         .expect("constructed Object.prototype.toString module should execute");
-    assert_eq!(value, Value::Str(expected.to_string()));
+    assert_eq!(value, Value::str(expected));
 });
 
 fn callable_tag_case(

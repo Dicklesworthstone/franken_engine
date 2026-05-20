@@ -39,10 +39,8 @@ fn identity_call_with_object_arg_returns_the_object() {
     // Triage step 1 (per bead). If this fails the call-site is broken
     // independent of destructuring; if it passes, the issue is
     // destructure-specific.
-    let outcome = eval(
-        "function f(o) { return typeof o; } console.log(f({ a: 3, b: 4 }));",
-    )
-    .expect("identity call must not error");
+    let outcome = eval("function f(o) { return typeof o; } console.log(f({ a: 3, b: 4 }));")
+        .expect("identity call must not error");
     assert_eq!(
         console_text(&outcome).trim(),
         "object",
@@ -52,10 +50,8 @@ fn identity_call_with_object_arg_returns_the_object() {
 
 #[test]
 fn identity_call_with_array_arg_returns_object_typeof() {
-    let outcome = eval(
-        "function f(o) { return typeof o; } console.log(f([3, 4]));",
-    )
-    .expect("identity call must not error");
+    let outcome = eval("function f(o) { return typeof o; } console.log(f([3, 4]));")
+        .expect("identity call must not error");
     assert_eq!(
         console_text(&outcome).trim(),
         "object",
@@ -66,10 +62,8 @@ fn identity_call_with_array_arg_returns_object_typeof() {
 #[test]
 fn array_destructuring_parameter_multiplies_elements() {
     // Triage step 2 from bd-iy713: the spec-failing case.
-    let outcome = eval(
-        "function g([x, y]) { return x * y; } console.log(g([3, 4]));",
-    )
-    .expect("array-destructuring parameter must not raise a runtime fault");
+    let outcome = eval("function g([x, y]) { return x * y; } console.log(g([3, 4]));")
+        .expect("array-destructuring parameter must not raise a runtime fault");
     assert_eq!(
         console_text(&outcome).trim(),
         "12",
@@ -81,10 +75,8 @@ fn array_destructuring_parameter_multiplies_elements() {
 #[test]
 fn object_destructuring_parameter_sums_fields() {
     // Triage step 3.
-    let outcome = eval(
-        "function g({ a, b }) { return a + b; } console.log(g({ a: 3, b: 4 }));",
-    )
-    .expect("object-destructuring parameter must not raise a runtime fault");
+    let outcome = eval("function g({ a, b }) { return a + b; } console.log(g({ a: 3, b: 4 }));")
+        .expect("object-destructuring parameter must not raise a runtime fault");
     assert_eq!(
         console_text(&outcome).trim(),
         "7",

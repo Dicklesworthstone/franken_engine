@@ -11,6 +11,7 @@
     clippy::manual_abs_diff
 )]
 
+#[allow(dead_code)]
 #[path = "../src/conformance_harness.rs"]
 mod conformance_harness;
 

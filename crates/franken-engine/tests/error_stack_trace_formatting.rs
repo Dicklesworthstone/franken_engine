@@ -139,7 +139,7 @@ fn nested_error_stack_module(source_label: &str) -> Ir3Module {
 
 fn expect_string(result: ExecutionResult, context: &str) -> String {
     match result.value {
-        Value::Str(value) => value,
+        Value::Str(value) => value.to_string(),
         other => panic!("{context}: expected string result, got {other:?}"),
     }
 }

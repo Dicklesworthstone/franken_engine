@@ -3919,10 +3919,7 @@ impl WitnessPublicationPipeline {
         // `new()` — instead of letting the builder fall back to the
         // well-known constant key baked into evidence_ledger.rs. This is
         // what gives the emitted entries actual origin authentication.
-        let producer_id = format!(
-            "franken-engine.witness-pipeline:{}",
-            self.config.policy_id
-        );
+        let producer_id = format!("franken-engine.witness-pipeline:{}", self.config.policy_id);
         let mut builder = EvidenceEntryBuilder::new(
             format!("trace:{}", artifact.publication_id),
             decision_id,

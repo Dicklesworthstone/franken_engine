@@ -114,6 +114,41 @@ Verification:
 
 ---
 
+## 2026-05-20 Review Round 1e - .gitignore + cross-cluster audit (Opus, review-only)
+
+Read AGENTS.md + README.md (first 200 lines) end-to-end, then `git log --since="6 hours ago"` (110 commits) and the prior 4 review rounds. Recent activity dominated by: `Value::Str(String)→Arc<str>` (bd-pysup), `SourceSpan: Copy` derive (bd-jtxmr / 45fd085d), attestation length-prefix framing (3f28d071), evidence-ledger signing-key hardening (1975db42), and a bd-4zlpm function-body Pop fix.
+
+Round 1 focused on areas the prior four rounds had not deeply covered: the working-tree's stray target dirs, a mutex-poison sweep beyond bd-ctry0's scope, and a fresh pass over the witness-pipeline signing-key surface to verify 1975db42's blast radius.
+
+Findings:
+
+- [HIGH] `.gitignore:65-69,143-146` — the `target_rch_*` ignore patterns are only rooted at the repository root (`/target_rch_*/`) and a small set of literal `crates/*/...` subpaths. Two untracked dirs at `crates/franken-engine/src/target_rch_review/` and `crates/franken-engine/target_rch_test_audit/` (both visible in `git status` at session start) are not matched, so `git add -A` from any pane will happily stage them. This is the exact failure class the in-file comment at lines 8-16 explains motivated two prior `git filter-repo` passes (`d8efc6b5`, `5294ed2d`) after a 576 MB `dep-graph.part.bin` was committed. Root cause: review/audit panes invoked `cargo --target-dir target_rch_review` while their cwd was inside `crates/franken-engine/src/`, so the target tree landed below `src/`. **Fixed**: appended `crates/*/target_rch_*/`, `crates/*/src/target_rch_*/`, and `**/target_rch_*/` patterns. Verified via `git check-ignore -v` that all three stray dirs (incl. the workspace-root one created by my own clippy run) are now matched by `**/target_rch_*/`.
+
+- [LOW] `crates/franken-engine/src/dual_backend_parser.rs:1232` and `crates/franken-engine/src/parser_multi_engine_harness.rs:2290` — two `span: span.clone()` / `canonical_span: span.clone()` sites that trip `clippy::clone_on_copy` now that `SourceSpan` is `Copy` (45fd085d). Both inside `#[cfg(test)] mod tests`, so caught by `cargo clippy --all-targets`. **Fixed**: dropped the `.clone()`. Singleton fixes per-file — surgical, no risk to public API. The remaining ~113 `.span.clone()` sites across `ast.rs` (42), `parser.rs` (23), and `react_jsx_lowering.rs` (48) are the bulk of Round 1d's reported "210 clippy errors". Per AGENTS.md "no broad regex rewrites", these need per-file beads rather than one mass commit.
+
+- [INFO] `clippy::derivable_impls` (ifc_artifacts.rs) and `clippy::field_reassign_with_default` (profiling.rs) from Round 1d both look already-resolved in HEAD. `FlowPolicyEnforcement` (ifc_artifacts.rs:656-668) has `#[derive(... Default)]` with `#[default]` on `AllowlistOnly`; profiling.rs uses `..Default::default()` struct-update syntax everywhere. Both clippy-clean as far as a source read shows; a clean clippy run will confirm.
+
+- [INFO] Mutex-poison sweep beyond bd-ctry0's scope — grepped `crates/franken-engine/src/` for `\.lock()\.(unwrap|expect)`. The only production-code matches are the two bd-ctry0-fixed sites in `shadow_decision_composer.rs:773` and `:2078`, both using `unwrap_or_else(|poison| poison.into_inner())`. The `parallel_parser.rs:2927,2938` `expect("thread id mutex should not be poisoned")` sites are inside `#[cfg(test)] mod tests`. bd-ctry0 appears comprehensive for that pattern in the engine crate.
+
+- [INFO] Witness-pipeline signing-key audit (post 1975db42) — grepped `crates/franken-engine/src/` for `authorize_producer`, `DEFAULT_EVIDENCE_PRODUCER_ID`, `default_evidence_signing_key`. Production-side callers of `EvidenceEntryBuilder::new()` outside the test trees are: (a) `evidence_ledger.rs::default_stitching_entry:1771` — a `pub fn`-emitted demo bundle whose consumers don't validate the result back into a ledger (hardcoded "ext-abc"/"0.85"/"sandbox" fixture data is deliberate); (b) `evidence_ordering.rs:314` — inside `#[cfg(test)]`. The `1975db42` fix narrowed `WitnessPublicationPipeline::emit_evidence_entry` correctly, but the *constants* `DEFAULT_EVIDENCE_SIGNING_KEY_BYTES = [0x7B; 32]` and `DEFAULT_EVIDENCE_PRODUCER_ID = "franken-engine.evidence-ledger.builder"` (evidence_ledger.rs:58-67) plus the `InMemoryLedger::Default` pre-authorization (line 533) remain as a structural risk: any *future* production code path that calls `EvidenceEntryBuilder::new(...).build()` without `.signed_by(...)` will mint an entry signed with the well-known key, accepted by `InMemoryLedger::Default`. Recommendation (not fixed this round — invasive, public-API change): either (i) drop `.signed_by(...)` defaults and require an explicit `SigningKey` argument at `EvidenceEntryBuilder::new` (typestate, or required positional arg), or (ii) wire a fail-closed validator that rejects ledger entries whose verification key matches `default_evidence_verification_key()` outside `#[cfg(test)]`.
+
+- [INFO] Deterministic-ordering audit (BTreeMap/BTreeSet rule from README + bd-pvr9h) — grepped `crates/franken-engine/src/` for `HashMap::new`, `HashSet::new`, `use std::collections::Hash*`. Only one production-code site: `epoch_barrier.rs:257,275` uses `HashSet<u64>` for `active_guard_ids`. Operations are only `insert`/`remove`/`clear`/`is_empty`/`len`; struct is `#[derive(Debug)]` only — no serde, no iteration. Not a determinism violation. All other matches are in `#[cfg(test)]` blocks or in `bin/franken_closure_report.rs` (a CLI report tool).
+
+- [INFO] Re-verified Round 1b's "dormant `Nop` underflow" assessment. The only emitter of `Ir1Op::Nop` is `Statement::Import|Statement::Export` at `lowering_pipeline.rs:2710-2712`, which is inside `lower_statement_to_ir1_with_flow` — called only for *nested* statements. Top-level imports take `lower_ir0_to_ir1::Statement::Import` at line 555, which emits `Ir1Op::ImportModule` directly without going through Nop. The parser rejects nested import/export per ES spec, so both `lower_ir2_to_ir3` Nop arms (lines 3377, 4655) are unreachable in practice. No fix needed; carry as documented latent.
+
+Verification:
+- `cargo fmt --check`: PASS.
+- `cargo clippy --all-targets -p frankenengine-engine --target-dir target_rch_review -- -D warnings`: first attempt SIGKILL'd on the rch worker after 18m43s (signal: 9 — OOM under the concurrent 8-build queue). Re-ran with `--lib` only, still pending in the queue at the time of this writeup; pre-existing 210-error backlog will dominate any successful run anyway, so the two surgical fixes here only push the count down by 2.
+- `git check-ignore -v crates/franken-engine/src/target_rch_review crates/franken-engine/target_rch_test_audit target_rch_review`: all three matched by `.gitignore:154 **/target_rch_*/`.
+
+Code changes pending commit in this round (uncommitted in this pane, per the "REVIEW-ONLY MODE" prompt's instruction to fix bugs but not commit):
+- `.gitignore` (+8 lines: three new target_rch ignore patterns with a comment explaining the prior filter-repo incident class).
+- `crates/franken-engine/src/dual_backend_parser.rs:1232` (drop `.clone()` on `SourceSpan`).
+- `crates/franken-engine/src/parser_multi_engine_harness.rs:2290` (drop `.clone()` on `SourceSpan`).
+
+
+---
+
 ## 2026-05-20 Review Round 1e - Arc<str> migration residual + clippy gate triage (PearlTower)
 
 Areas reviewed:

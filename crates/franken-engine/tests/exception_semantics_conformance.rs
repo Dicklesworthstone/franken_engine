@@ -75,7 +75,7 @@ fn eval_source(source: &str) -> String {
         .execute(&ir3, "eval-test")
         .expect("source should eval");
     match result.value {
-        Value::Str(s) => s,
+        Value::Str(s) => s.to_string(),
         Value::Int(n) => n.to_string(),
         Value::Undefined => "undefined".to_string(),
         other => format!("{:?}", other),

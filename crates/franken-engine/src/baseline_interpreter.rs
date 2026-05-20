@@ -22424,14 +22424,8 @@ mod function_prototype_call_apply_tests_current {
             .heap
             .get(array_id.0 as usize)
             .expect("result array should exist");
-        assert_eq!(
-            array.properties.get("0"),
-            Some(&Value::str("a0"))
-        );
-        assert_eq!(
-            array.properties.get("1"),
-            Some(&Value::str("b1"))
-        );
+        assert_eq!(array.properties.get("0"), Some(&Value::str("a0")));
+        assert_eq!(array.properties.get("1"), Some(&Value::str("b1")));
         assert_eq!(array.properties.get("length"), Some(&Value::Int(2)));
     }
 
@@ -23194,14 +23188,10 @@ mod tests {
     fn map_and_set_constructors_seed_iterable_input() {
         let mut core = quickjs_test_core();
 
-        let first_pair = alloc_indexed_object_for_test(
-            &mut core,
-            &[Value::str("alpha"), Value::Int(1)],
-        );
-        let second_pair = alloc_indexed_object_for_test(
-            &mut core,
-            &[Value::str("beta"), Value::Int(2)],
-        );
+        let first_pair =
+            alloc_indexed_object_for_test(&mut core, &[Value::str("alpha"), Value::Int(1)]);
+        let second_pair =
+            alloc_indexed_object_for_test(&mut core, &[Value::str("beta"), Value::Int(2)]);
         let map_iterable = alloc_indexed_object_for_test(
             &mut core,
             &[Value::Object(first_pair), Value::Object(second_pair)],
@@ -24370,10 +24360,7 @@ mod tests {
         let array_id = seed_array(
             &mut core,
             2,
-            &[
-                (0, Value::str("first")),
-                (1, Value::str("second")),
-            ],
+            &[(0, Value::str("first")), (1, Value::str("second"))],
         );
         let accumulator_id = core
             .alloc_object_with_prototype(None)
@@ -24446,29 +24433,14 @@ mod tests {
         let array_id = seed_array(
             &mut core,
             3,
-            &[
-                (0, Value::str("first")),
-                (2, Value::str("third")),
-            ],
+            &[(0, Value::str("first")), (2, Value::str("third"))],
         );
-        core.set_object_property(
-            array_id,
-            "01".to_string(),
-            Value::str("leading-zero"),
-        )
-        .expect("serde deserialization should succeed");
-        core.set_object_property(
-            array_id,
-            "3".to_string(),
-            Value::str("past-length"),
-        )
-        .expect("serde deserialization should succeed");
-        core.set_object_property(
-            array_id,
-            "4294967295".to_string(),
-            Value::str("uint32-max"),
-        )
-        .expect("serde deserialization should succeed");
+        core.set_object_property(array_id, "01".to_string(), Value::str("leading-zero"))
+            .expect("serde deserialization should succeed");
+        core.set_object_property(array_id, "3".to_string(), Value::str("past-length"))
+            .expect("serde deserialization should succeed");
+        core.set_object_property(array_id, "4294967295".to_string(), Value::str("uint32-max"))
+            .expect("serde deserialization should succeed");
         core.registers[0] = Value::Object(array_id);
 
         let result = core
@@ -24484,14 +24456,8 @@ mod tests {
         assert_eq!(properties.get("0"), Some(&Value::str("third")));
         assert_eq!(properties.get("1"), None);
         assert_eq!(properties.get("2"), Some(&Value::str("first")));
-        assert_eq!(
-            properties.get("01"),
-            Some(&Value::str("leading-zero"))
-        );
-        assert_eq!(
-            properties.get("3"),
-            Some(&Value::str("past-length"))
-        );
+        assert_eq!(properties.get("01"), Some(&Value::str("leading-zero")));
+        assert_eq!(properties.get("3"), Some(&Value::str("past-length")));
         assert_eq!(
             properties.get("4294967295"),
             Some(&Value::str("uint32-max"))
@@ -24504,10 +24470,7 @@ mod tests {
         let array_id = seed_array(
             &mut core,
             3,
-            &[
-                (0, Value::str("first")),
-                (2, Value::str("third")),
-            ],
+            &[(0, Value::str("first")), (2, Value::str("third"))],
         );
         core.registers[0] = Value::Object(array_id);
 
@@ -24632,10 +24595,7 @@ mod tests {
         let array_id = seed_array(
             &mut core,
             3,
-            &[
-                (0, Value::str("first")),
-                (2, Value::str("third")),
-            ],
+            &[(0, Value::str("first")), (2, Value::str("third"))],
         );
         core.registers[0] = Value::Object(array_id);
 
@@ -24702,10 +24662,7 @@ mod tests {
         let array_id = seed_array(
             &mut core,
             3,
-            &[
-                (0, Value::str("first")),
-                (2, Value::str("third")),
-            ],
+            &[(0, Value::str("first")), (2, Value::str("third"))],
         );
         core.registers[0] = Value::Object(array_id);
 
@@ -24827,11 +24784,7 @@ mod tests {
             iterator
         );
         assert_eq!(
-            iterator_method_via_property(
-                &mut core,
-                iterator.clone(),
-                Value::str("@@iterator")
-            ),
+            iterator_method_via_property(&mut core, iterator.clone(), Value::str("@@iterator")),
             iterator
         );
 
@@ -28707,10 +28660,10 @@ mod tests {
             // Create test array with mixed types that should be preserved after sorting
             let array_id = ObjectId(100);
             let test_elements = vec![
-                (0, Value::Int(42)),                  // Should remain Int(42), not Str("42")
-                (1, Value::Bool(true)),               // Should remain Bool(true), not Str("true")
-                (2, Value::Float(3.14.into())),       // Should remain Float, not Str("3.14")
-                (3, Value::str("apple")), // Should remain Str
+                (0, Value::Int(42)),               // Should remain Int(42), not Str("42")
+                (1, Value::Bool(true)),            // Should remain Bool(true), not Str("true")
+                (2, Value::Float(3.14.into())),    // Should remain Float, not Str("3.14")
+                (3, Value::str("apple")),          // Should remain Str
                 (4, Value::Object(ObjectId(200))), // Should remain Object, not Str("[object Object]")
             ];
 
@@ -28890,11 +28843,7 @@ mod tests {
                 .alloc_object_with_prototype(None)
                 .expect("serde deserialization should succeed");
             interpreter
-                .set_object_property(
-                    regexp_obj_id,
-                    "source".to_string(),
-                    Value::str("foo"),
-                )
+                .set_object_property(regexp_obj_id, "source".to_string(), Value::str("foo"))
                 .expect("serde deserialization should succeed");
 
             let math_id_groups = [
@@ -28979,9 +28928,9 @@ mod tests {
             // Create test array with mixed types including holes
             let array_id = ObjectId(100);
             let test_elements = vec![
-                (0, Value::Int(3)),                    // "3"
+                (0, Value::Int(3)),        // "3"
                 (1, Value::str("banana")), // "banana"
-                (2, Value::Bool(false)),               // "false"
+                (2, Value::Bool(false)),   // "false"
                 // index 3 is a hole (should become Undefined)
                 (4, Value::Float(1.5.into())),     // "1.5"
                 (5, Value::Object(ObjectId(200))), // "[object Object]"
@@ -29204,10 +29153,7 @@ mod tests {
 
             // Check elements
             assert_eq!(result_obj.properties.get("0"), Some(&Value::Int(1)));
-            assert_eq!(
-                result_obj.properties.get("1"),
-                Some(&Value::str("str"))
-            );
+            assert_eq!(result_obj.properties.get("1"), Some(&Value::str("str")));
         } else {
             panic!("Array concat should return an object");
         }
@@ -30427,11 +30373,7 @@ mod tests {
         let result = core
             .read_register(2)
             .expect("serde deserialization should succeed");
-        assert_eq!(
-            result,
-            Value::str("e"),
-            "charAt(1) should return 'e'"
-        );
+        assert_eq!(result, Value::str("e"), "charAt(1) should return 'e'");
     }
 
     #[test]
@@ -30591,11 +30533,7 @@ mod tests {
         let result = core
             .read_register(1)
             .expect("serde deserialization should succeed");
-        assert_eq!(
-            result,
-            Value::str("A"),
-            "No index should default to 0"
-        );
+        assert_eq!(result, Value::str("A"), "No index should default to 0");
     }
 
     #[test]
@@ -31278,10 +31216,7 @@ mod tests {
         }
 
         fn assert_array_tag(core: &mut InterpreterCore, value: Value) {
-            assert_eq!(
-                object_tag(core, value),
-                Value::str("[object Array]")
-            );
+            assert_eq!(object_tag(core, value), Value::str("[object Array]"));
         }
 
         let source_array = core
@@ -31773,18 +31708,9 @@ mod tests {
                 .heap
                 .get(array_id.0 as usize)
                 .expect("filled test array should remain allocated");
-            assert_eq!(
-                array.properties.get("0"),
-                Some(&Value::str("a"))
-            );
-            assert_eq!(
-                array.properties.get("1"),
-                Some(&Value::str("x"))
-            );
-            assert_eq!(
-                array.properties.get("2"),
-                Some(&Value::str("x"))
-            );
+            assert_eq!(array.properties.get("0"), Some(&Value::str("a")));
+            assert_eq!(array.properties.get("1"), Some(&Value::str("x")));
+            assert_eq!(array.properties.get("2"), Some(&Value::str("x")));
         }
     }
 

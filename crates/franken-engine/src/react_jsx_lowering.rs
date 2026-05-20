@@ -14,6 +14,8 @@
 //!
 //! Reference: [RGC-206B]
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 

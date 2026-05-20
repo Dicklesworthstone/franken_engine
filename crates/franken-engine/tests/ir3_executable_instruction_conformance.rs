@@ -68,7 +68,7 @@ impl ExpectedValue {
         match (self, actual) {
             (Self::Bool(expected), Value::Bool(actual)) => expected == actual,
             (Self::Int(expected), Value::Int(actual)) => expected == actual,
-            (Self::Str(expected), Value::Str(actual)) => expected == actual,
+            (Self::Str(expected), Value::Str(actual)) => *expected == actual.as_ref(),
             (Self::Undefined, Value::Undefined) => true,
             _ => false,
         }

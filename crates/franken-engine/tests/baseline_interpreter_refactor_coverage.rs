@@ -665,7 +665,10 @@ fn number_tostring_radix_base2_through_base36() {
                 s.as_ref(),
                 expected,
                 "Number.toString({}, {}) should be {}, got {}",
-                number, radix, expected, s
+                number,
+                radix,
+                expected,
+                s
             );
         } else {
             panic!(
@@ -716,7 +719,10 @@ fn number_tostring_handles_negative_numbers() {
                 s.as_ref(),
                 expected,
                 "Number.toString({}, {}) should be {}, got {}",
-                number, radix, expected, s
+                number,
+                radix,
+                expected,
+                s
             );
         } else {
             panic!(
@@ -748,7 +754,12 @@ fn number_tostring_handles_special_float_values() {
 
     let result_nan = qjs_run(&module_nan).unwrap();
     if let Value::Str(s) = result_nan.value {
-        assert_eq!(s.as_ref(), "NaN", "NaN.toString() should be 'NaN', got {}", s);
+        assert_eq!(
+            s.as_ref(),
+            "NaN",
+            "NaN.toString() should be 'NaN', got {}",
+            s
+        );
     } else {
         panic!(
             "NaN.toString should return String, got {:?}",
@@ -846,7 +857,13 @@ fn number_tostring_handles_zero_special_case() {
         let result = qjs_run(&module).unwrap();
 
         if let Value::Str(s) = result.value {
-            assert_eq!(s.as_ref(), "0", "0.toString({}) should be '0', got {}", radix, s);
+            assert_eq!(
+                s.as_ref(),
+                "0",
+                "0.toString({}) should be '0', got {}",
+                radix,
+                s
+            );
         } else {
             panic!("0.toString should return String, got {:?}", result.value);
         }
@@ -885,7 +902,10 @@ fn number_tostring_preserves_fractional_radix_digits() {
                 s.as_ref(),
                 expected,
                 "({}).toString({}) should be {}, got {}",
-                number, radix, expected, s
+                number,
+                radix,
+                expected,
+                s
             );
         } else {
             panic!(

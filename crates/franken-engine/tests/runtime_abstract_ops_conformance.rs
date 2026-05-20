@@ -56,7 +56,7 @@ impl ExpectedValue {
             (Self::Bool(expected), Value::Bool(actual)) => expected == actual,
             (Self::FloatNan, Value::Float(actual)) => actual.is_nan(),
             (Self::Int(expected), Value::Int(actual)) => expected == actual,
-            (Self::Str(expected), Value::Str(actual)) => expected == actual,
+            (Self::Str(expected), Value::Str(actual)) => *expected == actual.as_ref(),
             (Self::Undefined, Value::Undefined) => true,
             _ => false,
         }

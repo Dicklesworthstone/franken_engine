@@ -3,6 +3,8 @@
 // The parser trait is generic over input source and emits canonical `IR0`
 // syntax artifacts from `crate::ast`.
 
+#![allow(clippy::clone_on_copy)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;

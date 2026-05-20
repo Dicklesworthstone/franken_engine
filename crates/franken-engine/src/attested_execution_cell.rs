@@ -1334,7 +1334,10 @@ mod tests {
             &canonical[runtime_offset..runtime_offset + 8],
             &runtime_len.to_be_bytes()
         );
-        assert_eq!(&canonical[runtime_offset + 8..runtime_offset + 13], b"1.0.0");
+        assert_eq!(
+            &canonical[runtime_offset + 8..runtime_offset + 13],
+            b"1.0.0"
+        );
         assert_eq!(canonical[runtime_offset + 13], PlatformKind::Software as u8);
         assert_eq!(canonical.len(), runtime_offset + 8 + "1.0.0".len() + 1);
     }

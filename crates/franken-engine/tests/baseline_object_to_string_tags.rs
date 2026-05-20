@@ -183,9 +183,9 @@ fn object_to_string_tag_uses_internal_metadata_metamorphic_relation() {
     )
     .expect("shaped array tag should execute");
 
-    assert_eq!(plain_object_tag, Value::Str("[object Object]".to_string()));
+    assert_eq!(plain_object_tag, Value::str("[object Object]"));
     assert_eq!(array_like_object_tag, plain_object_tag);
-    assert_eq!(empty_array_tag, Value::Str("[object Array]".to_string()));
+    assert_eq!(empty_array_tag, Value::str("[object Array]"));
     assert_eq!(shaped_array_tag, empty_array_tag);
     assert_ne!(array_like_object_tag, shaped_array_tag);
 }
@@ -261,6 +261,6 @@ fn object_to_string_tag_covers_primitive_builtin_tags() {
     for (instructions, constant_pool, expected) in cases {
         let tag = run_value(instructions, constant_pool)
             .expect("Object.prototype.toString primitive tag should execute");
-        assert_eq!(tag, Value::Str(expected.to_string()));
+        assert_eq!(tag, Value::str(expected));
     }
 }

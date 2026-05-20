@@ -390,7 +390,7 @@ fn array_map_uses_callback_result_not_identity() {
     ))
     .expect("Array.map should invoke callback");
 
-    assert_eq!(result.value, Value::Str("mapped".to_string()));
+    assert_eq!(result.value, Value::str("mapped"));
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn array_find_uses_callback_result_not_first_truthy_element() {
     ))
     .expect("Array.find should invoke callback");
 
-    assert_eq!(result.value, Value::Str("target".to_string()));
+    assert_eq!(result.value, Value::str("target"));
 }
 
 #[test]

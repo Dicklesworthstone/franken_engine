@@ -203,7 +203,7 @@ fn integration_with_gc_cycle() {
     core.set_object_property(
         obj1,
         "new_prop".to_string(),
-        Value::Str("post_gc".to_string()),
+        Value::str("post_gc"),
     )
     .unwrap();
 
@@ -299,7 +299,7 @@ fn write_barrier_with_different_value_types() {
     let test_values = vec![
         Value::Int(42),
         Value::Float(Float64::new(std::f64::consts::PI)),
-        Value::Str("string_value".to_string()),
+        Value::str("string_value"),
         Value::Bool(true),
         Value::Null,
         Value::Undefined,

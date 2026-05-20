@@ -912,7 +912,7 @@ fn own_property_descriptor_ignores_inherited_properties() {
 fn prototype_chain_descriptor_finds_inherited_properties() {
     let result = execute(&inherited_descriptor_value_module(false))
         .expect("prototype descriptor lookup should execute");
-    assert_eq!(result.value, Value::Str("inherited".to_string()));
+    assert_eq!(result.value, Value::str("inherited"));
 }
 
 #[test]
@@ -939,8 +939,8 @@ fn shadowed_property_descriptor_prefers_child_value() {
     let inherited = execute(&shadowed_descriptor_value_module(false))
         .expect("prototype shadowed descriptor should execute");
 
-    assert_eq!(own.value, Value::Str("child".to_string()));
-    assert_eq!(inherited.value, Value::Str("child".to_string()));
+    assert_eq!(own.value, Value::str("child"));
+    assert_eq!(inherited.value, Value::str("child"));
 }
 
 #[cfg(any())]

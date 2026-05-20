@@ -208,11 +208,11 @@ fn weakmap_has_and_get_reject_primitive_keys_without_throwing() {
 fn weakmap_constructor_seeds_object_key_entries_from_iterable() {
     let first = execute(&weakmap_seeded_from_iterable_get_key(1))
         .expect("WeakMap constructor should seed first iterable entry");
-    assert_eq!(first.value, Value::Str("value1".to_string()));
+    assert_eq!(first.value, Value::str("value1"));
 
     let second = execute(&weakmap_seeded_from_iterable_get_key(2))
         .expect("WeakMap constructor should seed second iterable entry");
-    assert_eq!(second.value, Value::Str("value2".to_string()));
+    assert_eq!(second.value, Value::str("value2"));
 }
 
 #[test]
@@ -243,13 +243,13 @@ fn weakmap_prototype_methods_reject_non_weakmap_receivers() {
 #[test]
 fn weakmap_storage_tracks_weak_keys_and_cleans_collected_objects() {
     let mut storage = WeakMapStorage::new();
-    storage.set(1, Value::Str("value1".to_string()));
-    storage.set(2, Value::Str("value2".to_string()));
-    storage.set(3, Value::Str("value3".to_string()));
+    storage.set(1, Value::str("value1"));
+    storage.set(2, Value::str("value2"));
+    storage.set(3, Value::str("value3"));
 
     assert_eq!(storage.get_weak_key_objects().len(), 3);
     assert!(storage.has(1));
-    assert_eq!(storage.get(2), Some(&Value::Str("value2".to_string())));
+    assert_eq!(storage.get(2), Some(&Value::str("value2")));
 
     let collected = BTreeSet::from([1, 3]);
     storage.cleanup_collected_objects(&collected);
@@ -258,7 +258,7 @@ fn weakmap_storage_tracks_weak_keys_and_cleans_collected_objects() {
     assert!(storage.has(2));
     assert!(!storage.has(3));
     assert_eq!(storage.get(1), None);
-    assert_eq!(storage.get(2), Some(&Value::Str("value2".to_string())));
+    assert_eq!(storage.get(2), Some(&Value::str("value2")));
     assert_eq!(storage.get(3), None);
     assert_eq!(storage.get_weak_key_objects(), &BTreeSet::from([2]));
 }
@@ -360,7 +360,7 @@ mod legacy_private_api_tests {
         // Test primitive key types that should be rejected
         let primitive_keys = vec![
             frankenengine::baseline_interpreter::Value::Int(42),
-            frankenengine::baseline_interpreter::Value::Str("string".to_string()),
+            frankenengine::baseline_interpreter::Value::str("string"),
             frankenengine::baseline_interpreter::Value::Bool(true),
             frankenengine::baseline_interpreter::Value::Null,
             frankenengine::baseline_interpreter::Value::Undefined,
@@ -564,16 +564,12 @@ mod legacy_private_api_tests {
 
         assert_eq!(
             storage.get(key1.0),
-            Some(&frankenengine::baseline_interpreter::Value::Str(
-                "value1".to_string()
-            )),
+            Some(&frankenengine::baseline_interpreter::Value::str("value1")),
             "First key should map to 'value1'"
         );
         assert_eq!(
             storage.get(key2.0),
-            Some(&frankenengine::baseline_interpreter::Value::Str(
-                "value2".to_string()
-            )),
+            Some(&frankenengine::baseline_interpreter::Value::str("value2")),
             "Second key should map to 'value2'"
         );
     }
@@ -609,7 +605,7 @@ mod legacy_private_api_tests {
             .expect("WeakMap storage should exist");
         storage.set(
             key_obj.0,
-            frankenengine::baseline_interpreter::Value::Str("weak_value".to_string()),
+            frankenengine::baseline_interpreter::Value::str("weak_value"),
         );
 
         // Store the object as a property in regular object (strong reference)
@@ -682,15 +678,15 @@ mod legacy_private_api_tests {
             .expect("WeakMap storage should exist");
         storage.set(
             key1.0,
-            frankenengine::baseline_interpreter::Value::Str("value1".to_string()),
+            frankenengine::baseline_interpreter::Value::str("value1"),
         );
         storage.set(
             key2.0,
-            frankenengine::baseline_interpreter::Value::Str("value2".to_string()),
+            frankenengine::baseline_interpreter::Value::str("value2"),
         );
         storage.set(
             key3.0,
-            frankenengine::baseline_interpreter::Value::Str("value3".to_string()),
+            frankenengine::baseline_interpreter::Value::str("value3"),
         );
 
         assert_eq!(
@@ -725,9 +721,7 @@ mod legacy_private_api_tests {
         assert_eq!(storage.get(key1.0), None, "Value1 should be removed");
         assert_eq!(
             storage.get(key2.0),
-            Some(&frankenengine::baseline_interpreter::Value::Str(
-                "value2".to_string()
-            )),
+            Some(&frankenengine::baseline_interpreter::Value::str("value2")),
             "Value2 should remain"
         );
         assert_eq!(storage.get(key3.0), None, "Value3 should be removed");

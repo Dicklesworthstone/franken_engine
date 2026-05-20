@@ -115,7 +115,7 @@ fn decode_value_string(s: &str) -> Value {
             } else if let Ok(f) = s.parse::<f64>() {
                 Value::Float(frankenengine_engine::baseline_interpreter::Float64::new(f))
             } else {
-                Value::Str(s.to_string())
+                Value::str(s)
             }
         }
     }
@@ -136,7 +136,7 @@ fn value_serde_all_variants() {
         Value::Int(-1),
         Value::Int(i64::MAX),
         Value::Int(i64::MIN),
-        Value::Str(String::new()),
+        Value::str(""),
         Value::Str("hello world".into()),
         Value::Object(ObjectId(0)),
         Value::Object(ObjectId(u32::MAX)),
@@ -180,7 +180,7 @@ fn value_truthiness_all_falsy() {
     assert!(!Value::Null.is_truthy());
     assert!(!Value::Bool(false).is_truthy());
     assert!(!Value::Int(0).is_truthy());
-    assert!(!Value::Str(String::new()).is_truthy());
+    assert!(!Value::str("").is_truthy());
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn value_ordering() {
     assert!(Value::Null < Value::Bool(false));
     assert!(Value::Bool(false) < Value::Bool(true));
     assert!(Value::Bool(true) < Value::Int(0));
-    assert!(Value::Int(0) < Value::Str(String::new()));
+    assert!(Value::Int(0) < Value::str(""));
 }
 
 // ===========================================================================
@@ -1961,7 +1961,7 @@ fn string_charat_utf16_integration_regression() {
     // Test 1: Basic charAt behavior
     let result = interpreter.evaluate_expression("'hello'.charAt(1)");
     match result {
-        Ok(Value::Str(s)) => assert_eq!(s, "e"),
+        Ok(Value::Str(s)) => assert_eq!(s.as_ref(), "e"),
         Ok(other) => panic!("charAt should return string, got {:?}", other),
         Err(e) => panic!("charAt should not error: {:?}", e),
     }
@@ -1983,7 +1983,7 @@ fn string_charat_utf16_integration_regression() {
     // Test 3: Out of bounds behavior
     let result = interpreter.evaluate_expression("'hi'.charAt(5)");
     match result {
-        Ok(Value::Str(s)) => assert_eq!(s, ""),
+        Ok(Value::Str(s)) => assert_eq!(s.as_ref(), ""),
         Ok(other) => panic!(
             "out of bounds charAt should return empty string, got {:?}",
             other
@@ -1994,7 +1994,7 @@ fn string_charat_utf16_integration_regression() {
     // Test 4: Negative index handling
     let result = interpreter.evaluate_expression("'test'.charAt(-1)");
     match result {
-        Ok(Value::Str(s)) => assert_eq!(s, ""),
+        Ok(Value::Str(s)) => assert_eq!(s.as_ref(), ""),
         Ok(other) => panic!(
             "negative index charAt should return empty string, got {:?}",
             other
@@ -2021,7 +2021,7 @@ fn string_charat_utf16_integration_regression() {
     // Test 6: No argument handling
     let result = interpreter.evaluate_expression("'abc'.charAt()");
     match result {
-        Ok(Value::Str(s)) => assert_eq!(s, "a"),
+        Ok(Value::Str(s)) => assert_eq!(s.as_ref(), "a"),
         Ok(other) => panic!("charAt() should return first char, got {:?}", other),
         Err(_) => eprintln!("charAt() without args failed - acceptable"),
     }

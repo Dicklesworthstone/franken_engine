@@ -312,7 +312,7 @@ mod legacy_private_api_tests {
             },
             Ir3Instruction::LoadConstant {
                 dst: 1,
-                value: Value::Str("Test error message".to_string()),
+                value: Value::str("Test error message"),
             },
             Ir3Instruction::Call {
                 callee: 0,
@@ -345,7 +345,7 @@ mod legacy_private_api_tests {
                 instructions: vec![
                     Ir3Instruction::LoadConstant {
                         dst: 0,
-                        value: Value::Str("builtin:Error".to_string()),
+                        value: Value::str("builtin:Error"),
                     },
                     Ir3Instruction::Return { value: 0 },
                 ],
@@ -419,7 +419,7 @@ mod legacy_private_api_tests {
                         },
                         Ir3Instruction::LoadConstant {
                             dst: 1,
-                            value: Value::Str("Async error".to_string()),
+                            value: Value::str("Async error"),
                         },
                         Ir3Instruction::Call {
                             callee: 0,
@@ -436,7 +436,7 @@ mod legacy_private_api_tests {
                     instructions: vec![
                         Ir3Instruction::LoadConstant {
                             dst: 0,
-                            value: Value::Str("builtin:Error".to_string()),
+                            value: Value::str("builtin:Error"),
                         },
                         Ir3Instruction::Return { value: 0 },
                     ],
@@ -605,7 +605,7 @@ mod legacy_private_api_tests {
                 },
                 Ir3Instruction::LoadConstant {
                     dst: 1,
-                    value: Value::Str("Missing info error".to_string()),
+                    value: Value::str("Missing info error"),
                 },
                 Ir3Instruction::Call {
                     callee: 0,
@@ -622,7 +622,7 @@ mod legacy_private_api_tests {
                 instructions: vec![
                     Ir3Instruction::LoadConstant {
                         dst: 0,
-                        value: Value::Str("builtin:Error".to_string()),
+                        value: Value::str("builtin:Error"),
                     },
                     Ir3Instruction::Return { value: 0 },
                 ],

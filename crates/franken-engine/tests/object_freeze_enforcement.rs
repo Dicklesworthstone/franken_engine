@@ -275,7 +275,7 @@ fn object_freeze_prevents_property_deletion_and_preserves_value() {
     let result = execute(&frozen_delete_then_get_module(), &standard_caps())
         .expect("delete on a frozen object should be a false no-op, not a mutation");
 
-    assert_eq!(result.value, Value::Str("original".to_string()));
+    assert_eq!(result.value, Value::str("original"));
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn object_freeze_is_not_transitive() {
     let result = execute(&non_transitive_freeze_module(), &standard_caps())
         .expect("freezing an outer object should not freeze nested object values");
 
-    assert_eq!(result.value, Value::Str("modifiedInnerValue".to_string()));
+    assert_eq!(result.value, Value::str("modifiedInnerValue"));
 }
 
 #[test]
@@ -519,7 +519,7 @@ mod legacy_private_object_model_tests {
         // Test with primitive values - they should always be considered "frozen"
         let test_cases = vec![
             frankenengine::baseline_interpreter::Value::Int(42),
-            frankenengine::baseline_interpreter::Value::Str("hello".to_string()),
+            frankenengine::baseline_interpreter::Value::str("hello"),
             frankenengine::baseline_interpreter::Value::Bool(true),
             frankenengine::baseline_interpreter::Value::Null,
             frankenengine::baseline_interpreter::Value::Undefined,
@@ -746,7 +746,7 @@ mod legacy_private_object_model_tests {
         // Test freezing primitive values - should return the primitive unchanged
         let test_cases = vec![
             frankenengine::baseline_interpreter::Value::Int(42),
-            frankenengine::baseline_interpreter::Value::Str("hello".to_string()),
+            frankenengine::baseline_interpreter::Value::str("hello"),
             frankenengine::baseline_interpreter::Value::Bool(true),
             frankenengine::baseline_interpreter::Value::Null,
         ];

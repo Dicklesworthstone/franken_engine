@@ -20907,7 +20907,7 @@ mod active_builtin_regressions {
 
         for (index, value) in [
             (0, Value::Int(3)),
-            (1, Value::Str("banana".to_string())),
+            (1, Value::str("banana")),
             (2, Value::Bool(false)),
             (4, Value::Float(Float64::new(1.5))),
             (5, Value::Object(object_id)),
@@ -20999,7 +20999,7 @@ mod active_builtin_regressions {
         core.set_object_property(
             prototype_id,
             "inherited".to_string(),
-            Value::Str("from-prototype".to_string()),
+            Value::str("from-prototype"),
         )
         .expect("test prototype property write should succeed");
 
@@ -21065,7 +21065,7 @@ mod active_builtin_regressions {
         let inherited = core
             .prototype_chain_get(created_id, "inherited")
             .expect("prototype-chain lookup should execute");
-        assert_eq!(inherited, Value::Str("from-prototype".to_string()));
+        assert_eq!(inherited, Value::str("from-prototype"));
     }
 
     #[test]
@@ -21095,7 +21095,7 @@ mod active_builtin_regressions {
             );
             assert_eq!(properties.get("1"), Some(&Value::Int(3)));
             assert_eq!(properties.get("2"), Some(&Value::Object(object_id)));
-            assert_eq!(properties.get("3"), Some(&Value::Str("banana".to_string())));
+            assert_eq!(properties.get("3"), Some(&Value::str("banana")));
             assert_eq!(properties.get("4"), Some(&Value::Bool(false)));
             assert_eq!(properties.get("5"), Some(&Value::Undefined));
         }
@@ -21111,25 +21111,25 @@ mod active_builtin_regressions {
                 Some("builtin:StringPrototypeNormalize".to_string())
             );
 
-            core.registers[0] = Value::Str("Cafe\u{301}".to_string());
+            core.registers[0] = Value::str("Cafe\u{301}");
             let default_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                 .expect("StringPrototypeNormalize default NFC should execute");
-            assert_eq!(default_result, Value::Str("Café".to_string()));
+            assert_eq!(default_result, Value::str("Café"));
 
-            core.registers[0] = Value::Str("Café".to_string());
-            core.registers[1] = Value::Str("NFD".to_string());
+            core.registers[0] = Value::str("Café");
+            core.registers[1] = Value::str("NFD");
             let nfd_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeNormalize NFD should execute");
-            assert_eq!(nfd_result, Value::Str("Cafe\u{301}".to_string()));
+            assert_eq!(nfd_result, Value::str("Cafe\u{301}"));
 
-            core.registers[0] = Value::Str("\u{fb01}".to_string());
-            core.registers[1] = Value::Str("NFKC".to_string());
+            core.registers[0] = Value::str("\u{fb01}");
+            core.registers[1] = Value::str("NFKC");
             let nfkc_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeNormalize NFKC should execute");
-            assert_eq!(nfkc_result, Value::Str("fi".to_string()));
+            assert_eq!(nfkc_result, Value::str("fi"));
         }
     }
 
@@ -21137,8 +21137,8 @@ mod active_builtin_regressions {
     fn string_prototype_normalize_invalid_form_fails_closed() {
         for builtin_id in [222_u32, 273_u32] {
             let mut core = test_core();
-            core.registers[0] = Value::Str("hello".to_string());
-            core.registers[1] = Value::Str("BAD".to_string());
+            core.registers[0] = Value::str("hello");
+            core.registers[1] = Value::str("BAD");
 
             let err = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
@@ -21331,7 +21331,7 @@ mod async_runtime_tests_current {
             .expect("target property write should succeed");
 
         core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::Str("answer".to_string());
+        core.registers[1] = Value::str("answer");
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectGet",
@@ -21352,7 +21352,7 @@ mod async_runtime_tests_current {
         };
 
         core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::Str("answer".to_string());
+        core.registers[1] = Value::str("answer");
         core.registers[2] = Value::Int(42);
         assert_eq!(
             core.dispatch_builtin_hostcall(
@@ -21407,7 +21407,7 @@ mod async_runtime_tests_current {
         };
         assert_eq!(
             core.heap[weakmap_id.0 as usize].properties.get("__type"),
-            Some(&Value::Str("WeakMap".to_string()))
+            Some(&Value::str("WeakMap"))
         );
         weakmap_id
     }
@@ -21512,7 +21512,7 @@ mod async_runtime_tests_current {
         weakmap_storage_for_current_test(&mut core, weakmap_id).set(object_key_id.0, Value::Int(7));
 
         core.registers[0] = Value::Object(weakmap_id);
-        core.registers[1] = Value::Str("primitive".to_string());
+        core.registers[1] = Value::str("primitive");
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:WeakMapPrototypeHas",
@@ -21573,7 +21573,7 @@ mod async_runtime_tests_current {
         };
 
         core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::Str("anything".to_string());
+        core.registers[1] = Value::str("anything");
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectGet",
@@ -21581,7 +21581,7 @@ mod async_runtime_tests_current {
                 Some(&module),
             )
             .expect("Reflect.get should execute get trap"),
-            Value::Str("from-get-trap".to_string())
+            Value::str("from-get-trap")
         );
     }
 
@@ -21633,11 +21633,11 @@ mod async_runtime_tests_current {
         };
 
         core.registers[5] = Value::Object(proxy_id);
-        core.registers[6] = Value::Str("viaInstruction".to_string());
+        core.registers[6] = Value::str("viaInstruction");
         assert_eq!(
             core.run_loop(&module)
                 .expect("GetProperty should execute Proxy get trap"),
-            Value::Str("from-instruction-trap".to_string())
+            Value::str("from-instruction-trap")
         );
     }
 
@@ -21736,7 +21736,7 @@ mod async_runtime_tests_current {
             panic!("proxy field should be object");
         };
         core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::Str("x".to_string());
+        core.registers[1] = Value::str("x");
         let err = core
             .dispatch_builtin_hostcall("builtin:ReflectGet", RegRange { start: 0, count: 2 }, None)
             .expect_err("revoked proxy access must fail closed");
@@ -22016,7 +22016,7 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[0] = Value::Str("bad".to_string());
+        core.registers[0] = Value::str("bad");
         core.registers[2] = Value::Undefined;
         core.registers[3] = Value::Closure(0);
 
@@ -22126,7 +22126,7 @@ mod async_runtime_tests_current {
             Vec::new(),
         );
         let mut rejected_core = test_interpreter();
-        rejected_core.registers[0] = Value::Str("bad".to_string());
+        rejected_core.registers[0] = Value::str("bad");
         rejected_core
             .execute(&rejected_module)
             .expect("absent rejection handler should propagate rejection");
@@ -22410,7 +22410,7 @@ mod function_prototype_call_apply_tests_current {
         );
 
         let mut core = test_interpreter();
-        core.registers[0] = Value::Str("ab".to_string());
+        core.registers[0] = Value::str("ab");
         core.registers[1] = Value::Function(0);
 
         let result = core.execute(&module).expect("Array.from should execute");
@@ -22426,11 +22426,11 @@ mod function_prototype_call_apply_tests_current {
             .expect("result array should exist");
         assert_eq!(
             array.properties.get("0"),
-            Some(&Value::Str("a0".to_string()))
+            Some(&Value::str("a0"))
         );
         assert_eq!(
             array.properties.get("1"),
-            Some(&Value::Str("b1".to_string()))
+            Some(&Value::str("b1"))
         );
         assert_eq!(array.properties.get("length"), Some(&Value::Int(2)));
     }
@@ -22495,7 +22495,7 @@ mod numeric_error_message_tests {
     fn eval_numeric_helpers_preserve_type_error_messages() {
         let mut core = test_core();
         core.registers.resize(4, Value::Undefined);
-        core.registers[0] = Value::Str("not-a-number".to_string());
+        core.registers[0] = Value::str("not-a-number");
         core.registers[1] = Value::Int(1);
 
         let arith_err = core
@@ -22929,7 +22929,7 @@ mod tests {
     }
 
     fn iterator_next_via_property(core: &mut InterpreterCore, iterator: Value) -> Value {
-        iterator_method_via_property(core, iterator, Value::Str("next".to_string()))
+        iterator_method_via_property(core, iterator, Value::str("next"))
     }
 
     fn assert_iterator_result(
@@ -22951,7 +22951,7 @@ mod tests {
         let mut interpreter = quickjs_test_core();
 
         for func_index in [82, 234, 377] {
-            interpreter.registers[0] = Value::Str("42".to_string());
+            interpreter.registers[0] = Value::str("42");
             interpreter.registers[1] = Value::Float(Float64::new(f64::NAN));
 
             let result = interpreter
@@ -22975,7 +22975,7 @@ mod tests {
                         input: &str,
                         radix: Option<i64>,
                         expected: Option<i64>| {
-            interpreter.registers[0] = Value::Str(input.to_string());
+            interpreter.registers[0] = Value::str(input);
             let count = if let Some(radix) = radix {
                 interpreter.registers[1] = Value::Int(radix);
                 2
@@ -23039,7 +23039,7 @@ mod tests {
                 .expect("Number.toString with NaN radix should not fail interpreter dispatch");
             assert_eq!(
                 result,
-                Value::Str("42".to_string()),
+                Value::str("42"),
                 "Number.toString builtin ID {} should default NaN radix to decimal",
                 func_index
             );
@@ -23059,7 +23059,7 @@ mod tests {
                 .expect("Number.toString with fractional non-decimal radix should run");
             assert_eq!(
                 result,
-                Value::Str("11.1".to_string()),
+                Value::str("11.1"),
                 "Number.toString builtin ID {} should preserve fractional radix digits",
                 func_index
             );
@@ -23077,7 +23077,7 @@ mod tests {
         let weakmap_obj = &core.heap[weakmap_id.0 as usize];
         assert_eq!(
             weakmap_obj.properties.get("__type"),
-            Some(&Value::Str("WeakMap".to_string()))
+            Some(&Value::str("WeakMap"))
         );
         weakmap_id
     }
@@ -23166,7 +23166,7 @@ mod tests {
             .expect("test setup should write non-object-key entry");
 
         core.registers[0] = Value::Object(weakmap_id);
-        core.registers[1] = Value::Str("primitive".to_string());
+        core.registers[1] = Value::str("primitive");
         assert_eq!(
             core.call_builtin_by_id(324, RegRange { start: 0, count: 2 })
                 .expect("WeakMap.prototype.has should execute for primitive key"),
@@ -23196,11 +23196,11 @@ mod tests {
 
         let first_pair = alloc_indexed_object_for_test(
             &mut core,
-            &[Value::Str("alpha".to_string()), Value::Int(1)],
+            &[Value::str("alpha"), Value::Int(1)],
         );
         let second_pair = alloc_indexed_object_for_test(
             &mut core,
-            &[Value::Str("beta".to_string()), Value::Int(2)],
+            &[Value::str("beta"), Value::Int(2)],
         );
         let map_iterable = alloc_indexed_object_for_test(
             &mut core,
@@ -23220,13 +23220,13 @@ mod tests {
             Some(&Value::Int(2))
         );
         core.registers[0] = Value::Object(map_id);
-        core.registers[1] = Value::Str("alpha".to_string());
+        core.registers[1] = Value::str("alpha");
         assert_eq!(
             core.call_builtin_by_id(175, RegRange { start: 0, count: 2 })
                 .expect("Map.prototype.get should read seeded entry"),
             Value::Int(1)
         );
-        core.registers[1] = Value::Str("beta".to_string());
+        core.registers[1] = Value::str("beta");
         assert_eq!(
             core.call_builtin_by_id(175, RegRange { start: 0, count: 2 })
                 .expect("Map.prototype.get should read second seeded entry"),
@@ -23369,7 +23369,7 @@ mod tests {
         for (index, expected_part) in expected.iter().enumerate() {
             assert_eq!(
                 array_obj.properties.get(&index.to_string()),
-                Some(&Value::Str((*expected_part).to_string()))
+                Some(&Value::str((*expected_part)))
             );
         }
     }
@@ -23377,7 +23377,7 @@ mod tests {
     #[test]
     fn string_split_omitted_and_undefined_separator_returns_whole_string() {
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("hello".to_string());
+        core.registers[0] = Value::str("hello");
 
         // SAFETY: call_builtin cannot fail with valid test inputs
         let result = core
@@ -23402,7 +23402,7 @@ mod tests {
     #[test]
     fn string_split_omitted_and_undefined_separator_handle_non_ascii() {
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("a🙂b".to_string());
+        core.registers[0] = Value::str("a🙂b");
 
         // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
@@ -23427,7 +23427,7 @@ mod tests {
     #[test]
     fn string_split_omitted_separator_and_undefined_keep_whole_punctuation_string() {
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("a,b".to_string());
+        core.registers[0] = Value::str("a,b");
 
         // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
@@ -23452,8 +23452,8 @@ mod tests {
     #[test]
     fn string_split_empty_separator_splits_characters() {
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("ab".to_string());
-        core.registers[1] = Value::Str("".to_string());
+        core.registers[0] = Value::str("ab");
+        core.registers[1] = Value::str("");
 
         // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
@@ -23468,8 +23468,8 @@ mod tests {
     #[test]
     fn string_split_normal_separator() {
         let mut core = quickjs_test_core();
-        core.registers[0] = Value::Str("a,b,c".to_string());
-        core.registers[1] = Value::Str(",".to_string());
+        core.registers[0] = Value::str("a,b,c");
+        core.registers[1] = Value::str(",");
 
         // SAFETY: call_builtin cannot fail with valid test inputs and builtin function name
         let result = core
@@ -23618,7 +23618,7 @@ mod tests {
             .properties
             .insert("secret".to_string(), Value::Int(99));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("secret".to_string());
+        core.registers[2] = Value::str("secret");
 
         // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
         let result = core
@@ -23781,7 +23781,7 @@ mod tests {
             .alloc_object_with_prototype(None)
             .expect("serde deserialization should succeed");
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("key".to_string());
+        core.registers[2] = Value::str("key");
         core.registers[3] = Value::Int(7);
 
         // SAFETY: Test-only unwrap expecting execution to succeed with valid test module
@@ -23862,7 +23862,7 @@ mod tests {
             .properties
             .insert("stable".to_string(), Value::Int(12));
         core.registers[1] = Value::Object(oid);
-        core.registers[2] = Value::Str("stable".to_string());
+        core.registers[2] = Value::str("stable");
 
         let result = core
             .execute(&test_module(vec![
@@ -23963,7 +23963,7 @@ mod tests {
             vec!["hello".to_string()],
         );
         let result = quickjs_execute(&m).expect("serde deserialization should succeed");
-        assert_eq!(result.value, Value::Str("hello".to_string()));
+        assert_eq!(result.value, Value::str("hello"));
     }
 
     #[test]
@@ -24041,7 +24041,7 @@ mod tests {
             vec!["hello".to_string(), " world".to_string()],
         );
         let result = quickjs_execute(&m).expect("serde deserialization should succeed");
-        assert_eq!(result.value, Value::Str("hello world".to_string()));
+        assert_eq!(result.value, Value::str("hello world"));
     }
 
     #[test]
@@ -24371,8 +24371,8 @@ mod tests {
             &mut core,
             2,
             &[
-                (0, Value::Str("first".to_string())),
-                (1, Value::Str("second".to_string())),
+                (0, Value::str("first")),
+                (1, Value::str("second")),
             ],
         );
         let accumulator_id = core
@@ -24390,7 +24390,7 @@ mod tests {
             core.heap[accumulator_id.0 as usize]
                 .properties
                 .get("latest"),
-            Some(&Value::Str("second".to_string()))
+            Some(&Value::str("second"))
         );
     }
 
@@ -24447,26 +24447,26 @@ mod tests {
             &mut core,
             3,
             &[
-                (0, Value::Str("first".to_string())),
-                (2, Value::Str("third".to_string())),
+                (0, Value::str("first")),
+                (2, Value::str("third")),
             ],
         );
         core.set_object_property(
             array_id,
             "01".to_string(),
-            Value::Str("leading-zero".to_string()),
+            Value::str("leading-zero"),
         )
         .expect("serde deserialization should succeed");
         core.set_object_property(
             array_id,
             "3".to_string(),
-            Value::Str("past-length".to_string()),
+            Value::str("past-length"),
         )
         .expect("serde deserialization should succeed");
         core.set_object_property(
             array_id,
             "4294967295".to_string(),
-            Value::Str("uint32-max".to_string()),
+            Value::str("uint32-max"),
         )
         .expect("serde deserialization should succeed");
         core.registers[0] = Value::Object(array_id);
@@ -24481,20 +24481,20 @@ mod tests {
 
         assert_eq!(result, Value::Object(array_id));
         let properties = &core.heap[array_id.0 as usize].properties;
-        assert_eq!(properties.get("0"), Some(&Value::Str("third".to_string())));
+        assert_eq!(properties.get("0"), Some(&Value::str("third")));
         assert_eq!(properties.get("1"), None);
-        assert_eq!(properties.get("2"), Some(&Value::Str("first".to_string())));
+        assert_eq!(properties.get("2"), Some(&Value::str("first")));
         assert_eq!(
             properties.get("01"),
-            Some(&Value::Str("leading-zero".to_string()))
+            Some(&Value::str("leading-zero"))
         );
         assert_eq!(
             properties.get("3"),
-            Some(&Value::Str("past-length".to_string()))
+            Some(&Value::str("past-length"))
         );
         assert_eq!(
             properties.get("4294967295"),
-            Some(&Value::Str("uint32-max".to_string()))
+            Some(&Value::str("uint32-max"))
         );
     }
 
@@ -24505,8 +24505,8 @@ mod tests {
             &mut core,
             3,
             &[
-                (0, Value::Str("first".to_string())),
-                (2, Value::Str("third".to_string())),
+                (0, Value::str("first")),
+                (2, Value::str("third")),
             ],
         );
         core.registers[0] = Value::Object(array_id);
@@ -24532,7 +24532,7 @@ mod tests {
             &core,
             first.expect("serde deserialization should succeed"),
             0,
-            Value::Str("first".to_string()),
+            Value::str("first"),
         );
         let second = core
             .advance_for_of_iterator(None, iterator.clone())
@@ -24550,7 +24550,7 @@ mod tests {
             &core,
             third.expect("serde deserialization should succeed"),
             2,
-            Value::Str("third".to_string()),
+            Value::str("third"),
         );
         assert_eq!(
             core.advance_for_of_iterator(None, iterator)
@@ -24633,8 +24633,8 @@ mod tests {
             &mut core,
             3,
             &[
-                (0, Value::Str("first".to_string())),
-                (2, Value::Str("third".to_string())),
+                (0, Value::str("first")),
+                (2, Value::str("third")),
             ],
         );
         core.registers[0] = Value::Object(array_id);
@@ -24677,7 +24677,7 @@ mod tests {
         assert_eq!(
             core.advance_for_of_iterator(None, values.clone())
                 .expect("serde deserialization should succeed"),
-            Some(Value::Str("first".to_string()))
+            Some(Value::str("first"))
         );
         assert_eq!(
             core.advance_for_of_iterator(None, values.clone())
@@ -24687,7 +24687,7 @@ mod tests {
         assert_eq!(
             core.advance_for_of_iterator(None, values.clone())
                 .expect("serde deserialization should succeed"),
-            Some(Value::Str("third".to_string()))
+            Some(Value::str("third"))
         );
         assert_eq!(
             core.advance_for_of_iterator(None, values)
@@ -24703,8 +24703,8 @@ mod tests {
             &mut core,
             3,
             &[
-                (0, Value::Str("first".to_string())),
-                (2, Value::Str("third".to_string())),
+                (0, Value::str("first")),
+                (2, Value::str("third")),
             ],
         );
         core.registers[0] = Value::Object(array_id);
@@ -24741,19 +24741,19 @@ mod tests {
             .get("value")
             .cloned()
             .expect("entries result should expose value");
-        assert_entry_pair(&core, pair_value, 0, Value::Str("first".to_string()));
+        assert_entry_pair(&core, pair_value, 0, Value::str("first"));
 
         let key_result = iterator_next_via_property(&mut core, keys);
         assert_iterator_result(&core, key_result, false, Value::Int(0));
 
         let value_result = iterator_next_via_property(&mut core, values.clone());
-        assert_iterator_result(&core, value_result, false, Value::Str("first".to_string()));
+        assert_iterator_result(&core, value_result, false, Value::str("first"));
 
         let hole_result = iterator_next_via_property(&mut core, values.clone());
         assert_iterator_result(&core, hole_result, false, Value::Undefined);
 
         let tail_result = iterator_next_via_property(&mut core, values.clone());
-        assert_iterator_result(&core, tail_result, false, Value::Str("third".to_string()));
+        assert_iterator_result(&core, tail_result, false, Value::str("third"));
 
         let done_result = iterator_next_via_property(&mut core, values);
         assert_iterator_result(&core, done_result, true, Value::Undefined);
@@ -24830,7 +24830,7 @@ mod tests {
             iterator_method_via_property(
                 &mut core,
                 iterator.clone(),
-                Value::Str("@@iterator".to_string())
+                Value::str("@@iterator")
             ),
             iterator
         );
@@ -25057,7 +25057,7 @@ mod tests {
         // Math.abs(i64::MIN) uses saturating_abs -> i64::MAX (consistent with stdlib)
         assert_eq!(call_math_abs(Value::Int(i64::MIN)), Value::Int(i64::MAX));
         assert_eq!(
-            call_math_abs(Value::Str(" -3.5 ".to_string())),
+            call_math_abs(Value::str(" -3.5 ")),
             Value::Float(Float64::new(3.5))
         );
         assert_eq!(
@@ -25104,7 +25104,7 @@ mod tests {
 
         // String coercion should still work normally
         assert_eq!(
-            call_math_abs(Value::Str("-123".to_string())),
+            call_math_abs(Value::str("-123")),
             Value::Float(Float64::new(123.0))
         );
 
@@ -25300,12 +25300,12 @@ mod tests {
         assert!(!Value::Null.is_truthy());
         assert!(!Value::Bool(false).is_truthy());
         assert!(!Value::Int(0).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
+        assert!(!Value::str("").is_truthy());
 
         assert!(Value::Bool(true).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
     }
@@ -25320,7 +25320,7 @@ mod tests {
         assert_eq!(Value::Null.to_string(), "null");
         assert_eq!(Value::Bool(true).to_string(), "true");
         assert_eq!(Value::Int(42).to_string(), "42");
-        assert_eq!(Value::Str("hi".to_string()).to_string(), "hi");
+        assert_eq!(Value::str("hi").to_string(), "hi");
     }
 
     // -----------------------------------------------------------------------
@@ -25393,7 +25393,7 @@ mod tests {
             Value::Null,
             Value::Bool(true),
             Value::Int(42),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(7)),
             Value::Function(3),
         ] {
@@ -25542,7 +25542,7 @@ mod tests {
             vec!["answer: ".to_string()],
         );
         let result = quickjs_execute(&m).expect("serde deserialization should succeed");
-        assert_eq!(result.value, Value::Str("answer: 42".to_string()));
+        assert_eq!(result.value, Value::str("answer: 42"));
     }
 
     #[test]
@@ -25551,8 +25551,8 @@ mod tests {
         assert!(Value::Null < Value::Bool(false));
         assert!(Value::Bool(false) < Value::Bool(true));
         assert!(Value::Bool(true) < Value::Int(0));
-        assert!(Value::Int(0) < Value::Str(String::new()));
-        assert!(Value::Str(String::new()) < Value::Object(ObjectId(0)));
+        assert!(Value::Int(0) < Value::str(""));
+        assert!(Value::str("") < Value::Object(ObjectId(0)));
         assert!(Value::Object(ObjectId(0)) < Value::Function(0));
     }
 
@@ -25638,7 +25638,7 @@ mod tests {
             Value::Bool(false),
             Value::Int(0),
             Value::Int(-1),
-            Value::Str("hello".to_string()),
+            Value::str("hello"),
             Value::Object(ObjectId(0)),
             Value::Function(0),
         ];
@@ -25737,7 +25737,7 @@ mod tests {
         assert_eq!(Value::Null.type_name(), "null");
         assert_eq!(Value::Bool(true).type_name(), "boolean");
         assert_eq!(Value::Int(0).type_name(), "number");
-        assert_eq!(Value::Str(String::new()).type_name(), "string");
+        assert_eq!(Value::str("").type_name(), "string");
         assert_eq!(Value::Object(ObjectId(0)).type_name(), "object");
         assert_eq!(Value::Function(0).type_name(), "function");
         assert_eq!(
@@ -25755,8 +25755,8 @@ mod tests {
         assert!(!Value::Int(0).is_truthy());
         assert!(Value::Int(1).is_truthy());
         assert!(Value::Int(-1).is_truthy());
-        assert!(!Value::Str(String::new()).is_truthy());
-        assert!(Value::Str("x".to_string()).is_truthy());
+        assert!(!Value::str("").is_truthy());
+        assert!(Value::str("x").is_truthy());
         assert!(Value::Object(ObjectId(0)).is_truthy());
         assert!(Value::Function(0).is_truthy());
         assert!(Value::BuiltinFunction(BuiltinFunction::require("/tmp/entry.cjs")).is_truthy());
@@ -26000,7 +26000,7 @@ mod tests {
         let before = core.estimated_memory_bytes();
         core.heap[oid.0 as usize]
             .properties
-            .insert("payload".to_string(), Value::Str("hello world".to_string()));
+            .insert("payload".to_string(), Value::str("hello world"));
         core.sync_estimated_memory_bytes()
             .expect("serde deserialization should succeed");
         assert!(core.estimated_memory_bytes() > before);
@@ -26136,7 +26136,7 @@ mod tests {
         core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
-                value: Value::Str("x".repeat(128)),
+                value: Value::str("x".repeat(128)),
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -26159,7 +26159,7 @@ mod tests {
         core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
-                value: Value::Str("x".repeat(128)),
+                value: Value::str("x".repeat(128)),
                 kind: BindingKind::Var,
                 initialized: true,
             },
@@ -26270,7 +26270,7 @@ mod tests {
         );
         assert_eq!(
             result_object.properties.get("value"),
-            Some(&Value::Str(payload))
+            Some(&Value::str(payload))
         );
     }
 
@@ -26379,7 +26379,7 @@ mod tests {
             core.scope_chain.current_mut().unwrap().bindings.insert(
                 binding_name.clone(),
                 ScopeBinding {
-                    value: Value::Str(binding_value.clone()),
+                    value: Value::str(binding_value.clone()),
                     kind: BindingKind::Var,
                     initialized: true,
                 },
@@ -26399,7 +26399,7 @@ mod tests {
             let binding_name = format!("var{}", level);
             let expected_value = format!("value{}", level);
             if let Some(binding) = frame.bindings.get(&binding_name) {
-                assert_eq!(binding.value, Value::Str(expected_value));
+                assert_eq!(binding.value, Value::str(expected_value));
             } else {
                 panic!("Missing binding {} at scope level {}", binding_name, level);
             }
@@ -28318,7 +28318,7 @@ mod tests {
                 (Value::Int(42), crate::object_model::JsValue::Int(42)),
                 (Value::Int(-123), crate::object_model::JsValue::Int(-123)),
                 (
-                    Value::Str("hello".to_string()),
+                    Value::str("hello"),
                     crate::object_model::JsValue::Str("hello".to_string()),
                 ),
                 (
@@ -28455,11 +28455,11 @@ mod tests {
 
             // First call: create async generator from function 0
             core.registers[0] = Value::AsyncGeneratorFunction(0);
-            core.registers[3] = Value::Str("arg1".to_string()); // argument
+            core.registers[3] = Value::str("arg1"); // argument
 
             // Second call: create async generator from function 1
             core.registers[7] = Value::AsyncGeneratorFunction(1);
-            core.registers[10] = Value::Str("arg1".to_string()); // argument 1
+            core.registers[10] = Value::str("arg1"); // argument 1
             core.registers[11] = Value::Int(42); // argument 2
 
             core.execute(&module)
@@ -28630,7 +28630,7 @@ mod tests {
                 Value::Iterator(500),
                 Value::Bool(false),
                 Value::Int(-42),
-                Value::Str("ßa".to_string()),
+                Value::str("ßa"),
                 Value::Closure(600),
             ];
 
@@ -28644,9 +28644,9 @@ mod tests {
                         .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                         .expect("string casing builtin should execute");
                     let expected_result = if lowercase_builtin_ids.contains(&builtin_id) {
-                        Value::Str(expected.to_lowercase())
+                        Value::str(expected.to_lowercase())
                     } else {
-                        Value::Str(expected.to_uppercase())
+                        Value::str(expected.to_uppercase())
                     };
                     assert_eq!(
                         result, expected_result,
@@ -28676,7 +28676,7 @@ mod tests {
             ));
 
             for valid in [
-                Value::Str("hello".to_string()),
+                Value::str("hello"),
                 Value::Int(42),
                 Value::Bool(true),
                 Value::Function(1),
@@ -28710,7 +28710,7 @@ mod tests {
                 (0, Value::Int(42)),                  // Should remain Int(42), not Str("42")
                 (1, Value::Bool(true)),               // Should remain Bool(true), not Str("true")
                 (2, Value::Float(3.14.into())),       // Should remain Float, not Str("3.14")
-                (3, Value::Str("apple".to_string())), // Should remain Str
+                (3, Value::str("apple")), // Should remain Str
                 (4, Value::Object(ObjectId(200))), // Should remain Object, not Str("[object Object]")
             ];
 
@@ -28893,7 +28893,7 @@ mod tests {
                 .set_object_property(
                     regexp_obj_id,
                     "source".to_string(),
-                    Value::Str("foo".to_string()),
+                    Value::str("foo"),
                 )
                 .expect("serde deserialization should succeed");
 
@@ -28939,7 +28939,7 @@ mod tests {
             let regexp_ids = [268u32, 372u32];
             let first_result = {
                 interpreter.registers[0] = Value::Object(regexp_obj_id);
-                interpreter.registers[1] = Value::Str("a quick food".to_string());
+                interpreter.registers[1] = Value::str("a quick food");
                 interpreter
                     .call_builtin_by_id(regexp_ids[0], RegRange { start: 0, count: 2 })
                     .expect("first RegExp mapping should execute")
@@ -28954,7 +28954,7 @@ mod tests {
                     builtin_id
                 );
                 interpreter.registers[0] = Value::Object(regexp_obj_id);
-                interpreter.registers[1] = Value::Str("a quick food".to_string());
+                interpreter.registers[1] = Value::str("a quick food");
                 let result = interpreter
                     .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                     .expect("RegExp mapping should execute");
@@ -28980,7 +28980,7 @@ mod tests {
             let array_id = ObjectId(100);
             let test_elements = vec![
                 (0, Value::Int(3)),                    // "3"
-                (1, Value::Str("banana".to_string())), // "banana"
+                (1, Value::str("banana")), // "banana"
                 (2, Value::Bool(false)),               // "false"
                 // index 3 is a hole (should become Undefined)
                 (4, Value::Float(1.5.into())),     // "1.5"
@@ -29182,7 +29182,7 @@ mod tests {
 
         // Set up registers for concat call: this=arr, args=["str"]
         core.registers[0] = Value::Object(arr_id);
-        core.registers[1] = Value::Str("str".to_string());
+        core.registers[1] = Value::str("str");
 
         let result = core
             .execute(&test_module(vec![
@@ -29206,7 +29206,7 @@ mod tests {
             assert_eq!(result_obj.properties.get("0"), Some(&Value::Int(1)));
             assert_eq!(
                 result_obj.properties.get("1"),
-                Some(&Value::Str("str".to_string()))
+                Some(&Value::str("str"))
             );
         } else {
             panic!("Array concat should return an object");
@@ -29363,7 +29363,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test ParseInt with string argument (single argument)
-        core.registers[0] = Value::Str("123".to_string());
+        core.registers[0] = Value::str("123");
 
         let result = core
             .execute(&test_module(vec![
@@ -29384,7 +29384,7 @@ mod tests {
         }
 
         // Test ParseInt with radix argument
-        core.registers[0] = Value::Str("101".to_string());
+        core.registers[0] = Value::str("101");
         core.registers[1] = Value::Int(2); // binary radix
 
         let result = core
@@ -29411,7 +29411,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test ParseFloat with string argument
-        core.registers[0] = Value::Str("3.14".to_string());
+        core.registers[0] = Value::str("3.14");
 
         let result = core
             .execute(&test_module(vec![
@@ -29565,7 +29565,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Set up arguments for console.info
-        core.registers[0] = Value::Str("Info message".to_string());
+        core.registers[0] = Value::str("Info message");
         core.registers[1] = Value::Int(42);
 
         let result = core
@@ -29591,7 +29591,7 @@ mod tests {
     fn console_info_hostcall_dispatch() {
         let mut core = quickjs_test_core();
 
-        core.registers[0] = Value::Str("Info hostcall".to_string());
+        core.registers[0] = Value::str("Info hostcall");
         core.dispatch_console_hostcall("console:info", RegRange { start: 0, count: 1 })
             .expect("serde deserialization should succeed");
 
@@ -29606,7 +29606,7 @@ mod tests {
         // Test that the original builtin IDs 100-102 properly capture output
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
-        core.registers[0] = Value::Str("Log test".to_string());
+        core.registers[0] = Value::str("Log test");
 
         let result = core
             .execute(&test_module(vec![
@@ -29625,7 +29625,7 @@ mod tests {
         assert_eq!(core.console_output[0].message, "Log test");
 
         core.console_output.clear();
-        core.registers[0] = Value::Str("Error test".to_string());
+        core.registers[0] = Value::str("Error test");
 
         let result = core
             .execute(&test_module(vec![
@@ -29644,7 +29644,7 @@ mod tests {
         assert_eq!(core.console_output[0].message, "Error test");
 
         core.console_output.clear();
-        core.registers[0] = Value::Str("Warn test".to_string());
+        core.registers[0] = Value::str("Warn test");
 
         let result = core
             .execute(&test_module(vec![
@@ -29668,7 +29668,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test that console output includes proper metadata
-        core.registers[0] = Value::Str("Test".to_string());
+        core.registers[0] = Value::str("Test");
         core.registers[1] = Value::Int(123);
 
         let result = core
@@ -29700,9 +29700,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         core.set_register(0, Value::Object(obj_id))
             .expect("serde deserialization should succeed");
-        core.set_register(1, Value::Str("object".to_string()))
+        core.set_register(1, Value::str("object"))
             .expect("serde deserialization should succeed");
-        core.set_register(2, Value::Str("replacement".to_string()))
+        core.set_register(2, Value::str("replacement"))
             .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
@@ -29718,14 +29718,14 @@ mod tests {
         let result = core
             .read_register(3)
             .expect("serde deserialization should succeed");
-        assert_eq!(result, Value::Str("[replacement Object]".to_string()));
+        assert_eq!(result, Value::str("[replacement Object]"));
     }
 
     #[test]
     fn string_prototype_replace_no_search_arg() {
         // Test that no search argument returns original string
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        core.set_register(0, Value::Str("hello world".to_string()))
+        core.set_register(0, Value::str("hello world"))
             .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
@@ -29741,7 +29741,7 @@ mod tests {
         let result = core
             .read_register(1)
             .expect("serde deserialization should succeed");
-        assert_eq!(result, Value::Str("hello world".to_string()));
+        assert_eq!(result, Value::str("hello world"));
     }
 
     #[test]
@@ -29752,9 +29752,9 @@ mod tests {
         // Using Value::Iterator as an example of non-primitive type
         core.set_register(0, Value::Iterator(0))
             .expect("serde deserialization should succeed");
-        core.set_register(1, Value::Str("object".to_string()))
+        core.set_register(1, Value::str("object"))
             .expect("serde deserialization should succeed");
-        core.set_register(2, Value::Str("replaced".to_string()))
+        core.set_register(2, Value::str("replaced"))
             .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
@@ -29770,7 +29770,7 @@ mod tests {
         let result = core
             .read_register(3)
             .expect("serde deserialization should succeed");
-        assert_eq!(result, Value::Str("[replaced Object]".to_string()));
+        assert_eq!(result, Value::str("[replaced Object]"));
     }
 
     #[test]
@@ -29780,9 +29780,9 @@ mod tests {
         let builtin_fn = BuiltinFunction::new(42, "TestFunction".to_string());
         core.set_register(0, Value::BuiltinFunction(builtin_fn))
             .expect("serde deserialization should succeed");
-        core.set_register(1, Value::Str("object".to_string()))
+        core.set_register(1, Value::str("object"))
             .expect("serde deserialization should succeed");
-        core.set_register(2, Value::Str("function".to_string()))
+        core.set_register(2, Value::str("function"))
             .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
@@ -29798,7 +29798,7 @@ mod tests {
         let result = core
             .read_register(3)
             .expect("serde deserialization should succeed");
-        assert_eq!(result, Value::Str("[function Object]".to_string()));
+        assert_eq!(result, Value::str("[function Object]"));
     }
 
     // Regression tests for bd-1b3v6: parseFloat exponent and Infinity semantics
@@ -29807,7 +29807,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test parseFloat("1e3") should return 1000
-        core.registers[0] = Value::Str("1e3".to_string());
+        core.registers[0] = Value::str("1e3");
 
         let result = core
             .execute(&test_module(vec![
@@ -29824,7 +29824,7 @@ mod tests {
         assert_eq!(core.registers[10], Value::Int(1000));
 
         // Test parseFloat("2.5e2") should return 250
-        core.registers[0] = Value::Str("2.5e2".to_string());
+        core.registers[0] = Value::str("2.5e2");
 
         let result = core
             .execute(&test_module(vec![
@@ -29850,7 +29850,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test parseFloat("1e-3") should return 0.001
-        core.registers[0] = Value::Str("1e-3".to_string());
+        core.registers[0] = Value::str("1e-3");
 
         let result = core
             .execute(&test_module(vec![
@@ -29871,7 +29871,7 @@ mod tests {
         }
 
         // Test parseFloat("5E+2") should return 500
-        core.registers[0] = Value::Str("5E+2".to_string());
+        core.registers[0] = Value::str("5E+2");
 
         let result = core
             .execute(&test_module(vec![
@@ -29893,7 +29893,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test parseFloat("Infinity")
-        core.registers[0] = Value::Str("Infinity".to_string());
+        core.registers[0] = Value::str("Infinity");
 
         let result = core
             .execute(&test_module(vec![
@@ -29914,7 +29914,7 @@ mod tests {
         }
 
         // Test parseFloat("-Infinity")
-        core.registers[0] = Value::Str("-Infinity".to_string());
+        core.registers[0] = Value::str("-Infinity");
 
         let result = core
             .execute(&test_module(vec![
@@ -29935,7 +29935,7 @@ mod tests {
         }
 
         // Test parseFloat("+Infinity")
-        core.registers[0] = Value::Str("+Infinity".to_string());
+        core.registers[0] = Value::str("+Infinity");
 
         let result = core
             .execute(&test_module(vec![
@@ -29961,7 +29961,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test parseFloat("1e") - incomplete exponent should parse as 1
-        core.registers[0] = Value::Str("1e".to_string());
+        core.registers[0] = Value::str("1e");
 
         let result = core
             .execute(&test_module(vec![
@@ -29982,7 +29982,7 @@ mod tests {
         }
 
         // Test parseFloat("123abc") should stop at 'a' and return 123
-        core.registers[0] = Value::Str("123abc".to_string());
+        core.registers[0] = Value::str("123abc");
 
         let result = core
             .execute(&test_module(vec![
@@ -30005,9 +30005,9 @@ mod tests {
 
         let float_builtin_ids = [83u32, 232u32, 378u32];
         let inputs = [
-            Value::Str("1e3".to_string()),
-            Value::Str("Infinityxyz".to_string()),
-            Value::Str(" 2.5e2 ".to_string()),
+            Value::str("1e3"),
+            Value::str("Infinityxyz"),
+            Value::str(" 2.5e2 "),
             Value::Int(7),
             Value::Float(Float64::new(3.5)),
         ];
@@ -30056,7 +30056,7 @@ mod tests {
         let number_is_nan_ids = [90u32, 239u32, 337u32];
         let nan_cases = [
             (Value::Float(Float64::new(f64::NAN)), true),
-            (Value::Str("NaN".to_string()), false),
+            (Value::str("NaN"), false),
             (Value::Undefined, false),
         ];
         for builtin_id in number_is_nan_ids {
@@ -30082,7 +30082,7 @@ mod tests {
         let finite_cases = [
             (Value::Int(7), true),
             (Value::Float(Float64::new(f64::INFINITY)), false),
-            (Value::Str("7".to_string()), false),
+            (Value::str("7"), false),
         ];
         for builtin_id in number_is_finite_ids {
             assert_eq!(
@@ -30109,18 +30109,18 @@ mod tests {
                 Some("builtin:StringPrototypeCharAt".to_string())
             );
 
-            core.registers[4] = Value::Str("hello".to_string());
+            core.registers[4] = Value::str("hello");
             core.registers[5] = Value::Int(1);
             let explicit_index = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 2 })
                 .expect("String.prototype.charAt alias should execute");
-            assert_eq!(explicit_index, Value::Str("e".to_string()));
+            assert_eq!(explicit_index, Value::str("e"));
 
             core.registers[4] = Value::Int(42);
             let default_index = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 4, count: 1 })
                 .expect("String.prototype.charAt alias should execute");
-            assert_eq!(default_index, Value::Str("4".to_string()));
+            assert_eq!(default_index, Value::str("4"));
         }
     }
 
@@ -30190,7 +30190,7 @@ mod tests {
         // Test basic charCodeAt functionality with ASCII characters
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hello".to_string()))
+        core.set_register(0, Value::str("Hello"))
             .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(0))
@@ -30222,7 +30222,7 @@ mod tests {
 
         // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("😀".to_string()))
+        core.set_register(0, Value::str("😀"))
             .expect("serde deserialization should succeed");
 
         // Get first surrogate (high surrogate)
@@ -30281,7 +30281,7 @@ mod tests {
         // Test charCodeAt with out-of-bounds index returns NaN
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hi".to_string()))
+        core.set_register(0, Value::str("Hi"))
             .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the out-of-bounds index is intentional.
         core.set_register(1, Value::Int(5))
@@ -30316,7 +30316,7 @@ mod tests {
     fn string_prototype_char_code_at_negative_index() {
         // Test charCodeAt with negative index (should treat as 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        core.set_register(0, Value::Str("Test".to_string()))
+        core.set_register(0, Value::str("Test"))
             .expect("serde deserialization should succeed");
         core.set_register(1, Value::Int(-1))
             .expect("serde deserialization should succeed"); // negative index
@@ -30346,7 +30346,7 @@ mod tests {
     fn string_prototype_char_code_at_no_index() {
         // Test charCodeAt with no index argument (should default to 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        core.set_register(0, Value::Str("ABC".to_string()))
+        core.set_register(0, Value::str("ABC"))
             .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
@@ -30405,7 +30405,7 @@ mod tests {
         // Test basic charAt functionality with ASCII characters
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hello".to_string()))
+        core.set_register(0, Value::str("Hello"))
             .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
         core.set_register(1, Value::Int(1))
@@ -30429,7 +30429,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             result,
-            Value::Str("e".to_string()),
+            Value::str("e"),
             "charAt(1) should return 'e'"
         );
     }
@@ -30440,7 +30440,7 @@ mod tests {
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
 
         // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
-        core.set_register(0, Value::Str("😀".to_string()))
+        core.set_register(0, Value::str("😀"))
             .expect("serde deserialization should succeed");
 
         // Get first surrogate character (high surrogate)
@@ -30505,7 +30505,7 @@ mod tests {
         // Test charAt with out-of-bounds index returns empty string
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(0, Value::Str("Hi".to_string()))
+        core.set_register(0, Value::str("Hi"))
             .expect("serde deserialization should succeed");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(1, Value::Int(5))
@@ -30528,7 +30528,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             result,
-            Value::Str("".to_string()),
+            Value::str(""),
             "Out-of-bounds charAt should return empty string"
         );
     }
@@ -30538,7 +30538,7 @@ mod tests {
         // Test charAt with negative index (should treat as 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(0, Value::Str("Test".to_string()))
+        core.set_register(0, Value::str("Test"))
             .expect("serde deserialization should succeed");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
         core.set_register(1, Value::Int(-1))
@@ -30562,7 +30562,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             result,
-            Value::Str("T".to_string()),
+            Value::str("T"),
             "Negative index should be treated as 0"
         );
     }
@@ -30572,7 +30572,7 @@ mod tests {
         // Test charAt with no index argument (should default to 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: test setup writes to a valid register in a fresh interpreter.
-        core.set_register(0, Value::Str("ABC".to_string()))
+        core.set_register(0, Value::str("ABC"))
             .expect("serde deserialization should succeed");
 
         // SAFETY: the test module is well-formed and should execute successfully.
@@ -30593,7 +30593,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             result,
-            Value::Str("A".to_string()),
+            Value::str("A"),
             "No index should default to 0"
         );
     }
@@ -30623,7 +30623,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             result,
-            Value::Str("6".to_string()),
+            Value::str("6"),
             "charAt on number should coerce to string"
         );
     }
@@ -30878,7 +30878,7 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Test ConsoleLog (ID 100)
-        core.registers[0] = Value::Str("Log message".to_string());
+        core.registers[0] = Value::str("Log message");
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:ConsoleLog".to_string(),
@@ -30896,7 +30896,7 @@ mod tests {
 
         // Test ConsoleError (ID 101)
         core.console_output.clear();
-        core.registers[0] = Value::Str("Error message".to_string());
+        core.registers[0] = Value::str("Error message");
         // SAFETY: the console-error regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
@@ -30914,7 +30914,7 @@ mod tests {
 
         // Test ConsoleWarn (ID 102)
         core.console_output.clear();
-        core.registers[0] = Value::Str("Warn message".to_string());
+        core.registers[0] = Value::str("Warn message");
         // SAFETY: the console-warn regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
@@ -30932,7 +30932,7 @@ mod tests {
 
         // Test ConsoleInfo (ID 384) - the critical one from audit
         core.console_output.clear();
-        core.registers[0] = Value::Str("Info message".to_string());
+        core.registers[0] = Value::str("Info message");
         // SAFETY: the console-info regression module is well-formed and should execute.
         core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
@@ -30962,7 +30962,7 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
 
         for builtin_id in [100, 101, 102, 384] {
-            core.registers[0] = Value::Str(format!("message-{builtin_id}"));
+            core.registers[0] = Value::str(format!("message-{builtin_id}"));
             let builtin = core
                 .map_function_index_to_builtin_capability(builtin_id)
                 .expect("console builtin id should be mapped");
@@ -30983,7 +30983,7 @@ mod tests {
             "console:warn",
             "console:info",
         ] {
-            core.registers[0] = Value::Str(cap.to_string());
+            core.registers[0] = Value::str(cap);
             let result = core
                 .dispatch_console_hostcall(cap, RegRange { start: 0, count: 1 })
                 .expect("console hostcall should return normally with zero output cap");
@@ -31027,8 +31027,8 @@ mod tests {
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
 
         // Test string split functionality
-        core.registers[0] = Value::Str("hello,world,test".to_string());
-        core.registers[1] = Value::Str(",".to_string());
+        core.registers[0] = Value::str("hello,world,test");
+        core.registers[1] = Value::str(",");
 
         let result = core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
@@ -31087,9 +31087,9 @@ mod tests {
         core.heap.push(Object {
             properties: BTreeMap::from([
                 ("length".to_string(), Value::Int(3)),
-                ("0".to_string(), Value::Str("first".to_string())),
-                ("1".to_string(), Value::Str("second".to_string())),
-                ("2".to_string(), Value::Str("third".to_string())),
+                ("0".to_string(), Value::str("first")),
+                ("1".to_string(), Value::str("second")),
+                ("2".to_string(), Value::str("third")),
             ]),
             ..Default::default()
         });
@@ -31140,7 +31140,7 @@ mod tests {
                     Ir3Instruction::Halt,
                 ]))
                 .expect("ObjectPrototypeToString should run successfully");
-            assert_eq!(result, Value::Str(expected.to_string()));
+            assert_eq!(result, Value::str(expected));
         };
 
         run_to_string(&mut core, Value::Undefined, "[object Undefined]");
@@ -31152,7 +31152,7 @@ mod tests {
             Value::Float(Float64::new(1.5)),
             "[object Number]",
         );
-        run_to_string(&mut core, Value::Str("test".to_string()), "[object String]");
+        run_to_string(&mut core, Value::str("test"), "[object String]");
 
         // Array-like object with length property should not be treated as an array.
         let object_id = core
@@ -31166,7 +31166,7 @@ mod tests {
 
         // Arrays should still return the array tag.
         let array_id = core
-            .alloc_array_from_values(&[Value::Str("x".to_string())])
+            .alloc_array_from_values(&[Value::str("x")])
             .expect("serde deserialization should succeed");
         run_to_string(&mut core, Value::Object(array_id), "[object Array]");
 
@@ -31228,13 +31228,13 @@ mod tests {
             .expect("Array.of should produce a value");
         assert_eq!(
             object_tag(&mut core, array_of),
-            Value::Str("[object Array]".to_string())
+            Value::str("[object Array]")
         );
 
         let array_like_id = core
             .alloc_object_with_prototype(None)
             .expect("array-like source should allocate");
-        core.set_object_property(array_like_id, "0".to_string(), Value::Str("x".to_string()))
+        core.set_object_property(array_like_id, "0".to_string(), Value::str("x"))
             .expect("array-like source should accept index 0");
         core.set_object_property(array_like_id, "length".to_string(), Value::Int(1))
             .expect("array-like source should accept length");
@@ -31244,7 +31244,7 @@ mod tests {
             .expect("Array.from should produce a value");
         assert_eq!(
             object_tag(&mut core, array_from),
-            Value::Str("[object Array]".to_string())
+            Value::str("[object Array]")
         );
 
         let array_from_async = core
@@ -31256,7 +31256,7 @@ mod tests {
             .expect("Array.fromAsync should produce a value");
         assert_eq!(
             object_tag(&mut core, array_from_async),
-            Value::Str("[object Array]".to_string())
+            Value::str("[object Array]")
         );
     }
 
@@ -31280,7 +31280,7 @@ mod tests {
         fn assert_array_tag(core: &mut InterpreterCore, value: Value) {
             assert_eq!(
                 object_tag(core, value),
-                Value::Str("[object Array]".to_string())
+                Value::str("[object Array]")
             );
         }
 
@@ -31460,7 +31460,7 @@ mod tests {
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
 
         // Test StringPrototypeTrim functionality
-        core.registers[0] = Value::Str("  hello world  ".to_string());
+        core.registers[0] = Value::str("  hello world  ");
         let trim_result = core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:StringPrototypeTrim".to_string(),
@@ -31490,8 +31490,8 @@ mod tests {
         );
 
         // Test StringPrototypeEndsWith functionality
-        core.registers[0] = Value::Str("hello world".to_string());
-        core.registers[1] = Value::Str("world".to_string());
+        core.registers[0] = Value::str("hello world");
+        core.registers[1] = Value::str("world");
         let endswith_result = core.execute(&test_module(vec![
             Ir3Instruction::CallBuiltin {
                 builtin: "builtin:StringPrototypeEndsWith".to_string(),
@@ -31511,9 +31511,9 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [43_u32, 226_u32] {
-            interpreter.registers[0] = Value::Str("7".to_string());
+            interpreter.registers[0] = Value::str("7");
             interpreter.registers[1] = Value::Int(3);
-            interpreter.registers[2] = Value::Str("0".to_string());
+            interpreter.registers[2] = Value::str("0");
 
             assert_eq!(
                 interpreter.builtin_name_from_id(builtin_id),
@@ -31522,7 +31522,7 @@ mod tests {
             let result = interpreter
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypePadStart ID should execute");
-            assert_eq!(result, Value::Str("007".to_string()));
+            assert_eq!(result, Value::str("007"));
         }
     }
 
@@ -31531,9 +31531,9 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [44_u32, 227_u32] {
-            interpreter.registers[0] = Value::Str("7".to_string());
+            interpreter.registers[0] = Value::str("7");
             interpreter.registers[1] = Value::Int(3);
-            interpreter.registers[2] = Value::Str("0".to_string());
+            interpreter.registers[2] = Value::str("0");
 
             assert_eq!(
                 interpreter.builtin_name_from_id(builtin_id),
@@ -31542,7 +31542,7 @@ mod tests {
             let result = interpreter
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 3 })
                 .expect("StringPrototypePadEnd ID should execute");
-            assert_eq!(result, Value::Str("700".to_string()));
+            assert_eq!(result, Value::str("700"));
         }
     }
 
@@ -31551,8 +31551,8 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [39_u32, 229_u32] {
-            interpreter.registers[0] = Value::Str("alpha".to_string());
-            interpreter.registers[1] = Value::Str("ph".to_string());
+            interpreter.registers[0] = Value::str("alpha");
+            interpreter.registers[1] = Value::str("ph");
             interpreter.registers[2] = Value::Int(2);
 
             assert_eq!(
@@ -31571,8 +31571,8 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [40_u32, 230_u32, 336_u32] {
-            interpreter.registers[0] = Value::Str("frankenengine".to_string());
-            interpreter.registers[1] = Value::Str("engine".to_string());
+            interpreter.registers[0] = Value::str("frankenengine");
+            interpreter.registers[1] = Value::str("engine");
             interpreter.registers[2] = Value::Int(13);
 
             assert_eq!(
@@ -31606,8 +31606,8 @@ mod tests {
             );
 
             for (this_str, search_str, length, expected) in cases {
-                interpreter.registers[0] = Value::Str(this_str.to_string());
-                interpreter.registers[1] = Value::Str(search_str.to_string());
+                interpreter.registers[0] = Value::str(this_str);
+                interpreter.registers[1] = Value::str(search_str);
 
                 let args = if let Some(length) = length {
                     interpreter.registers[2] = Value::Int(length);
@@ -31629,8 +31629,8 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [40_u32, 230_u32, 336_u32] {
-            interpreter.registers[0] = Value::Str("A😀B".to_string());
-            interpreter.registers[1] = Value::Str("😀".to_string());
+            interpreter.registers[0] = Value::str("A😀B");
+            interpreter.registers[1] = Value::str("😀");
             interpreter.registers[2] = Value::Int(2);
 
             let result =
@@ -31647,7 +31647,7 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [42_u32, 233_u32] {
-            interpreter.registers[0] = Value::Str("ha".to_string());
+            interpreter.registers[0] = Value::str("ha");
             interpreter.registers[1] = Value::Int(3);
 
             assert_eq!(
@@ -31657,7 +31657,7 @@ mod tests {
             let result = interpreter
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeRepeat ID should execute");
-            assert_eq!(result, Value::Str("hahaha".to_string()));
+            assert_eq!(result, Value::str("hahaha"));
         }
     }
 
@@ -31666,8 +31666,8 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [38_u32, 238_u32] {
-            interpreter.registers[0] = Value::Str("frankenengine".to_string());
-            interpreter.registers[1] = Value::Str("engine".to_string());
+            interpreter.registers[0] = Value::str("frankenengine");
+            interpreter.registers[1] = Value::str("engine");
             interpreter.registers[2] = Value::Int(4);
 
             assert_eq!(
@@ -31686,7 +31686,7 @@ mod tests {
         let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         for builtin_id in [223_u32, 301_u32] {
-            interpreter.registers[0] = Value::Str("  frankenengine  ".to_string());
+            interpreter.registers[0] = Value::str("  frankenengine  ");
 
             assert_eq!(
                 interpreter.builtin_name_from_id(builtin_id),
@@ -31695,7 +31695,7 @@ mod tests {
             let result = interpreter
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                 .expect("StringPrototypeTrimStart ID should execute");
-            assert_eq!(result, Value::Str("frankenengine  ".to_string()));
+            assert_eq!(result, Value::str("frankenengine  "));
         }
     }
 
@@ -31715,7 +31715,7 @@ mod tests {
                 .expect("test descriptor value write should succeed");
 
             interpreter.registers[0] = Value::Object(object_id);
-            interpreter.registers[1] = Value::Str("answer".to_string());
+            interpreter.registers[1] = Value::str("answer");
             interpreter.registers[2] = Value::Object(descriptor_id);
 
             assert_eq!(
@@ -31747,16 +31747,16 @@ mod tests {
                 .set_object_property(array_id, "length".to_string(), Value::Int(3))
                 .expect("test array length write should succeed");
             interpreter
-                .set_object_property(array_id, "0".to_string(), Value::Str("a".to_string()))
+                .set_object_property(array_id, "0".to_string(), Value::str("a"))
                 .expect("test array element write should succeed");
             interpreter
-                .set_object_property(array_id, "1".to_string(), Value::Str("b".to_string()))
+                .set_object_property(array_id, "1".to_string(), Value::str("b"))
                 .expect("test array element write should succeed");
             interpreter
-                .set_object_property(array_id, "2".to_string(), Value::Str("c".to_string()))
+                .set_object_property(array_id, "2".to_string(), Value::str("c"))
                 .expect("test array element write should succeed");
             interpreter.registers[0] = Value::Object(array_id);
-            interpreter.registers[1] = Value::Str("x".to_string());
+            interpreter.registers[1] = Value::str("x");
             interpreter.registers[2] = Value::Int(1);
             interpreter.registers[3] = Value::Int(3);
 
@@ -31775,15 +31775,15 @@ mod tests {
                 .expect("filled test array should remain allocated");
             assert_eq!(
                 array.properties.get("0"),
-                Some(&Value::Str("a".to_string()))
+                Some(&Value::str("a"))
             );
             assert_eq!(
                 array.properties.get("1"),
-                Some(&Value::Str("x".to_string()))
+                Some(&Value::str("x"))
             );
             assert_eq!(
                 array.properties.get("2"),
-                Some(&Value::Str("x".to_string()))
+                Some(&Value::str("x"))
             );
         }
     }
@@ -31800,10 +31800,10 @@ mod tests {
         assert_eq!(interp.estimated_memory_bytes, 0);
 
         let payload = "hello-world".to_string();
-        let payload_bytes = InterpreterCore::estimate_value_bytes(&Value::Str(payload.clone()));
+        let payload_bytes = InterpreterCore::estimate_value_bytes(&Value::str(payload.clone()));
         assert!(payload_bytes > 0, "string value must contribute bytes");
 
-        interp.write_reg(0, Value::Str(payload)).expect("write_reg");
+        interp.write_reg(0, Value::str(payload)).expect("write_reg");
         assert_eq!(interp.estimated_memory_bytes, payload_bytes);
         // Source-of-truth recompute must agree — no drift introduced by
         // the incremental update.
@@ -31816,7 +31816,7 @@ mod tests {
     #[test]
     fn write_reg_replacing_string_with_undefined_subtracts_bytes() {
         let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
-        let payload = Value::Str("x".repeat(64));
+        let payload = Value::str("x".repeat(64));
         let initial_bytes = InterpreterCore::estimate_value_bytes(&payload);
         interp.write_reg(0, payload).expect("write_reg string");
         assert_eq!(interp.estimated_memory_bytes, initial_bytes);
@@ -31841,7 +31841,7 @@ mod tests {
         config.max_total_memory_bytes = 64;
         let mut interp = InterpreterCore::new(config, "test-trace");
 
-        let huge = Value::Str("x".repeat(1024));
+        let huge = Value::str("x".repeat(1024));
         let result = interp.write_reg(0, huge);
         assert!(
             matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })),
@@ -31867,7 +31867,7 @@ mod tests {
         let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
         for i in 0..256u32 {
             let value = if i.is_multiple_of(3) {
-                Value::Str(format!("payload-{i}-{}", "x".repeat((i % 32) as usize)))
+                Value::str(format!("payload-{i}-{}", "x".repeat((i % 32) as usize)))
             } else if i.is_multiple_of(2) {
                 Value::Int(i as i64)
             } else {

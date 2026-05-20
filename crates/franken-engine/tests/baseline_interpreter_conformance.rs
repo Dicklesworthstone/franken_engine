@@ -249,7 +249,7 @@ fn batch_29_number_and_char_at_dispatch_uses_active_argument_registers() {
         vec!["hello".to_string()],
     )
     .expect("String.prototype.charAt should honor explicit index from args.start + 1");
-    assert_eq!(char_at_explicit_index, Value::Str("e".to_string()));
+    assert_eq!(char_at_explicit_index, Value::str("e"));
 
     let char_at_default_index = run_value(
         vec![
@@ -260,7 +260,7 @@ fn batch_29_number_and_char_at_dispatch_uses_active_argument_registers() {
         Vec::new(),
     )
     .expect("String.prototype.charAt should default missing index to zero");
-    assert_eq!(char_at_default_index, Value::Str("4".to_string()));
+    assert_eq!(char_at_default_index, Value::str("4"));
 }
 
 fn array_with_three_values_prefix() -> Vec<Ir3Instruction> {
@@ -314,7 +314,7 @@ fn array_with_three_values_prefix() -> Vec<Ir3Instruction> {
 
 #[test]
 fn array_tag_survives_metamorphic_array_producer_transformations() {
-    let expected = Value::Str("[object Array]".to_string());
+    let expected = Value::str("[object Array]");
 
     let shuffled_array_of = run_value(
         vec![

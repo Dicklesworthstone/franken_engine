@@ -150,7 +150,7 @@ fn decode_value_string(s: &str) -> Value {
             } else if let Ok(f) = s.parse::<f64>() {
                 Value::Float(frankenengine_engine::baseline_interpreter::Float64::new(f))
             } else {
-                Value::Str(s.to_string())
+                Value::str(s)
             }
         }
     }
@@ -184,7 +184,7 @@ fn value_truthiness_falsy_variants() {
     assert!(!Value::Null.is_truthy());
     assert!(!Value::Bool(false).is_truthy());
     assert!(!Value::Int(0).is_truthy());
-    assert!(!Value::Str(String::new()).is_truthy());
+    assert!(!Value::str("").is_truthy());
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn value_truthiness_truthy_variants() {
     assert!(Value::Int(1).is_truthy());
     assert!(Value::Int(-1).is_truthy());
     assert!(Value::Int(i64::MAX).is_truthy());
-    assert!(Value::Str("x".to_string()).is_truthy());
+    assert!(Value::str("x").is_truthy());
     assert!(Value::Object(ObjectId(0)).is_truthy());
     assert!(Value::Function(0).is_truthy());
 }
@@ -228,8 +228,8 @@ fn value_ord_total() {
     assert!(Value::Null < Value::Bool(false));
     assert!(Value::Bool(false) < Value::Bool(true));
     assert!(Value::Bool(true) < Value::Int(i64::MIN));
-    assert!(Value::Int(0) < Value::Str(String::new()));
-    assert!(Value::Str(String::new()) < Value::Object(ObjectId(0)));
+    assert!(Value::Int(0) < Value::str(""));
+    assert!(Value::str("") < Value::Object(ObjectId(0)));
     assert!(Value::Object(ObjectId(0)) < Value::Function(0));
 }
 
@@ -3998,7 +3998,7 @@ fn require_module_nested_cjs_dirname_binding_is_relative_to_inner_module() {
         .parent()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    assert_eq!(result.value, Value::Str(expected_dir));
+    assert_eq!(result.value, Value::str(expected_dir));
 }
 
 #[test]
@@ -4053,7 +4053,7 @@ fn require_module_nested_cjs_filename_binding_is_inner_module() {
     let expected_file = inner_path.canonicalize().unwrap_or(inner_path);
     assert_eq!(
         result.value,
-        Value::Str(expected_file.display().to_string())
+        Value::str(expected_file.display())
     );
 }
 
@@ -9295,7 +9295,7 @@ fn cjs_module_exposes_filename_binding() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::Str(expected_file.display().to_string())
+        Value::str(expected_file.display())
     );
 }
 
@@ -9357,7 +9357,7 @@ fn cjs_module_exposes_dirname_binding() {
         .parent()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    assert_eq!(result.value, Value::Str(expected_dir));
+    assert_eq!(result.value, Value::str(expected_dir));
 }
 
 #[test]
@@ -9420,7 +9420,7 @@ fn cjs_module_exports_module_filename() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::Str(expected_file.display().to_string())
+        Value::str(expected_file.display())
     );
 }
 
@@ -9480,7 +9480,7 @@ fn cjs_module_exports_module_id() {
     let expected_file = entry_path.canonicalize().unwrap_or(entry_path);
     assert_eq!(
         result.value,
-        Value::Str(expected_file.display().to_string())
+        Value::str(expected_file.display())
     );
 }
 
@@ -9602,7 +9602,7 @@ fn cjs_module_parent_tracks_require_chain() {
     let expected_parent = parent_path.canonicalize().unwrap_or(parent_path);
     assert_eq!(
         result.value,
-        Value::Str(expected_parent.display().to_string())
+        Value::str(expected_parent.display())
     );
 }
 
@@ -9726,7 +9726,7 @@ fn cjs_module_exports_module_path() {
         .parent()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
-    assert_eq!(result.value, Value::Str(expected_dir));
+    assert_eq!(result.value, Value::str(expected_dir));
 }
 
 #[test]
@@ -10587,25 +10587,25 @@ fn test_string_char_at_utf16_indexing() {
     // Basic ASCII characters
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(0)").unwrap(),
-        Value::Str("A".to_string())
+        Value::str("A")
     );
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(1)").unwrap(),
-        Value::Str("B".to_string())
+        Value::str("B")
     );
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(2)").unwrap(),
-        Value::Str("C".to_string())
+        Value::str("C")
     );
 
     // Out of bounds returns empty string
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(3)").unwrap(),
-        Value::Str("".to_string())
+        Value::str("")
     );
     assert_eq!(
         interpreter.evaluate_expression("'ABC'.charAt(-1)").unwrap(),
-        Value::Str("A".to_string())
+        Value::str("A")
     ); // -1 normalizes to 0
 
     // UTF-16 surrogate pair handling (emoji should return individual surrogates)
@@ -10625,13 +10625,13 @@ fn test_string_char_at_utf16_indexing() {
         interpreter
             .evaluate_expression("'ABC'.charAt('1')")
             .unwrap(),
-        Value::Str("B".to_string())
+        Value::str("B")
     );
     assert_eq!(
         interpreter
             .evaluate_expression("'ABC'.charAt(1.7)")
             .unwrap(),
-        Value::Str("B".to_string())
+        Value::str("B")
     ); // 1.7 truncates to 1
 }
 

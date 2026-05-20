@@ -343,7 +343,7 @@ fn enrichment_for_in_enumerates_keys_in_order() {
     );
     let result = qjs_run(&m).unwrap();
     // BTreeMap order: "a" comes first.
-    assert_eq!(result.value, Value::Str("a".to_string()));
+    assert_eq!(result.value, Value::str("a"));
 }
 
 #[test]
@@ -423,7 +423,7 @@ fn enrichment_for_in_emits_iteration_trace_events() {
     );
 
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("key".to_string()));
+    assert_eq!(result.value, Value::str("key"));
     assert_eq!(result.iteration_traces.len(), 1);
 
     let trace = &result.iteration_traces[0];
@@ -485,7 +485,7 @@ fn enrichment_for_of_string_yields_chars() {
         vec!["ab".to_string()],
     );
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("a".to_string()));
+    assert_eq!(result.value, Value::str("a"));
 }
 
 #[test]
@@ -600,7 +600,7 @@ fn enrichment_for_of_emits_iteration_trace_events() {
     );
 
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("a".to_string()));
+    assert_eq!(result.value, Value::str("a"));
     assert_eq!(result.iteration_traces.len(), 1);
 
     let trace = &result.iteration_traces[0];
@@ -801,7 +801,7 @@ fn enrichment_template_literal_object_coercion() {
         Ir3Instruction::Halt, // 2
     ]);
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("[object Object]".to_string()));
+    assert_eq!(result.value, Value::str("[object Object]"));
 }
 
 #[test]
@@ -818,7 +818,7 @@ fn enrichment_template_literal_null_and_undefined_coercion() {
         Ir3Instruction::Halt, // 3
     ]);
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("nullundefined".to_string()));
+    assert_eq!(result.value, Value::str("nullundefined"));
 }
 
 #[test]
@@ -832,7 +832,7 @@ fn enrichment_template_literal_empty_parts() {
         Ir3Instruction::Halt,
     ]);
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str(String::new()));
+    assert_eq!(result.value, Value::str(""));
 }
 
 #[test]
@@ -852,7 +852,7 @@ fn enrichment_template_literal_false_and_negative() {
         Ir3Instruction::Halt, // 3
     ]);
     let result = qjs_run(&m).unwrap();
-    assert_eq!(result.value, Value::Str("false-7".to_string()));
+    assert_eq!(result.value, Value::str("false-7"));
 }
 
 // ============================================================================

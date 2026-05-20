@@ -563,55 +563,80 @@ pub fn build_seed_contract() -> ReactOperatorContract {
     }
 
     // Features
-    let features = [
+    //
+    // Tuple shape: (name, support, description, limitations).
+    //
+    // `suspense_boundaries` is intentionally `Partial` rather than
+    // `NotImplemented` — the engine has no React runtime suspension primitive,
+    // but `global_coherence_checker::check_suspense_boundaries` (live as of
+    // bd-xsair) walks the composition graph, classifies async vs sync
+    // children, and emits `CoherenceViolationKind::SuspenseBoundaryConflict`.
+    // Declaring `NotImplemented` would have let external consumers skip the
+    // surface entirely and miss those coherence diagnostics.
+    let features: [(&str, FeatureSupport, &str, &[&str]); 8] = [
         (
             "jsx_elements",
             FeatureSupport::Supported,
             "Basic JSX element creation",
+            &[],
         ),
         (
             "jsx_fragments",
             FeatureSupport::Supported,
             "JSX fragment syntax (<>...</>)",
+            &[],
         ),
         (
             "jsx_spread_attributes",
             FeatureSupport::Supported,
             "JSX spread attributes ({...props})",
+            &[],
         ),
         (
             "tsx_type_annotations",
             FeatureSupport::Partial,
             "TypeScript type annotations in JSX",
+            &[],
         ),
         (
             "react_hooks",
             FeatureSupport::NotImplemented,
             "React hooks runtime support",
+            &[],
         ),
         (
             "server_components",
             FeatureSupport::NotImplemented,
             "React Server Components",
+            &[],
         ),
         (
             "suspense_boundaries",
-            FeatureSupport::NotImplemented,
-            "React Suspense boundaries",
+            FeatureSupport::Partial,
+            "React Suspense boundary coherence diagnostics (no runtime suspension primitive)",
+            &[
+                "Static coherence-only: global_coherence_checker emits \
+                 SuspenseBoundaryConflict when a boundary mixes async-suspended \
+                 children with sync-only children that carry layout effects.",
+                "No runtime fallback rendering, fiber yield, or thrown-promise \
+                 unwinding — consumers must not rely on Suspense semantics for \
+                 actual asynchronous data loading.",
+            ],
         ),
         (
             "concurrent_mode",
             FeatureSupport::Unsupported,
             "React Concurrent Mode internals",
+            &[],
         ),
     ];
 
-    for (name, support, desc) in &features {
+    for (name, support, desc, limitations) in &features {
         contract.add_feature(ReactFeatureContract {
             name: name.to_string(),
             support: *support,
             description: desc.to_string(),
-            limitations: Vec::new(),
+            limitations: limitations.iter().map(|s| s.to_string()).collect(),
             tracking_bead: None,
         });
     }
@@ -797,14 +822,20 @@ mod tests {
     fn seed_contract_available_features() {
         let contract = build_seed_contract();
         let available = contract.available_features();
-        assert_eq!(available.len(), 4); // 3 supported + 1 partial
+        // 3 Supported (jsx_elements, jsx_fragments, jsx_spread_attributes)
+        // + 2 Partial (tsx_type_annotations, suspense_boundaries — the latter
+        //              reclassified by bd-xsair to reflect coherence-only
+        //              diagnostics from global_coherence_checker).
+        assert_eq!(available.len(), 5);
     }
 
     #[test]
     fn seed_contract_unsupported_features() {
         let contract = build_seed_contract();
         let unsupported = contract.unsupported_features();
-        assert_eq!(unsupported.len(), 4);
+        // 2 NotImplemented (react_hooks, server_components)
+        // + 1 Unsupported (concurrent_mode).
+        assert_eq!(unsupported.len(), 3);
     }
 
     #[test]

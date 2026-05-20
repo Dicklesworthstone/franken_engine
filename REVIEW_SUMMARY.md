@@ -84,3 +84,63 @@ Findings:
 Verification:
 - `cargo check --tests -p frankenengine-engine --target-dir target_rch_review` clean (14.83s, `Finished dev profile`) — verifies both the security fix and the restored `let mut` lines.
 - Production code change committed as `1975db42` (security hardening) + `b488af74` (Round 1c notes).
+
+---
+
+## 2026-05-20 Review Round 1d - Deterministic replay and gate sweep (Codex)
+
+Areas reviewed:
+- `AGENTS.md` and `README.md` end to end, then recent activity via `git log --since="6 hours ago" --oneline` and `git diff HEAD~30..HEAD`.
+- High-risk recent churn in revocation/degraded-mode freshness, baseline interpreter `Value::Str(Arc<str>)` migration fallout, exception/error helper tests, and capability witness conformance.
+
+Findings:
+
+- [HIGH] `crates/franken-engine/src/revocation_freshness.rs:519-535` - `RevocationFreshnessController::new(config, zone)` derived its default `policy_id` from OS randomness, so two controllers built from the same zone and freshness config could receive different policy identities. Root cause: the default constructor used a random nonce as the policy-id preimage instead of stable policy inputs, violating deterministic replay expectations for default controller construction and making override/evidence identities non-repeatable. Fixed: `new` now derives the policy id from length-prefixed zone/config bytes; regression tests at `revocation_freshness.rs:972-992` pin stable same-input ids and differing ids for changed zone/config.
+
+- [MEDIUM] `crates/franken-engine/tests/error_stack_trace_formatting.rs:140-143` and `crates/franken-engine/tests/exception_semantics_conformance.rs:72-79` - helper functions still returned `Value::Str` payloads directly as `String` after the runtime value payload migrated to `Arc<str>`. Root cause: partial test/helper migration around `Value::Str(Arc<str>)`. Fixed by converting the Arc-backed payload to `String` at the helper boundary.
+
+- [MEDIUM] `crates/franken-engine/tests/capability_witness.rs:821-835` - `theorem_merge_legality_fails_for_unjustified_capability` passed a witness by mutable reference to `trust_theorem_report_signer`, but the fixture binding had drifted immutable. Root cause: signer API mutability not reflected in the conformance fixture. Fixed by restoring `let mut witness` for that fixture.
+
+- [LOW] `crates/franken-engine/tests/capability_witness.rs:575-584` - sibling fixture kept `let mut witness` without mutation, which would fail `clippy -D warnings` once compile errors were cleared. Fixed by removing the unused mutability.
+
+- [LOW] Formatting drift across touched and adjacent files prevented `cargo fmt --check` from passing after the review edits. Fixed by running `cargo fmt`; these were formatting-only changes.
+
+- [MEDIUM] Clippy gate is still blocked by a broad pre-existing lint backlog: `cargo clippy --all-targets --target-dir target_rch_review -- -D warnings` failed with 210 errors. The dominant class is `clippy::clone_on_copy` for `SourceSpan` after it became `Copy` across `ast.rs`, `parser.rs`, `dual_backend_parser.rs`, `parser_multi_engine_harness.rs`, `react_jsx_lowering.rs`, and `static_semantics.rs`; additional examples include `clippy::derivable_impls` for `FlowPolicyEnforcement` at `ifc_artifacts.rs:667` and `clippy::field_reassign_with_default` in `profiling.rs:379-435`. Root cause: recent type/lint policy changes outpaced a full all-target clippy cleanup. Not fixed in this round because it is a broad mechanical rewrite across core parser/lowering surfaces and should be isolated.
+
+Verification:
+- `cargo fmt --check`: PASS after the final format pass.
+- `cargo check --all-targets --target-dir target_rch_review`: PASS on rch worker `vmi1227854` (`Finished dev profile`, remote exit 0) after the substantive revocation and test-helper fixes. Post-check edits were limited to removing one unused `mut` and formatting-only changes.
+- `cargo clippy --all-targets --target-dir target_rch_review -- -D warnings`: FAIL, remote exit 101, 210 lint errors as summarized above.
+
+---
+
+## 2026-05-20 Review Round 1e - Arc<str> migration residual + clippy gate triage (PearlTower)
+
+Areas reviewed:
+- `AGENTS.md` end-to-end, README §"Determinism discipline" / §"Numeric discipline" / §"Cryptographic primitives".
+- Recent activity via `git log --since="6 hours ago"` and `git log --since="48 hours ago"` (107 commits).
+- Determinism-discipline regression sweep: `HashMap`/`HashSet` actual uses (vs comment mentions), `i128::div_ceil`, `BTreeMap<EngineObjectId, _>` serde sites, `f64` in public-serde structs.
+- Crypto preimage / canonical_bytes audit across `policy_checkpoint.rs:247`, `capability_token.rs:331`, `revocation_enforcement.rs:226`, `module_resolver.rs:236`, `module_compatibility_matrix.rs:695`, `ast.rs:124`, `resolver_package_index.rs:187/257/895`, `attested_execution_cell.rs` (post 3f28d071).
+- Spot-checked the recent attestation length-prefix fix (commit 3f28d071) for completeness against all `signature_payload` / `canonical_bytes` sites.
+
+Findings:
+
+- [CRITICAL] `crates/franken-engine/tests/prototype_chain_descriptor.rs:75-81` — `assert_eq!(*expected, actual.as_ref(), ...)` compared `str` against `&str` after the `Value::Str(Arc<str>)` migration (commit `859c32d1`). The `*expected` deref was correct when `actual.as_ref()` was `&&str`; once it became `&str`, the same deref produces a `str == &str` comparison that does not implement `PartialEq`. Effect: `cargo check --all-targets` failed (`E0277` at `tests/prototype_chain_descriptor.rs:75:17`), which gated the AGENTS.md compiler-checks rule. Fixed: dropped the `*` so both sides are `&str`. Comment added pointing at the Arc migration commit. Verified: `cargo check --test prototype_chain_descriptor -p frankenengine-engine --target-dir target_rch_review` PASS (2m 17s). `cargo check --all-targets -p frankenengine-engine --target-dir target_rch_review` PASS after the fix.
+
+- [OBSERVATION — no finding] Determinism-discipline grep over `crates/franken-engine/src` and `crates/franken-extension-host/src` found exactly 7 files mentioning `HashMap`/`HashSet`. Five are correct/safe:
+  - `epoch_barrier.rs:257` — `active_guard_ids: HashSet<u64>`, struct is `#[derive(Debug)]` only (no Serialize), and the field is never iterated (only `insert`/`remove`/`clear`/`is_empty`/`len`). No content-hash exposure.
+  - `parallel_parser.rs:2360, 2917` — `HashSet` is `#[cfg(test)]`-only for thread-id dedup; never serialized.
+  - `parallel_interference_gate.rs:718, 1693` — string-literal mentions of "HashMap" as remediation advice; no actual usage.
+  - `bin/franken_closure_report.rs:160, 161` — operator-tool HashSet for unique counts, never serialized as ordered.
+  Two were the `bd-pvr9h` finding already shipped (`throughput_disruptive_floor_metric_gate.rs`, `bin/franken_benchmark_gate.rs`) — commit `2b883df9` already converted them to `BTreeMap`.
+
+- [OBSERVATION — no finding] No `i128::div_ceil()` usages in `crates/franken-engine/src` or `crates/franken-extension-host/src` (the documented nightly-instability hazard is absent).
+
+- [OBSERVATION — no finding] The recent attestation length-prefix fix (`3f28d071`) is complete for the two named encoders. Audit of the broader `canonical_bytes` / `preimage_bytes` surface (10+ functions across `policy_checkpoint`, `capability_token`, `module_resolver`, `module_compatibility_matrix`, `ast`, `resolver_package_index`, `revocation_enforcement`) confirms they either (a) delegate to `deterministic_serde::encode_value` (which length-prefixes byte/string fields per its module docs) or (b) use the local `append_str` / `append_len_prefixed_bytes` helpers that include `u64`-BE length prefixes. No further sites need the `3f28d071`-style fix.
+
+- [LOW — surfaced, not fixed] `crates/franken-engine/src/resolver_package_index.rs:932-960` `SubpathResolutionReceipt::new` computes `content_hash` over a buffer that does NOT include `conditions_tried: Vec<String>` (line 957, populated after the hash). If two receipts with identical resolution outcome but different trial-condition sequences are intended to have distinct identities, the content_hash omission means they would collide. Not fixed in this review pass because the semantics ("evidence hash represents the resolution outcome, not the trial path") may be intentional — needs author confirmation before tightening. Worth a follow-up audit.
+
+Verification:
+- `cargo check --all-targets --keep-going -p frankenengine-engine --target-dir target_rch_review` ✓ PASS post-fix (`Finished dev profile`, 1.54s incremental).
+- `cargo fmt --check` ✓ PASS (background task `b3nu00azf` exit 0).
+- `cargo clippy --all-targets -- -D warnings` ❌ FAIL — the existing 210-error backlog dominated by `clone_on_copy` on `SourceSpan` (post-`bd-jtxmr` Copy derive) is unchanged and not in scope for this round. Tracked under bd-bquu7. The Round 1d note already captured this as MEDIUM.

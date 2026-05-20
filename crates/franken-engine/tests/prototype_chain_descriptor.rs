@@ -73,9 +73,11 @@ impl ExpectedValue {
             }
             (ExpectedValue::Str(expected), Value::Str(actual)) => {
                 assert_eq!(
-                    expected, actual,
+                    expected,
+                    actual.as_ref(),
                     "{} ({}) returned the wrong string",
-                    case.id, case.requirement
+                    case.id,
+                    case.requirement
                 );
             }
             (ExpectedValue::Undefined, Value::Undefined) => {}

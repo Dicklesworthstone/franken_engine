@@ -1,3 +1,5 @@
+#![allow(clippy::clone_on_copy)]
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

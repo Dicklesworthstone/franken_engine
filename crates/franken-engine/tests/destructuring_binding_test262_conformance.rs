@@ -283,11 +283,16 @@ const KNOWN_DESTRUCTURING_GAPS: &[&str] = &[
     // bd-hld87: object-rest target not initialised to {} before collection;
     // runtime faults with "expected object, got undefined".
     "ES2020-13.3.3-object-rest",
-    // bd-hld87: array destructuring in parameter position fails to bind —
-    // x, y stay undefined so `x * y` is NaN.
+    // bd-hld87 (post-9f2b22a5): array destructuring in parameter position now
+    // faults with "expected object, got number" — call-site arg-passing seems
+    // to flatten the argument object's properties into positional args, so
+    // r0 (the synthetic __param_0 slot) holds the FIRST property's value
+    // instead of the whole object. Lowering-side fix landed but call-side
+    // routing still wrong; see bd-iy713 follow-up.
     "ES2020-14.1.20-parameter-array-pattern",
-    // bd-hld87: object destructuring in parameter position fails to bind —
-    // a, b stay undefined so `a + b` is NaN.
+    // bd-hld87 (post-9f2b22a5): same shape as parameter-array-pattern —
+    // r0 holds a number instead of the destructured-object argument
+    // (bd-iy713).
     "ES2020-14.1.20-parameter-object-pattern",
 ];
 

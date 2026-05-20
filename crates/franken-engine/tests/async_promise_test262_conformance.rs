@@ -19,6 +19,10 @@
 //! reject/.catch propagation, microtask-after-sync ordering, chained
 //! .then values, async function fulfillment and rejection, await
 //! thenable assimilation, Promise.all aggregation.
+//!
+//! bd-5sxc9 expands that matrix with ES2020/ES2022 Promise combinators,
+//! await-rejection propagation, timer-vs-microtask ordering, host rejection
+//! tracking observability, and thenable assimilation edge cases.
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -55,10 +59,24 @@ pub enum AsyncPromiseCategory {
     ChainedThen,
     /// §25.6.4.1 Promise.all aggregation.
     PromiseAll,
+    /// §25.6.4.3 Promise.race first-settlement semantics.
+    PromiseRace,
+    /// §25.6.4.2 Promise.allSettled outcome aggregation.
+    PromiseAllSettled,
+    /// ES2022 Promise.any first-fulfillment / aggregate rejection semantics.
+    PromiseAny,
     /// §15.8 async function: synchronous return wraps in resolved promise.
     AsyncFunctionFulfillment,
+    /// §15.8.4 await rejected promise propagation.
+    AwaitRejection,
     /// §15.8.4 await: thenable assimilation + resumption microtask.
     AwaitThenable,
+    /// Timer macrotasks must run after the microtask checkpoint.
+    TimerMicrotaskOrdering,
+    /// HostPromiseRejectionTracker-facing ordering and noninterference.
+    UnhandledRejectionTracking,
+    /// Promise.resolve(thenable) job ordering.
+    ThenableAssimilation,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +212,62 @@ impl AsyncPromiseHarness {
                     output: "1,2,3\n".to_string(),
                 },
             },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.4.3-promise-race-uses-first-settled-input".to_string(),
+                description:
+                    "Promise.race resolves with the first already-settled input in iteration order."
+                        .to_string(),
+                es_section: "25.6.4.3".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::PromiseRace,
+                source: "Promise.race([Promise.resolve('first'), Promise.resolve('second')]).then(v => console.log(v));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "first\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.4.2-promise-allsettled-preserves-status-and-order".to_string(),
+                description:
+                    "Promise.allSettled preserves input order and reports fulfilled/rejected status fields."
+                        .to_string(),
+                es_section: "25.6.4.2".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::PromiseAllSettled,
+                source: "Promise.allSettled([Promise.resolve('ok'), Promise.reject('bad')]).then(r => console.log(r[0].status + ':' + r[0].value + ',' + r[1].status + ':' + r[1].reason));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "fulfilled:ok,rejected:bad\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2022-27.2.4.5-promise-any-fulfills-with-first-fulfillment".to_string(),
+                description:
+                    "Promise.any ignores earlier rejections and fulfills with the first fulfillment."
+                        .to_string(),
+                es_section: "27.2.4.5".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::PromiseAny,
+                source: "Promise.any([Promise.reject('no'), Promise.resolve('yes')]).then(v => console.log(v));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "yes\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2022-27.2.4.5-promise-any-all-rejected-aggregate-errors".to_string(),
+                description:
+                    "Promise.any rejects with an AggregateError whose errors preserve rejection order."
+                        .to_string(),
+                es_section: "27.2.4.5".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::PromiseAny,
+                source: "Promise.any([Promise.reject('a'), Promise.reject('b')]).catch(e => console.log(e.name + ':' + e.errors.join(',')));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "AggregateError:a,b\n".to_string(),
+                },
+            },
             // ─── §15.8 async function ────────────────────────────────────────
             AsyncPromiseTest {
                 id: "ES2020-15.8-async-function-wraps-return-in-promise".to_string(),
@@ -224,6 +298,20 @@ impl AsyncPromiseHarness {
                     output: "nope\n".to_string(),
                 },
             },
+            AsyncPromiseTest {
+                id: "ES2020-15.8.4-await-rejected-promise-propagates-to-caller".to_string(),
+                description:
+                    "await on a rejected promise rejects the containing async function's promise."
+                        .to_string(),
+                es_section: "15.8.4".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::AwaitRejection,
+                source: "async function f() { await Promise.reject('await-boom'); console.log('unreachable'); } f().catch(r => console.log(r));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "await-boom\n".to_string(),
+                },
+            },
             // ─── §15.8.4 await ───────────────────────────────────────────────
             AsyncPromiseTest {
                 id: "ES2020-15.8.4-await-assimilates-thenable".to_string(),
@@ -238,6 +326,49 @@ impl AsyncPromiseHarness {
                     .to_string(),
                 expected_result: ExpectedResult::Success {
                     output: "12\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-8.4.1-settimeout-runs-after-microtask-checkpoint".to_string(),
+                description:
+                    "setTimeout(0) callbacks run after current-script microtasks drain."
+                        .to_string(),
+                es_section: "8.4.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::TimerMicrotaskOrdering,
+                source: "setTimeout(() => console.log('timer'), 0); Promise.resolve().then(() => console.log('micro')); console.log('sync');"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "sync\nmicro\ntimer\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.1.9-unhandled-rejection-does-not-block-microtasks".to_string(),
+                description:
+                    "HostPromiseRejectionTracker observation must not reorder later fulfillment jobs."
+                        .to_string(),
+                es_section: "25.6.1.9".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::UnhandledRejectionTracking,
+                source: "Promise.reject('unhandled'); Promise.resolve().then(() => console.log('after-unhandled'));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "after-unhandled\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.1.3-promise-resolve-thenable-enqueues-nested-microtask"
+                    .to_string(),
+                description:
+                    "Promise.resolve(thenable) calls then and preserves nested microtask order."
+                        .to_string(),
+                es_section: "25.6.1.3".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::ThenableAssimilation,
+                source: "const t = { then(resolve) { Promise.resolve().then(() => console.log('nested')); resolve('thenable'); } }; Promise.resolve(t).then(v => console.log(v));"
+                    .to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "nested\nthenable\n".to_string(),
                 },
             },
         ]
@@ -362,8 +493,8 @@ mod tests {
     fn harness_has_minimum_initial_coverage() {
         let harness = AsyncPromiseHarness::new();
         assert!(
-            harness.tests.len() >= 10,
-            "initial bd-ffavl wave promised >=10 spec-anchored cases; got {}",
+            harness.tests.len() >= 18,
+            "bd-5sxc9 wave promised >=18 spec-anchored cases; got {}",
             harness.tests.len(),
         );
         for test in &harness.tests {
@@ -373,8 +504,8 @@ mod tests {
                 test.id,
             );
             assert!(
-                test.id.starts_with("ES2020-"),
-                "test id {} must start with ES2020- to mark spec anchoring",
+                test.id.starts_with("ES2020-") || test.id.starts_with("ES2022-"),
+                "test id {} must start with ES2020- or ES2022- to mark spec anchoring",
                 test.id,
             );
         }
@@ -392,12 +523,19 @@ mod tests {
             MicrotaskOrdering,
             ChainedThen,
             PromiseAll,
+            PromiseRace,
+            PromiseAllSettled,
+            PromiseAny,
             AsyncFunctionFulfillment,
+            AwaitRejection,
             AwaitThenable,
+            TimerMicrotaskOrdering,
+            UnhandledRejectionTracking,
+            ThenableAssimilation,
         ] {
             assert!(
                 categories.contains(&required),
-                "initial bd-ffavl matrix must include category {required:?}",
+                "bd-5sxc9 matrix must include category {required:?}",
             );
         }
     }

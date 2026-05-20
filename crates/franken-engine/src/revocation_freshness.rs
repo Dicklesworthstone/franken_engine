@@ -157,6 +157,13 @@ pub enum OverrideError {
     SignatureInvalid { detail: String },
     /// Operator is not authorized for overrides.
     UnauthorizedOperator { operator_id: String },
+    /// Override token was already consumed.
+    AlreadyConsumed { override_id: EngineObjectId },
+    /// Override token was minted for a different controller zone.
+    ZoneMismatch {
+        controller_zone: String,
+        override_zone: String,
+    },
     /// Not in degraded mode — override not applicable.
     NotDegraded { current_state: FreshnessState },
 }
@@ -182,6 +189,16 @@ impl fmt::Display for OverrideError {
             Self::UnauthorizedOperator { operator_id } => {
                 write!(f, "unauthorized operator: {operator_id}")
             }
+            Self::AlreadyConsumed { override_id } => {
+                write!(f, "override already consumed: {override_id}")
+            }
+            Self::ZoneMismatch {
+                controller_zone,
+                override_zone,
+            } => write!(
+                f,
+                "override zone mismatch: controller={controller_zone}, override={override_zone}"
+            ),
             Self::NotDegraded { current_state } => {
                 write!(f, "not in degraded mode: state={current_state}")
             }
@@ -399,6 +416,8 @@ pub struct RevocationFreshnessController {
     state_events: Vec<FreshnessStateChangeEvent>,
     /// Decision events.
     decision_events: Vec<DegradedModeDecisionEvent>,
+    /// Override tokens already consumed by this controller.
+    consumed_override_ids: BTreeSet<EngineObjectId>,
     /// Per-outcome counters.
     outcome_counts: BTreeMap<String, u64>,
     /// Zone for this controller.
@@ -417,6 +436,7 @@ impl RevocationFreshnessController {
             recovery_start_tick: None,
             state_events: Vec::new(),
             decision_events: Vec::new(),
+            consumed_override_ids: BTreeSet::new(),
             outcome_counts: BTreeMap::new(),
             zone: zone.to_string(),
         }
@@ -532,6 +552,13 @@ impl RevocationFreshnessController {
             });
         }
 
+        if override_token.zone != self.zone {
+            return Err(OverrideError::ZoneMismatch {
+                controller_zone: self.zone.clone(),
+                override_zone: override_token.zone.clone(),
+            });
+        }
+
         // Check expiry.
         if override_token.expiry.0 <= self.current_tick {
             return Err(OverrideError::Expired {
@@ -583,6 +610,17 @@ impl RevocationFreshnessController {
         .map_err(|e| OverrideError::SignatureInvalid {
             detail: e.to_string(),
         })?;
+
+        if self
+            .consumed_override_ids
+            .contains(&override_token.override_id)
+        {
+            return Err(OverrideError::AlreadyConsumed {
+                override_id: override_token.override_id.clone(),
+            });
+        }
+        self.consumed_override_ids
+            .insert(override_token.override_id.clone());
 
         // Override granted.
         let decision = FreshnessDecision::OverrideGranted {
@@ -774,6 +812,22 @@ mod tests {
         )
     }
 
+    fn make_override_for_zone(
+        operation: OperationType,
+        expiry_tick: u64,
+        zone: &str,
+    ) -> DegradedModeOverride {
+        let sk = operator_key();
+        DegradedModeOverride::create(
+            operation,
+            "ops-admin-01",
+            "emergency deploy",
+            DeterministicTimestamp(expiry_tick),
+            zone,
+            &sk,
+        )
+    }
+
     fn unpinned_operator_key() -> SigningKey {
         SigningKey::from_bytes([
             0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
@@ -947,6 +1001,63 @@ mod tests {
             // expects specific RevocationFreshnessResult::OverrideGranted from test scenario
             other => panic!("expected OverrideGranted, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn same_override_token_is_rejected_on_second_use() {
+        let mut ctrl = make_controller();
+        ctrl.set_tick(1000);
+        ctrl.update_expected_head(10, "t-degrade");
+
+        let override_token = make_override(OperationType::ExtensionActivation, 2000);
+        let vk = operator_key().verification_key();
+
+        ctrl.evaluate_with_override(
+            OperationType::ExtensionActivation,
+            &override_token,
+            &vk,
+            "t-override-first",
+        )
+        .expect("first override presentation should be granted");
+
+        let replay = ctrl.evaluate_with_override(
+            OperationType::ExtensionActivation,
+            &override_token,
+            &vk,
+            "t-override-replay",
+        );
+
+        assert!(matches!(
+            replay,
+            Err(OverrideError::AlreadyConsumed { override_id })
+                if override_id == override_token.override_id
+        ));
+    }
+
+    #[test]
+    fn override_token_for_other_zone_is_rejected() {
+        let mut ctrl = make_controller();
+        ctrl.set_tick(1000);
+        ctrl.update_expected_head(10, "t-degrade");
+
+        let override_token =
+            make_override_for_zone(OperationType::ExtensionActivation, 2000, "zone-other");
+        let vk = operator_key().verification_key();
+
+        let result = ctrl.evaluate_with_override(
+            OperationType::ExtensionActivation,
+            &override_token,
+            &vk,
+            "t-override-zone-replay",
+        );
+
+        assert!(matches!(
+            result,
+            Err(OverrideError::ZoneMismatch {
+                controller_zone,
+                override_zone,
+            }) if controller_zone == TEST_ZONE && override_zone == "zone-other"
+        ));
     }
 
     #[test]
@@ -1509,6 +1620,13 @@ mod tests {
             OverrideError::UnauthorizedOperator {
                 operator_id: "intruder".to_string(),
             },
+            OverrideError::AlreadyConsumed {
+                override_id: EngineObjectId([9; 32]),
+            },
+            OverrideError::ZoneMismatch {
+                controller_zone: "zone-a".to_string(),
+                override_zone: "zone-b".to_string(),
+            },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
             },
@@ -1793,12 +1911,19 @@ mod tests {
             OverrideError::UnauthorizedOperator {
                 operator_id: "op".to_string(),
             },
+            OverrideError::AlreadyConsumed {
+                override_id: EngineObjectId([3; 32]),
+            },
+            OverrideError::ZoneMismatch {
+                controller_zone: "controller".to_string(),
+                override_zone: "token".to_string(),
+            },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
             },
         ];
         let set: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
-        assert_eq!(set.len(), 5);
+        assert_eq!(set.len(), 7);
     }
 
     #[test]
@@ -1849,6 +1974,13 @@ mod tests {
             OverrideError::UnauthorizedOperator {
                 operator_id: "x".to_string(),
             },
+            OverrideError::AlreadyConsumed {
+                override_id: EngineObjectId([4; 32]),
+            },
+            OverrideError::ZoneMismatch {
+                controller_zone: "a".to_string(),
+                override_zone: "b".to_string(),
+            },
             OverrideError::NotDegraded {
                 current_state: FreshnessState::Fresh,
             },
@@ -1857,7 +1989,7 @@ mod tests {
             .iter()
             .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
-        assert_eq!(set.len(), 5);
+        assert_eq!(set.len(), 7);
     }
 
     #[test]
@@ -1998,6 +2130,27 @@ mod tests {
             operator_id: "alice".to_string(),
         };
         assert_eq!(e.to_string(), "unauthorized operator: alice");
+    }
+
+    #[test]
+    fn override_error_display_already_consumed() {
+        let override_id = EngineObjectId([7; 32]);
+        let e = OverrideError::AlreadyConsumed {
+            override_id: override_id.clone(),
+        };
+        assert_eq!(e.to_string(), format!("override already consumed: {override_id}"));
+    }
+
+    #[test]
+    fn override_error_display_zone_mismatch() {
+        let e = OverrideError::ZoneMismatch {
+            controller_zone: "zone-a".to_string(),
+            override_zone: "zone-b".to_string(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "override zone mismatch: controller=zone-a, override=zone-b"
+        );
     }
 
     #[test]

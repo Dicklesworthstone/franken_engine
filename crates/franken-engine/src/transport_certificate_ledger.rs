@@ -68,7 +68,6 @@ const MAX_DEGRADATION_REASONS: usize = 32;
 const MAX_LEDGER_COMPONENTS: usize = 128;
 
 /// Maximum certificates in the canonical manifest.
-#[allow(dead_code)]
 const MAX_MANIFEST_CERTIFICATES: usize = 1024;
 
 // ---------------------------------------------------------------------------
@@ -950,7 +949,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         MILLIONTHS,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Same arch, different microarch (partial transport).
@@ -962,7 +962,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         850_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Vector width reduction (degraded).
@@ -974,7 +975,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         600_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Cross-arch transport of non-arch-sensitive artifact (profile data).
@@ -986,7 +988,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         400_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Cross-arch transport of arch-sensitive artifact (incompatible).
@@ -998,7 +1001,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         200_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // ARM to ARM same microarch (full transport).
@@ -1010,7 +1014,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         980_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // ARM different microarch.
@@ -1022,7 +1027,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         750_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // RISC-V to x86 cross-arch (incompatible for AOT).
@@ -1034,7 +1040,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         100_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Failed transport (very low residual).
@@ -1046,7 +1053,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         50_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Rewrite rule cross-arch (non-arch-sensitive, degraded).
@@ -1058,7 +1066,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         500_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Cache entry same arch different uarch.
@@ -1070,7 +1079,8 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         920_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     // Profile data ARM to ARM.
@@ -1082,10 +1092,25 @@ pub fn franken_engine_transport_manifest() -> Vec<TransportCertificate> {
         MILLIONTHS,
         960_000,
     ) {
-        certs.push(c);
+        push_manifest_certificate(&mut certs, c)
+            .expect("canonical transport manifest certificate cap exceeded");
     }
 
     certs
+}
+
+fn push_manifest_certificate(
+    certs: &mut Vec<TransportCertificate>,
+    cert: TransportCertificate,
+) -> Result<(), TransportError> {
+    if certs.len() >= MAX_MANIFEST_CERTIFICATES {
+        return Err(TransportError::InternalError(format!(
+            "too many manifest certificates: attempted {} > {MAX_MANIFEST_CERTIFICATES}",
+            certs.len().saturating_add(1)
+        )));
+    }
+    certs.push(cert);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2214,6 +2239,39 @@ mod tests {
     fn manifest_produces_certificates() {
         let certs = franken_engine_transport_manifest();
         assert!(certs.len() >= 10, "manifest should have at least 10 certs");
+    }
+
+    #[test]
+    fn manifest_certificate_count_is_bounded() {
+        let certs = franken_engine_transport_manifest();
+        assert!(
+            certs.len() <= MAX_MANIFEST_CERTIFICATES,
+            "canonical manifest must not exceed MAX_MANIFEST_CERTIFICATES"
+        );
+    }
+
+    #[test]
+    fn manifest_certificate_cap_rejects_overflow_without_mutation() {
+        let cert = franken_engine_transport_manifest()
+            .into_iter()
+            .next()
+            .expect("canonical manifest should produce a fixture certificate");
+        let mut certs = vec![cert.clone(); MAX_MANIFEST_CERTIFICATES];
+
+        let err = push_manifest_certificate(&mut certs, cert)
+            .expect_err("over-cap manifest certificate insertion must fail closed");
+        match err {
+            TransportError::InternalError(message) => {
+                assert!(message.contains("too many manifest certificates"));
+                assert!(message.contains(&MAX_MANIFEST_CERTIFICATES.to_string()));
+            }
+            other => panic!("expected InternalError for over-cap manifest, got {other:?}"),
+        }
+        assert_eq!(
+            certs.len(),
+            MAX_MANIFEST_CERTIFICATES,
+            "failed insert must not grow the manifest"
+        );
     }
 
     #[test]

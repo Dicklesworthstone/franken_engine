@@ -80,23 +80,37 @@ use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
 
-/// Default adaptive router exploration rate (now read from RuntimeConfig).
+// Canonical baseline anchors for the orchestrator-tuning regression pin
+// (see `runtime_config_default_matches_orchestrator_constants` in this file's
+// `#[cfg(test)]` module). The live source of truth is `RuntimeConfig`; these
+// constants exist so the regression test fails fast if a `RuntimeConfig::
+// default()` field silently drifts away from the documented baseline. Only
+// the test module references the millisecond/tick anchors, which is why each
+// still carries `#[allow(dead_code)]` — the constant is "live in tests, dead
+// in `cargo build`".
+//
+// `DEFAULT_MAX_CONCURRENT_SAGAS` is the lone exception: it is also consumed
+// by `concurrency_envelope_tier` below, so it has no `#[allow(dead_code)]`
+// marker.
+
+/// Pin anchor for `RuntimeConfig::orchestrator::adaptive_router_gamma_millionths`.
 #[allow(dead_code)]
 const ADAPTIVE_ROUTER_GAMMA_MILLIONTHS: i64 = 100_000;
-/// Default CUSUM anomaly detection threshold (now read from RuntimeConfig).
+/// Pin anchor for `RuntimeConfig::orchestrator::stopping_cusum_threshold_millionths`.
 #[allow(dead_code)]
 const STOPPING_CUSUM_THRESHOLD_MILLIONTHS: i64 = 5_000_000;
-/// Default CUSUM reference value (now read from RuntimeConfig).
+/// Pin anchor for `RuntimeConfig::orchestrator::stopping_cusum_reference_millionths`.
 #[allow(dead_code)]
 const STOPPING_CUSUM_REFERENCE_MILLIONTHS: i64 = 500_000;
+/// Pin anchor for `RuntimeConfig::orchestrator::drain_deadline_ticks`.
 #[allow(dead_code)]
 const DEFAULT_DRAIN_DEADLINE_TICKS: u64 = 10_000;
+/// Pin anchor for `RuntimeConfig::orchestrator::cell_close_budget_ms`.
 #[allow(dead_code)]
 const ORCHESTRATOR_CELL_CLOSE_BUDGET_MS: u64 = 10_000;
-#[allow(dead_code)]
+/// Pin anchor for `RuntimeConfig::orchestrator::max_concurrent_sagas` and
+/// the "default" tier threshold used by `concurrency_envelope_tier`.
 const DEFAULT_MAX_CONCURRENT_SAGAS: usize = 4;
-#[allow(dead_code)]
-const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
 const SCALE_MILLION: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------

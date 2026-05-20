@@ -61,6 +61,30 @@ fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes(key).unwrap()
 }
 
+fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        signing_key.verification_key().to_hex(),
+    );
+}
+
+trait TestPromotionTheoremSigning {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<frankenengine_engine::capability_witness::PromotionTheoremReport, WitnessError>;
+}
+
+impl TestPromotionTheoremSigning for CapabilityWitness {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<frankenengine_engine::capability_witness::PromotionTheoremReport, WitnessError>
+    {
+        self.evaluate_promotion_theorems_signed_by(input, &test_signing_key())
+    }
+}
+
 fn test_extension_id() -> EngineObjectId {
     engine_object_id::derive_id(
         ObjectDomain::Attestation,
@@ -147,6 +171,7 @@ fn promotion_theorem_input_for(witness: &CapabilityWitness) -> PromotionTheoremI
 }
 
 fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
+    trust_theorem_report_signer(witness, &test_signing_key());
     let report = witness
         .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
         .expect("theorem check report");
@@ -1058,6 +1083,7 @@ fn apply_theorem_report_does_not_add_proofs_when_failed() {
     .proof(make_proof(&cap_write))
     .build()
     .unwrap();
+    trust_theorem_report_signer(&mut witness, &test_signing_key());
 
     let initial_proof_count = witness.proof_obligations.len();
 

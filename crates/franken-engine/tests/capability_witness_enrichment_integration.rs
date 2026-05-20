@@ -1195,6 +1195,29 @@ fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes([0x42u8; 32]).unwrap()
 }
 
+fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        signing_key.verification_key().to_hex(),
+    );
+}
+
+trait TestPromotionTheoremSigning {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<PromotionTheoremReport, WitnessError>;
+}
+
+impl TestPromotionTheoremSigning for CapabilityWitness {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<PromotionTheoremReport, WitnessError> {
+        self.evaluate_promotion_theorems_signed_by(input, &test_signing_key())
+    }
+}
+
 fn test_extension_id() -> EngineObjectId {
     engine_object_id::derive_id(
         ObjectDomain::PolicyObject,
@@ -1238,7 +1261,7 @@ fn make_proof(cap: &Capability, kind: ProofKind, tag: &str) -> ProofObligation {
 /// Build a minimal valid witness in Draft state via WitnessBuilder.
 fn build_minimal_witness() -> CapabilityWitness {
     let cap = Capability::new("fs.read");
-    WitnessBuilder::new(
+    let mut witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
         SecurityEpoch::from_raw(1),
@@ -1250,7 +1273,9 @@ fn build_minimal_witness() -> CapabilityWitness {
     .confidence(ConfidenceInterval::from_trials(1000, 980))
     .replay_seed(42)
     .build()
-    .expect("build minimal witness")
+    .expect("build minimal witness");
+    trust_theorem_report_signer(&mut witness, &test_signing_key());
+    witness
 }
 
 /// Build a witness with multiple capabilities and denial records.
@@ -1258,7 +1283,7 @@ fn build_rich_witness() -> CapabilityWitness {
     let cap_read = Capability::new("fs.read");
     let cap_write = Capability::new("fs.write");
     let cap_net = Capability::new("net.connect");
-    WitnessBuilder::new(
+    let mut witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
         SecurityEpoch::from_raw(5),
@@ -1286,7 +1311,9 @@ fn build_rich_witness() -> CapabilityWitness {
     .meta("owner", "test-team")
     .meta("version", "3")
     .build()
-    .expect("build rich witness")
+    .expect("build rich witness");
+    trust_theorem_report_signer(&mut witness, &test_signing_key());
+    witness
 }
 
 fn make_promotion_input(witness: &CapabilityWitness) -> PromotionTheoremInput {
@@ -1304,6 +1331,7 @@ fn make_promotion_input(witness: &CapabilityWitness) -> PromotionTheoremInput {
 }
 
 fn promote_witness(witness: &mut CapabilityWitness) {
+    trust_theorem_report_signer(witness, &test_signing_key());
     let input = make_promotion_input(witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
     witness

@@ -47,6 +47,30 @@ fn make_sk(seed: u8) -> SigningKey {
     SigningKey::from_bytes(key).unwrap()
 }
 
+fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        signing_key.verification_key().to_hex(),
+    );
+}
+
+trait TestPromotionTheoremSigning {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<frankenengine_engine::capability_witness::PromotionTheoremReport, WitnessError>;
+}
+
+impl TestPromotionTheoremSigning for CapabilityWitness {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<frankenengine_engine::capability_witness::PromotionTheoremReport, WitnessError>
+    {
+        self.evaluate_promotion_theorems_signed_by(input, &make_sk(13))
+    }
+}
+
 fn ext_id() -> EngineObjectId {
     engine_object_id::derive_id(
         ObjectDomain::Attestation,
@@ -111,8 +135,9 @@ fn passing_theorem_input(witness: &CapabilityWitness) -> PromotionTheoremInput {
 }
 
 fn apply_passing_theorems(witness: &mut CapabilityWitness, sk: &SigningKey) {
+    trust_theorem_report_signer(witness, sk);
     let report = witness
-        .evaluate_promotion_theorems(&passing_theorem_input(witness))
+        .evaluate_promotion_theorems_signed_by(&passing_theorem_input(witness), sk)
         .expect("theorem check report");
     assert!(report.all_passed);
     witness
@@ -1045,6 +1070,7 @@ fn apply_promotion_theorem_report_sets_metadata() {
         .proof(make_proof(&cap))
         .build()
         .unwrap();
+    trust_theorem_report_signer(&mut w, &make_sk(13));
     let report = w
         .evaluate_promotion_theorems(&passing_theorem_input(&w))
         .unwrap();

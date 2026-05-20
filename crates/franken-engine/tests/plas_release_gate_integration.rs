@@ -136,8 +136,12 @@ fn promote_witness_with_passing_theorems(
     .build()
     .expect("build witness");
 
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        synthesizer_key.verification_key().to_hex(),
+    );
     let theorem_report = witness
-        .evaluate_promotion_theorems(&passing_theorem_input(&witness))
+        .evaluate_promotion_theorems_signed_by(&passing_theorem_input(&witness), synthesizer_key)
         .expect("theorem report");
     assert!(theorem_report.all_passed);
     witness

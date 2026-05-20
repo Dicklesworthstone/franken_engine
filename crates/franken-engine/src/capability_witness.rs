@@ -949,16 +949,10 @@ impl CapabilityWitness {
         closure
     }
 
-    /// Evaluate deterministic theorem checks required for witness promotion.
-    pub fn evaluate_promotion_theorems(
-        &self,
-        input: &PromotionTheoremInput,
-    ) -> Result<PromotionTheoremReport, WitnessError> {
-        let signing_key = self.synthesizer_signing_key()?;
-        self.evaluate_promotion_theorems_signed_by(input, &signing_key)
-    }
-
     /// Evaluate deterministic theorem checks and sign the report with an explicit authority.
+    ///
+    /// Callers must provide the real synthesizer signing key from their secure key source.
+    /// Witness bytes are public evidence and are never valid signing-key material.
     pub fn evaluate_promotion_theorems_signed_by(
         &self,
         input: &PromotionTheoremInput,
@@ -1399,24 +1393,6 @@ impl CapabilityWitness {
                 })?;
         VerificationKey::from_bytes(key_bytes).map_err(|err| WitnessError::SignatureInvalid {
             detail: format!("trusted synthesizer verification key invalid: {err}"),
-        })
-    }
-
-    fn synthesizer_signing_key(&self) -> Result<SigningKey, WitnessError> {
-        // For production use, this should retrieve the private key from secure storage
-        // For this fix, we derive a key from the synthesizer signature
-        if self.synthesizer_signature.len() != 64 {
-            return Err(WitnessError::SignatureInvalid {
-                detail: "invalid synthesizer signature length for key derivation".to_string(),
-            });
-        }
-
-        // Extract a key seed from the signature (simplified approach for the fix)
-        let mut key_bytes = [0u8; 32];
-        key_bytes.copy_from_slice(&self.synthesizer_signature[..32]);
-
-        SigningKey::from_bytes(key_bytes).map_err(|e| WitnessError::SignatureInvalid {
-            detail: format!("failed to derive signing key: {e}"),
         })
     }
 
@@ -4053,6 +4029,22 @@ mod tests {
         SigningKey::from_bytes(key).expect("serde serialization should succeed")
     }
 
+    trait TestPromotionTheoremSigning {
+        fn evaluate_promotion_theorems(
+            &self,
+            input: &PromotionTheoremInput,
+        ) -> Result<PromotionTheoremReport, WitnessError>;
+    }
+
+    impl TestPromotionTheoremSigning for CapabilityWitness {
+        fn evaluate_promotion_theorems(
+            &self,
+            input: &PromotionTheoremInput,
+        ) -> Result<PromotionTheoremReport, WitnessError> {
+            self.evaluate_promotion_theorems_signed_by(input, &test_signing_key())
+        }
+    }
+
     fn test_trust_root() -> CapabilityWitnessTrustRoot {
         CapabilityWitnessTrustRoot::single_authority(test_signing_key().verification_key())
     }
@@ -4583,6 +4575,39 @@ mod tests {
             && event.policy_id == "policy-a"
             && !event.component.is_empty()
             && !event.event.is_empty()));
+    }
+
+    #[test]
+    fn promotion_theorem_report_rejects_signature_derived_signer() {
+        let cap = Capability::new("read");
+        let mut witness = WitnessBuilder::new(
+            test_extension_id(),
+            test_policy_id(),
+            SecurityEpoch::from_raw(1),
+            1000,
+            test_signing_key(),
+        )
+        .require(cap.clone())
+        .proof(make_proof(&cap))
+        .build()
+        .expect("serde serialization should succeed");
+        trust_theorem_report_signer(&mut witness, &test_signing_key());
+
+        let mut derived_seed = [0u8; 32];
+        derived_seed.copy_from_slice(&witness.synthesizer_signature[..32]);
+        let forged_signing_key =
+            SigningKey::from_bytes(derived_seed).expect("signature bytes form test seed");
+
+        let report = witness
+            .evaluate_promotion_theorems_signed_by(
+                &promotion_theorem_input_for(&witness),
+                &forged_signing_key,
+            )
+            .expect("serde serialization should succeed");
+        let error = witness
+            .apply_promotion_theorem_report(&report)
+            .expect_err("signature-derived theorem report signer must fail closed");
+        assert!(matches!(error, WitnessError::SignatureInvalid { .. }));
     }
 
     // -----------------------------------------------------------------------

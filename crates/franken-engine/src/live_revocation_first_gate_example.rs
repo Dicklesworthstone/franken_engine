@@ -399,7 +399,7 @@ fn build_promoted_witness(
         policy_id,
         SecurityEpoch::from_raw(4_200),
         500_000,
-        witness_key,
+        witness_key.clone(),
     )
     .require(requested_capability.clone())
     .proof(proof)
@@ -425,8 +425,12 @@ fn build_promoted_witness(
         non_interference_dependencies: BTreeMap::new(),
         custom_extensions: Vec::new(),
     };
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        witness_key.verification_key().to_hex(),
+    );
     let theorem_report = witness
-        .evaluate_promotion_theorems(&theorem_input)
+        .evaluate_promotion_theorems_signed_by(&theorem_input, &witness_key)
         .map_err(|error| format!("evaluate promotion theorems: {error}"))?;
     if !theorem_report.all_passed {
         return Err("synthetic witness promotion theorem report failed".to_string());

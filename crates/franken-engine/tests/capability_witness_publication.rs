@@ -128,8 +128,12 @@ fn build_promoted_witness(seed: u64, signing_key: &SigningKey) -> CapabilityWitn
         non_interference_dependencies: BTreeMap::new(),
         custom_extensions: Vec::new(),
     };
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        signing_key.verification_key().to_hex(),
+    );
     let report = witness
-        .evaluate_promotion_theorems(&theorem_input)
+        .evaluate_promotion_theorems_signed_by(&theorem_input, signing_key)
         .expect("evaluate promotion theorems");
     assert!(report.all_passed, "promotion theorem report must pass");
     witness

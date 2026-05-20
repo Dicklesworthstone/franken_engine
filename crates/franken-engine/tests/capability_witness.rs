@@ -45,6 +45,29 @@ fn test_signing_key() -> SigningKey {
     SigningKey::from_bytes(key).unwrap()
 }
 
+fn trust_theorem_report_signer(witness: &mut CapabilityWitness, signing_key: &SigningKey) {
+    witness.metadata.insert(
+        "trusted_synthesizer_verification_key".to_string(),
+        signing_key.verification_key().to_hex(),
+    );
+}
+
+trait TestPromotionTheoremSigning {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<PromotionTheoremReport, WitnessError>;
+}
+
+impl TestPromotionTheoremSigning for CapabilityWitness {
+    fn evaluate_promotion_theorems(
+        &self,
+        input: &PromotionTheoremInput,
+    ) -> Result<PromotionTheoremReport, WitnessError> {
+        self.evaluate_promotion_theorems_signed_by(input, &test_signing_key())
+    }
+}
+
 fn test_extension_id() -> EngineObjectId {
     engine_object_id::derive_id(
         ObjectDomain::Attestation,
@@ -109,6 +132,7 @@ fn promotion_theorem_input_for(witness: &CapabilityWitness) -> PromotionTheoremI
 }
 
 fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
+    trust_theorem_report_signer(witness, &test_signing_key());
     let report = witness
         .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
         .expect("theorem check report");
@@ -776,6 +800,7 @@ fn theorem_all_pass_enables_promotion() {
     .proof(make_proof(&cap))
     .build()
     .unwrap();
+    trust_theorem_report_signer(&mut witness, &test_signing_key());
     let report = witness
         .evaluate_promotion_theorems(&promotion_theorem_input_for(&witness))
         .unwrap();
@@ -806,6 +831,7 @@ fn theorem_merge_legality_fails_for_unjustified_capability() {
     .proof(make_proof(&cap_w))
     .build()
     .unwrap();
+    trust_theorem_report_signer(&mut witness, &test_signing_key());
     let input = PromotionTheoremInput {
         source_capability_sets: vec![SourceCapabilitySet {
             source_id: "dynamic-ablation".to_string(),

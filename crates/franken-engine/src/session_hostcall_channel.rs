@@ -197,7 +197,6 @@ impl AeadAlgorithm {
         }
     }
 
-    #[allow(dead_code)]
     fn as_tag(self) -> u8 {
         match self {
             Self::ChaCha20Poly1305 => 1,
@@ -215,7 +214,6 @@ pub enum DataPlaneDirection {
 }
 
 impl DataPlaneDirection {
-    #[allow(dead_code)]
     fn as_byte(self) -> u8 {
         match self {
             Self::HostToExtension => 0x00,

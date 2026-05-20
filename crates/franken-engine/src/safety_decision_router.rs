@@ -681,11 +681,9 @@ impl SafetyDecisionRouter {
 
     /// Summary of decisions by action type.
     pub fn summary_by_action(&self) -> BTreeMap<SafetyAction, ActionSummary> {
-        let mut summaries = BTreeMap::new();
+        let mut summaries: BTreeMap<SafetyAction, ActionSummary> = BTreeMap::new();
         for result in &self.results {
-            let entry = summaries
-                .entry(result.action)
-                .or_insert_with(ActionSummary::default);
+            let entry: &mut ActionSummary = summaries.entry(result.action).or_default();
             entry.total = entry.total.saturating_add(1);
             match &result.verdict {
                 SafetyVerdict::Allow => entry.allows = entry.allows.saturating_add(1),

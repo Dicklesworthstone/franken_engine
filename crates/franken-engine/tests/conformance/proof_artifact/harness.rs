@@ -145,9 +145,7 @@ impl ConformanceHarness {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let stats = coverage_by_section
-                .entry(section)
-                .or_insert_with(SectionStats::default);
+            let stats = coverage_by_section.entry(section).or_default();
 
             match result.requirement_level {
                 RequirementLevel::Must => stats.must_total += 1,

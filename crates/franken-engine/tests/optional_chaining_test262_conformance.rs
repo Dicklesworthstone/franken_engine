@@ -429,12 +429,10 @@ impl OptionalChainingHarness {
         &self,
         results: &BTreeMap<String, OptionalChainingResult>,
     ) -> BTreeMap<OptionalChainingCategory, CategoryCoverage> {
-        let mut coverage = BTreeMap::new();
+        let mut coverage: BTreeMap<OptionalChainingCategory, CategoryCoverage> = BTreeMap::new();
 
         for test in &self.tests {
-            let category_coverage = coverage
-                .entry(test.category.clone())
-                .or_insert_with(CategoryCoverage::default);
+            let category_coverage = coverage.entry(test.category.clone()).or_default();
             category_coverage.total += 1;
 
             if let Some(result) = results.get(&test.id)

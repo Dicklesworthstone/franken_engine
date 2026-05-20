@@ -560,12 +560,10 @@ impl IteratorConformanceHarness {
         &self,
         results: &BTreeMap<String, IteratorConformanceResult>,
     ) -> BTreeMap<IteratorTestCategory, CategoryStats> {
-        let mut coverage = BTreeMap::new();
+        let mut coverage: BTreeMap<IteratorTestCategory, CategoryStats> = BTreeMap::new();
 
         for test in &self.tests {
-            let category_stats = coverage
-                .entry(test.category.clone())
-                .or_insert_with(CategoryStats::default);
+            let category_stats = coverage.entry(test.category.clone()).or_default();
             category_stats.total += 1;
 
             if let Some(result) = results.get(&test.id) {

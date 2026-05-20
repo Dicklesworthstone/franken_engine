@@ -272,12 +272,10 @@ impl TemplateLiteralConformanceHarness {
     fn calculate_coverage_by_category(
         results: &BTreeMap<String, TemplateLiteralResult>,
     ) -> BTreeMap<TemplateLiteralTestCategory, CategoryCoverage> {
-        let mut coverage = BTreeMap::new();
+        let mut coverage: BTreeMap<TemplateLiteralTestCategory, CategoryCoverage> = BTreeMap::new();
 
         for test in Self::test_cases() {
-            let category_coverage = coverage
-                .entry(test.category.clone())
-                .or_insert_with(CategoryCoverage::default);
+            let category_coverage = coverage.entry(test.category.clone()).or_default();
             category_coverage.total += 1;
 
             if let Some(result) = results.get(&test.id)

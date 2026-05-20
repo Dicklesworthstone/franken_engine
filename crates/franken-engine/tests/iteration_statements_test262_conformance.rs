@@ -553,12 +553,11 @@ impl IterationStatementConformanceHarness {
     fn calculate_coverage_by_category(
         results: &BTreeMap<String, IterationStatementResult>,
     ) -> BTreeMap<IterationStatementTestCategory, CategoryCoverage> {
-        let mut coverage = BTreeMap::new();
+        let mut coverage: BTreeMap<IterationStatementTestCategory, CategoryCoverage> =
+            BTreeMap::new();
 
         for static_case in Self::STATIC_TEST_CASES {
-            let category_coverage = coverage
-                .entry(static_case.category.clone())
-                .or_insert_with(CategoryCoverage::default);
+            let category_coverage = coverage.entry(static_case.category.clone()).or_default();
             category_coverage.total += 1;
 
             if let Some(result) = results.get(static_case.id)

@@ -425,9 +425,7 @@ impl AsyncPromiseHarness {
     ) -> BTreeMap<AsyncPromiseCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<AsyncPromiseCategory, CategoryCoverage> = BTreeMap::new();
         for test in &self.tests {
-            let entry = coverage
-                .entry(test.category.clone())
-                .or_insert_with(CategoryCoverage::default);
+            let entry = coverage.entry(test.category.clone()).or_default();
             entry.total += 1;
             if let Some(result) = results.get(&test.id)
                 && matches!(result, AsyncPromiseResult::Pass)

@@ -662,7 +662,8 @@ fn number_tostring_radix_base2_through_base36() {
 
         if let Value::Str(s) = result.value {
             assert_eq!(
-                s, expected,
+                s.as_ref(),
+                expected,
                 "Number.toString({}, {}) should be {}, got {}",
                 number, radix, expected, s
             );
@@ -712,7 +713,8 @@ fn number_tostring_handles_negative_numbers() {
 
         if let Value::Str(s) = result.value {
             assert_eq!(
-                s, expected,
+                s.as_ref(),
+                expected,
                 "Number.toString({}, {}) should be {}, got {}",
                 number, radix, expected, s
             );
@@ -746,7 +748,7 @@ fn number_tostring_handles_special_float_values() {
 
     let result_nan = qjs_run(&module_nan).unwrap();
     if let Value::Str(s) = result_nan.value {
-        assert_eq!(s, "NaN", "NaN.toString() should be 'NaN', got {}", s);
+        assert_eq!(s.as_ref(), "NaN", "NaN.toString() should be 'NaN', got {}", s);
     } else {
         panic!(
             "NaN.toString should return String, got {:?}",
@@ -773,7 +775,8 @@ fn number_tostring_handles_special_float_values() {
     let result_inf = qjs_run(&module_inf).unwrap();
     if let Value::Str(s) = result_inf.value {
         assert_eq!(
-            s, "Infinity",
+            s.as_ref(),
+            "Infinity",
             "Infinity.toString() should be 'Infinity', got {}",
             s
         );
@@ -803,7 +806,8 @@ fn number_tostring_handles_special_float_values() {
     let result_neg_inf = qjs_run(&module_neg_inf).unwrap();
     if let Value::Str(s) = result_neg_inf.value {
         assert_eq!(
-            s, "-Infinity",
+            s.as_ref(),
+            "-Infinity",
             "(-Infinity).toString() should be '-Infinity', got {}",
             s
         );
@@ -842,7 +846,7 @@ fn number_tostring_handles_zero_special_case() {
         let result = qjs_run(&module).unwrap();
 
         if let Value::Str(s) = result.value {
-            assert_eq!(s, "0", "0.toString({}) should be '0', got {}", radix, s);
+            assert_eq!(s.as_ref(), "0", "0.toString({}) should be '0', got {}", radix, s);
         } else {
             panic!("0.toString should return String, got {:?}", result.value);
         }
@@ -878,7 +882,8 @@ fn number_tostring_preserves_fractional_radix_digits() {
 
         if let Value::Str(s) = result.value {
             assert_eq!(
-                s, expected,
+                s.as_ref(),
+                expected,
                 "({}).toString({}) should be {}, got {}",
                 number, radix, expected, s
             );

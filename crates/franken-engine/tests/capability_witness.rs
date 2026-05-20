@@ -570,7 +570,7 @@ fn confidence_serde_roundtrip() {
 #[test]
 fn builder_minimal_witness_starts_as_draft() {
     let cap = Capability::new("read");
-    let witness = WitnessBuilder::new(
+    let mut witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
         SecurityEpoch::from_raw(1),
@@ -818,7 +818,7 @@ fn theorem_all_pass_enables_promotion() {
 fn theorem_merge_legality_fails_for_unjustified_capability() {
     let cap_r = Capability::new("read");
     let cap_w = Capability::new("write");
-    let witness = WitnessBuilder::new(
+    let mut witness = WitnessBuilder::new(
         test_extension_id(),
         test_policy_id(),
         SecurityEpoch::from_raw(1),

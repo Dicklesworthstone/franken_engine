@@ -9,7 +9,12 @@
 
 use clap::{Arg, Command};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// bd-pvr9h: BTreeMap, not HashMap — README.md L921 + AGENTS.md mission
+// language require deterministic iteration order anywhere a content
+// hash or a serde output can observe it. `BenchmarkResult.metadata` is
+// serde-derived and the lookup map below is read in baseline order, so
+// switching to BTreeMap also keeps comparison-order deterministic.
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -20,7 +25,7 @@ pub struct BenchmarkResult {
     pub test_name: String,
     pub value: f64,
     pub unit: String,
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub metadata: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 /// Collection of benchmark results from a test run.
@@ -103,7 +108,7 @@ fn gate_benchmark_equivalence(
     let mut passing_tests = 0;
 
     // Create lookup map for run results
-    let run_map: HashMap<&String, &BenchmarkResult> =
+    let run_map: BTreeMap<&String, &BenchmarkResult> =
         run.results.iter().map(|r| (&r.test_name, r)).collect();
 
     // Compare each baseline result against corresponding run result

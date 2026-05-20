@@ -6,7 +6,13 @@
 //! artifact consumed by `disruptive_floor_metric_gate`.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+// bd-pvr9h: BTreeMap, not HashMap — README.md L921 + AGENTS.md mission
+// language require iteration order to be deterministic anywhere it can
+// reach a content hash or a serde output, and the throughput gate
+// outputs feed both the >=3x claim and the disruptive_floor_metric_gate
+// aggregator. HashMap iteration order is unspecified, so its serde
+// output is non-deterministic.
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -57,7 +63,7 @@ pub struct BaselineManifest {
     pub generated_at: String,
     pub measurement_duration_ms: u64,
     pub workloads: Vec<String>,
-    pub runtimes: HashMap<String, RuntimeBaseline>,
+    pub runtimes: BTreeMap<String, RuntimeBaseline>,
     pub has_live_measurements: bool,
     pub notes: String,
 }
@@ -66,7 +72,7 @@ pub struct BaselineManifest {
 pub struct RuntimeBaseline {
     pub version: String,
     pub baseline_ops_per_second: u64,
-    pub workload_results: HashMap<String, u64>,
+    pub workload_results: BTreeMap<String, u64>,
 }
 
 /// Load baseline manifest from file system or return error if unavailable

@@ -35,10 +35,6 @@ use crate::signature_preimage::{
 const ENVELOPE_ZONE: &str = "flow_envelope";
 const ENVELOPE_SCHEMA_DEF: &[u8] = b"FlowEnvelope.v1";
 
-/// Fixed-point unit: 1_000_000 = 1.0.
-#[allow(dead_code)]
-const MILLIONTHS: u64 = 1_000_000;
-
 // ---------------------------------------------------------------------------
 // Flow requirement (enriched flow rule with provenance)
 // ---------------------------------------------------------------------------

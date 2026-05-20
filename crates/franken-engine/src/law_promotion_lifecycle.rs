@@ -48,10 +48,6 @@ pub const LAW_PROMOTION_LIFECYCLE_BEAD_ID: &str = "bd-1lsy.9.10.3";
 /// Component name.
 pub const COMPONENT: &str = "law_promotion_lifecycle";
 
-/// One million — the unit for fixed-point millionths arithmetic.
-#[allow(dead_code)]
-const MILLION: u64 = 1_000_000;
-
 /// Default expiration window (10 epochs).
 const DEFAULT_EXPIRATION_WINDOW: u64 = 10;
 

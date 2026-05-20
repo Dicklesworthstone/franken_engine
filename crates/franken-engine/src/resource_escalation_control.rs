@@ -36,10 +36,6 @@ pub const ESCALATION_SCHEMA_VERSION: &str = "franken-engine.resource-escalation-
 pub const ESCALATION_BEAD_ID: &str = "bd-g61cl";
 const ESCALATION_STEP_INTERVAL_NS: u64 = 150_000_000;
 
-/// Fixed-point millionths unit.
-#[allow(dead_code)]
-const MILLIONTHS: u64 = 1_000_000;
-
 // ---------------------------------------------------------------------------
 // Escalation action
 // ---------------------------------------------------------------------------

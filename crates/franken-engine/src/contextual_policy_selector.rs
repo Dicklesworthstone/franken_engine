@@ -42,10 +42,6 @@ pub const BEAD_ID: &str = "bd-1lsy.7.8.1";
 /// Policy reference.
 pub const POLICY_ID: &str = "RGC-608A";
 
-/// Fixed-point unit.
-#[allow(dead_code)]
-const MILLION: u64 = 1_000_000;
-
 /// Maximum number of strategies a selector can evaluate.
 pub const MAX_STRATEGIES: usize = 32;
 
@@ -723,7 +719,7 @@ mod tests {
         let deb = DEFAULT_EXPLORATION_BUDGET;
         let mrb = MAX_REGRET_BUDGET;
         assert!(deb > 0);
-        assert!(deb < MILLION);
+        assert!(deb < 1_000_000);
         assert!(mrb > 0);
     }
 

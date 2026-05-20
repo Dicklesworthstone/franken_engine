@@ -49,10 +49,6 @@ const MAX_FILES_PER_SWEEP: usize = 8192;
 /// Maximum violations before early-abort.
 const MAX_VIOLATIONS_BEFORE_ABORT: usize = 1024;
 
-/// Fixed-point unit: 1_000_000 = 1.0 (100%).
-#[allow(dead_code)]
-const MILLION: u64 = 1_000_000;
-
 // ---------------------------------------------------------------------------
 // PatternCategory
 // ---------------------------------------------------------------------------

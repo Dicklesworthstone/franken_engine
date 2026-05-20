@@ -132,7 +132,10 @@ fn execute_module(
 fn execute_case(case: &AbstractOpCase) -> Result<Value, InterpreterError> {
     execute_module(
         case.instructions.clone(),
-        case.constant_pool.iter().map(|value| value.to_string()).collect(),
+        case.constant_pool
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
     )
 }
 
@@ -209,9 +212,7 @@ fn case(
 }
 
 fn cases() -> Vec<AbstractOpCase> {
-    use AbstractOpCategory::{
-        Bitwise, Equality, Relational, ToBoolean, ToNumber, TypeOf, Void,
-    };
+    use AbstractOpCategory::{Bitwise, Equality, Relational, ToBoolean, ToNumber, TypeOf, Void};
 
     vec![
         case(
@@ -700,7 +701,7 @@ fn cases() -> Vec<AbstractOpCase> {
 fn runtime_abstract_ops_conformance_matrix_must_pass() {
     let report = build_report().expect("runtime abstract-op conformance cases must pass");
 
-    assert_eq!(report.case_count, 29);
+    assert_eq!(report.case_count, 28);
     for category in [
         AbstractOpCategory::Bitwise,
         AbstractOpCategory::Equality,

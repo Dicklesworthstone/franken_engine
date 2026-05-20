@@ -386,7 +386,12 @@ impl ParserArena {
         Ok(SyntaxTree {
             goal: self.goal,
             body,
-            span: self.span(self.tree_span)?.clone(),
+            // SourceSpan derives Copy (bd-jtxmr); the explicit `.clone()`
+            // here was a leftover from before that change. Dereferencing
+            // the `&SourceSpan` yields the same value without invoking
+            // Clone — matches the bd-bquu7 sweep on `.span.clone()` field
+            // forms.
+            span: *self.span(self.tree_span)?,
         })
     }
 

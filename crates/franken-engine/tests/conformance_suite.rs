@@ -1716,10 +1716,36 @@ fn conformance_token_jti_deterministic() {
 // 15. Delegation Chain Conformance
 // =========================================================================
 
+use frankenengine_engine::capability_token::TokenId;
 use frankenengine_engine::delegation_chain::{
     ChainError as DelegationChainError, DelegationChain, DelegationVerificationContext,
-    NoRevocationOracle,
+    NoRevocationOracle, RevocationOracle,
 };
+
+// bd-irs7h: positive-path revocation oracle for conformance. Every other
+// delegation-chain conformance test in this file uses `NoRevocationOracle`,
+// which always returns false. That negative-by-construction coverage proves
+// the verifier does not falsely reject; it does NOT prove the verifier
+// rejects when revocation actually fires. This oracle, plus the
+// `conformance_delegation_revoked_link_rejected` test below, exercises
+// `is_revoked() == true` end-to-end through DelegationChain::verify.
+struct RevokingTestOracle {
+    revoked: std::collections::BTreeSet<TokenId>,
+}
+
+impl RevokingTestOracle {
+    fn revoking(token_id: TokenId) -> Self {
+        let mut revoked = std::collections::BTreeSet::new();
+        revoked.insert(token_id);
+        Self { revoked }
+    }
+}
+
+impl RevocationOracle for RevokingTestOracle {
+    fn is_revoked(&self, token_id: &TokenId) -> bool {
+        self.revoked.contains(token_id)
+    }
+}
 
 #[test]
 fn conformance_delegation_empty_chain_rejected() {
@@ -1932,6 +1958,88 @@ fn conformance_delegation_missing_capability_at_leaf() {
         ),
         "missing capability must be rejected"
     );
+}
+
+#[test]
+fn conformance_delegation_revoked_link_rejected() {
+    // bd-irs7h: positively exercise the revocation-rejection security check.
+    // Build a valid single-link chain that, under NoRevocationOracle, verifies
+    // cleanly. Switch in a RevokingTestOracle that revokes the chain's only
+    // token and assert the verifier returns ChainError::RevokedLink with the
+    // matching index and token_id. This is the only conformance test that
+    // drives `is_revoked() == true` through DelegationChain::verify; the
+    // remaining delegation conformance tests all use the always-false
+    // NoRevocationOracle and so prove only the negative direction.
+    let root_sk = test_signing_key(180);
+    let root_vk = root_sk.verification_key();
+    let leaf_sk = test_signing_key(181);
+    let leaf_vk = leaf_sk.verification_key();
+    let leaf_principal = PrincipalId::from_verification_key(&leaf_vk);
+
+    let schema = SchemaId::from_definition(b"test.deleg.revoked.v1");
+    let cp_id =
+        derive_id(ObjectDomain::CheckpointArtifact, "zone", &schema, b"cp").expect("derive");
+    let revocation_head_hash = ContentHash::compute(b"rev");
+
+    let token = TokenBuilder::new(
+        root_sk,
+        DeterministicTimestamp(0),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::GENESIS,
+        "zone",
+    )
+    .add_capability(RuntimeCapability::PolicyRead)
+    .add_audience(leaf_principal.clone())
+    .bind_checkpoint(CheckpointRef {
+        min_checkpoint_seq: 0,
+        checkpoint_id: cp_id.clone(),
+    })
+    .bind_revocation_freshness(RevocationFreshnessRef {
+        min_revocation_seq: 0,
+        revocation_head_hash,
+    })
+    .build()
+    .expect("build token");
+
+    let revoked_token_id = token.jti.clone();
+    let chain = DelegationChain::new(vec![token]);
+    let ctx = DelegationVerificationContext::with_authorized_root(root_vk)
+        .with_checkpoint_id(cp_id)
+        .with_revocation_head_hash(revocation_head_hash);
+
+    // Sanity: without revocation the chain must verify, so any failure below
+    // can be attributed to the revocation oracle, not to chain construction.
+    chain
+        .verify(
+            RuntimeCapability::PolicyRead,
+            &leaf_principal,
+            &ctx,
+            &NoRevocationOracle,
+        )
+        .expect("baseline chain must verify under NoRevocationOracle");
+
+    // Now flip revocation on for this specific token and re-verify.
+    let oracle = RevokingTestOracle::revoking(revoked_token_id.clone());
+    let revoked_result = chain.verify(
+        RuntimeCapability::PolicyRead,
+        &leaf_principal,
+        &ctx,
+        &oracle,
+    );
+
+    match revoked_result {
+        Err(DelegationChainError::RevokedLink { index, token_id }) => {
+            assert_eq!(index, 0, "single-link chain must report index 0");
+            assert_eq!(
+                token_id, revoked_token_id,
+                "RevokedLink must echo back the revoked token id"
+            );
+        }
+        other => panic!(
+            "expected RevokedLink for revoked token, got {:?}",
+            other.map(|_| "Ok(_)")
+        ),
+    }
 }
 
 // =========================================================================

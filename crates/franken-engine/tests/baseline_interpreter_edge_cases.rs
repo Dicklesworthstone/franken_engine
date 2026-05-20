@@ -536,7 +536,7 @@ fn add_negative_integers() {
 }
 
 #[test]
-#[ignore = "pre-existing: interpreter now returns JS-semantic Float(3.5) for 7/2; test expected legacy Int(3) truncation. Behavior drift, not compile error."]
+#[ignore = "behavior drift: asserts legacy Int(3) for 7/2, but JS-spec Number division returns Float(3.5). Whole-result coverage already lives in baseline_interpreter_integration.rs::div_integers (20/4 -> Int(5)). Body is stale; rewrite to assert Float(3.5) before re-enabling (bd-c13nb)"]
 fn div_integer_truncation() {
     let m = test_module(vec![
         Ir3Instruction::LoadInt { dst: 1, value: 7 },
@@ -1579,7 +1579,7 @@ fn test_array_prototype_some_duplicate_removal_regression() {
 }
 
 #[test]
-#[ignore = "pre-existing: expected Math.round(-0.5/-1.5) semantics not implemented by QuickJsInspiredNativeEngine eval path. Runtime behavior, not compile error."]
+#[ignore = "eval-path gap: Math.round negative-half semantics are covered by regression_tests_math_round_console_info_integration.rs::test_math_round_basic_regression / test_math_round_edge_cases_regression / test_math_round_type_coercion_regression and regression_tests_math_console_integration.rs::test_math_round_comprehensive_integration_regression. Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn math_round_negative_half_semantics_regression() {
     // Regression test for commit 5e20ceac701c03a02f70fda1966e2677c9a73f8e
     // fix(baseline_interpreter): add comprehensive Math.round tests + fix ConsoleLevel::Info
@@ -1953,7 +1953,7 @@ fn array_some_duplicate_removal_regression() {
 }
 
 #[test]
-#[ignore = "pre-existing: String.prototype.charAt UTF-16 semantics not wired through QuickJsInspiredNativeEngine eval path. Runtime behavior, not compile error."]
+#[ignore = "eval-path gap: charAt UTF-16 indexing semantics are covered by regression_tests_charat_utf16_integration.rs (6 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn string_charat_utf16_integration_regression() {
     // Regression test for commit 3b448a3946d095224e8f0a5a5ce106b0128ce474
     // fix(baseline_interpreter): align charAt with UTF-16 indexing semantics
@@ -2030,7 +2030,7 @@ fn string_charat_utf16_integration_regression() {
 }
 
 #[test]
-#[ignore = "pre-existing: String.prototype.charCodeAt UTF-16 semantics not wired through QuickJsInspiredNativeEngine eval path. Runtime behavior, not compile error."]
+#[ignore = "eval-path gap: charCodeAt UTF-16 code-unit semantics are covered by regression_tests_charcodeat_utf16_integration.rs (7 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn string_charcodeat_utf16_integration_regression() {
     // Regression test for commit 5ab2773a2da968f58704d734fa3f25642be072d1
     // fix(baseline_interpreter): align charCodeAt with UTF-16 code unit semantics

@@ -10525,19 +10525,19 @@ fn console_output_hostcall_bounds_capability_based() {
 // the new calling convention.
 
 #[test]
-#[ignore = "pre-existing API drift: Ir3Instruction::CallFunction + Ir3FunctionDesc{param_count,local_count,body_start} removed in favor of Call{callee,args,dst} with register-based callee. Builtin-dedup invariants are covered by source-scan tests in array_*_duplicate_removal_regression.rs."]
+#[ignore = "API-drift stub: Ir3Instruction::CallFunction was replaced by Call{callee,args,dst}; body never updated. Builtin-dedup invariants are covered by array_foreach_duplicate_removal_regression.rs and array_some_duplicate_removal_regression.rs. Empty body — delete or rewrite for the new calling convention (bd-c13nb)"]
 fn math_random_builtin_ids_produce_deterministic_results() {
     // stub: see module-level comment above.
 }
 
 #[test]
-#[ignore = "pre-existing API drift: Ir3Instruction::CallFunction + Ir3FunctionDesc{param_count,local_count,body_start} removed in favor of Call{callee,args,dst} with register-based callee."]
+#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString radix coverage lives in stdlib_integration.rs and stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_builtin_ids_consistent_radix_handling() {
     // stub: see module-level comment above.
 }
 
 #[test]
-#[ignore = "pre-existing API drift: Ir3Instruction::CallFunction + Ir3FunctionDesc{param_count,local_count,body_start} removed in favor of Call{callee,args,dst} with register-based callee."]
+#[ignore = "API-drift stub: same as above — Ir3Instruction::CallFunction replaced by Call{callee,args,dst}; body never updated. Number.toString invalid-radix behavior lives in stdlib_integration.rs / stdlib_enrichment_integration.rs. Empty body — delete or rewrite (bd-c13nb)"]
 fn number_to_string_invalid_radix_handling() {
     // stub: see module-level comment above.
 }
@@ -10579,7 +10579,7 @@ fn test_array_prototype_some_fail_closed_validation() {
 }
 
 #[test]
-#[ignore = "pre-existing: String.prototype.charAt is not wired through QuickJsInspiredNativeEngine eval path; covered by direct runtime tests."]
+#[ignore = "eval-path gap: charAt UTF-16 indexing semantics are covered by regression_tests_charat_utf16_integration.rs (6 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn test_string_char_at_utf16_indexing() {
     // Regression test for commit 3b448a39: charAt UTF-16 indexing semantics
     let mut interpreter = make_default_interpreter();
@@ -10636,7 +10636,7 @@ fn test_string_char_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "pre-existing: String.prototype.charCodeAt is not wired through QuickJsInspiredNativeEngine eval path; covered by direct runtime tests."]
+#[ignore = "eval-path gap: charCodeAt UTF-16 code-unit semantics are covered by regression_tests_charcodeat_utf16_integration.rs (7 direct-runtime tests). Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn test_string_char_code_at_utf16_indexing() {
     // Regression test for commit 5ab2773a: charCodeAt UTF-16 code unit semantics
     let mut interpreter = make_default_interpreter();
@@ -10715,7 +10715,7 @@ fn test_string_char_code_at_utf16_indexing() {
 }
 
 #[test]
-#[ignore = "pre-existing: Math.random is not wired through QuickJsInspiredNativeEngine eval path; deterministic runtime behavior is covered below the eval shim."]
+#[ignore = "eval-path gap: deterministic Math.random replay is covered by baseline_interpreter_refactor_coverage.rs::math_random_uses_deterministic_xorshift64_prng / math_random_different_execution_states_produce_different_values / math_random_xorshift64_produces_full_precision. Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn test_math_random_deterministic_replay() {
     // Regression test for commit 8df95361: SHA-256 deterministic replay
     let config = InterpreterConfig::quickjs_defaults();
@@ -10986,7 +10986,7 @@ fn test_array_some_callback_invocation_integration() {
 }
 
 #[test]
-#[ignore = "pre-existing: Math.round is not wired through QuickJsInspiredNativeEngine eval path; covered by direct runtime tests."]
+#[ignore = "eval-path gap: Math.round semantics (incl. negative-half floor(x+0.5)) are covered by regression_tests_math_round_console_info_integration.rs::test_math_round_basic_regression / test_math_round_edge_cases_regression / test_math_round_type_coercion_regression and regression_tests_math_console_integration.rs::test_math_round_comprehensive_integration_regression. Eval-shim wiring tracked in bd-lnkmc (parent: bd-c13nb)"]
 fn test_math_round_negative_half_semantics_integration() {
     // Regression test for commit 5e20ceac: Math.round negative half semantics
     // Validates JavaScript Math.round uses floor(x + 0.5) not round-away-from-zero

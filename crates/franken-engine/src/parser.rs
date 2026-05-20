@@ -3362,8 +3362,18 @@ fn parse_binding_pattern(
         }
     }
 
-    // Simple identifier binding
+    // Simple identifier binding. Reject reserved words like `return`, `function`,
+    // `class` — using them as a binding name (e.g. `var return = 1;`) is invalid
+    // ES2020 syntax regardless of strict/sloppy mode (bd-wa01t).
     if is_identifier(trimmed) {
+        if is_unconditional_reserved_keyword(trimmed) {
+            return Err(ParseError::new(
+                ParseErrorCode::UnsupportedSyntax,
+                format!("`{trimmed}` is a reserved word and cannot be used as a binding name"),
+                context.source_label.to_string(),
+                Some(span.clone()),
+            ));
+        }
         return Ok(BindingPattern::Identifier(trimmed.to_string()));
     }
 
@@ -3953,6 +3963,20 @@ fn parse_primary_expression(
         return Ok(Expression::StringLiteral(value));
     }
 
+    // Reject unterminated / malformed string literals (bd-wa01t). An expression
+    // starting with `'` or `"` that did not parse as a balanced string literal
+    // would otherwise fall through to `Expression::Raw`, silently passing
+    // malformed source on to lowering instead of fail-closed parsing.
+    if let Some(first) = expression.as_bytes().first()
+        && (*first == b'"' || *first == b'\'')
+    {
+        return Err(unsupported_expression_syntax_error(
+            "unterminated or malformed string literal",
+            span,
+            context,
+        ));
+    }
+
     // Regex literal: /pattern/flags
     if let Some((pattern, flags)) = parse_regexp_literal(expression) {
         return Ok(Expression::RegExpLiteral { pattern, flags });
@@ -4095,6 +4119,22 @@ fn parse_primary_expression(
     if is_unseparated_expression_sequence(expression) {
         return Err(unsupported_expression_syntax_error(
             "unseparated expression sequence",
+            span,
+            context,
+        ));
+    }
+
+    // Reject expressions that begin with a stray binary-only operator with no
+    // left-hand operand (e.g. `* 5`, `% 2`, `?? null`) (bd-wa01t). These are
+    // never valid as the leading token of an expression — including them in the
+    // `Expression::Raw` fallback would silently swallow real syntax errors.
+    // We deliberately exclude `+`, `-`, `!`, `~`, `/` (unary or regex contexts)
+    // and `:` / `,` (already structurally invalid via other paths).
+    if let Some(first) = expression.as_bytes().first()
+        && matches!(*first, b'*' | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'?')
+    {
+        return Err(unsupported_expression_syntax_error(
+            "expression begins with a binary operator with no left-hand operand",
             span,
             context,
         ));
@@ -5962,8 +6002,17 @@ fn parse_comma_separated_exprs(
 }
 
 fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
+    // Accept an explicit `+` or `-` sign prefix. try_parse_unary_prefix
+    // intentionally skips unary +/- when the next char is a digit so the
+    // literal parser owns signed integer literals end-to-end; previously
+    // only `-` was stripped here, so `+0` (and any `+<digit>` form) failed
+    // to parse as a primary expression. The upstream `===` comparison then
+    // surfaced as a spurious `false` because the left operand parsed as a
+    // non-numeric value. (bd-bs81a)
     let (is_neg, digits) = if let Some(rest) = input.strip_prefix('-') {
         (true, rest)
+    } else if let Some(rest) = input.strip_prefix('+') {
+        (false, rest)
     } else {
         (false, input)
     };
@@ -6570,6 +6619,56 @@ fn is_identifier(input: &str) -> bool {
 
 fn is_module_binding_identifier(input: &str) -> bool {
     is_identifier(input) && !is_disallowed_module_binding_name(input)
+}
+
+/// ES2020 unconditional reserved keywords — identifiers that are never legal
+/// as a binding name in any context (script or module, strict or sloppy).
+///
+/// Excludes strict-mode-only reserved words (`implements`, `interface`, `let`,
+/// `package`, `private`, `protected`, `public`, `static`, `yield`) and
+/// contextual reserved words (`await`) — those are valid identifiers in
+/// non-strict script code and are policed by the static-semantics analyzer
+/// when strict mode actually applies (see `static_semantics::is_reserved_binding`).
+fn is_unconditional_reserved_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "function"
+            | "if"
+            | "import"
+            | "in"
+            | "instanceof"
+            | "new"
+            | "null"
+            | "return"
+            | "super"
+            | "switch"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "typeof"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+    )
 }
 
 fn is_disallowed_module_binding_name(name: &str) -> bool {
@@ -8695,6 +8794,76 @@ mod tests {
             .parse("var", ParseGoal::Script)
             .expect_err("var without binding must fail");
         assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    // bd-wa01t: parser must fail-closed on these three classes of syntactically
+    // invalid source instead of accepting them as `Expression::Raw` /
+    // `BindingPattern::Identifier`. Each input was surfaced by the
+    // parser_error_taxonomy_conformance harness.
+
+    #[test]
+    fn unterminated_string_literal_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("var x = \"unterminated", ParseGoal::Script)
+            .expect_err("unterminated string literal must fail-closed");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn stray_binary_operator_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for source in ["* 5", "% 2", "& 1", "| 1", "^ 1", "< 1", "> 1", "?? null"] {
+            let err = parser
+                .parse(source, ParseGoal::Script)
+                .expect_err(&format!("`{source}` must fail-closed"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::UnsupportedSyntax,
+                "wrong code for `{source}`",
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_word_as_binding_identifier_is_rejected() {
+        let parser = CanonicalEs2020Parser;
+        for keyword in [
+            "return", "function", "class", "var", "if", "while", "for", "switch", "try",
+        ] {
+            let source = format!("var {keyword} = 1;");
+            let err = parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .expect_err(&format!("`{source}` must fail-closed"));
+            assert_eq!(
+                err.code,
+                ParseErrorCode::UnsupportedSyntax,
+                "wrong code for keyword `{keyword}`",
+            );
+        }
+    }
+
+    #[test]
+    fn strict_only_reserved_words_remain_valid_in_script_mode() {
+        // bd-wa01t scope guard: the fix above MUST NOT over-reject. Strict-mode
+        // reserved words (`package`, `private`, `public`, `static`, …) are
+        // still legal binding names in non-strict script code per ES2020.
+        let parser = CanonicalEs2020Parser;
+        for ident in [
+            "package",
+            "private",
+            "public",
+            "protected",
+            "static",
+            "implements",
+            "interface",
+            "let",
+        ] {
+            let source = format!("var {ident} = 1;");
+            parser.parse(source.as_str(), ParseGoal::Script).unwrap_or_else(|err| {
+                panic!("`{source}` should still parse in script mode, got {err:?}")
+            });
+        }
     }
 
     #[test]

@@ -16,14 +16,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::signature_preimage::{
-    sign_preimage, verify_signature, Signature, SignaturePreimage, SigningKey, VerificationKey,
-    SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+    verify_signature,
 };
 
 // ---------------------------------------------------------------------------
@@ -1867,9 +1867,11 @@ mod tests {
         let config = FreshnessConfig::default();
         assert_eq!(config.staleness_threshold, 5);
         assert_eq!(config.holdoff_ticks, 10);
-        assert!(config
-            .override_eligible
-            .contains(&OperationType::ExtensionActivation));
+        assert!(
+            config
+                .override_eligible
+                .contains(&OperationType::ExtensionActivation)
+        );
         assert!(config.authorized_operators.is_empty());
         assert!(config.authorized_operator_keys.is_empty());
     }
@@ -2596,8 +2598,9 @@ mod tests {
         let c = FreshnessConfig::default();
         assert_eq!(c.staleness_threshold, 5);
         assert_eq!(c.holdoff_ticks, 10);
-        assert!(c
-            .override_eligible
-            .contains(&OperationType::ExtensionActivation));
+        assert!(
+            c.override_eligible
+                .contains(&OperationType::ExtensionActivation)
+        );
     }
 }

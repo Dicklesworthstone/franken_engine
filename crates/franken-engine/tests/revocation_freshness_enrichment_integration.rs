@@ -338,23 +338,27 @@ fn enrichment_debug_operation_type_distinct() {
 fn enrichment_debug_nonempty_all_types() {
     assert!(!format!("{:?}", FreshnessState::Fresh).is_empty());
     assert!(!format!("{:?}", OperationType::SafeOperation).is_empty());
-    assert!(!format!(
-        "{:?}",
-        DegradedDenial {
-            operation_type: OperationType::TokenAcceptance,
-            local_head_seq: 0,
-            expected_head_seq: 5,
-            staleness_gap: 5,
-        }
-    )
-    .is_empty());
-    assert!(!format!(
-        "{:?}",
-        OverrideError::NotDegraded {
-            current_state: FreshnessState::Fresh,
-        }
-    )
-    .is_empty());
+    assert!(
+        !format!(
+            "{:?}",
+            DegradedDenial {
+                operation_type: OperationType::TokenAcceptance,
+                local_head_seq: 0,
+                expected_head_seq: 5,
+                staleness_gap: 5,
+            }
+        )
+        .is_empty()
+    );
+    assert!(
+        !format!(
+            "{:?}",
+            OverrideError::NotDegraded {
+                current_state: FreshnessState::Fresh,
+            }
+        )
+        .is_empty()
+    );
     assert!(!format!("{:?}", FreshnessConfig::default()).is_empty());
     let ctrl = make_controller();
     assert!(!format!("{ctrl:?}").is_empty());
@@ -452,12 +456,14 @@ fn enrichment_recovering_allows_safe_and_health() {
     ctrl.update_local_head(10, "t-recover");
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
-    assert!(ctrl
-        .evaluate(OperationType::SafeOperation, "t-rec-safe")
-        .is_ok());
-    assert!(ctrl
-        .evaluate(OperationType::HealthCheck, "t-rec-hc")
-        .is_ok());
+    assert!(
+        ctrl.evaluate(OperationType::SafeOperation, "t-rec-safe")
+            .is_ok()
+    );
+    assert!(
+        ctrl.evaluate(OperationType::HealthCheck, "t-rec-hc")
+            .is_ok()
+    );
 }
 
 // =========================================================================
@@ -1037,9 +1043,10 @@ fn enrichment_freshness_config_default_values() {
     assert_eq!(cfg.staleness_threshold, 5);
     assert_eq!(cfg.holdoff_ticks, 10);
     // Default has ExtensionActivation as override-eligible.
-    assert!(cfg
-        .override_eligible
-        .contains(&OperationType::ExtensionActivation));
+    assert!(
+        cfg.override_eligible
+            .contains(&OperationType::ExtensionActivation)
+    );
     assert_eq!(cfg.override_eligible.len(), 1);
     // No authorized operators by default.
     assert!(cfg.authorized_operators.is_empty());

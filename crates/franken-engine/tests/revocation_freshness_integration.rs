@@ -118,12 +118,14 @@ fn initial_config_matches() {
     assert_eq!(cfg.staleness_threshold, 5);
     assert_eq!(cfg.holdoff_ticks, 10);
     assert!(cfg.authorized_operators.contains("ops-admin-01"));
-    assert!(cfg
-        .override_eligible
-        .contains(&OperationType::ExtensionActivation));
-    assert!(cfg
-        .override_eligible
-        .contains(&OperationType::TokenAcceptance));
+    assert!(
+        cfg.override_eligible
+            .contains(&OperationType::ExtensionActivation)
+    );
+    assert!(
+        cfg.override_eligible
+            .contains(&OperationType::TokenAcceptance)
+    );
 }
 
 // =========================================================================
@@ -371,12 +373,14 @@ fn operations_proceed_in_stale() {
     assert_eq!(ctrl.state(), FreshnessState::Stale);
 
     assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_ok());
-    assert!(ctrl
-        .evaluate(OperationType::ExtensionActivation, "t2")
-        .is_ok());
-    assert!(ctrl
-        .evaluate(OperationType::HighRiskOperation, "t3")
-        .is_ok());
+    assert!(
+        ctrl.evaluate(OperationType::ExtensionActivation, "t2")
+            .is_ok()
+    );
+    assert!(
+        ctrl.evaluate(OperationType::HighRiskOperation, "t3")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -388,12 +392,14 @@ fn revocation_dependent_operations_denied_in_recovering() {
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
     assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_err());
-    assert!(ctrl
-        .evaluate(OperationType::ExtensionActivation, "t2")
-        .is_err());
-    assert!(ctrl
-        .evaluate(OperationType::HighRiskOperation, "t3")
-        .is_err());
+    assert!(
+        ctrl.evaluate(OperationType::ExtensionActivation, "t2")
+            .is_err()
+    );
+    assert!(
+        ctrl.evaluate(OperationType::HighRiskOperation, "t3")
+            .is_err()
+    );
 }
 
 // =========================================================================
@@ -1059,12 +1065,16 @@ fn freshness_config_default_values() {
     let config = FreshnessConfig::default();
     assert_eq!(config.staleness_threshold, 5);
     assert_eq!(config.holdoff_ticks, 10);
-    assert!(config
-        .override_eligible
-        .contains(&OperationType::ExtensionActivation));
-    assert!(!config
-        .override_eligible
-        .contains(&OperationType::TokenAcceptance));
+    assert!(
+        config
+            .override_eligible
+            .contains(&OperationType::ExtensionActivation)
+    );
+    assert!(
+        !config
+            .override_eligible
+            .contains(&OperationType::TokenAcceptance)
+    );
     assert!(config.authorized_operators.is_empty());
 }
 

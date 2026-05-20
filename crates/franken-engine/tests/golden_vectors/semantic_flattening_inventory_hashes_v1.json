@@ -1,0 +1,195 @@
+{
+  "fixture_schema_version": "franken-engine.semantic-flattening-inventory-hashes.v1",
+  "cases": [
+    {
+      "case_id": "intentional_preserved_policy_id",
+      "expectation": "documented policy identifier pass-through remains stable",
+      "assessed_epoch": 13,
+      "inventory_hash": "ea3c23358936a2dfe74d1f154a7f818fd70182ff7062bcc7021c8439063de414",
+      "summary": {
+        "total": 1,
+        "must_fix": 0,
+        "intentional": 1,
+        "acceptable": 0,
+        "false_positive": 0,
+        "by_domain": {
+          "PolicyId": 1
+        },
+        "by_severity": {
+          "Info": 1
+        }
+      },
+      "occurrences": [
+        {
+          "id": "sf-intentional-policy-id",
+          "domain": "PolicyId",
+          "boundary": {
+            "source_module": "policy_controller",
+            "target_module": "audit_ledger",
+            "api_surface": "record_policy_identifier",
+            "line_hint": 120
+          },
+          "translation_kind": "Preserved",
+          "classification": "Intentional",
+          "severity": "Info",
+          "description": "Policy identifiers are forwarded unchanged into audit evidence.",
+          "remediation": "Keep the boundary documented as intentional pass-through.",
+          "remediation_bead": "bd-xrkpf",
+          "content_hash": "203ee8f4b8162149d94e6a18d2ce3431236ea2212aefc67234f5ce43c3ee563a"
+        }
+      ]
+    },
+    {
+      "case_id": "acceptable_edge_diagnostics_translated",
+      "expectation": "operator diagnostics translation stays reviewable",
+      "assessed_epoch": 13,
+      "inventory_hash": "1303e103990e3ba925f85fac2691424174b3a7f24476bf508aa32e9d6fb3fa4b",
+      "summary": {
+        "total": 1,
+        "must_fix": 0,
+        "intentional": 0,
+        "acceptable": 1,
+        "false_positive": 0,
+        "by_domain": {
+          "Diagnostics": 1
+        },
+        "by_severity": {
+          "Low": 1
+        }
+      },
+      "occurrences": [
+        {
+          "id": "sf-acceptable-diagnostics",
+          "domain": "Diagnostics",
+          "boundary": {
+            "source_module": "parser_diagnostics",
+            "target_module": "operator_cli",
+            "api_surface": "render_diagnostic",
+            "line_hint": 214
+          },
+          "translation_kind": "Translated",
+          "classification": "AcceptableEdge",
+          "severity": "Low",
+          "description": "Structured parser diagnostics are rendered into stable operator text.",
+          "remediation": "Retain source diagnostic identifiers when the CLI renderer grows detail.",
+          "remediation_bead": "bd-xrkpf",
+          "content_hash": "92b155201a5847eb858be8d9520a7222ff2a84346a90e5b58201c1e230823d1c"
+        }
+      ]
+    },
+    {
+      "case_id": "capability_widening_must_fix",
+      "expectation": "capability widening continues to hash as a release-blocking finding",
+      "assessed_epoch": 13,
+      "inventory_hash": "5eee4b22f2fd715e81982633da86e815f86cc96b9608207cb05969461181c541",
+      "summary": {
+        "total": 1,
+        "must_fix": 1,
+        "intentional": 0,
+        "acceptable": 0,
+        "false_positive": 0,
+        "by_domain": {
+          "Capability": 1
+        },
+        "by_severity": {
+          "Critical": 1
+        }
+      },
+      "occurrences": [
+        {
+          "id": "sf-capability-widening",
+          "domain": "Capability",
+          "boundary": {
+            "source_module": "extension_manifest",
+            "target_module": "capability_grant_store",
+            "api_surface": "materialize_grant",
+            "line_hint": 338
+          },
+          "translation_kind": "Widened",
+          "classification": "MustFix",
+          "severity": "Critical",
+          "description": "Manifest capability scope expands while entering the grant store.",
+          "remediation": "Reject widened grants unless an explicit authority edge proves the expansion.",
+          "remediation_bead": "bd-capability-widening",
+          "content_hash": "512436e8f3f4deb838837935f95159efb6443d1f6df0a2d9f46985ef499e3541"
+        }
+      ]
+    },
+    {
+      "case_id": "budget_narrowing_must_fix",
+      "expectation": "budget narrowing keeps a distinct content hash from widening",
+      "assessed_epoch": 13,
+      "inventory_hash": "fdac9ebfffe17d009f2653011703675f33e32be3b5bbf175f2cee4db6cdcf564",
+      "summary": {
+        "total": 1,
+        "must_fix": 1,
+        "intentional": 0,
+        "acceptable": 0,
+        "false_positive": 0,
+        "by_domain": {
+          "Budget": 1
+        },
+        "by_severity": {
+          "High": 1
+        }
+      },
+      "occurrences": [
+        {
+          "id": "sf-budget-narrowing",
+          "domain": "Budget",
+          "boundary": {
+            "source_module": "budget_planner",
+            "target_module": "execution_scheduler",
+            "api_surface": "schedule_with_budget",
+            "line_hint": 512
+          },
+          "translation_kind": "Narrowed",
+          "classification": "MustFix",
+          "severity": "High",
+          "description": "Tiered CPU and memory budgets collapse into a single scheduler quota.",
+          "remediation": "Carry the tier breakdown through scheduling receipts.",
+          "remediation_bead": "bd-budget-narrowing",
+          "content_hash": "3a12e99db78a6b601be4dd1d5c5f039110f79199b459f17b6d0d0ef721d4ca56"
+        }
+      ]
+    },
+    {
+      "case_id": "critical_outcome_dropped",
+      "expectation": "critical outcome loss stays frozen as a distinct regression vector",
+      "assessed_epoch": 13,
+      "inventory_hash": "18b0f516eba845d5579eb38e42ef3c7235bd70414e3f1734168115b036ea3040",
+      "summary": {
+        "total": 1,
+        "must_fix": 1,
+        "intentional": 0,
+        "acceptable": 0,
+        "false_positive": 0,
+        "by_domain": {
+          "Outcome": 1
+        },
+        "by_severity": {
+          "Critical": 1
+        }
+      },
+      "occurrences": [
+        {
+          "id": "sf-critical-outcome-dropped",
+          "domain": "Outcome",
+          "boundary": {
+            "source_module": "safe_mode_controller",
+            "target_module": "release_gate",
+            "api_surface": "record_execution_outcome",
+            "line_hint": 733
+          },
+          "translation_kind": "Dropped",
+          "classification": "MustFix",
+          "severity": "Critical",
+          "description": "Partial-failure outcome detail is dropped before release-gate evidence.",
+          "remediation": "Persist partial-failure outcome detail in release-gate artifacts.",
+          "remediation_bead": "bd-critical-outcome-dropped",
+          "content_hash": "7cd5b7684091c1b2019e9dc14cf075e3d0ecaa835e8842861eba75a35a82e332"
+        }
+      ]
+    }
+  ]
+}

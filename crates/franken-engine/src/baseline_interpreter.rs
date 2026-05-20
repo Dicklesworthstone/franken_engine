@@ -4614,14 +4614,13 @@ impl InterpreterCore {
                 });
             }
 
-            let instr = module
-                .instructions
-                .get(self.ip)
-                .ok_or(InterpreterError::InstructionOutOfBounds {
+            let instr_ref = module.instructions.get(self.ip).ok_or(
+                InterpreterError::InstructionOutOfBounds {
                     ip: self.ip,
                     count: module.instructions.len(),
-                })?
-                .clone();
+                },
+            )?;
+            let instr = instr_ref.clone();
             self.instructions_executed += 1;
 
             // Checkpoint guard integration: tick on each instruction
@@ -4656,11 +4655,6 @@ impl InterpreterCore {
                 None
             };
 
-            let profiling_instruction = if self.profiling_data.is_some() {
-                Some(instr.clone())
-            } else {
-                None
-            };
 
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
@@ -6720,13 +6714,10 @@ impl InterpreterCore {
             }
 
             // Record profiling data for this instruction
-            if let (Some(profiler), Some(profile_start), Some(instruction)) = (
-                &mut self.profiling_data,
-                profile_start,
-                profiling_instruction.as_ref(),
-            ) {
-                profiler.record_instruction(instruction);
-                profiler.record_instruction_time(instruction, profile_start.elapsed());
+            if let (Some(profiler), Some(profile_start)) = (&mut self.profiling_data, profile_start)
+            {
+                profiler.record_instruction(instr_ref);
+                profiler.record_instruction_time(instr_ref, profile_start.elapsed());
             }
         }
     }

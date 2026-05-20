@@ -1,0 +1,94 @@
+{
+  "fixture_schema_version": "franken-engine.extension-host.hostcall-sink-policy-clearance-matrix.v1",
+  "policy": {
+    "fs_write": {
+      "max_secrecy": "internal",
+      "min_integrity": "validated"
+    },
+    "network_send": {
+      "max_secrecy": "public",
+      "min_integrity": "validated"
+    },
+    "ipc_send": {
+      "max_secrecy": "secret",
+      "min_integrity": "untrusted"
+    }
+  },
+  "matrix": [
+    {
+      "hostcall_type": "fs_read",
+      "hostcall_type_display": "fs_read",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "fs_write",
+      "hostcall_type_display": "fs_write",
+      "is_sink": true,
+      "clearance": {
+        "max_secrecy": "internal",
+        "min_integrity": "validated"
+      }
+    },
+    {
+      "hostcall_type": "network_send",
+      "hostcall_type_display": "network_send",
+      "is_sink": true,
+      "clearance": {
+        "max_secrecy": "public",
+        "min_integrity": "validated"
+      }
+    },
+    {
+      "hostcall_type": "network_recv",
+      "hostcall_type_display": "network_recv",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "process_spawn",
+      "hostcall_type_display": "process_spawn",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "env_read",
+      "hostcall_type_display": "env_read",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "mem_alloc",
+      "hostcall_type_display": "mem_alloc",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "timer_create",
+      "hostcall_type_display": "timer_create",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "crypto_op",
+      "hostcall_type_display": "crypto_op",
+      "is_sink": false,
+      "clearance": null
+    },
+    {
+      "hostcall_type": "ipc_send",
+      "hostcall_type_display": "ipc_send",
+      "is_sink": true,
+      "clearance": {
+        "max_secrecy": "secret",
+        "min_integrity": "untrusted"
+      }
+    },
+    {
+      "hostcall_type": "ipc_recv",
+      "hostcall_type_display": "ipc_recv",
+      "is_sink": false,
+      "clearance": null
+    }
+  ]
+}

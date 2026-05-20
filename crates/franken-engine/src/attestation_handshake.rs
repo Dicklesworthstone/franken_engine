@@ -144,14 +144,20 @@ impl AttestationResponse {
 }
 
 fn append_attestation_quote_canonical_bytes(buf: &mut Vec<u8>, quote: &AttestationQuote) {
-    buf.extend_from_slice(&quote.measurement.canonical_bytes());
+    let measurement_bytes = quote.measurement.canonical_bytes();
+    append_len_prefixed_bytes(buf, &measurement_bytes);
     buf.extend_from_slice(&quote.nonce);
     buf.extend_from_slice(&quote.issued_at_ns.to_be_bytes());
     buf.extend_from_slice(&quote.validity_window_ns.to_be_bytes());
     buf.push(quote.trust_level as u8);
     buf.push(quote.platform as u8);
-    buf.extend_from_slice(&quote.signature_bytes);
-    buf.extend_from_slice(quote.signer_key_id.as_bytes());
+    append_len_prefixed_bytes(buf, &quote.signature_bytes);
+    append_len_prefixed_bytes(buf, quote.signer_key_id.as_bytes());
+}
+
+fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -2472,6 +2478,42 @@ mod tests {
         assert_eq!(response.response_timestamp_ns, 5000);
         assert!(response.claimed_capabilities.contains("sign_receipts"));
         assert!(response.claimed_capabilities.contains("emit_evidence"));
+    }
+
+    #[test]
+    fn response_canonical_bytes_frame_quote_signature_and_signer() {
+        let root = test_trust_root();
+        let measurement = test_measurement(&root);
+        let base_quote = root.attest(&measurement, [7u8; 32], 10_000, 1_000);
+
+        let mut quote_a = base_quote.clone();
+        quote_a.signature_bytes = vec![1, 2];
+        quote_a.signer_key_id = "ab".to_string();
+
+        let mut quote_b = base_quote;
+        quote_b.signature_bytes = vec![1];
+        quote_b.signer_key_id = "\u{2}ab".to_string();
+
+        let response_a = AttestationResponse {
+            cell_id: "cell-001".to_string(),
+            attestation_quote: quote_a,
+            signer_public_key: vec![9; 32],
+            key_binding_proof: vec![8; 64],
+            claimed_capabilities: BTreeSet::new(),
+            response_timestamp_ns: 1_000,
+            cell_function: CellFunction::DecisionReceiptSigner,
+            response_signature: Vec::new(),
+        };
+        let response_b = AttestationResponse {
+            attestation_quote: quote_b,
+            ..response_a.clone()
+        };
+
+        assert_ne!(
+            response_a.canonical_bytes(),
+            response_b.canonical_bytes(),
+            "quote signature bytes and signer id must be independently length-framed"
+        );
     }
 
     #[test]

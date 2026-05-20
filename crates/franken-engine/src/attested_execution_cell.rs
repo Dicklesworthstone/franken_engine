@@ -189,7 +189,7 @@ impl MeasurementDigest {
         buf.extend_from_slice(self.config_hash.as_bytes());
         buf.extend_from_slice(self.policy_hash.as_bytes());
         buf.extend_from_slice(self.evidence_schema_hash.as_bytes());
-        buf.extend_from_slice(self.runtime_version.as_bytes());
+        append_len_prefixed_bytes(&mut buf, self.runtime_version.as_bytes());
         buf.extend_from_slice(&[self.platform as u8]);
         buf
     }
@@ -234,7 +234,7 @@ impl AttestationQuote {
         buf.extend_from_slice(&self.validity_window_ns.to_be_bytes());
         buf.push(self.trust_level as u8);
         buf.push(self.platform as u8);
-        buf.extend_from_slice(self.signer_key_id.as_bytes());
+        append_len_prefixed_bytes(&mut buf, self.signer_key_id.as_bytes());
         buf
     }
 
@@ -247,6 +247,11 @@ impl AttestationQuote {
     pub fn is_expired_at(&self, current_ns: u64) -> bool {
         !self.is_fresh_at(current_ns)
     }
+}
+
+fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,6 +1322,23 @@ mod tests {
         assert_eq!(m, restored);
     }
 
+    #[test]
+    fn measurement_canonical_frames_runtime_version() {
+        let root = test_trust_root();
+        let m = test_measurement(&root);
+        let canonical = m.canonical_bytes();
+        let runtime_offset = 32 * 4;
+        let runtime_len = "1.0.0".len() as u64;
+
+        assert_eq!(
+            &canonical[runtime_offset..runtime_offset + 8],
+            &runtime_len.to_be_bytes()
+        );
+        assert_eq!(&canonical[runtime_offset + 8..runtime_offset + 13], b"1.0.0");
+        assert_eq!(canonical[runtime_offset + 13], PlatformKind::Software as u8);
+        assert_eq!(canonical.len(), runtime_offset + 8 + "1.0.0".len() + 1);
+    }
+
     // --- AttestationQuote ---
 
     #[test]
@@ -1341,6 +1363,23 @@ mod tests {
         let restored: AttestationQuote =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(quote, restored);
+    }
+
+    #[test]
+    fn quote_signature_payload_frames_signer_key_id() {
+        let root = test_trust_root();
+        let m = test_measurement(&root);
+        let quote = test_quote(&root, &m, [2u8; 32], 200, 5_000_000);
+        let payload = quote.signature_payload();
+        let signer = b"test-key-1";
+        let signer_len = signer.len() as u64;
+        let suffix_start = payload.len() - 8 - signer.len();
+
+        assert_eq!(
+            &payload[suffix_start..suffix_start + 8],
+            &signer_len.to_be_bytes()
+        );
+        assert_eq!(&payload[suffix_start + 8..], signer);
     }
 
     // --- VerificationResult ---

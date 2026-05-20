@@ -362,6 +362,8 @@ pub struct FreshnessConfig {
     pub override_eligible: BTreeSet<OperationType>,
     /// Authorized operator IDs.
     pub authorized_operators: BTreeSet<String>,
+    /// Verification key pinned to each authorized operator ID.
+    pub authorized_operator_keys: BTreeMap<String, VerificationKey>,
 }
 
 impl Default for FreshnessConfig {
@@ -374,6 +376,7 @@ impl Default for FreshnessConfig {
             holdoff_ticks: 10,
             override_eligible,
             authorized_operators: BTreeSet::new(),
+            authorized_operator_keys: BTreeMap::new(),
         }
     }
 }
@@ -547,6 +550,20 @@ impl RevocationFreshnessController {
                 operator_id: override_token.operator_id.clone(),
             });
         }
+        let Some(authorized_verification_key) = self
+            .config
+            .authorized_operator_keys
+            .get(&override_token.operator_id)
+        else {
+            return Err(OverrideError::UnauthorizedOperator {
+                operator_id: override_token.operator_id.clone(),
+            });
+        };
+        if authorized_verification_key != operator_verification_key {
+            return Err(OverrideError::SignatureInvalid {
+                detail: "operator verification key does not match authorized operator".to_string(),
+            });
+        }
 
         // Check operation is override-eligible.
         if !self.config.override_eligible.contains(&operation) {
@@ -559,7 +576,7 @@ impl RevocationFreshnessController {
         // Verify signature.
         let preimage = override_token.preimage_bytes();
         verify_signature(
-            operator_verification_key,
+            authorized_verification_key,
             &preimage,
             &override_token.signature,
         )
@@ -722,6 +739,11 @@ mod tests {
     fn make_config() -> FreshnessConfig {
         let mut authorized = BTreeSet::new();
         authorized.insert("ops-admin-01".to_string());
+        let mut authorized_operator_keys = BTreeMap::new();
+        authorized_operator_keys.insert(
+            "ops-admin-01".to_string(),
+            operator_key().verification_key(),
+        );
 
         let mut override_eligible = BTreeSet::new();
         override_eligible.insert(OperationType::ExtensionActivation);
@@ -732,6 +754,7 @@ mod tests {
             holdoff_ticks: 10,
             override_eligible,
             authorized_operators: authorized,
+            authorized_operator_keys,
         }
     }
 
@@ -749,6 +772,15 @@ mod tests {
             TEST_ZONE,
             &sk,
         )
+    }
+
+    fn unpinned_operator_key() -> SigningKey {
+        SigningKey::from_bytes([
+            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
+            0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C,
+            0x4D, 0x4E, 0x4F, 0x50,
+        ])
+        .expect("serde deserialization should succeed")
     }
 
     // ---------------------------------------------------------------
@@ -915,6 +947,34 @@ mod tests {
             // expects specific RevocationFreshnessResult::OverrideGranted from test scenario
             other => panic!("expected OverrideGranted, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn authorized_operator_id_signed_by_unpinned_key_is_rejected() {
+        let mut ctrl = make_controller();
+        ctrl.set_tick(1000);
+        ctrl.update_expected_head(10, "t-degrade");
+
+        let unpinned = unpinned_operator_key();
+        let override_token = DegradedModeOverride::create(
+            OperationType::ExtensionActivation,
+            "ops-admin-01",
+            "forged authorized operator id",
+            DeterministicTimestamp(2000),
+            TEST_ZONE,
+            &unpinned,
+        );
+
+        let result = ctrl.evaluate_with_override(
+            OperationType::ExtensionActivation,
+            &override_token,
+            &unpinned.verification_key(),
+            "t-unpinned-key",
+        );
+        assert!(matches!(
+            result,
+            Err(OverrideError::SignatureInvalid { .. })
+        ));
     }
 
     #[test]
@@ -1490,6 +1550,7 @@ mod tests {
                 .contains(&OperationType::ExtensionActivation)
         );
         assert!(config.authorized_operators.is_empty());
+        assert!(config.authorized_operator_keys.is_empty());
     }
 
     // ---------------------------------------------------------------
@@ -1866,6 +1927,7 @@ mod tests {
         assert!(json.contains("\"holdoff_ticks\""));
         assert!(json.contains("\"override_eligible\""));
         assert!(json.contains("\"authorized_operators\""));
+        assert!(json.contains("\"authorized_operator_keys\""));
     }
 
     #[test]

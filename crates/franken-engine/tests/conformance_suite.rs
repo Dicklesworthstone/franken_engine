@@ -612,6 +612,7 @@ fn conformance_freshness_initial_state_is_fresh() {
         holdoff_ticks: 3,
         override_eligible: BTreeSet::from([OperationType::TokenAcceptance]),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let ctrl = RevocationFreshnessController::new(config, "zone");
     assert_eq!(ctrl.state(), FreshnessState::Fresh);
@@ -624,6 +625,7 @@ fn conformance_freshness_staleness_detection() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "zone");
 
@@ -644,6 +646,7 @@ fn conformance_freshness_safe_ops_evaluated() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "zone");
 
@@ -661,6 +664,7 @@ fn conformance_freshness_recovery_after_catchup() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "zone");
 
@@ -686,6 +690,7 @@ fn conformance_freshness_is_fresh_and_is_degraded() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let ctrl = RevocationFreshnessController::new(config, "zone");
     assert!(ctrl.is_fresh(), "initial state must be fresh");
@@ -699,6 +704,7 @@ fn conformance_freshness_staleness_gap_tracks_difference() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "zone");
     assert_eq!(ctrl.staleness_gap(), 0);
@@ -1976,6 +1982,7 @@ fn conformance_integration_revocation_chain_plus_freshness() {
         holdoff_ticks: 1,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "int-zone");
     ctrl.update_expected_head(chain.head_seq().unwrap_or(0), "t2");

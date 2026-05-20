@@ -18,7 +18,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::revocation_freshness::{
@@ -53,6 +53,8 @@ fn operator_verification_key() -> VerificationKey {
 fn test_config() -> FreshnessConfig {
     let mut authorized = BTreeSet::new();
     authorized.insert("ops-admin-01".to_string());
+    let mut authorized_operator_keys = BTreeMap::new();
+    authorized_operator_keys.insert("ops-admin-01".to_string(), operator_verification_key());
 
     let mut override_eligible = BTreeSet::new();
     override_eligible.insert(OperationType::ExtensionActivation);
@@ -63,6 +65,7 @@ fn test_config() -> FreshnessConfig {
         holdoff_ticks: 10,
         override_eligible,
         authorized_operators: authorized,
+        authorized_operator_keys,
     }
 }
 

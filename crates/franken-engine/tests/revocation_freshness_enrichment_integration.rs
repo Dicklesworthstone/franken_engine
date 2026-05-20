@@ -20,7 +20,7 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
@@ -47,6 +47,11 @@ fn operator_key() -> SigningKey {
 fn make_config() -> FreshnessConfig {
     let mut authorized = BTreeSet::new();
     authorized.insert("ops-admin-01".to_string());
+    let mut authorized_operator_keys = BTreeMap::new();
+    authorized_operator_keys.insert(
+        "ops-admin-01".to_string(),
+        operator_key().verification_key(),
+    );
 
     let mut override_eligible = BTreeSet::new();
     override_eligible.insert(OperationType::ExtensionActivation);
@@ -57,6 +62,7 @@ fn make_config() -> FreshnessConfig {
         holdoff_ticks: 10,
         override_eligible,
         authorized_operators: authorized,
+        authorized_operator_keys,
     }
 }
 
@@ -465,6 +471,7 @@ fn enrichment_custom_staleness_threshold_controls_degraded_transition() {
         holdoff_ticks: 5,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "custom-zone");
 
@@ -484,6 +491,7 @@ fn enrichment_custom_holdoff_ticks_controls_recovery_duration() {
         holdoff_ticks: 3,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::new(),
+        authorized_operator_keys: BTreeMap::new(),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "holdoff-zone");
     ctrl.set_tick(100);
@@ -637,6 +645,10 @@ fn enrichment_empty_override_eligible_rejects_all_overrides() {
         holdoff_ticks: 10,
         override_eligible: BTreeSet::new(),
         authorized_operators: BTreeSet::from(["ops-admin-01".to_string()]),
+        authorized_operator_keys: BTreeMap::from([(
+            "ops-admin-01".to_string(),
+            operator_key().verification_key(),
+        )]),
     };
     let mut ctrl = RevocationFreshnessController::new(config, "test-zone");
     ctrl.set_tick(1000);

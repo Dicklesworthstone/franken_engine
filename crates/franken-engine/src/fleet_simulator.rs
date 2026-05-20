@@ -251,9 +251,12 @@ pub struct FleetSimulator {
     instances: BTreeMap<NodeId, EngineInstance>,
     /// Centralized message bus.
     message_bus: MessageBus,
-    /// Containment thresholds for all instances.
-    #[allow(dead_code)]
-    containment_thresholds: ContainmentThresholds,
+    // bd-s8h89: a `containment_thresholds: ContainmentThresholds` field
+    // used to live here. It was populated by the constructor (with a
+    // clone-then-move pattern) but never read — every consumer of the
+    // thresholds reaches them through the sub-instance's own copy on
+    // `ConvergenceEngine`. Removed; the constructor parameter still
+    // exists because the per-instance clone happens inside the loop.
     /// Simulation start time for relative timestamps.
     start_time: Instant,
     /// Total simulation steps executed.
@@ -396,10 +399,12 @@ impl FleetSimulator {
             instances.insert(node_id, instance);
         }
 
+        // `containment_thresholds` is intentionally not stored on `Self`
+        // (bd-s8h89). Each instance got its own clone above; the
+        // original argument falls out of scope here.
         Ok(Self {
             instances,
             message_bus,
-            containment_thresholds,
             start_time,
             simulation_steps: 0,
             event_log,

@@ -915,7 +915,7 @@ mod tests {
     fn make_sk(seed: u8) -> SigningKey {
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([seed; 32]).expect("32-byte SigningKey construction")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -933,7 +933,7 @@ mod tests {
         CheckpointBuilder::genesis(SecurityEpoch::GENESIS, DeterministicTimestamp(100), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
             .build(keys)
-            .expect("serde deserialization should succeed")
+            .expect("genesis checkpoint build with valid keys")
     }
 
     fn build_after(
@@ -947,7 +947,7 @@ mod tests {
         CheckpointBuilder::after(prev, seq, epoch, DeterministicTimestamp(tick), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, seq + 1))
             .build(keys)
-            .expect("serde deserialization should succeed")
+            .expect("after-checkpoint build with valid keys")
     }
 
     /// Build a divergent checkpoint at the same seq by using a different
@@ -967,7 +967,7 @@ mod tests {
                 seq + 1 + version_offset,
             ))
             .build(keys)
-            .expect("serde deserialization should succeed")
+            .expect("divergent-checkpoint build with valid keys")
     }
 
     // -- Basic recording --

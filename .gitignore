@@ -144,6 +144,14 @@ __pycache__/
 crates/*/target_standalone/
 crates/*/target/
 crates/*/target_cod_*/
+# Custom `--target-dir target_rch_*` invocations (review/audit pane targets).
+# Mirror /target_rch_*/ at root (line 68) for any subdir. Without these,
+# `cargo --target-dir target_rch_review` run from inside a crate or `src/`
+# leaves a target tree that `git add -A` will happily stage — the exact
+# failure class that needed two filter-repo passes (d8efc6b5, 5294ed2d).
+crates/*/target_rch_*/
+crates/*/src/target_rch_*/
+**/target_rch_*/
 
 # Ephemeral one-off refactoring scripts (agent-generated)
 apply_fix.py

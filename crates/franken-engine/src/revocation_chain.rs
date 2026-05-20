@@ -601,16 +601,13 @@ impl RevocationChain {
     ) -> Result<u64, ChainError> {
         let head_verification_key = head_signing_key.verification_key();
         let head_principal = PrincipalId::from_verification_key(&head_verification_key);
-        if revocation.issued_by == head_principal
-            && !self
-                .authorized_revocation_keys
-                .contains_key(&revocation.issued_by)
-        {
-            self.authorized_revocation_keys
-                .insert(head_principal.clone(), head_verification_key.clone());
+        if !self.authorized_head_keys.contains_key(&head_principal) {
+            let err = ChainError::SignatureInvalid {
+                detail: format!("head signer {} is not authorized", head_principal.to_hex()),
+            };
+            self.emit_reject(trace_id, err.to_string());
+            return Err(err);
         }
-        self.authorized_head_keys
-            .insert(head_principal, head_verification_key);
 
         // Validate zone matches.
         if revocation.zone != self.zone {
@@ -1235,6 +1232,14 @@ mod tests {
         .expect("serde deserialization should succeed")
     }
 
+    fn trusted_test_chain() -> RevocationChain {
+        let head_key = test_signing_key().verification_key();
+        let revocation_key = test_revocation_key().verification_key();
+        RevocationChain::new(TEST_ZONE)
+            .with_authorized_head_key(head_key)
+            .with_authorized_revocation_key(revocation_key)
+    }
+
     fn make_revocation(
         target_type: RevocationTargetType,
         reason: RevocationReason,
@@ -1285,7 +1290,7 @@ mod tests {
 
     #[test]
     fn append_genesis_event() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -1345,7 +1350,7 @@ mod tests {
 
     #[test]
     fn guarded_lookup_releases_epoch_guard_after_success() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Token,
@@ -1556,6 +1561,7 @@ mod tests {
     fn append_rejects_unauthorized_revocation_issuer() {
         let mut chain = RevocationChain::new(TEST_ZONE);
         let head_sk = test_signing_key();
+        chain.authorize_head_key(head_sk.verification_key());
         let rev = make_revocation(
             RevocationTargetType::Key,
             RevocationReason::Compromised,
@@ -1572,6 +1578,7 @@ mod tests {
         let mut chain = RevocationChain::new(TEST_ZONE);
         let head_sk = test_signing_key();
         let revocation_sk = alternate_revocation_key();
+        chain.authorize_head_key(head_sk.verification_key());
         chain.authorize_revocation_key(revocation_sk.verification_key());
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -1584,6 +1591,51 @@ mod tests {
             .append(rev, &head_sk, "t-authorized")
             .expect("serde deserialization should succeed");
         assert_eq!(seq, 0);
+    }
+
+    #[test]
+    fn append_rejects_unconfigured_head_signer() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let head_sk = test_signing_key();
+        let revocation_sk = test_revocation_key();
+        chain.authorize_revocation_key(revocation_sk.verification_key());
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [0xC1; 32],
+            &revocation_sk,
+        );
+
+        let err = chain.append(rev, &head_sk, "t-head-unauth").unwrap_err();
+        assert!(matches!(
+            err,
+            ChainError::SignatureInvalid { ref detail }
+                if detail.contains("head signer") && detail.contains("not authorized")
+        ));
+        assert_eq!(chain.len(), 0);
+        assert!(chain.head().is_none());
+    }
+
+    #[test]
+    fn append_rejects_same_key_revocation_issuer_without_revocation_authorization() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let sk = test_signing_key();
+        chain.authorize_head_key(sk.verification_key());
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [0xC2; 32],
+            &sk,
+        );
+
+        let err = chain.append(rev, &sk, "t-rev-unauth").unwrap_err();
+        assert!(matches!(
+            err,
+            ChainError::SignatureInvalid { ref detail }
+                if detail.contains("revocation issuer") && detail.contains("not authorized")
+        ));
+        assert_eq!(chain.len(), 0);
+        assert!(chain.head().is_none());
     }
 
     #[test]
@@ -1775,7 +1827,7 @@ mod tests {
 
     #[test]
     fn verify_append_accepts_valid_next_event() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         // Append genesis.
@@ -1815,7 +1867,7 @@ mod tests {
 
     #[test]
     fn verify_append_rejects_wrong_seq() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -1854,7 +1906,7 @@ mod tests {
 
     #[test]
     fn verify_append_rejects_wrong_prev_link() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(

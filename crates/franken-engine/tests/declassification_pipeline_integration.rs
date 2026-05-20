@@ -1031,6 +1031,29 @@ fn emergency_bypasses_route_check() {
 }
 
 #[test]
+fn emergency_policy_extension_mismatch_fails_closed() {
+    let mut pipeline = DeclassificationPipeline::default();
+    let policy = make_policy();
+    let mut request = make_request("nonexistent-route", Label::Secret, Label::Public);
+    request.extension_id = "wrong-ext".to_string();
+    request.is_emergency = true;
+
+    let err = pipeline
+        .process(&request, &policy, &low_loss(), &test_key())
+        .unwrap_err();
+
+    match err {
+        PipelineError::PolicyUnavailable { reason } => {
+            assert!(reason.contains("No policy for extension"));
+        }
+        other => panic!("expected PolicyUnavailable, got {other:?}"),
+    }
+    assert!(pipeline.receipts().is_empty());
+    assert_eq!(pipeline.stats().decision_count, 0);
+    assert_eq!(pipeline.stats().emergency_grants_active, 0);
+}
+
+#[test]
 fn emergency_creates_grant() {
     let mut pipeline = DeclassificationPipeline::default();
     let policy = make_policy();

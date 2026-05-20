@@ -352,8 +352,11 @@ impl DeclassificationPipeline {
             };
             self.emit_stage_event(request, "policy_evaluation", outcome, error_code);
 
-            // Check emergency pathway
-            if request.is_emergency {
+            // Emergency may bypass route predicates, but never a missing or
+            // mismatched policy identity.
+            if request.is_emergency
+                && !matches!(&policy_result, PolicyEvalResult::PolicyUnavailable { .. })
+            {
                 return self.process_emergency(request, loss, signing_key);
             }
 
@@ -2630,18 +2633,20 @@ mod tests {
     // -- Additional functional / edge-case enrichment --
 
     #[test]
-    fn emergency_pathway_with_mismatched_extension() {
+    fn emergency_pathway_with_mismatched_extension_fails_closed() {
         let mut pipeline = DeclassificationPipeline::default();
         let policy = make_policy();
         let mut request = make_request("nonexistent", Label::Secret, Label::Public);
         request.extension_id = "wrong-ext".to_string();
         request.is_emergency = true;
 
-        // Extension mismatch => PolicyUnavailable, but emergency still fires
-        let result = pipeline.process(&request, &policy, &low_loss(), &test_key());
-        // Emergency pathway should bypass the PolicyUnavailable error
-        let receipt = result.expect("serde deserialization should succeed");
-        assert_eq!(receipt.decision, DeclassificationDecision::Allow);
+        let err = pipeline
+            .process(&request, &policy, &low_loss(), &test_key())
+            .unwrap_err();
+        assert!(matches!(err, PipelineError::PolicyUnavailable { .. }));
+        assert!(pipeline.receipts().is_empty());
+        assert_eq!(pipeline.stats().decision_count, 0);
+        assert_eq!(pipeline.stats().emergency_grants_active, 0);
     }
 
     #[test]

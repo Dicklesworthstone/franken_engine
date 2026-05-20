@@ -2800,48 +2800,6 @@ fn push_segment<'a>(
     out.push((trimmed_start, trimmed_end, trimmed));
 }
 
-#[allow(dead_code)]
-fn span_for_segment(
-    line_start_offset: usize,
-    line_no: u64,
-    start_in_line: usize,
-    end_in_line: usize,
-    source_label: &str,
-) -> ParseResult<SourceSpan> {
-    let start_offset = line_start_offset
-        .checked_add(start_in_line)
-        .ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::SourceTooLarge,
-                "source offset overflow",
-                source_label.to_string(),
-                None,
-            )
-        })
-        .and_then(|v| to_u64(v, source_label, None))?;
-    let end_offset = line_start_offset
-        .checked_add(end_in_line)
-        .ok_or_else(|| {
-            ParseError::new(
-                ParseErrorCode::SourceTooLarge,
-                "source offset overflow",
-                source_label.to_string(),
-                None,
-            )
-        })
-        .and_then(|v| to_u64(v, source_label, None))?;
-    let start_column = to_u64(start_in_line.saturating_add(1), source_label, None)?;
-    let end_column = to_u64(end_in_line.saturating_add(1), source_label, None)?;
-    Ok(SourceSpan::new(
-        start_offset,
-        end_offset,
-        line_no,
-        start_column,
-        line_no,
-        end_column,
-    ))
-}
-
 fn parse_statement(
     statement: &str,
     goal: ParseGoal,

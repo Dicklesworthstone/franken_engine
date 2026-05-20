@@ -1140,8 +1140,9 @@ Ownership boundary:
 - [x] Ship runtime-generic O(Delta) anti-entropy primitives for distributed revocation/checkpoint/evidence object sets (`crates/franken-engine/src/anti_entropy.rs`): IBLT sketches, peelable symmetric-difference decoding, and deterministic object-type ordering.
 - [x] Ship deterministic fallback primitives for unresolved anti-entropy sketches (`FallbackProtocol` in `crates/franken-engine/src/anti_entropy.rs`): sorted hash-list reconciliation, deterministic evidence fields, and unit coverage for fallback convergence.
 - [x] Publish a machine-verifiable anti-entropy repair artifact fixture (`examples/09_anti_entropy_trust_reconciliation/repair_artifact.json`) with a fail-closed verifier (`./examples/09_anti_entropy_trust_reconciliation/verify.sh`) that ties fallback events to sorted repair actions.
-- [ ] Integrate anti-entropy primitives into live revocation/checkpoint/evidence replication flows and emit proof-carrying recovery artifacts for degraded-mode repairs and rejected trust transitions.
-- [ ] Add phase gates for this track: deterministic replay pass, interleaving suite pass, conformance vectors pass, fuzz/adversarial pass, and runtime anti-entropy integration evidence.
+- [x] Add deterministic live anti-entropy integration evidence gate (`crates/franken-engine/tests/live_anti_entropy_integration_evidence_gate.rs`, `scripts/check_live_anti_entropy_integration_evidence.sh`) covering revocation/checkpoint/evidence object scope, unresolved IBLT fallback, verified recovery-artifact emission, deterministic replay, insertion-order interleaving stability, and adversarial peel-failure evidence.
+- [ ] Wire anti-entropy primitives into production revocation/checkpoint/evidence replication services and emit proof-carrying recovery artifacts for degraded-mode repairs and rejected trust transitions.
+- [ ] Add remaining phase gates for this track: broad interleaving suite pass, conformance vectors pass, fuzz/adversarial pass, and CI/release wiring for runtime anti-entropy integration evidence.
 
 ### 10.12 Frontier Programs Execution Track (9H Canonical Owners)
 - [ ] Define proof schema and signer model for optimizer activation witnesses (`opt_receipt`, `rollback_token`, `invariance_digest`).

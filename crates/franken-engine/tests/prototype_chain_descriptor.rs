@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use frankenengine_engine::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError, Value,
@@ -10,6 +11,7 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::{CapabilityTag, Ir3Instruction, Ir3Module, RegRange};
 
 const PROTOTYPE_DESCRIPTOR_TEST_BUDGET: u64 = 512;
+const PROXY_GET_FALLBACK_MAX_ELAPSED: Duration = Duration::from_secs(5);
 
 fn config() -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
@@ -841,7 +843,13 @@ fn prototype_conformance_descriptor_frozen_non_configurable() {
 
 #[test]
 fn prototype_conformance_proxy_get_no_trap_fallback() {
+    let started = Instant::now();
     run_conformance_case("proxy-get-no-trap-fallback");
+    assert!(
+        started.elapsed() < PROXY_GET_FALLBACK_MAX_ELAPSED,
+        "proxy-get-no-trap-fallback exceeded {:?}",
+        PROXY_GET_FALLBACK_MAX_ELAPSED
+    );
 }
 
 #[test]

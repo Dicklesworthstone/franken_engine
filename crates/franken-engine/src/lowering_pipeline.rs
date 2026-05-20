@@ -4645,12 +4645,18 @@ pub fn lower_ir2_to_ir3(
                         label_id: *label_id,
                     });
                 }
-                Ir1Op::Pop | Ir1Op::Nop => {
+                Ir1Op::Pop => {
+                    // Function-local Pop is stack cleanup, not script
+                    // completion. Register 0 is the first parameter in a
+                    // function frame, so mirroring the top-level completion
+                    // register behavior here corrupts destructuring params.
+                    let _ = pop_lowering_value(&mut fn_value_stack)?;
+                }
+                Ir1Op::Nop => {
                     let reg = pop_lowering_value(&mut fn_value_stack)?;
-                    if matches!(body_ir1, Ir1Op::Pop) && reg != 0 {
-                        ir3.instructions
-                            .push(Ir3Instruction::Move { dst: 0, src: reg });
-                    }
+                    ir3.instructions
+                        .push(Ir3Instruction::Move { dst: reg, src: reg });
+                    fn_value_stack.push(reg);
                 }
                 Ir1Op::AssignOp {
                     binding_id,

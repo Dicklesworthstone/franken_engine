@@ -35,6 +35,7 @@
     clippy::unnecessary_map_or
 )]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -2341,6 +2342,14 @@ pub struct InterpreterCore {
 }
 
 impl InterpreterCore {
+    fn scoped_constant_name(module: &Ir3Module, name_pool_index: u32) -> Cow<'_, str> {
+        module
+            .constant_pool
+            .get(name_pool_index as usize)
+            .map(|name| Cow::Borrowed(name.as_str()))
+            .unwrap_or_else(|| Cow::Owned(format!("__binding_{name_pool_index}")))
+    }
+
     /// Create a new interpreter core with the given configuration.
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
@@ -6623,22 +6632,18 @@ impl InterpreterCore {
                     dst,
                     name_pool_index,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
-                    let val = if let Some((_, binding)) = self.scope_chain.resolve(&name) {
+                    let name = Self::scoped_constant_name(module, name_pool_index);
+                    let val = if let Some((_, binding)) = self.scope_chain.resolve(name.as_ref()) {
                         if !binding.initialized {
                             return Err(InterpreterError::UninitializedBinding {
-                                name: name.clone(),
+                                name: name.into_owned(),
                             });
                         }
                         binding.value.clone()
                     } else if let Some(context) = self.active_cjs_context.as_ref() {
                         let (filename, dirname) =
                             self.cjs_filename_dirname(Some(&context.module_specifier));
-                        match name.as_str() {
+                        match name.as_ref() {
                             "__filename" => filename,
                             "__dirname" => dirname,
                             _ => Value::Undefined,
@@ -6653,20 +6658,19 @@ impl InterpreterCore {
                     src,
                     name_pool_index,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
                     let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
+                    if let Some(binding) = self.scope_chain.resolve_mut(name.as_ref()) {
                         if !binding.initialized {
-                            // perf: hot path - name is already owned, move instead of clone
-                            return Err(InterpreterError::UninitializedBinding { name });
+                            return Err(InterpreterError::UninitializedBinding {
+                                name: name.into_owned(),
+                            });
                         }
                         if binding.kind == BindingKind::Const {
-                            return Err(InterpreterError::ConstAssignment { name });
+                            return Err(InterpreterError::ConstAssignment {
+                                name: name.into_owned(),
+                            });
                         }
                         previous = Some(binding.clone());
                         binding.value = val;
@@ -6675,7 +6679,7 @@ impl InterpreterCore {
                     // (strict mode would throw, but baseline is lenient).
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
+                            && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
                         {
                             *binding = old_binding;
                         }
@@ -6688,21 +6692,17 @@ impl InterpreterCore {
                     name_pool_index,
                     src,
                 } => {
-                    let name = module
-                        .constant_pool
-                        .get(name_pool_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| format!("__binding_{name_pool_index}"));
+                    let name = Self::scoped_constant_name(module, name_pool_index);
                     let val = self.read_reg(src)?;
                     let mut previous = None;
-                    if let Some(binding) = self.scope_chain.resolve_mut(&name) {
+                    if let Some(binding) = self.scope_chain.resolve_mut(name.as_ref()) {
                         previous = Some(binding.clone());
                         binding.value = val;
                         binding.initialized = true;
                     }
                     if let Err(err) = self.sync_estimated_memory_bytes() {
                         if let Some(old_binding) = previous
-                            && let Some(binding) = self.scope_chain.resolve_mut(&name)
+                            && let Some(binding) = self.scope_chain.resolve_mut(name.as_ref())
                         {
                             *binding = old_binding;
                         }

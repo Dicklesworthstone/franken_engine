@@ -351,10 +351,7 @@ mod tests {
     /// every run (line-by-line below). Intentionally empty for the
     /// initial wave — if the first batch needs a waiver, file a bead and
     /// add it here.
-    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[(
-        "ES2020-7.2.15-positive-zero-strictly-equals-negative-zero",
-        "bd-bs81a",
-    )];
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[];
 
     fn must_tests(harness: &AbstractOperationsHarness) -> Vec<&AbstractOperationTest> {
         harness

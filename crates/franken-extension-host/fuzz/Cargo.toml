@@ -28,4 +28,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "decision_signing_key_byte_import"
+path = "fuzz_targets/decision_signing_key_byte_import.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

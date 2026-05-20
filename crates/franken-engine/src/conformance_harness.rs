@@ -1,4 +1,14 @@
-#![allow(dead_code)]
+// bd-jio9m audit: same disposition as version_matrix_lane.rs — the
+// file-level `#![allow(dead_code)]` was defensive cruft from before the
+// integration suite landed. The 36 public items here are reachable
+// from 4272 lines of tests across conformance_harness_integration.rs,
+// conformance_harness_enrichment_integration.rs,
+// conformance_harness_edge_cases.rs, conformance_assets.rs,
+// conformance_min_repro.rs, ifc_conformance_corpus.rs, and
+// ifc_release_gate.rs, plus the franken_ifc_conformance_runner
+// binary. Drop the blanket suppression; if any genuinely-private item
+// surfaces a warning, the right move is a targeted per-item
+// `#[allow(dead_code)]` (or, better, deletion).
 
 use std::collections::BTreeMap;
 use std::error::Error;

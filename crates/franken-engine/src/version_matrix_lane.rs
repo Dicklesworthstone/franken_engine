@@ -1,4 +1,17 @@
-#![allow(dead_code)]
+// bd-jio9m audit: the file-level `#![allow(dead_code)]` was defensive
+// scaffolding from before the integration suite landed. Every public
+// type (VersionSource, PinnedVersionCombination, BoundaryMatrixSpec,
+// MatrixLaneKind, VersionMatrixCell, VersionMatrixPlan, VersionSlots,
+// VersionMatrixError, MatrixOutcome, MatrixCellResult,
+// FailureScopeKind, MatrixFailureScope, MatrixHealthSummary) and every
+// public function (derive_version_slots, derive_version_matrix,
+// classify_failure_scopes, summarize_matrix_health) is now exercised
+// by tests/version_matrix_lane_integration.rs (1293 lines),
+// tests/version_matrix_lane_enrichment_integration.rs (451 lines),
+// tests/governance_scorecard*.rs, and src/governance_scorecard.rs. All
+// private helpers (ParsedVersion + parse/is_prerelease/bump_patch_next/
+// format, build_cell, parse_versions_from_tags) are reachable from the
+// public functions. The blanket suppression is no longer needed.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};

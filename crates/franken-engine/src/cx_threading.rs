@@ -263,7 +263,7 @@ impl HostcallDescriptor {
         self
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn effective_budget_cost_ms(&self) -> u64 {
         self.budget_cost_override_ms
             .unwrap_or(HOSTCALL_BUDGET_COST_MS)

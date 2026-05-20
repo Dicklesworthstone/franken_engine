@@ -854,7 +854,7 @@ impl LruReference {
         saturating_div_millionths(self.hits, total)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn total_ops(&self) -> u64 {
         self.hits + self.misses
     }
@@ -936,7 +936,7 @@ impl ClockReference {
         saturating_div_millionths(self.hits, total)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn total_ops(&self) -> u64 {
         self.hits + self.misses
     }

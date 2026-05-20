@@ -43,7 +43,7 @@ pub enum SchemaVersion {
 
 impl SchemaVersion {
     /// Encode as canonical bytes for schema hash input.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn as_bytes(self) -> &'static [u8] {
         match self {
             Self::V1 => b"self-replacement.v1",

@@ -54,10 +54,6 @@ const MAX_KERNELS: usize = 2048;
 /// Maximum sketch entries per kernel before compaction.
 const MAX_SKETCH_ENTRIES: usize = 16_384;
 
-/// Default evidence-thinning retention rate (10% = 100_000 millionths).
-#[allow(dead_code)]
-const DEFAULT_RETENTION_MILLIONTHS: u64 = 100_000;
-
 /// Calibration error threshold (5% = 50_000 millionths).
 const CALIBRATION_ERROR_THRESHOLD: u64 = 50_000;
 

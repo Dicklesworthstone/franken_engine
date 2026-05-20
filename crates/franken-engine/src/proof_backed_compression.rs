@@ -52,11 +52,6 @@ pub const COMPONENT: &str = "proof_backed_compression";
 /// One million — the unit for fixed-point millionths arithmetic.
 const MILLION: u64 = 1_000_000;
 
-/// Maximum compression ratio before the system suspects data corruption
-/// (millionths, 100_000 = 10x compression).
-#[allow(dead_code)]
-const MAX_PLAUSIBLE_RATIO_MILLIONTHS: u64 = 50_000;
-
 // ---------------------------------------------------------------------------
 // ArtifactDomain
 // ---------------------------------------------------------------------------

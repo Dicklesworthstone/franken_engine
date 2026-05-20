@@ -103,8 +103,11 @@ pub struct Profiler {
     instruction_times: BTreeMap<String, Duration>,
     memory_stats: MemoryStats,
     start_time: Instant,
-    #[allow(dead_code)]
+    /// Wall-clock instant of the most recent hotspot sample, or the profiler's
+    /// `start_time` if no sample has been taken yet. See `record_instruction`.
     last_sample_time: Instant,
+    /// Number of hotspot-sample boundaries crossed during this run.
+    sample_count: u64,
     instruction_counter: u64,
 }
 
@@ -125,6 +128,7 @@ impl Profiler {
             },
             start_time: now,
             last_sample_time: now,
+            sample_count: 0,
             instruction_counter: 0,
         }
     }
@@ -138,6 +142,34 @@ impl Profiler {
         let name = instruction_name(instruction);
         *self.instruction_counts.entry(name).or_insert(0) += 1;
         self.instruction_counter += 1;
+
+        // Hotspot sampling tick (bd-y9jj9): when hotspot profiling is on and
+        // the configured interval has elapsed in instructions, advance
+        // `last_sample_time`. Mirrors crates/franken-engine/src/profiling.rs.
+        if self.config.enable_hotspot_profiling
+            && self.config.hotspot_sampling_interval > 0
+            && self
+                .instruction_counter
+                .is_multiple_of(self.config.hotspot_sampling_interval)
+        {
+            self.last_sample_time = Instant::now();
+            self.sample_count = self.sample_count.saturating_add(1);
+        }
+    }
+
+    /// Wall-clock instant of the most recent hotspot sample tick.
+    pub fn last_sample_time(&self) -> Instant {
+        self.last_sample_time
+    }
+
+    /// Number of hotspot-sample boundaries crossed since `new`.
+    pub fn sample_count(&self) -> u64 {
+        self.sample_count
+    }
+
+    /// Elapsed wall-clock duration since the most recent hotspot sample tick.
+    pub fn time_since_last_sample(&self) -> Duration {
+        self.last_sample_time.elapsed()
     }
 
     /// Record timing for an instruction execution.

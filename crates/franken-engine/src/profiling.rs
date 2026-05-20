@@ -103,8 +103,13 @@ pub struct Profiler {
     instruction_times: BTreeMap<String, Duration>,
     memory_stats: MemoryStats,
     start_time: Instant,
-    #[allow(dead_code)]
+    /// Wall-clock instant of the most recent hotspot sample, or the profiler's
+    /// `start_time` if no sample has been taken yet. Advanced inside
+    /// `record_instruction` once `hotspot_sampling_interval` instructions have
+    /// been observed since the previous sample (or the start of the run).
     last_sample_time: Instant,
+    /// Number of hotspot-sample boundaries crossed during this run.
+    sample_count: u64,
     instruction_counter: u64,
 }
 
@@ -125,6 +130,7 @@ impl Profiler {
             },
             start_time: now,
             last_sample_time: now,
+            sample_count: 0,
             instruction_counter: 0,
         }
     }
@@ -138,6 +144,38 @@ impl Profiler {
         let name = instruction_name(instruction);
         *self.instruction_counts.entry(name).or_insert(0) += 1;
         self.instruction_counter += 1;
+
+        // Hotspot sampling tick: when hotspot profiling is on and the
+        // configured interval has elapsed (in instructions), advance
+        // `last_sample_time`. Callers can observe sampling activity via
+        // `sample_count()` / `last_sample_time()` / `time_since_last_sample()`.
+        if self.config.enable_hotspot_profiling
+            && self.config.hotspot_sampling_interval > 0
+            && self
+                .instruction_counter
+                .is_multiple_of(self.config.hotspot_sampling_interval)
+        {
+            self.last_sample_time = Instant::now();
+            self.sample_count = self.sample_count.saturating_add(1);
+        }
+    }
+
+    /// Wall-clock instant of the most recent hotspot sample tick. Returns the
+    /// profiler's start time when no sample has been taken yet.
+    pub fn last_sample_time(&self) -> Instant {
+        self.last_sample_time
+    }
+
+    /// Number of hotspot-sample boundaries crossed since `new`. Zero if
+    /// hotspot profiling is disabled, the configured interval is zero, or
+    /// fewer than `hotspot_sampling_interval` instructions have been recorded.
+    pub fn sample_count(&self) -> u64 {
+        self.sample_count
+    }
+
+    /// Elapsed wall-clock duration since the most recent hotspot sample tick.
+    pub fn time_since_last_sample(&self) -> Duration {
+        self.last_sample_time.elapsed()
     }
 
     /// Record timing for an instruction execution.
@@ -328,5 +366,85 @@ mod tests {
             rhs: 2,
         };
         assert_eq!(instruction_name(&add), "Add");
+    }
+
+    // bd-y9jj9: hotspot sampling was previously a vestigial config knob —
+    // `last_sample_time` was initialized but never updated and the
+    // `hotspot_sampling_interval` field gated nothing. record_instruction
+    // now advances the sample tick once every N instructions while hotspot
+    // profiling is enabled.
+
+    #[test]
+    fn hotspot_sampling_ticks_at_configured_interval() {
+        let mut config = ProfilingConfig::default();
+        config.hotspot_sampling_interval = 4;
+        let mut profiler = Profiler::new(config);
+        assert_eq!(profiler.sample_count(), 0);
+
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
+        // 3 instructions: still below the interval, no sample yet.
+        for _ in 0..3 {
+            profiler.record_instruction(&load_int);
+        }
+        assert_eq!(profiler.sample_count(), 0);
+
+        // 4th instruction crosses the boundary — exactly one sample.
+        profiler.record_instruction(&load_int);
+        assert_eq!(profiler.sample_count(), 1);
+
+        // 4 more instructions → second sample.
+        for _ in 0..4 {
+            profiler.record_instruction(&load_int);
+        }
+        assert_eq!(profiler.sample_count(), 2);
+    }
+
+    #[test]
+    fn hotspot_sampling_inactive_when_disabled() {
+        let mut config = ProfilingConfig::default();
+        config.enable_hotspot_profiling = false;
+        config.hotspot_sampling_interval = 1; // would otherwise tick every instruction
+        let mut profiler = Profiler::new(config);
+
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
+        for _ in 0..10 {
+            profiler.record_instruction(&load_int);
+        }
+        assert_eq!(profiler.sample_count(), 0);
+    }
+
+    #[test]
+    fn hotspot_sampling_inactive_when_interval_zero() {
+        // A zero interval is a misconfiguration — silently treating it as
+        // "sample never" is more useful than dividing-by-zero or sampling
+        // every instruction.
+        let mut config = ProfilingConfig::default();
+        config.hotspot_sampling_interval = 0;
+        let mut profiler = Profiler::new(config);
+
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
+        for _ in 0..10 {
+            profiler.record_instruction(&load_int);
+        }
+        assert_eq!(profiler.sample_count(), 0);
+    }
+
+    #[test]
+    fn last_sample_time_advances_with_samples() {
+        let mut config = ProfilingConfig::default();
+        config.hotspot_sampling_interval = 1; // sample every instruction
+        let mut profiler = Profiler::new(config);
+        let before = profiler.last_sample_time();
+
+        // Burn a small amount of wall time then take a sample.
+        std::thread::sleep(Duration::from_millis(2));
+        let load_int = Ir3Instruction::LoadInt { dst: 0, value: 1 };
+        profiler.record_instruction(&load_int);
+
+        let after = profiler.last_sample_time();
+        assert!(
+            after > before,
+            "last_sample_time must advance when a sample is taken"
+        );
     }
 }

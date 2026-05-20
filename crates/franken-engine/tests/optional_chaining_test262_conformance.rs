@@ -620,4 +620,175 @@ mod tests {
         assert!(summary.contains("Coverage by Category"));
         assert!(summary.contains("Test Results"));
     }
+
+    // -----------------------------------------------------------------------
+    // MUST-tier conformance gates (bd-ifk27)
+    //
+    // The other tests above check that the harness runs and produces a
+    // well-formed report — they do NOT gate on whether the engine actually
+    // implements the spec. A regression that drops every MUST-tier ES2020
+    // optional-chaining test to Fail would still leave them green, because
+    // `pass_rate_millionths <= 1_000_000` is trivially true for any pass rate.
+    //
+    // The tests below add real teeth:
+    //   1. A canonical-cases smoke gate that pins the highest-signal MUST
+    //      tests by id and refuses to ship if they regress.
+    //   2. A full MUST-tier regression gate driven by an EXPECTED_FAILING_MUSTS
+    //      allow-list. Empty by default; populated only with explicit bead
+    //      references when the engine has a known semantic gap. The gate
+    //      panics both ways: on unexpected failures AND on tests that start
+    //      passing without the list being updated.
+    // -----------------------------------------------------------------------
+
+    /// Canonical MUST-tier optional-chaining cases that the engine MUST keep
+    /// passing — the floor below which `?.` is fundamentally broken.
+    ///
+    /// Unlike EXPECTED_FAILING_MUSTS below, these entries have no waiver
+    /// mechanism. A regression here is a P0; the engine has lost the
+    /// short-circuit semantics that gate every other optional-chaining case.
+    ///
+    /// The list is intentionally narrow: it pins the null/undefined short-
+    /// circuit paths that currently work, not the resolution paths still
+    /// blocked on bd-itxl9. As bd-itxl9 is resolved, basic-property-access
+    /// and basic-bracket-access should be promoted here.
+    const CANONICAL_MUST_IDS: &[&str] = &[
+        "ES2020-12.3.2.1-property-access-null",
+        "ES2020-12.3.2.1-property-access-undefined",
+        "ES2020-12.3.2.1-bracket-access-null",
+        "ES2020-12.3.2.1-short-circuit",
+    ];
+
+    /// Allow-listed MUST-tier failures with their tracking bead references.
+    ///
+    /// Each entry MUST cite an open bead documenting the semantic gap. The
+    /// allow-list is "pinned": a test entering the list because of a real
+    /// regression will fail the next push (since the bead reference will be
+    /// missing); a test passing again will also fail (forcing list cleanup),
+    /// keeping the list honest.
+    ///
+    /// All current entries trace to bd-itxl9 (engine returns `undefined` for
+    /// basic `obj?.x` style expressions). They are NOT spec waivers — they are
+    /// known-bug acknowledgements; the goal is to drain this list as the
+    /// engine bug is fixed, not to grow it.
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[
+        ("ES2020-12.3.2.1-basic-property-access", "bd-itxl9"),
+        ("ES2020-12.3.2.1-basic-bracket-access", "bd-itxl9"),
+        ("ES2020-12.3.2.1-method-call-existing", "bd-itxl9"),
+        ("ES2020-12.3.2.1-method-call-null", "bd-itxl9"),
+        ("ES2020-12.3.2.1-chained-property", "bd-itxl9"),
+        ("ES2020-12.3.2.1-mixed-chaining", "bd-itxl9"),
+        ("ES2020-12.3.2.1-dynamic-property", "bd-itxl9"),
+        ("ES2020-12.3.2.1-optional-call", "bd-itxl9"),
+        ("ES2020-12.3.2.1-complex-bracket", "bd-itxl9"),
+        ("ES2020-12.3.2.1-number-property", "bd-itxl9"),
+        ("ES2020-12.3.2.1-parentheses-grouping", "bd-itxl9"),
+        ("ES2020-12.3.2.1-side-effects", "bd-itxl9"),
+    ];
+
+    fn must_tests(harness: &OptionalChainingHarness) -> Vec<&OptionalChainingTest> {
+        harness
+            .tests
+            .iter()
+            .filter(|t| t.requirement_level == RequirementLevel::Must)
+            .collect()
+    }
+
+    #[test]
+    fn optional_chaining_canonical_must_cases_pass() {
+        let harness = OptionalChainingHarness::new();
+        let report = harness.run_conformance(SecurityEpoch::from_raw(1));
+
+        // Sanity: every canonical id actually exists in the suite (guards
+        // against renames silently dropping coverage).
+        let suite_ids: std::collections::BTreeSet<&str> =
+            harness.tests.iter().map(|t| t.id.as_str()).collect();
+        for id in CANONICAL_MUST_IDS {
+            assert!(
+                suite_ids.contains(*id),
+                "canonical MUST id `{id}` is no longer present in the optional-chaining suite; \
+                 update CANONICAL_MUST_IDS or restore the test case",
+            );
+        }
+
+        let mut failures: Vec<String> = Vec::new();
+        for id in CANONICAL_MUST_IDS {
+            match report.test_results.get(*id) {
+                Some(OptionalChainingResult::Pass) => {}
+                Some(other) => failures.push(format!("{id}: {other:?}")),
+                None => failures.push(format!("{id}: <missing result>")),
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Canonical MUST-tier optional-chaining cases regressed ({} of {} failed):\n  {}\n\n\
+             These cases gate the ES2020 §12.3.2.1 baseline; any failure here means the engine \
+             no longer implements `?.` correctly for trivial inputs.",
+            failures.len(),
+            CANONICAL_MUST_IDS.len(),
+            failures.join("\n  "),
+        );
+    }
+
+    #[test]
+    fn optional_chaining_must_tier_has_no_unexpected_regressions() {
+        let harness = OptionalChainingHarness::new();
+        let report = harness.run_conformance(SecurityEpoch::from_raw(1));
+        let allow: std::collections::BTreeMap<&str, &str> =
+            EXPECTED_FAILING_MUSTS.iter().copied().collect();
+
+        // Every entry in EXPECTED_FAILING_MUSTS must reference a real MUST id
+        // in the suite — prevents stale waivers outliving the test.
+        let must_ids: std::collections::BTreeSet<&str> =
+            must_tests(&harness).iter().map(|t| t.id.as_str()).collect();
+        for (waived_id, bead) in allow.iter() {
+            assert!(
+                must_ids.contains(*waived_id),
+                "EXPECTED_FAILING_MUSTS waiver references unknown id `{waived_id}`; \
+                 remove the entry or update the test id",
+            );
+            assert!(
+                bead.starts_with("bd-") && bead.len() > 3,
+                "EXPECTED_FAILING_MUSTS entry for `{waived_id}` is missing a bead reference \
+                 (got `{bead}`); every waiver must point at a tracking bead",
+            );
+        }
+
+        let mut unexpected_failures: Vec<(String, OptionalChainingResult)> = Vec::new();
+        let mut unexpected_passes: Vec<String> = Vec::new();
+        for test in must_tests(&harness) {
+            let result = report
+                .test_results
+                .get(&test.id)
+                .cloned()
+                .unwrap_or_else(|| OptionalChainingResult::Error {
+                    error: "<missing result in report>".to_string(),
+                });
+            let waived = allow.contains_key(test.id.as_str());
+            match (&result, waived) {
+                (OptionalChainingResult::Pass, false) => {}
+                (OptionalChainingResult::Pass, true) => unexpected_passes.push(test.id.clone()),
+                (_, true) => {} // expected failure
+                (other, false) => unexpected_failures.push((test.id.clone(), other.clone())),
+            }
+        }
+
+        assert!(
+            unexpected_failures.is_empty(),
+            "{} MUST-tier optional-chaining test(s) regressed unexpectedly. Either fix the engine \
+             or add an explicit waiver to EXPECTED_FAILING_MUSTS with a tracking bead id:\n  {}",
+            unexpected_failures.len(),
+            unexpected_failures
+                .iter()
+                .map(|(id, r)| format!("{id}: {r:?}"))
+                .collect::<Vec<_>>()
+                .join("\n  "),
+        );
+        assert!(
+            unexpected_passes.is_empty(),
+            "{} MUST-tier test(s) waived in EXPECTED_FAILING_MUSTS now pass — remove their entries:\n  {}",
+            unexpected_passes.len(),
+            unexpected_passes.join("\n  "),
+        );
+    }
 }

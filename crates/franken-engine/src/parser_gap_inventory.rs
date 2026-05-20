@@ -507,7 +507,7 @@ impl UnsupportedSyntaxDiagnostic {
             severity: self.severity,
             message_template: self.message_template.clone(),
             source_label: self.source_label.clone(),
-            span: self.span.clone(),
+            span: self.span,
             budget_kind: None,
             witness: None,
         }

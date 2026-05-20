@@ -420,7 +420,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
                             result.add_error(SemanticError::new(
                                 code,
                                 Some(binding_name.to_string()),
-                                Some(import.span.clone()),
+                                Some(import.span),
                             ));
                         }
                     }
@@ -434,7 +434,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
                         result.add_error(SemanticError::new(
                             SemanticErrorCode::DuplicateDefaultExport,
                             None,
-                            Some(export.span.clone()),
+                            Some(export.span),
                         ));
                     }
                 }
@@ -455,7 +455,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
                         result.add_error(SemanticError::new(
                             SemanticErrorCode::ConstWithoutInitializer,
                             primary_name,
-                            Some(declarator.span.clone()),
+                            Some(declarator.span),
                         ));
                     }
 
@@ -467,7 +467,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
                                 result.add_error(SemanticError::new(
                                     code,
                                     Some(bound_name.to_string()),
-                                    Some(declarator.span.clone()),
+                                    Some(declarator.span),
                                 ));
                             }
                         }
@@ -847,7 +847,7 @@ pub fn lower_ir0_to_ir1(
                                     SemanticError::new(
                                         SemanticErrorCode::UndeclaredExportBinding,
                                         Some(local_name.clone()),
-                                        Some(export.span.clone()),
+                                        Some(export.span),
                                     ),
                                 ));
                             }
@@ -1647,7 +1647,7 @@ fn lower_statement_to_ir1_with_flow(
                             SemanticError::new(
                                 SemanticErrorCode::ConstWithoutInitializer,
                                 primary_name,
-                                Some(d.span.clone()),
+                                Some(d.span),
                             ),
                         ));
                     }
@@ -2059,7 +2059,7 @@ fn lower_statement_to_ir1_with_flow(
                 "FE-PARSER-GAP-WITH-0001",
                 "lower_ir0_to_ir1.with_statement_dynamic_scope",
                 "with statement lowering is not implemented; fail-closed parser-gap contract rejected dynamic-scope execution",
-                Some(with_stmt.span.clone()),
+                Some(with_stmt.span),
             ));
         }
         Statement::While(while_stmt) => {
@@ -2365,7 +2365,7 @@ fn lower_statement_to_ir1_with_flow(
                     SemanticError::new(
                         SemanticErrorCode::UndefinedLabel,
                         Some(label.clone()),
-                        Some(brk.span.clone()),
+                        Some(brk.span),
                     ),
                 ));
             }
@@ -2373,7 +2373,7 @@ fn lower_statement_to_ir1_with_flow(
                 LoweringPipelineError::SemanticViolation(SemanticError::new(
                     SemanticErrorCode::IllegalBreak,
                     None,
-                    Some(brk.span.clone()),
+                    Some(brk.span),
                 ))
             })?;
             ops.push(Ir1Op::Jump { label_id });
@@ -2384,7 +2384,7 @@ fn lower_statement_to_ir1_with_flow(
                     SemanticError::new(
                         SemanticErrorCode::UndefinedLabel,
                         Some(label.clone()),
-                        Some(cont.span.clone()),
+                        Some(cont.span),
                     ),
                 ));
             }
@@ -2392,7 +2392,7 @@ fn lower_statement_to_ir1_with_flow(
                 LoweringPipelineError::SemanticViolation(SemanticError::new(
                     SemanticErrorCode::IllegalContinue,
                     None,
-                    Some(cont.span.clone()),
+                    Some(cont.span),
                 ))
             })?;
             ops.push(Ir1Op::Jump { label_id });

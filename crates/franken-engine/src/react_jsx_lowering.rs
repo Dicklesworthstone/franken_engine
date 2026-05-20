@@ -736,7 +736,7 @@ impl<'a> LoweringCtx<'a> {
         if depth >= self.config.max_depth {
             return Err(ReactLoweringError::DepthExceeded {
                 max_depth: self.config.max_depth,
-                span: element.span.clone(),
+                span: element.span,
             });
         }
 
@@ -765,7 +765,7 @@ impl<'a> LoweringCtx<'a> {
                     "Namespaced element '{}' is non-standard in React",
                     element.name.to_string_repr()
                 ),
-                Some(element.span.clone()),
+                Some(element.span),
             );
         }
 
@@ -798,7 +798,7 @@ impl<'a> LoweringCtx<'a> {
             source_location,
             is_static_children,
             depth,
-            span: element.span.clone(),
+            span: element.span,
         })
     }
 
@@ -810,7 +810,7 @@ impl<'a> LoweringCtx<'a> {
         if depth >= self.config.max_depth {
             return Err(ReactLoweringError::DepthExceeded {
                 max_depth: self.config.max_depth,
-                span: fragment.span.clone(),
+                span: fragment.span,
             });
         }
 
@@ -843,7 +843,7 @@ impl<'a> LoweringCtx<'a> {
             source_location,
             is_static_children,
             depth,
-            span: fragment.span.clone(),
+            span: fragment.span,
         })
     }
 

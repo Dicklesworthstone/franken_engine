@@ -507,7 +507,7 @@ fn analyze_statement(
                 state.push_error(
                     StaticErrorKind::ImportInScript,
                     "import declarations are only allowed in module code",
-                    import.span.clone(),
+                    import.span,
                 );
             }
 
@@ -524,12 +524,12 @@ fn analyze_statement(
                             "import binding '{}' already declared at line {}",
                             binding_name, prev_span.start_line
                         ),
-                        import.span.clone(),
+                        import.span,
                     );
                 } else {
                     state
                         .import_bindings
-                        .insert(binding_name.clone(), import.span.clone());
+                        .insert(binding_name.clone(), import.span);
                 }
 
                 // Check for collision with lexical bindings
@@ -540,10 +540,10 @@ fn analyze_statement(
                             "identifier '{}' already declared as lexical binding at line {}",
                             binding_name, prev_span.start_line
                         ),
-                        import.span.clone(),
+                        import.span,
                     );
                 } else {
-                    lexical_names.insert(binding_name.clone(), import.span.clone());
+                    lexical_names.insert(binding_name.clone(), import.span);
                 }
 
                 let bid = state.alloc_binding_id();
@@ -562,7 +562,7 @@ fn analyze_statement(
                 state.push_error(
                     StaticErrorKind::ExportInScript,
                     "export declarations are only allowed in module code",
-                    export.span.clone(),
+                    export.span,
                 );
             }
 
@@ -574,7 +574,7 @@ fn analyze_statement(
                         state.push_error(
                             StaticErrorKind::DuplicateExport,
                             "duplicate default export",
-                            export.span.clone(),
+                            export.span,
                         );
                     }
                 }
@@ -588,7 +588,7 @@ fn analyze_statement(
                             state.push_error(
                                 StaticErrorKind::DuplicateExport,
                                 format!("duplicate export name '{}'", clause),
-                                export.span.clone(),
+                                export.span,
                             );
                         }
                     } else {
@@ -597,7 +597,7 @@ fn analyze_statement(
                                 state.push_error(
                                     StaticErrorKind::DuplicateExport,
                                     format!("duplicate export name '{}'", exported_name),
-                                    export.span.clone(),
+                                    export.span,
                                 );
                             }
                         }
@@ -736,7 +736,7 @@ fn analyze_statement(
                 state.push_error(
                     StaticErrorKind::ReturnOutsideFunction,
                     "return statement is not allowed outside a function",
-                    ret.span.clone(),
+                    ret.span,
                 );
             }
             if let Some(ref arg) = ret.argument {
@@ -765,7 +765,7 @@ fn analyze_statement(
                         scope: catch_scope_id,
                         kind: BindingKind::Let,
                     });
-                    catch_lex.insert(param.clone(), handler.span.clone());
+                    catch_lex.insert(param.clone(), handler.span);
                 }
                 for child in &handler.body.body {
                     analyze_statement(
@@ -813,7 +813,7 @@ fn analyze_statement(
                 state.push_error(
                     StaticErrorKind::BreakOutsideLoop,
                     "break statement must be inside a loop or switch",
-                    brk.span.clone(),
+                    brk.span,
                 );
             }
         }
@@ -823,7 +823,7 @@ fn analyze_statement(
                 state.push_error(
                     StaticErrorKind::ContinueOutsideLoop,
                     "continue statement must be inside a loop",
-                    cont.span.clone(),
+                    cont.span,
                 );
             }
         }
@@ -841,7 +841,7 @@ fn analyze_statement(
                 if let Some(prev_span) = var_names.get(name) {
                     let _ = prev_span;
                 }
-                var_names.insert(name.clone(), func.span.clone());
+                var_names.insert(name.clone(), func.span);
             }
             let func_scope_id = state.alloc_scope_id(scope_id.depth + 1);
             let mut func_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -855,7 +855,7 @@ fn analyze_statement(
                         state.push_error(
                             StaticErrorKind::DuplicateParameter,
                             format!("duplicate parameter name '{}'", bound_name),
-                            param.span.clone(),
+                            param.span,
                         );
                     }
                     let bid = state.alloc_binding_id();
@@ -913,10 +913,10 @@ fn analyze_statement(
                             "identifier '{}' has already been declared at line {}",
                             name, prev_span.start_line
                         ),
-                        class_decl.span.clone(),
+                        class_decl.span,
                     );
                 } else {
-                    lexical_names.insert(name.clone(), class_decl.span.clone());
+                    lexical_names.insert(name.clone(), class_decl.span);
                 }
 
                 if let Some(prev_span) = var_names.get(name) {
@@ -926,7 +926,7 @@ fn analyze_statement(
                             "class binding '{}' collides with var declaration at line {}",
                             name, prev_span.start_line
                         ),
-                        class_decl.span.clone(),
+                        class_decl.span,
                     );
                 }
 
@@ -937,7 +937,7 @@ fn analyze_statement(
                             "identifier '{}' already declared as import binding at line {}",
                             name, prev_span.start_line
                         ),
-                        class_decl.span.clone(),
+                        class_decl.span,
                     );
                 }
 
@@ -970,7 +970,7 @@ fn analyze_statement(
                             state.push_error(
                                 StaticErrorKind::DuplicateParameter,
                                 format!("duplicate parameter name '{}'", bound_name),
-                                param.span.clone(),
+                                param.span,
                             );
                         }
                         let bid = state.alloc_binding_id();
@@ -1148,7 +1148,7 @@ fn analyze_variable_declaration(
         state.push_error(
             StaticErrorKind::EmptyDeclaratorList,
             format!("{} declaration has no declarators", decl.kind.as_str()),
-            decl.span.clone(),
+            decl.span,
         );
         return;
     }
@@ -1184,7 +1184,7 @@ fn analyze_variable_declaration(
                     "const declaration '{}' must have an initializer",
                     primary_name
                 ),
-                declarator.span.clone(),
+                declarator.span,
             );
         }
 
@@ -1198,10 +1198,10 @@ fn analyze_variable_declaration(
                             "identifier '{}' has already been declared at line {}",
                             name, prev_span.start_line
                         ),
-                        declarator.span.clone(),
+                        declarator.span,
                     );
                 } else {
-                    lexical_names.insert((*name).to_string(), declarator.span.clone());
+                    lexical_names.insert((*name).to_string(), declarator.span);
                 }
 
                 // Check collision with var
@@ -1212,7 +1212,7 @@ fn analyze_variable_declaration(
                             "lexical binding '{}' collides with var declaration at line {}",
                             name, prev_span.start_line
                         ),
-                        declarator.span.clone(),
+                        declarator.span,
                     );
                 }
 
@@ -1224,7 +1224,7 @@ fn analyze_variable_declaration(
                             "identifier '{}' already declared as import binding at line {}",
                             name, prev_span.start_line
                         ),
-                        declarator.span.clone(),
+                        declarator.span,
                     );
                 }
             } else {
@@ -1236,10 +1236,10 @@ fn analyze_variable_declaration(
                             "var '{}' collides with lexical declaration at line {}",
                             name, prev_span.start_line
                         ),
-                        declarator.span.clone(),
+                        declarator.span,
                     );
                 }
-                var_names.insert((*name).to_string(), declarator.span.clone());
+                var_names.insert((*name).to_string(), declarator.span);
             }
 
             // Track const bindings for assignment-to-const detection
@@ -1426,7 +1426,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                             state.push_error(
                                 StaticErrorKind::DuplicateParameter,
                                 format!("duplicate parameter name '{}'", bound_name),
-                                param.span.clone(),
+                                param.span,
                             );
                         }
                     }
@@ -1672,7 +1672,7 @@ fn detect_tdz_violations(
                     state.push_error(
                         StaticErrorKind::TemporalDeadZone,
                         format!("cannot access '{}' before initialization", name),
-                        expr_stmt.span.clone(),
+                        expr_stmt.span,
                     );
                 }
             }
@@ -1691,7 +1691,7 @@ fn detect_tdz_violations(
                             state.push_error(
                                 StaticErrorKind::TemporalDeadZone,
                                 format!("cannot access '{}' before initialization", name),
-                                declarator.span.clone(),
+                                declarator.span,
                             );
                         }
                     }

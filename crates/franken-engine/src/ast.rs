@@ -38,7 +38,7 @@ impl ParseGoal {
 /// Source-span with byte offsets and one-based line/column markers.
 ///
 /// Pure POD (six `u64`, 48 bytes). `Copy` is derived so the dozens of
-/// `.span.clone()` sites across parser/lowering/diagnostic code become
+/// `.span` sites across parser/lowering/diagnostic code become
 /// byte-wise copies at the ABI level (bd-jtxmr).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSpan {

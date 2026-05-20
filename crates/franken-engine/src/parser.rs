@@ -601,7 +601,7 @@ pub fn normalize_parse_error(error: &ParseError) -> ParseDiagnosticEnvelope {
             .diagnostic_message_template(budget_kind)
             .to_string(),
         source_label: error.source_label.clone(),
-        span: error.span.clone(),
+        span: error.span,
         budget_kind,
         witness: error
             .witness
@@ -857,7 +857,7 @@ impl ParseEventIr {
                 outcome: "failure".to_string(),
                 error_code: Some(error.code),
                 statement_index: None,
-                span: error.span.clone(),
+                span: error.span,
                 payload_kind: Some("parse_diagnostic".to_string()),
                 payload_hash: Some(diagnostic_hash),
             },
@@ -933,7 +933,7 @@ impl ParseEventIr {
             outcome: "success".to_string(),
             error_code: None,
             statement_index: None,
-            span: Some(tree.span.clone()),
+            span: Some(tree.span),
             payload_kind: Some("syntax_tree".to_string()),
             payload_hash: Some(canonical_value_hash(&tree.canonical_value())),
         });

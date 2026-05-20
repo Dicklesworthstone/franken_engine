@@ -402,10 +402,8 @@ fn destructuring_full_matrix_matches_known_gap_set() {
         // Touch report so it isn't dead.
         let _ = &report.case_results;
     }
-    let observed: std::collections::BTreeSet<&str> = observed_detail
-        .iter()
-        .map(|(id, _)| id.as_str())
-        .collect();
+    let observed: std::collections::BTreeSet<&str> =
+        observed_detail.iter().map(|(id, _)| id.as_str()).collect();
     let expected: std::collections::BTreeSet<&str> =
         KNOWN_DESTRUCTURING_GAPS.iter().copied().collect();
     assert_eq!(

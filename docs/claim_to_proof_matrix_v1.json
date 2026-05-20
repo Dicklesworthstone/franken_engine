@@ -170,8 +170,8 @@
       "claim_text": "Unsupported surfaces and support contract language are explicitly documented.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 2297,
-        "end_line": 2297,
+        "start_line": 2307,
+        "end_line": 2307,
         "must_contain": "Unsupported-surface usage voids reproduction assistance"
       },
       "allowed_state": "observed",

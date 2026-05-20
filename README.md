@@ -217,7 +217,7 @@ This README is long because it serves several audiences. Below is a recommended 
 
 ## Architecture
 
-The core execution pipeline runs from source through a four-stage lowering into the baseline interpreter and orchestrator, with the evidence ledger collecting trace, decision, and audit records at every stage.
+The core execution pipeline runs from source through a four-stage lowering into the baseline interpreter and orchestrator, then materializes IR4/WitnessIR artifacts from the evidence stream. The evidence ledger collects trace, decision, and audit records at every stage.
 
 ```
 ┌──────────┐   ┌──────────┐   ┌──────────┐
@@ -246,6 +246,13 @@ The core execution pipeline runs from source through a four-stage lowering into 
                                   │      Evidence Ledger         │
                                   │      evidence_ledger.rs      │
                                   │  traces · decisions · audit  │
+                                  └──────────────┬───────────────┘
+                                                 │
+                                                 ▼
+                                  ┌──────────────────────────────┐
+                                  │       IR4 / WitnessIR        │
+                                  │      ir_contract.rs          │
+                                  │ replay · audit · proof links │
                                   └──────────────────────────────┘
 ```
 
@@ -321,6 +328,7 @@ Tracing one invocation end-to-end is the fastest way to see how every subsystem 
                  │     · symbol/scope resolution            │
                  │     · control-flow normalization (SSA)   │
                  │     · IR3 = register-allocated dispatch  │
+                 │     · IR4 is emitted after execution     │
                  └──────────────┬───────────────────────────┘
                                 ▼
                  ┌──────────────────────────────────────────┐
@@ -351,6 +359,7 @@ Tracing one invocation end-to-end is the fastest way to see how every subsystem 
                  │     · TraceEntry, DecisionRecord, audit  │
                  │     · length-prefixed canonical hashing  │
                  │     · chained content hashes             │
+                 │     · IR4 / WitnessIR artifact assembly  │
                  └──────────────┬───────────────────────────┘
                                 ▼
                  ┌──────────────────────────────────────────┐
@@ -367,7 +376,7 @@ The smoke wrapper `scripts/e2e/readme_cli_workflow_smoke.sh` exercises steps 1�
 
 ## IR Pipeline Deep-Dive
 
-The lowering pipeline progresses through four intermediate representations, each narrower than the last:
+The IR contract has five levels. IR0 through IR3 are the lowering and executable-program stages; IR4/WitnessIR is the post-execution artifact representation defined in `ir_contract.rs`, linked back to the executed IR3 program.
 
 | Stage | What it carries | Key invariants enforced here |
 |---|---|---|
@@ -375,6 +384,7 @@ The lowering pipeline progresses through four intermediate representations, each
 | **IR1 — normalized** | Scope/symbol tables resolved, declarations hoisted, identifiers bound. `Ir1Instruction` set includes the iterator-protocol opcodes (`ForInInit`, `ForInNext`, `ForOfInit`, `ForOfNext`, `IteratorClose`). | Static-semantics rules, TDZ correctness, declaration-before-use, named-export-clause validity. |
 | **IR2 — simplified** | Control-flow lowered into basic blocks with SSA-ish form (`Ir2Block`). Tagged-template expressions desugar to `Call` with a template-literal argument; exception lowering inserts `BeginTry` / `EnterCatch` / `EnterFinally` / `EndFinally`. | IFC join on derived data, exception unwinder shape, lowering-gap truth invariant (status fields cannot disagree). |
 | **IR3 — executable** | Register-allocated dispatch (`Ir3Instruction`) ready for the baseline interpreter. Includes the 19 expansion variants added in Wave 2 (`Mod`, `Exp`, `Lt`/`Lte`/`Gt`/`Gte`, `Eq`/`StrictEq`/`NotEq`/`StrictNotEq`, `BitAnd`/`BitOr`/`BitXor`, `Shl`/`Shr`/`Ushr`, `InstanceOf`, `InOp`, `Construct`) and TemplateLiteral emission. | Stack/register frame integrity, mnemonic completeness in `execution_orchestrator.rs`, baseline-interpreter match-arm exhaustiveness. |
+| **IR4 — WitnessIR** | Post-execution witness module (`Ir4Module`) carrying the executed IR3 hash, outcome, witness event trace, hostcall decisions, logical ticks, and active specialization IDs. | IR3 linkage, replay identity, monotonic witness-event ordering, proof/specialization consumption audit. |
 
 Two contracts guard the pipeline shape:
 
@@ -2191,7 +2201,7 @@ Project-specific jargon, defined once.
 | **HYPOTHESIS** | A matrix state meaning the claim is projected/optional, not validated. Required wording: includes the literal qualifier so the gate accepts the prose. |
 | **IDEA-WIZARD-N** | A named multi-stage initiative tracked as `bd-<id>` with children `.A` – `.F`. The tracker contains series II through XIII (12 waves total); X / XI / XII / XIII landed primarily in May 2026 and are the ones the current README cites. |
 | **IFC** | Information-flow control. Finite lattice `Public < Internal < Confidential < Secret < TopSecret` plus custom labels via `Label::level()`. |
-| **IR0 / IR1 / IR2 / IR3** | The four lowering stages: raw AST, scope-normalized, simplified control-flow / SSA-ish, register-allocated executable. |
+| **IR0 / IR1 / IR2 / IR3 / IR4** | The five-level IR contract: four lowering/execution stages (raw AST, scope-normalized, simplified control-flow / SSA-ish, register-allocated executable) plus IR4/WitnessIR post-execution evidence artifacts. |
 | **Lockstep oracle** | `frx_lockstep_oracle.rs`, the differential execution oracle that compares FrankenEngine output against Node and Bun on the same input. Currently SIMULATED for the differential surface. |
 | **Lowering gap inventory** | Catalogue of syntactic constructs and their lowering status. Bound by the `LOWERING_GAP_TRUTH_INVARIANT_V1` contract. |
 | **Metamorphic relations** | Equivalence properties that should be preserved by a transformation (whitespace invariance, AST roundtrip, semantic equivalence under refactor). `crates/franken-metamorphic/`. |

@@ -1938,7 +1938,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 
 | Surface | Command / path | What it shows |
 |---|---|---|
-| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 21 claims that are not yet OBSERVED (5 TARGETED, 7 HYPOTHESIS; 9 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
+| **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 21 claims that are not yet OBSERVED (4 TARGETED, 8 HYPOTHESIS; 9 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
 | **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION:`) + the *Persistence Surface & The Active DEVIATION* section | Currently exactly one: the typed-heavy persistence stores still routing through generic `storage_adapter.rs`. P0 follow-up bead filed. |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 

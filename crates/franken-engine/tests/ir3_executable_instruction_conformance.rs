@@ -594,6 +594,111 @@ fn cases() -> Vec<InstructionCase> {
             &[RuntimeCapability::Builtin],
             Value(Bool(true)),
         ),
+        // bd-2y8o4 expansion wave 1: broaden arithmetic/comparison/logic
+        // coverage beyond the single-case-per-op baseline so the matrix
+        // exercises every dispatcher arm a typical script reaches.
+        case(
+            "integer_subtraction_writes_destination",
+            ArithmeticAndCoercion,
+            "Sub must combine integer operands.",
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 50 },
+                Ir3Instruction::LoadInt { dst: 2, value: 8 },
+                Ir3Instruction::Sub {
+                    dst: 0,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            &[],
+            Value(Int(42)),
+        ),
+        case(
+            "integer_multiplication_writes_destination",
+            ArithmeticAndCoercion,
+            "Mul must multiply integer operands.",
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 6 },
+                Ir3Instruction::LoadInt { dst: 2, value: 7 },
+                Ir3Instruction::Mul {
+                    dst: 0,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            &[],
+            Value(Int(42)),
+        ),
+        case(
+            "unary_neg_flips_integer_sign",
+            ArithmeticAndCoercion,
+            "UnaryNeg must produce the additive inverse of an integer register.",
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 42 },
+                Ir3Instruction::UnaryNeg { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            &[],
+            Value(Int(-42)),
+        ),
+        case(
+            "logical_not_inverts_truthiness",
+            ArithmeticAndCoercion,
+            "LogicalNot must coerce via ToBoolean then invert (truthy int → false).",
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 7 },
+                Ir3Instruction::LogicalNot { dst: 0, src: 1 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            &[],
+            Value(Bool(false)),
+        ),
+        case(
+            "strict_equality_cross_type_is_false",
+            ArithmeticAndCoercion,
+            "StrictEq must return false when operand types differ, with no coercion.",
+            vec![
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::StrictEq {
+                    dst: 0,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                Ir3Instruction::Halt,
+            ],
+            &["1"],
+            &[],
+            Value(Bool(false)),
+        ),
+        case(
+            "jump_if_falsy_selects_branch_for_false",
+            ControlFlow,
+            "JumpIf-as-conditional must fall through for false cond (the falsy branch wins).",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 1,
+                    value: false,
+                },
+                Ir3Instruction::JumpIf { cond: 1, target: 4 },
+                Ir3Instruction::LoadInt { dst: 0, value: 11 },
+                Ir3Instruction::Jump { target: 5 },
+                Ir3Instruction::LoadInt { dst: 0, value: 99 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            &[],
+            Value(Int(11)),
+        ),
     ]
 }
 

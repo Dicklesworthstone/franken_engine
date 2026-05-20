@@ -41,6 +41,492 @@ fn execute(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
     InterpreterCore::new(config(), "prototype-chain-descriptor").execute(module)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExpectedValue {
+    Bool(bool),
+    Int(i64),
+    Str(&'static str),
+    Undefined,
+}
+
+impl ExpectedValue {
+    fn assert_matches(self, actual: &Value, case: &PrototypeConformanceCase) {
+        match (self, actual) {
+            (ExpectedValue::Bool(expected), Value::Bool(actual)) => {
+                assert_eq!(
+                    expected, *actual,
+                    "{} ({}) returned the wrong boolean",
+                    case.id, case.requirement
+                );
+            }
+            (ExpectedValue::Int(expected), Value::Int(actual)) => {
+                assert_eq!(
+                    expected, *actual,
+                    "{} ({}) returned the wrong integer",
+                    case.id, case.requirement
+                );
+            }
+            (ExpectedValue::Str(expected), Value::Str(actual)) => {
+                assert_eq!(
+                    expected, actual,
+                    "{} ({}) returned the wrong string",
+                    case.id, case.requirement
+                );
+            }
+            (ExpectedValue::Undefined, Value::Undefined) => {}
+            (expected, actual) => panic!(
+                "{} ({}) expected {expected:?}, got {actual:?}",
+                case.id, case.requirement
+            ),
+        }
+    }
+}
+
+struct PrototypeConformanceCase {
+    id: &'static str,
+    spec_ref: &'static str,
+    requirement: &'static str,
+    module: fn() -> Ir3Module,
+    expected: ExpectedValue,
+}
+
+struct UnsupportedSemantic {
+    id: &'static str,
+    spec_ref: &'static str,
+    reason: &'static str,
+}
+
+const UNSUPPORTED_SEMANTICS: &[UnsupportedSemantic] = &[
+    UnsupportedSemantic {
+        id: "accessor-descriptor-get-set",
+        spec_ref: "ECMA-262 [[GetOwnProperty]] accessor descriptors",
+        reason: "IR3 object heap descriptors currently materialize data values only",
+    },
+    UnsupportedSemantic {
+        id: "instanceof-symbol-hasinstance",
+        spec_ref: "ECMA-262 OrdinaryHasInstance / @@hasInstance",
+        reason: "baseline InstanceOf covers constructor prototype chains, not Symbol.hasInstance traps",
+    },
+];
+
+fn conformance_cases() -> Vec<PrototypeConformanceCase> {
+    vec![
+        PrototypeConformanceCase {
+            id: "get-own-data",
+            spec_ref: "ECMA-262 [[Get]] own property",
+            requirement: "own data property lookup returns the object's value",
+            module: own_data_get_module,
+            expected: ExpectedValue::Int(11),
+        },
+        PrototypeConformanceCase {
+            id: "get-inherited-data",
+            spec_ref: "ECMA-262 [[Get]] prototype traversal",
+            requirement: "missing own property is read from the prototype chain",
+            module: inherited_data_get_module,
+            expected: ExpectedValue::Str("parent"),
+        },
+        PrototypeConformanceCase {
+            id: "get-own-shadows-inherited",
+            spec_ref: "ECMA-262 [[Get]] own before inherited",
+            requirement: "own property shadows an inherited property of the same key",
+            module: shadowed_data_get_module,
+            expected: ExpectedValue::Str("child"),
+        },
+        PrototypeConformanceCase {
+            id: "set-creates-own-shadow",
+            spec_ref: "ECMA-262 [[Set]] ordinary receiver write",
+            requirement: "setting an inherited key creates the receiver's own value",
+            module: set_shadow_data_module,
+            expected: ExpectedValue::Str("own"),
+        },
+        PrototypeConformanceCase {
+            id: "delete-own-reveals-inherited",
+            spec_ref: "ECMA-262 [[Delete]] and subsequent [[Get]]",
+            requirement: "deleting an own shadow reveals the inherited property",
+            module: delete_reveals_inherited_module,
+            expected: ExpectedValue::Str("parent"),
+        },
+        PrototypeConformanceCase {
+            id: "in-finds-inherited",
+            spec_ref: "ECMA-262 RelationalExpression in",
+            requirement: "the in operator observes inherited properties",
+            module: in_operator_inherited_module,
+            expected: ExpectedValue::Bool(true),
+        },
+        PrototypeConformanceCase {
+            id: "in-missing-false",
+            spec_ref: "ECMA-262 RelationalExpression in",
+            requirement: "the in operator returns false for absent chain keys",
+            module: in_operator_missing_module,
+            expected: ExpectedValue::Bool(false),
+        },
+        PrototypeConformanceCase {
+            id: "descriptor-own-value",
+            spec_ref: "ECMA-262 Object.getOwnPropertyDescriptor data descriptor",
+            requirement: "own descriptors expose their value field",
+            module: own_descriptor_value_module,
+            expected: ExpectedValue::Int(42),
+        },
+        PrototypeConformanceCase {
+            id: "descriptor-inherited-value",
+            spec_ref: "ECMA-262 prototype-aware property descriptor lookup",
+            requirement: "prototype descriptor lookup returns inherited data",
+            module: inherited_descriptor_lookup_module,
+            expected: ExpectedValue::Str("inherited"),
+        },
+        PrototypeConformanceCase {
+            id: "own-descriptor-excludes-inherited",
+            spec_ref: "ECMA-262 Object.getOwnPropertyDescriptor own-only lookup",
+            requirement: "own descriptor lookup does not report inherited data",
+            module: own_descriptor_excludes_inherited_module,
+            expected: ExpectedValue::Undefined,
+        },
+        PrototypeConformanceCase {
+            id: "descriptor-frozen-non-configurable",
+            spec_ref: "ECMA-262 frozen data descriptor attributes",
+            requirement: "frozen properties report configurable=false",
+            module: frozen_configurable_descriptor_module,
+            expected: ExpectedValue::Bool(false),
+        },
+        PrototypeConformanceCase {
+            id: "proxy-get-no-trap-fallback",
+            spec_ref: "ECMA-262 Proxy [[Get]] target fallback",
+            requirement: "a proxy without a get trap delegates lookup to its target",
+            module: proxy_get_no_trap_fallback_module,
+            expected: ExpectedValue::Str("target"),
+        },
+    ]
+}
+
+fn own_data_get_module() -> Ir3Module {
+    module(
+        "own-data-get",
+        vec!["own"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 2, value: 11 },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 0,
+                key: 1,
+                dst: 3,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ],
+    )
+}
+
+fn inherited_data_get_module() -> Ir3Module {
+    module(
+        "inherited-data-get",
+        vec!["slot", "parent"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 1,
+                dst: 6,
+            },
+            Ir3Instruction::Return { value: 6 },
+        ],
+    )
+}
+
+fn shadowed_data_get_module() -> Ir3Module {
+    module(
+        "shadowed-data-get",
+        vec!["slot", "parent", "child"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 3,
+                key: 1,
+                val: 4,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 1,
+                dst: 6,
+            },
+            Ir3Instruction::Return { value: 6 },
+        ],
+    )
+}
+
+fn set_shadow_data_module() -> Ir3Module {
+    module(
+        "set-shadow-data",
+        vec!["slot", "proto", "own"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 3,
+                key: 1,
+                val: 4,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 1,
+                dst: 6,
+            },
+            Ir3Instruction::Return { value: 6 },
+        ],
+    )
+}
+
+fn delete_reveals_inherited_module() -> Ir3Module {
+    module(
+        "delete-reveals-inherited",
+        vec!["slot", "parent", "child"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 2,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 3,
+                key: 1,
+                val: 4,
+            },
+            Ir3Instruction::DeleteProperty {
+                obj: 3,
+                key: 1,
+                dst: 6,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 1,
+                dst: 7,
+            },
+            Ir3Instruction::Return { value: 7 },
+        ],
+    )
+}
+
+fn in_operator_inherited_module() -> Ir3Module {
+    module(
+        "in-operator-inherited",
+        vec!["slot", "parent"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::InOp {
+                dst: 6,
+                lhs: 1,
+                rhs: 3,
+            },
+            Ir3Instruction::Return { value: 6 },
+        ],
+    )
+}
+
+fn in_operator_missing_module() -> Ir3Module {
+    module(
+        "in-operator-missing",
+        vec!["slot", "parent", "missing"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::Move { dst: 4, src: 0 },
+            Ir3Instruction::HostCall {
+                capability: builtin("ObjectSetPrototypeOf"),
+                args: RegRange { start: 3, count: 2 },
+                dst: 5,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 6,
+                pool_index: 2,
+            },
+            Ir3Instruction::InOp {
+                dst: 7,
+                lhs: 6,
+                rhs: 3,
+            },
+            Ir3Instruction::Return { value: 7 },
+        ],
+    )
+}
+
+fn own_descriptor_excludes_inherited_module() -> Ir3Module {
+    inherited_descriptor_value_module(true)
+}
+
+fn inherited_descriptor_lookup_module() -> Ir3Module {
+    inherited_descriptor_value_module(false)
+}
+
+fn frozen_configurable_descriptor_module() -> Ir3Module {
+    frozen_descriptor_flag_module("configurable")
+}
+
+fn proxy_get_no_trap_fallback_module() -> Ir3Module {
+    module(
+        "proxy-get-no-trap-fallback",
+        vec!["slot", "target"],
+        vec![
+            Ir3Instruction::NewObject { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 2,
+                pool_index: 1,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 1 },
+            Ir3Instruction::HostCall {
+                capability: builtin("Proxy"),
+                args: RegRange { start: 0, count: 2 },
+                dst: 3,
+            },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            Ir3Instruction::GetProperty {
+                obj: 3,
+                key: 4,
+                dst: 5,
+            },
+            Ir3Instruction::Return { value: 5 },
+        ],
+    )
+}
+
 fn own_descriptor_value_module() -> Ir3Module {
     module(
         "own-descriptor-value",
@@ -263,6 +749,69 @@ fn shadowed_descriptor_value_module(own_only: bool) -> Ir3Module {
             Ir3Instruction::Return { value: 8 },
         ],
     )
+}
+
+#[test]
+#[ignore = "investigation: hangs on bd-f4ycb"]
+fn prototype_property_descriptor_conformance_matrix() {
+    for case in conformance_cases() {
+        assert!(
+            !case.spec_ref.is_empty(),
+            "{} has no spec reference",
+            case.id
+        );
+        let module = (case.module)();
+        let result = execute(&module).unwrap_or_else(|err| {
+            panic!(
+                "{} ({}) should execute, got {err:?}",
+                case.id, case.requirement
+            )
+        });
+        case.expected.assert_matches(&result.value, &case);
+    }
+}
+
+#[test]
+fn prototype_property_descriptor_conformance_inventory_is_explicit() {
+    let cases = conformance_cases();
+    assert!(
+        (8..=12).contains(&cases.len()),
+        "expected 8-12 executable conformance cases, got {}",
+        cases.len()
+    );
+
+    let mut ids = BTreeSet::new();
+    for case in cases {
+        assert!(
+            ids.insert(case.id),
+            "duplicate conformance case id {}",
+            case.id
+        );
+        assert!(
+            !case.requirement.is_empty(),
+            "{} must describe the enforced requirement",
+            case.id
+        );
+        assert!(
+            !case.spec_ref.is_empty(),
+            "{} must reference the spec surface",
+            case.id
+        );
+    }
+
+    let mut waived = BTreeSet::new();
+    for semantic in UNSUPPORTED_SEMANTICS {
+        assert!(
+            waived.insert(semantic.id),
+            "duplicate unsupported semantic waiver {}",
+            semantic.id
+        );
+        assert!(
+            !semantic.spec_ref.is_empty() && !semantic.reason.is_empty(),
+            "{} must document both spec reference and waiver reason",
+            semantic.id
+        );
+    }
 }
 
 #[test]

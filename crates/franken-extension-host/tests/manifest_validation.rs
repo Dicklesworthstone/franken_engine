@@ -1,12 +1,13 @@
 use ed25519_dalek::{Signer, SigningKey};
 use frankenengine_extension_host::{
-    CURRENT_ENGINE_VERSION, Capability, ExtensionManifest, MAX_NAME_LEN, ManifestValidationContext,
-    ManifestValidationError, canonical_manifest_json, compute_content_hash, validate_manifest,
-    validate_manifest_with_context,
+    CURRENT_ENGINE_VERSION, Capability, ExtensionHostConfig, ExtensionManifest, MAX_NAME_LEN,
+    ManifestValidationContext, ManifestValidationError, canonical_manifest_json,
+    compute_content_hash, validate_manifest, validate_manifest_with_config,
+    validate_manifest_with_context_and_config,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn capability_set(values: &[Capability]) -> BTreeSet<Capability> {
     values.iter().copied().collect()
@@ -62,6 +63,17 @@ fn with_hash(mut manifest: ExtensionManifest) -> ExtensionManifest {
     manifest
 }
 
+fn trusted_config_for(manifest: &ExtensionManifest) -> ExtensionHostConfig {
+    let trust_chain_ref = manifest
+        .trust_chain_ref
+        .clone()
+        .expect("signed test manifest has trust chain ref");
+    ExtensionHostConfig {
+        trusted_publisher_keys: BTreeMap::from([(trust_chain_ref.clone(), trust_chain_ref)]),
+        ..ExtensionHostConfig::default()
+    }
+}
+
 fn create_test_manifest(
     name: &str,
     version: &str,
@@ -110,7 +122,8 @@ fn json_manifest_loads_and_validates() {
         "dist/index.js",
         &[Capability::FsRead, Capability::FsWrite],
     );
-    assert_eq!(validate_manifest(&manifest), Ok(()));
+    let config = trusted_config_for(&manifest);
+    assert_eq!(validate_manifest_with_config(&manifest, &config), Ok(()));
 
     let context = ManifestValidationContext::new(
         "trace-json",
@@ -118,7 +131,7 @@ fn json_manifest_loads_and_validates() {
         "policy-json",
         &manifest.name,
     );
-    let report = validate_manifest_with_context(&manifest, &context);
+    let report = validate_manifest_with_context_and_config(&manifest, &context, &config);
     assert_eq!(report.error, None);
     assert_eq!(report.event.outcome, "pass");
     assert_eq!(report.event.error_code, None);
@@ -133,7 +146,10 @@ fn toml_manifest_loads_and_validates() {
         "dist/index.js",
         &[Capability::FsRead, Capability::NetClient],
     );
-    assert_eq!(validate_manifest(&manifest), Ok(()));
+    assert_eq!(
+        validate_manifest_with_config(&manifest, &trusted_config_for(&manifest)),
+        Ok(())
+    );
 
     // Test TOML serialization round-trip
     let toml_string = toml::to_string(&manifest).expect("toml serialize");

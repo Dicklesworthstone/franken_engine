@@ -52,6 +52,12 @@ pub struct ExtensionHostConfig {
     /// This must stay false for production validation so unsigned manifests do
     /// not silently bypass supply-chain provenance checks.
     pub allow_development_trust: bool,
+    /// Trusted publisher keys resolved by `trust_chain_ref`.
+    ///
+    /// Signed supply-chain manifests must reference an entry in this map. The
+    /// map value is the hex-encoded Ed25519 verification key used to verify the
+    /// publisher signature. Production defaults intentionally trust no roots.
+    pub trusted_publisher_keys: BTreeMap<String, String>,
 }
 
 impl Default for ExtensionHostConfig {
@@ -62,6 +68,7 @@ impl Default for ExtensionHostConfig {
             max_entrypoint_len: MAX_ENTRYPOINT_LEN,
             max_trust_chain_ref_len: MAX_TRUST_CHAIN_REF_LEN,
             allow_development_trust: false,
+            trusted_publisher_keys: BTreeMap::new(),
         }
     }
 }
@@ -195,6 +202,7 @@ pub enum ManifestValidationError {
     CanonicalSerialization(String),
     InvalidPublisherSignature,
     DevelopmentTrustDisabled,
+    UntrustedTrustChainRef,
 }
 
 impl ManifestValidationError {
@@ -212,6 +220,7 @@ impl ManifestValidationError {
             Self::FieldTooLong { .. } => "FE-MANIFEST-0010",
             Self::InvalidPublisherSignature => "FE-MANIFEST-0011",
             Self::DevelopmentTrustDisabled => "FE-MANIFEST-0012",
+            Self::UntrustedTrustChainRef => "FE-MANIFEST-0013",
         }
     }
 
@@ -250,6 +259,9 @@ impl ManifestValidationError {
             }
             Self::DevelopmentTrustDisabled => {
                 "development trust manifests require explicit policy override".to_string()
+            }
+            Self::UntrustedTrustChainRef => {
+                "trust_chain_ref does not resolve to a configured trusted publisher key".to_string()
             }
         }
     }
@@ -769,14 +781,27 @@ pub fn validate_provenance_with_config(
             // Verify the publisher signature cryptographically
             let signature_bytes = manifest.publisher_signature.as_ref().unwrap();
             let trust_chain_ref = manifest.trust_chain_ref.as_ref().unwrap().trim();
+            let trusted_publisher_key = resolve_trusted_publisher_key(config, trust_chain_ref)?;
 
-            if !verify_manifest_signature(manifest, trust_chain_ref, signature_bytes) {
+            if !verify_manifest_signature(manifest, trusted_publisher_key, signature_bytes) {
                 return Err(ManifestValidationError::InvalidPublisherSignature);
             }
         }
     }
 
     Ok(())
+}
+
+fn resolve_trusted_publisher_key<'a>(
+    config: &'a ExtensionHostConfig,
+    trust_chain_ref: &str,
+) -> Result<&'a str, ManifestValidationError> {
+    config
+        .trusted_publisher_keys
+        .get(trust_chain_ref)
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+        .ok_or(ManifestValidationError::UntrustedTrustChainRef)
 }
 
 fn validate_manifest_field_lengths(
@@ -6817,6 +6842,23 @@ mod tests {
         })
     }
 
+    fn trusted_config_for(manifest: &ExtensionManifest) -> ExtensionHostConfig {
+        let trust_chain_ref = manifest
+            .trust_chain_ref
+            .clone()
+            .expect("signed test manifest has trust chain ref");
+        ExtensionHostConfig {
+            trusted_publisher_keys: BTreeMap::from([(trust_chain_ref.clone(), trust_chain_ref)]),
+            ..ExtensionHostConfig::default()
+        }
+    }
+
+    fn validate_trusted_test_manifest(
+        manifest: &ExtensionManifest,
+    ) -> Result<(), ManifestValidationError> {
+        validate_manifest_with_config(manifest, &trusted_config_for(manifest))
+    }
+
     fn development_manifest(capabilities: &[Capability]) -> ExtensionManifest {
         let mut manifest = ExtensionManifest {
             name: "dev-ext".to_string(),
@@ -6835,7 +6877,16 @@ mod tests {
     #[test]
     fn signed_manifest_validates_with_matching_hash() {
         let manifest = signed_manifest(&[Capability::FsRead, Capability::FsWrite]);
-        assert_eq!(validate_manifest(&manifest), Ok(()));
+        assert_eq!(validate_trusted_test_manifest(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn signed_manifest_rejects_self_signed_without_configured_trust_root() {
+        let manifest = signed_manifest(&[Capability::FsRead]);
+        assert_eq!(
+            validate_manifest(&manifest),
+            Err(ManifestValidationError::UntrustedTrustChainRef)
+        );
     }
 
     #[test]
@@ -6865,7 +6916,7 @@ mod tests {
         let mut manifest = signed_manifest(&[Capability::FsRead]);
         manifest.publisher_signature.as_mut().expect("signature")[0] ^= 0xFF;
         assert_eq!(
-            validate_manifest(&manifest),
+            validate_trusted_test_manifest(&manifest),
             Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
@@ -6879,7 +6930,7 @@ mod tests {
         // Replace valid Ed25519 signature with fake short bytes
         manifest.publisher_signature = Some(vec![1, 2, 3, 4]);
         assert_eq!(
-            validate_manifest(&manifest),
+            validate_trusted_test_manifest(&manifest),
             Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
@@ -6893,7 +6944,7 @@ mod tests {
         manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
         assert_eq!(
             validate_manifest(&manifest),
-            Err(ManifestValidationError::InvalidPublisherSignature)
+            Err(ManifestValidationError::UntrustedTrustChainRef)
         );
     }
 
@@ -6903,7 +6954,7 @@ mod tests {
         // Replace with wrong-length signature (not 64 bytes)
         manifest.publisher_signature = Some(vec![0xFF; 32]);
         assert_eq!(
-            validate_manifest(&manifest),
+            validate_trusted_test_manifest(&manifest),
             Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
@@ -6921,7 +6972,7 @@ mod tests {
         contaminated.trust_chain_ref = manifest_a.trust_chain_ref.clone();
 
         assert_eq!(
-            validate_manifest(&contaminated),
+            validate_manifest_with_config(&contaminated, &trusted_config_for(&manifest_a)),
             Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
@@ -6988,7 +7039,7 @@ mod tests {
 
         // Should fail verification due to domain mismatch
         assert_eq!(
-            validate_manifest(&manifest_with_wrong_domain),
+            validate_trusted_test_manifest(&manifest_with_wrong_domain),
             Err(ManifestValidationError::InvalidPublisherSignature)
         );
     }
@@ -6999,7 +7050,7 @@ mod tests {
         let manifest = signed_manifest(&[Capability::FsRead]);
 
         // Should pass validation with correct domain-separated signature
-        assert_eq!(validate_manifest(&manifest), Ok(()));
+        assert_eq!(validate_trusted_test_manifest(&manifest), Ok(()));
     }
 
     #[test]
@@ -7082,7 +7133,7 @@ mod tests {
         manifest = with_test_signed_supply_chain_provenance(manifest);
         let config = ExtensionHostConfig {
             max_name_len: MAX_NAME_LEN + 1,
-            ..ExtensionHostConfig::default()
+            ..trusted_config_for(&manifest)
         };
 
         assert_eq!(validate_manifest_with_config(&manifest, &config), Ok(()));
@@ -7130,7 +7181,11 @@ mod tests {
             "weather-ext",
         );
         let manifest = signed_manifest(&[Capability::FsRead, Capability::FsWrite]);
-        let report = validate_manifest_with_context(&manifest, &context);
+        let report = validate_manifest_with_context_and_config(
+            &manifest,
+            &context,
+            &trusted_config_for(&manifest),
+        );
 
         assert_eq!(report.error, None);
         assert_eq!(report.event.outcome, "pass");
@@ -10553,6 +10608,10 @@ mod enrichment_tests {
         assert_eq!(
             ManifestValidationError::DevelopmentTrustDisabled.error_code(),
             "FE-MANIFEST-0012"
+        );
+        assert_eq!(
+            ManifestValidationError::UntrustedTrustChainRef.error_code(),
+            "FE-MANIFEST-0013"
         );
     }
 

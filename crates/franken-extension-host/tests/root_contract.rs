@@ -16,7 +16,8 @@ use frankenengine_extension_host::{
     ExtensionManifest, ExtensionState, FlowLabel, HostcallDispatcher, HostcallSinkPolicy,
     LifecycleTransition, MAX_DELEGATE_LIFETIME_NS, MAX_NAME_LEN, ManifestValidationContext,
     ResourceBudget, allowed_lifecycle_transitions, compute_content_hash, lifecycle_target_state,
-    validate_manifest, validate_manifest_with_context, with_computed_content_hash,
+    validate_manifest_with_config, validate_manifest_with_context_and_config,
+    with_computed_content_hash,
 };
 use serde::{Deserialize, Serialize};
 
@@ -246,6 +247,17 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     output
 }
 
+fn trusted_config_for(manifest: &ExtensionManifest) -> ExtensionHostConfig {
+    let trust_chain_ref = manifest
+        .trust_chain_ref
+        .clone()
+        .expect("signed test manifest has trust chain ref");
+    ExtensionHostConfig {
+        trusted_publisher_keys: BTreeMap::from([(trust_chain_ref.clone(), trust_chain_ref)]),
+        ..ExtensionHostConfig::default()
+    }
+}
+
 fn artifact_dir() -> Option<PathBuf> {
     env::var("EXTENSION_HOST_ROOT_CONTRACT_ARTIFACT_DIR")
         .ok()
@@ -361,11 +373,15 @@ fn extension_host_root_required_exports_are_live_and_compilable() {
     );
 
     let manifest = with_computed_content_hash(base_manifest()).expect("computed content hash");
-    assert_eq!(validate_manifest(&manifest), Ok(()));
+    let manifest_config = trusted_config_for(&manifest);
+    assert_eq!(
+        validate_manifest_with_config(&manifest, &manifest_config),
+        Ok(())
+    );
 
     let context =
         ManifestValidationContext::new(TRACE_ID, DECISION_ID, CONTRACT_POLICY_ID, &manifest.name);
-    let report = validate_manifest_with_context(&manifest, &context);
+    let report = validate_manifest_with_context_and_config(&manifest, &context, &manifest_config);
     assert_eq!(report.error, None);
     assert_eq!(report.event.outcome, "pass");
     assert_eq!(

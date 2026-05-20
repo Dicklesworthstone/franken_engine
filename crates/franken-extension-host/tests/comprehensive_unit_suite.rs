@@ -5,7 +5,7 @@
 
 use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_extension_host::*;
 
@@ -17,6 +17,17 @@ use frankenengine_extension_host::*;
 /// Uses proper Ed25519 signatures instead of fake provenance
 fn valid_manifest() -> ExtensionManifest {
     create_proper_signed_manifest("test-extension", "1.0.0", "main.js", &[Capability::FsRead])
+}
+
+fn trusted_config_for(manifest: &ExtensionManifest) -> ExtensionHostConfig {
+    let trust_chain_ref = manifest
+        .trust_chain_ref
+        .clone()
+        .expect("signed test manifest has trust chain ref");
+    ExtensionHostConfig {
+        trusted_publisher_keys: BTreeMap::from([(trust_chain_ref.clone(), trust_chain_ref)]),
+        ..ExtensionHostConfig::default()
+    }
 }
 
 /// Create development manifest for tests that specifically need unsigned manifests
@@ -248,7 +259,7 @@ fn manifest_trust_chain_ref_too_long() {
 #[test]
 fn manifest_valid_passes() {
     let m = valid_manifest();
-    assert!(validate_manifest(&m).is_ok());
+    assert!(validate_manifest_with_config(&m, &trusted_config_for(&m)).is_ok());
 }
 
 // ---------------------------------------------------------------------------

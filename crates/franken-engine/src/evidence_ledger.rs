@@ -24,6 +24,9 @@ use crate::hindsight_boundary_capture::{
     BoundaryCaptureRecord, BoundaryCaptureSession, BoundaryContext,
 };
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+};
 
 pub use crate::control_plane::SchemaVersion;
 
@@ -50,6 +53,18 @@ impl SchemaVersionExt for SchemaVersion {
 
 pub fn current_schema_version() -> SchemaVersion {
     SchemaVersion::new(1, 0, 0)
+}
+
+const DEFAULT_EVIDENCE_PRODUCER_ID: &str = "franken-engine.evidence-ledger.builder";
+const DEFAULT_EVIDENCE_SIGNING_KEY_BYTES: [u8; 32] = [0x7B; 32];
+
+fn default_evidence_signing_key() -> SigningKey {
+    SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
+        .expect("default evidence signing key is non-zero")
+}
+
+fn default_evidence_verification_key() -> VerificationKey {
+    default_evidence_signing_key().verification_key()
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +185,21 @@ pub struct Witness {
 }
 
 // ---------------------------------------------------------------------------
+// EvidenceSignatureEnvelope — producer authentication
+// ---------------------------------------------------------------------------
+
+/// Signature proving which registered producer emitted an evidence entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSignatureEnvelope {
+    /// Registered producer identity.
+    pub producer_id: String,
+    /// Public verification key for the producer.
+    pub verification_key: VerificationKey,
+    /// Signature over the unsigned canonical entry.
+    pub signature: Signature,
+}
+
+// ---------------------------------------------------------------------------
 // ChosenAction — the selected action
 // ---------------------------------------------------------------------------
 
@@ -221,8 +251,56 @@ pub struct EvidenceEntry {
     pub witnesses: Vec<Witness>,
     /// Content hash of this entry for integrity chain linking.
     pub evidence_hash: String,
+    /// Producer signature envelope verified by the ledger before storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_envelope: Option<EvidenceSignatureEnvelope>,
     /// Additional structured metadata (deterministic via BTreeMap).
     pub metadata: BTreeMap<String, String>,
+}
+
+impl EvidenceEntry {
+    fn unsigned_signature_preimage(&self) -> Result<Vec<u8>, LedgerError> {
+        let mut unsigned = self.clone();
+        unsigned.signed_envelope = None;
+        serde_json::to_vec(&unsigned).map_err(|e| LedgerError::SchemaValidationFailed {
+            reason: format!("evidence entry signature preimage serialization failed: {e}"),
+        })
+    }
+
+    fn recomputed_content_ids(&self) -> Result<(String, String), LedgerError> {
+        let mut unsigned = self.clone();
+        unsigned.entry_id.clear();
+        unsigned.evidence_hash.clear();
+        unsigned.signed_envelope = None;
+        let hash_input =
+            serde_json::to_string(&unsigned).map_err(|e| LedgerError::SchemaValidationFailed {
+                reason: format!("evidence entry serialization failed: {e}"),
+            })?;
+        let evidence_hash = deterministic_hash(&hash_input);
+        let entry_id = format!("ev-{}", evidence_hash.get(..32).unwrap_or(&evidence_hash));
+        Ok((entry_id, evidence_hash))
+    }
+
+    /// Sign this entry with a producer key.
+    pub fn sign_with(
+        &mut self,
+        producer_id: impl Into<String>,
+        signing_key: &SigningKey,
+    ) -> Result<(), LedgerError> {
+        let producer_id = producer_id.into();
+        let signature =
+            sign_preimage(signing_key, &self.unsigned_signature_preimage()?).map_err(|e| {
+                LedgerError::SchemaValidationFailed {
+                    reason: format!("evidence entry signing failed for {producer_id}: {e}"),
+                }
+            })?;
+        self.signed_envelope = Some(EvidenceSignatureEnvelope {
+            producer_id,
+            verification_key: signing_key.verification_key(),
+            signature,
+        });
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +321,8 @@ pub struct EvidenceEntryBuilder {
     chosen_action: Option<ChosenAction>,
     witnesses: Vec<Witness>,
     metadata: BTreeMap<String, String>,
+    producer_id: String,
+    signing_key: SigningKey,
 }
 
 impl EvidenceEntryBuilder {
@@ -266,6 +346,8 @@ impl EvidenceEntryBuilder {
             chosen_action: None,
             witnesses: Vec::new(),
             metadata: BTreeMap::new(),
+            producer_id: DEFAULT_EVIDENCE_PRODUCER_ID.to_string(),
+            signing_key: default_evidence_signing_key(),
         }
     }
 
@@ -305,6 +387,13 @@ impl EvidenceEntryBuilder {
         self
     }
 
+    /// Override the producer signing identity for this entry.
+    pub fn signed_by(mut self, producer_id: impl Into<String>, signing_key: SigningKey) -> Self {
+        self.producer_id = producer_id.into();
+        self.signing_key = signing_key;
+        self
+    }
+
     /// Build the entry, computing entry_id and evidence_hash.
     ///
     /// Returns `Err` if `chosen_action` was not set.
@@ -337,6 +426,7 @@ impl EvidenceEntryBuilder {
                 w
             },
             evidence_hash: String::new(),
+            signed_envelope: None,
             metadata: self.metadata,
         };
         // Serialize the entry with empty hash fields to form the canonical hash input.
@@ -351,6 +441,7 @@ impl EvidenceEntryBuilder {
 
         temp_entry.entry_id = entry_id;
         temp_entry.evidence_hash = evidence_hash;
+        temp_entry.sign_with(self.producer_id, &self.signing_key)?;
 
         Ok(temp_entry)
     }
@@ -426,15 +517,55 @@ pub trait EvidenceEmitter: fmt::Debug {
 /// In-memory evidence ledger for testing and lab mode.
 ///
 /// Stores entries in insertion order, rejects duplicates by entry_id.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct InMemoryLedger {
     entries: Vec<EvidenceEntry>,
     entry_ids: std::collections::BTreeSet<String>,
+    current_epoch: Option<SecurityEpoch>,
+    authorized_producers: BTreeMap<String, VerificationKey>,
+    authorized_policy_ids: BTreeSet<String>,
+}
+
+impl Default for InMemoryLedger {
+    fn default() -> Self {
+        let mut authorized_producers = BTreeMap::new();
+        authorized_producers.insert(
+            DEFAULT_EVIDENCE_PRODUCER_ID.to_string(),
+            default_evidence_verification_key(),
+        );
+        Self {
+            entries: Vec::new(),
+            entry_ids: BTreeSet::new(),
+            current_epoch: None,
+            authorized_producers,
+            authorized_policy_ids: BTreeSet::new(),
+        }
+    }
 }
 
 impl InMemoryLedger {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn for_epoch(epoch: SecurityEpoch) -> Self {
+        Self {
+            current_epoch: Some(epoch),
+            ..Self::default()
+        }
+    }
+
+    pub fn authorize_producer(
+        &mut self,
+        producer_id: impl Into<String>,
+        verification_key: VerificationKey,
+    ) {
+        self.authorized_producers
+            .insert(producer_id.into(), verification_key);
+    }
+
+    pub fn authorize_policy(&mut self, policy_id: impl Into<String>) {
+        self.authorized_policy_ids.insert(policy_id.into());
     }
 
     /// Number of entries in the ledger.
@@ -466,6 +597,77 @@ impl InMemoryLedger {
             .filter(|e| e.epoch_id == epoch)
             .collect()
     }
+
+    fn validate_entry(&self, entry: &EvidenceEntry) -> Result<(), LedgerError> {
+        let (expected_entry_id, expected_hash) = entry.recomputed_content_ids()?;
+        if entry.evidence_hash != expected_hash {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!("evidence hash mismatch for entry {}", entry.entry_id),
+            });
+        }
+        if entry.entry_id != expected_entry_id {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "entry id mismatch: expected {expected_entry_id}, actual {}",
+                    entry.entry_id
+                ),
+            });
+        }
+
+        if let Some(expected_epoch) = self.current_epoch
+            && entry.epoch_id != expected_epoch
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "evidence epoch mismatch: expected {}, actual {}",
+                    expected_epoch.as_u64(),
+                    entry.epoch_id.as_u64()
+                ),
+            });
+        }
+
+        if !self.authorized_policy_ids.is_empty()
+            && !self.authorized_policy_ids.contains(&entry.policy_id)
+        {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!("unauthorized policy id: {}", entry.policy_id),
+            });
+        }
+
+        let envelope =
+            entry
+                .signed_envelope
+                .as_ref()
+                .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                    reason: format!("missing evidence signature for entry {}", entry.entry_id),
+                })?;
+        let registered_key = self
+            .authorized_producers
+            .get(&envelope.producer_id)
+            .ok_or_else(|| LedgerError::SchemaValidationFailed {
+                reason: format!("unauthorized evidence producer: {}", envelope.producer_id),
+            })?;
+        if registered_key != &envelope.verification_key {
+            return Err(LedgerError::SchemaValidationFailed {
+                reason: format!(
+                    "producer verification key mismatch: {}",
+                    envelope.producer_id
+                ),
+            });
+        }
+        verify_signature(
+            registered_key,
+            &entry.unsigned_signature_preimage()?,
+            &envelope.signature,
+        )
+        .map_err(|_| LedgerError::SchemaValidationFailed {
+            reason: format!(
+                "invalid evidence signature from producer: {}",
+                envelope.producer_id
+            ),
+        })?;
+        Ok(())
+    }
 }
 
 impl EvidenceEmitter for InMemoryLedger {
@@ -475,6 +677,7 @@ impl EvidenceEmitter for InMemoryLedger {
                 entry_id: entry.entry_id,
             });
         }
+        self.validate_entry(&entry)?;
         self.entry_ids.insert(entry.entry_id.clone());
         self.entries.push(entry);
         Ok(())
@@ -2046,6 +2249,53 @@ mod tests {
 
         let err = ledger.emit(entry).unwrap_err();
         assert!(matches!(err, LedgerError::DuplicateEntryId { .. }));
+    }
+
+    #[test]
+    fn ledger_rejects_unsigned_entry() {
+        let mut ledger = InMemoryLedger::new();
+        let mut entry = sample_entry();
+        entry.signed_envelope = None;
+
+        let err = ledger.emit(entry).unwrap_err();
+        assert!(
+            matches!(err, LedgerError::SchemaValidationFailed { reason } if reason.contains("missing evidence signature"))
+        );
+    }
+
+    #[test]
+    fn ledger_rejects_unauthorized_producer() {
+        let signing_key = SigningKey::from_bytes([0x33; 32]).expect("non-zero test signing key");
+        let entry = EvidenceEntryBuilder::new(
+            "trace-attacker",
+            "decision-attacker",
+            "policy-v1",
+            SecurityEpoch::from_raw(5),
+            DecisionType::SecurityAction,
+        )
+        .chosen(ChosenAction {
+            action_name: "allow".to_string(),
+            expected_loss_millionths: 0,
+            rationale: "forged".to_string(),
+        })
+        .signed_by("unregistered-producer", signing_key)
+        .build()
+        .expect("build signed forged entry");
+
+        let mut ledger = InMemoryLedger::new();
+        let err = ledger.emit(entry).unwrap_err();
+        assert!(
+            matches!(err, LedgerError::SchemaValidationFailed { reason } if reason.contains("unauthorized evidence producer"))
+        );
+    }
+
+    #[test]
+    fn ledger_rejects_mismatched_epoch() {
+        let mut ledger = InMemoryLedger::for_epoch(SecurityEpoch::from_raw(6));
+        let err = ledger.emit(sample_entry()).unwrap_err();
+        assert!(
+            matches!(err, LedgerError::SchemaValidationFailed { reason } if reason.contains("evidence epoch mismatch"))
+        );
     }
 
     #[test]

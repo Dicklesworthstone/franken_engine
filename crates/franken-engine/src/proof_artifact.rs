@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
+use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path};
 
@@ -1117,7 +1118,21 @@ fn read_limited_jsonl_line<R: BufRead>(
     Ok(true)
 }
 
-/// Atomically writes multiple events to a JSONL file, creating or truncating the file
+/// Acquire an advisory exclusive `flock` on the given file. The lock is
+/// released when the file handle is dropped. The previous JSONL writers
+/// claimed "race-safe" in their docstrings but only relied on
+/// `O_APPEND`, which guarantees atomicity per-syscall — NOT per-write_all
+/// — and did read+write windows (file_needs_leading_newline → write_all)
+/// with no lock at all, opening a TOCTOU on the trailing-newline check.
+/// All concurrent emitters now serialize on this lock instead. (bd-zvdxr)
+fn lock_exclusive(file: &File) -> Result<(), ProofArtifactError> {
+    flock(file, FlockOperation::LockExclusive)
+        .map_err(|error| ProofArtifactError::Io(format!("flock LockExclusive failed: {error}")))
+}
+
+/// Atomically writes multiple events to a JSONL file, creating or
+/// truncating the file. Serializes against `append_events_jsonl_atomic`
+/// on the same path via an exclusive `flock`. (bd-zvdxr)
 pub fn write_events_jsonl_atomic(
     path: impl AsRef<Path>,
     events: &[ProofEvent],
@@ -1127,32 +1142,54 @@ pub fn write_events_jsonl_atomic(
         event.validate()?;
     }
 
-    // Collect all lines into a single buffer for atomic write
+    // Collect all lines into a single buffer
     let mut buffer = Vec::new();
     for event in events {
         let line = serde_json::to_string(event)
             .map_err(|e| ProofArtifactError::JsonMalformed(e.to_string()))?;
-
-        // Validate the serialized line
         validate_event_json_line(&line)?;
-
         buffer.push(line);
     }
 
-    // Join all lines and write atomically
-    let content = buffer.join("\n");
-    if !content.is_empty() {
-        let content_with_final_newline = format!("{}\n", content);
-        fs::write(path, content_with_final_newline.as_bytes())
-            .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    // Build the full payload before opening anything else. Final newline so
+    // strict JSONL parsers do not need to special-case end-of-file.
+    let content = if buffer.is_empty() {
+        Vec::new()
     } else {
-        fs::write(path, b"").map_err(|e| ProofArtifactError::Io(e.to_string()))?;
-    }
+        let joined = buffer.join("\n");
+        let mut bytes = joined.into_bytes();
+        bytes.push(b'\n');
+        bytes
+    };
 
+    // Open with create + truncate AFTER acquiring the lock so concurrent
+    // appenders can't see a momentarily-empty file.
+    //
+    // Open in read+write so we can flock; truncate after the flock
+    // succeeds. Pre-fix, `fs::write` truncated immediately and never
+    // serialized with the appender, so a write↔append race could lose
+    // appended events between the appender's last-byte read and its
+    // write_all.
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    lock_exclusive(&file)?;
+    file.set_len(0)
+        .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    file.write_all(&content)
+        .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
     Ok(())
 }
 
-/// Atomically appends events to a JSONL file (race-safe for concurrent access)
+/// Atomically appends events to a JSONL file. Race-safe for concurrent
+/// access — see [`lock_exclusive`] for the serialization story. The
+/// trailing-newline check and the subsequent write happen inside the
+/// same flock window, so concurrent appenders cannot both observe a
+/// missing trailing newline and emit doubled `\n`s. (bd-zvdxr)
 pub fn append_events_jsonl_atomic(
     path: impl AsRef<Path>,
     events: &[ProofEvent],
@@ -1167,10 +1204,7 @@ pub fn append_events_jsonl_atomic(
     for event in events {
         let line = serde_json::to_string(event)
             .map_err(|e| ProofArtifactError::JsonMalformed(e.to_string()))?;
-
-        // Validate the serialized line
         validate_event_json_line(&line)?;
-
         buffer.push(line);
     }
 
@@ -1178,13 +1212,21 @@ pub fn append_events_jsonl_atomic(
         return Ok(());
     }
 
-    // Use append mode so each write lands at the current end of file.
+    // Open in append+read so we can both flock and inspect the trailing
+    // byte. `append` makes every write land at the current end of file
+    // even if the kernel-side seek cursor falls behind, so the lock+seek
+    // pattern below is safe.
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)
         .append(true)
         .open(path)
         .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    // Hold the exclusive lock across BOTH the trailing-byte read and the
+    // payload write. This is what was missing before — both halves used
+    // to race independently. The lock is released when `file` drops at
+    // end-of-scope.
+    lock_exclusive(&file)?;
 
     let mut content = String::new();
     if file_needs_leading_newline(&mut file)? {
@@ -2095,6 +2137,90 @@ mod tests {
         assert_eq!(thread_event_counts.len(), 8);
         for count in thread_event_counts.values() {
             assert_eq!(*count, 10);
+        }
+    }
+
+    /// bd-zvdxr regression. The pre-fix
+    /// `append_events_jsonl_atomic` did a TOCTOU on the trailing-newline
+    /// check: two concurrent appenders both observed a missing trailing
+    /// newline and both prepended `\n`, producing a blank line in the
+    /// JSONL stream that strict parsers reject. With the new exclusive
+    /// flock around the read+write window, the final file must contain
+    /// *no* blank lines and must be exactly thread_count*per_thread
+    /// events long. (The sibling
+    /// `concurrent_event_emission_preserves_jsonl_integrity` test
+    /// tolerated blank lines via `if line.trim().is_empty() continue`,
+    /// so a regression to the racing implementation would have passed
+    /// that test.)
+    #[test]
+    fn concurrent_append_emits_no_blank_lines_under_contention() {
+        use std::io::BufRead;
+        use std::sync::Arc;
+        use std::thread;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = Arc::new(temp_file.path().to_path_buf());
+
+        const THREADS: usize = 16;
+        const EVENTS_PER_THREAD: usize = 25;
+
+        let mut handles = Vec::with_capacity(THREADS);
+        for thread_id in 0..THREADS {
+            let path = Arc::clone(&temp_path);
+            let handle = thread::spawn(move || {
+                for event_id in 0..EVENTS_PER_THREAD {
+                    let event = ProofEvent {
+                        schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+                        event_name: format!("bd-zvdxr.t{}.e{}", thread_id, event_id),
+                        severity: ProofEventSeverity::Info,
+                        step_id: format!("step-{}-{}", thread_id, event_id),
+                        command_id: None,
+                        artifact_path: None,
+                        artifact_sha256: None,
+                        exit_code: Some(0),
+                        duration_ms: Some(1),
+                        decision: "race-pin".to_string(),
+                        remediation: None,
+                    };
+                    emit_event_jsonl_atomic(&*path, &event).expect("emit event");
+                }
+            });
+            handles.push(handle);
+        }
+        for handle in handles {
+            handle.join().expect("thread joined");
+        }
+
+        // Strict line-by-line audit — every non-final line must end with
+        // `\n` and no blank lines may appear anywhere.
+        let raw = std::fs::read_to_string(&*temp_path).expect("read events file");
+        assert!(
+            raw.ends_with('\n'),
+            "JSONL file must end with a newline; got tail {:?}",
+            &raw[raw.len().saturating_sub(8)..],
+        );
+        let mut total = 0usize;
+        for (idx, line) in raw.lines().enumerate() {
+            assert!(
+                !line.is_empty(),
+                "JSONL line {idx} is blank — bd-zvdxr race regression: concurrent \
+                 appenders both decided needs_leading_newline=true",
+            );
+            total += 1;
+        }
+        assert_eq!(
+            total,
+            THREADS * EVENTS_PER_THREAD,
+            "every emit_event_jsonl_atomic call must have produced exactly one line",
+        );
+
+        // And every line must parse as a valid event.
+        let file = std::fs::File::open(&*temp_path).expect("reopen events file");
+        for line_result in std::io::BufReader::new(file).lines() {
+            let line = line_result.expect("read line");
+            assert!(!line.is_empty(), "no blank lines (strict)");
+            validate_event_json_line(&line).expect("each line parses as ProofEvent");
         }
     }
 }

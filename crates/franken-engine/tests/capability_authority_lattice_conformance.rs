@@ -160,7 +160,10 @@ fn tag_parsing_unknown_or_internal_tags_return_none() {
             // 'console' is documented as canonical; assert that it resolves.
             assert_eq!(parsed, Some(RuntimeCapability::Console));
         } else {
-            assert_eq!(parsed, None, "tag `{tag}` should not resolve, got {parsed:?}");
+            assert_eq!(
+                parsed, None,
+                "tag `{tag}` should not resolve, got {parsed:?}"
+            );
         }
     }
 }
@@ -319,7 +322,10 @@ fn intersection_is_commutative() {
     let pairs = [
         (CapabilityProfile::full(), CapabilityProfile::engine_core()),
         (CapabilityProfile::full(), CapabilityProfile::policy()),
-        (CapabilityProfile::engine_core(), CapabilityProfile::remote()),
+        (
+            CapabilityProfile::engine_core(),
+            CapabilityProfile::remote(),
+        ),
         (CapabilityProfile::policy(), CapabilityProfile::remote()),
     ];
     for (a, b) in pairs {
@@ -521,10 +527,7 @@ const LATTICE_CONFORMANCE_RULES: &[(&str, &str)] = &[
         "FE-CAPS-§D.3-DisjointMeetsCollapse",
         "Mid-tier disjoint pairs intersect to ComputeOnly",
     ),
-    (
-        "FE-CAPS-§D.4-IntersectionCommutes",
-        "X ∩ Y = Y ∩ X",
-    ),
+    ("FE-CAPS-§D.4-IntersectionCommutes", "X ∩ Y = Y ∩ X"),
     (
         "FE-CAPS-§E.1-RequireGrantsWhenHeld",
         "require_capability succeeds when the profile holds the cap",

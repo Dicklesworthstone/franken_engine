@@ -12,7 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::causal_replay::{
-    CounterfactualConfig, DecisionSnapshot, NondeterminismLog, TraceRecord,
+    CounterfactualConfig, DecisionSnapshot, TraceRecord,
 };
 use crate::counterfactual_evaluator::{
     ConfidenceEnvelope, EnvelopeStatus, EstimatorKind, PolicyId,
@@ -601,14 +601,14 @@ impl CounterfactualReplayEngine {
         Ok(result)
     }
 
-    // ── Internal: Collect scoped decisions ────────────────────────
+    // ── Internal: Collect in-scope decisions ──────────────────────
 
     fn collect_scoped_decisions<'a>(
         &self,
         traces: &'a [TraceRecord],
         scope: &ReplayScope,
-    ) -> Result<Vec<ScopedDecision<'a>>, ReplayEngineError> {
-        let mut decisions = Vec::new();
+    ) -> Result<Vec<&'a DecisionSnapshot>, ReplayEngineError> {
+        let mut decisions: Vec<&'a DecisionSnapshot> = Vec::new();
 
         for trace in traces {
             if !scope.includes_trace(trace) {
@@ -627,11 +627,7 @@ impl CounterfactualReplayEngine {
 
             for entry in &trace.entries {
                 if scope.includes(&entry.decision) {
-                    decisions.push(ScopedDecision {
-                        trace_id: &trace.trace_id,
-                        decision: &entry.decision,
-                        nondeterminism: &trace.nondeterminism_log,
-                    });
+                    decisions.push(&entry.decision);
                 }
             }
         }
@@ -650,7 +646,7 @@ impl CounterfactualReplayEngine {
 
     fn evaluate_alternate(
         &self,
-        decisions: &[ScopedDecision<'_>],
+        decisions: &[&DecisionSnapshot],
         alt: &AlternatePolicy,
         _causal_model: Option<&StructuralCausalModel>,
     ) -> Result<PolicyComparisonReport, ReplayEngineError> {
@@ -661,8 +657,7 @@ impl CounterfactualReplayEngine {
         let mut regime_original: BTreeMap<String, i64> = BTreeMap::new();
         let mut regime_counterfactual: BTreeMap<String, i64> = BTreeMap::new();
 
-        for sd in decisions {
-            let snapshot = sd.decision;
+        for &snapshot in decisions {
             let original_action = &snapshot.chosen_action;
             let original_outcome = snapshot.outcome_millionths;
 
@@ -1032,17 +1027,6 @@ fn z_multiplier(confidence_millionths: i64) -> i64 {
         950_001..=990_000 => 2_576, // 2.576
         _ => 3_291,                 // 3.291
     }
-}
-
-// ── Internal decision wrapper ────────────────────────────────────────────
-
-/// A decision snapshot with its trace context.
-struct ScopedDecision<'a> {
-    #[allow(dead_code)]
-    trace_id: &'a str,
-    decision: &'a DecisionSnapshot,
-    #[allow(dead_code)]
-    nondeterminism: &'a NondeterminismLog,
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────

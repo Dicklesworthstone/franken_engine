@@ -146,10 +146,11 @@ Verification:
 - `cargo clippy --all-targets -p frankenengine-engine --target-dir target_rch_review -- -D warnings`: SIGKILL on the rch worker after 18m43s (signal 9, OOM under concurrent 8-build queue). Retry with `--lib` only also SIGKILL'd at 10m+ in queue. Both failures are workload/RAM contention, not clippy errors. PearlTower's Round 1e captured the actual backlog state (210 errors, dominated by bd-bquu7 SourceSpan `clone_on_copy`). My two surgical fixes shrink that backlog by 2.
 - `git check-ignore -v crates/franken-engine/src/target_rch_review crates/franken-engine/target_rch_test_audit target_rch_review`: all three matched by `.gitignore:154 **/target_rch_*/`.
 
-Code changes (uncommitted in working tree; "REVIEW-ONLY MODE" did not authorize commits and other agents may have parallel staged edits):
-- `.gitignore` (+8 lines: three new `target_rch_*` patterns + comment).
-- `crates/franken-engine/src/dual_backend_parser.rs:1232` (drop `.clone()` on `SourceSpan`).
-- `crates/franken-engine/src/parser_multi_engine_harness.rs:2290` (drop `.clone()` on `SourceSpan`).
+Code changes — converged with parallel pane commits that landed mid-session, so my working-tree edits are now redundant with HEAD:
+- `.gitignore` — superseded by `a888b4a8 chore(gitignore): block target_rch_* under crates/ and src/ trees` (landed 14:29:42 with the same three patterns + matching rationale). Independent finding, but the other pane shipped it first.
+- `crates/franken-engine/src/dual_backend_parser.rs:1232` and `crates/franken-engine/src/parser_multi_engine_harness.rs:2290` — both `.span.clone()` sites are now clean in HEAD, and `cfd93e90 style: rustfmt cleanup + clippy lint allows after recent refactor wave` (landed 14:31:08) also added file-level `#![allow(clippy::clone_on_copy)]` to those two plus four more files (ast.rs, parser.rs, react_jsx_lowering.rs, static_semantics.rs) as a coarse stopgap for the bd-bquu7 backlog. The surgical drop and the file-level allow are complementary — both reduce noise; the allow is the bigger blast-radius silencer.
+
+Net code contribution from this round: REVIEW_SUMMARY.md notes only. The .gitignore and two-clone fixes were independently shipped by parallel panes within minutes.
 
 
 ---
@@ -184,3 +185,73 @@ Verification:
 - `cargo check --all-targets --keep-going -p frankenengine-engine --target-dir target_rch_review` ✓ PASS post-fix (`Finished dev profile`, 1.54s incremental).
 - `cargo fmt --check` ✓ PASS (background task `b3nu00azf` exit 0).
 - `cargo clippy --all-targets -- -D warnings` ❌ FAIL — the existing 210-error backlog dominated by `clone_on_copy` on `SourceSpan` (post-`bd-jtxmr` Copy derive) is unchanged and not in scope for this round. Tracked under bd-bquu7. The Round 1d note already captured this as MEDIUM.
+
+---
+
+## 2026-05-20 Review Round 1g - Clippy Gate Follow-up (Codex)
+
+Areas reviewed:
+- All-target compiler/clippy verification after the `Value::Str(Arc<str>)`, SourceSpan `Copy`, declassification, and review-note commits that landed during the review window.
+- `SafetyDecisionRouter::summary_by_action` in `crates/franken-engine/src/safety_decision_router.rs`.
+
+Findings:
+
+- [HIGH] `crates/franken-engine/src/safety_decision_router.rs:683-687` - the clippy all-target build failed with `E0282` at `summaries.entry(result.action).or_default()`: the entry binding needed a concrete map value type under the current dirty review tree. Root cause: a cleanup from `or_insert_with(ActionSummary::default)` toward `or_default()` left type inference too implicit for the clippy lib/lib-test build path. Fixed by explicitly typing the summaries map as `BTreeMap<SafetyAction, ActionSummary>` and the entry binding as `&mut ActionSummary`.
+
+Verification:
+- `cargo fmt --check`: PASS after the safety-router patch.
+- `rch exec -- cargo check --all-targets --target-dir target_rch_review`: PASS before the final one-line safety-router clippy fix (`Finished dev profile`, remote exit 0).
+- `rch exec -- cargo clippy --all-targets --target-dir target_rch_review -- -D warnings`: FAIL before the safety-router patch with `E0282` at `safety_decision_router.rs:686`; post-fix clippy retry was contended with parallel rch jobs and did not produce a captureable final exit in this pane before this note.
+
+---
+
+## 2026-05-20 Review Round 1c - Security/Runtime Continuation
+
+Areas reviewed:
+- Attestation measurement, quote, and handshake canonicalization in `crates/franken-engine/src/attested_execution_cell.rs` and `crates/franken-engine/src/attestation_handshake.rs`.
+- Recent `Value::Str(Arc<str>)` migration fallout in date-formatting integration coverage.
+- Required review context from `git log --since="6 hours ago" --oneline` and `git diff HEAD~30..HEAD`, with emphasis on attestation, revocation freshness, capability witness, lowering, and baseline-interpreter churn.
+
+Findings:
+
+- [MEDIUM] `crates/franken-engine/tests/locale_date_formatting.rs:438` - `invalid_date_handling` compared a `Value::Str(Arc<str>)` binding directly to a string literal after the `Value::Str` allocation-reduction migration. This breaks `cargo check --all-targets` when the integration test target is compiled. Root cause: one assertion was not migrated with the runtime string payload type. Fix: compare `error_str.as_ref()` to `"Invalid Date"`.
+
+- [LOW] `crates/franken-engine/src/attested_execution_cell.rs:186`, `:230`, and `crates/franken-engine/src/attestation_handshake.rs:146` - re-audited the recent attestation canonical-byte framing hardening. Variable-length `runtime_version`, `signer_key_id`, nested measurement bytes, and quote signature bytes are already length-prefixed in current `HEAD`; no new patch needed. Root cause of the prior risk would have been ambiguous signed/hash-bound field concatenation, but the present code is framed.
+
+Fixes:
+- Updated `crates/franken-engine/tests/locale_date_formatting.rs` to compare the `Arc<str>` payload via `as_ref()`.
+
+Verification:
+- `git diff --check -- crates/franken-engine/tests/locale_date_formatting.rs` passed.
+- `rch exec -- cargo test -p frankenengine-engine frame --lib --target-dir target_rch_review` was cancelled after `rch queue` showed live heartbeat but no progress for more than 20 minutes on build `29843600204366507`.
+- `rch exec -- cargo fmt --check` failed on unrelated dirty formatting in `crates/franken-engine/src/capability_witness.rs:3919`.
+- `rch exec -- cargo check --all-targets --target-dir target_rch_review` progressed through `frankenengine-engine` into `frankenengine-test-support`, then failed because remote SSH hit the 1800s timeout.
+- `rch exec -- cargo clippy --all-targets --target-dir target_rch_review -- -D warnings` reached `frankenengine-engine`, then failed with `SIGKILL` from `clippy-driver` on the lib and lib-test targets.
+
+---
+
+## 2026-05-20 Review Round 1h - Fresh-Eyes Declassification and Gate Continuation (Codex)
+
+Areas reviewed:
+- `crates/franken-engine/src/declassification_pipeline.rs` emergency declassification path and its integration tests.
+- `crates/franken-engine/src/safety_decision_router.rs` all-target summary build path.
+- Test262 conformance coverage harnesses for optional chaining, template literals, iteration statements, iterator protocol, and arrow functions.
+- Related recent activity around declassification, Arc<str>, SourceSpan Copy, attestation, and review-gate churn.
+
+Findings:
+
+- [HIGH] `crates/franken-engine/src/declassification_pipeline.rs:355-360` - emergency declassification previously bypassed a `PolicyUnavailable` result, including extension identity mismatch. Root cause: the emergency branch ran for every non-approved policy result instead of distinguishing route/condition failures from missing or mismatched policy identity. Current HEAD now fails closed for `PolicyUnavailable` (`80f12cca`); this pass aligned the integration assertion in `crates/franken-engine/tests/declassification_pipeline_integration.rs:1046-1048` with the actual mismatch error text.
+
+- [MEDIUM] `crates/franken-engine/src/safety_decision_router.rs:684-686`, `crates/franken-engine/tests/optional_chaining_test262_conformance.rs:432-435`, `crates/franken-engine/tests/template_literal_test262_conformance.rs:275-278`, `crates/franken-engine/tests/iteration_statements_test262_conformance.rs:556-560`, `crates/franken-engine/tests/iterator_protocol_test262_conformance.rs:563-566`, and `crates/franken-engine/tests/arrow_function_test262_conformance.rs:403-406` - all-target builds could fail with `E0282` after cleanup changed typed `or_insert_with(Default::default)` calls to `or_default()` while leaving the `BTreeMap::new()` value type implicit. Root cause: the entry value type was only inferable through the defaulted entry binding in some lib-test/integration-test targets. Fixed by making the map or entry types explicit at each failing coverage/summary site.
+
+Verification:
+- PASS: `cargo fmt --check`.
+- PASS: `env RUSTFLAGS='-C linker=cc' CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --lib --target-dir target_rch_review emergency_pathway_with_mismatched_extension_fails_closed -- --nocapture`.
+- FAIL, then patched: `env RUSTFLAGS='-C linker=cc' CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p frankenengine-engine --test declassification_pipeline_integration --target-dir target_rch_review emergency_policy_extension_mismatch_fails_closed -- --nocapture` initially failed because the integration test expected stale text (`"No policy for extension"`). After the assertion update, the rerun was blocked by remote `SIGKILL` while compiling `frankenengine-engine`.
+- FAIL, then patched: `env RUSTFLAGS='-C linker=cc' CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --all-targets --target-dir target_rch_review -- -D warnings` failed first with `E0282` at `safety_decision_router.rs:686`.
+- FAIL, then patched: `env RUSTFLAGS='-C linker=cc' CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --all-targets --target-dir target_rch_review` failed next with `E0282` at `iteration_statements_test262_conformance.rs:559` and then remote `No space left on device` while writing query cache.
+- BLOCKED after patches: `env RUSTFLAGS='-C linker=cc' CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo check --config build.incremental=false --all-targets --target-dir target_rch_review` ran through rch on `vmi1167313` and failed with `SIGKILL` compiling the `frankenengine-engine` lib-test target (remote exit 101). No post-patch Rust diagnostic was emitted.
+- NOT RUN after the blocked all-target check: full `cargo clippy --all-targets -- -D warnings` retry and repo tests.
+
+Commit:
+- No new commit from this pane. The required broad all-target gate did not complete after the type fixes; leaving the changes uncommitted until the remote build can finish without SIGKILL.

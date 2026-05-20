@@ -1528,7 +1528,7 @@ The thirteen "impossible-by-default" capabilities from [`docs/plans/PLAN_TO_CREA
 | 2 | Deterministic replay | `05_replay_demo` | `./examples/05_replay_demo/verify.sh` |
 | 3 | Signed checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` |
 | 4 | Quarantine mesh | `07_quarantine_mesh` | `./examples/07_quarantine_mesh/demo.sh` |
-| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` (alt: `08_proof_carrying_optimization`) | `./examples/15_proof_carrying_optimization/verify.sh` |
+| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` |
 | 6 | Capability-typed rejection boundary | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
 | 7 | Deterministic resource-exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
 | 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
@@ -1863,7 +1863,7 @@ The certified optimizer was paused for a substantial window during the `franken-
 
 ### Demo
 
-`examples/15_proof_carrying_optimization` and the alternate `examples/08_proof_carrying_optimization` exercise the proof-carrying adaptive optimization path end-to-end. The rewrite ships with its cost-model proof and the demo verifies the proof before applying.
+`examples/15_proof_carrying_optimization` exercises the proof-carrying adaptive optimization path end-to-end. The rewrite ships with its cost-model proof and the demo verifies the proof before applying.
 
 ---
 

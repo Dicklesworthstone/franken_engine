@@ -34,7 +34,6 @@ from PLAN section 3.2 to the shipped example directories in this repository.
 - `01_hello_world` - General FrankenEngine introduction
 - `03_doctor_input` - Doctor diagnostic tooling
 - `04_bench_vs_node` - Performance benchmarking
-- `08_proof_carrying_optimization` - Alternate certified rewrite demo for capability #5
 - `11_cli_workflow_smoke` - CLI workflow demonstration
 - `12_frankenctl_react_demo` - Fail-closed React compile contract demo
 

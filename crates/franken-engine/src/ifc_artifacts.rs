@@ -653,7 +653,9 @@ pub struct DeclassificationRoute {
 }
 
 /// Enforcement strategy for [`FlowPolicy`] checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub enum FlowPolicyEnforcement {
     /// Preserve legacy lattice-open behavior: explicit denials win, explicit
     /// allows win, configured declassification routes produce obligations, and
@@ -661,13 +663,8 @@ pub enum FlowPolicyEnforcement {
     LatticeOpen,
     /// Fail closed unless a flow is explicitly allowed or routed through a
     /// declassification obligation.
+    #[default]
     AllowlistOnly,
-}
-
-impl Default for FlowPolicyEnforcement {
-    fn default() -> Self {
-        Self::AllowlistOnly
-    }
 }
 
 // ---------------------------------------------------------------------------

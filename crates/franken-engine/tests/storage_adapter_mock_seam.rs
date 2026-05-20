@@ -1,3 +1,28 @@
+//! Mock-seam tests for the storage-adapter contract.
+//!
+//! This suite exercises `FrankensqliteStorageAdapter` against an in-process
+//! `MockFrankensqlite` backend (defined in this file). The mock satisfies
+//! `FrankensqliteBackend` via a `BTreeMap`, which means these tests verify
+//! the adapter's contract-level behavior (key ordering, metadata filters,
+//! revision bumps, batch semantics, failure propagation) but **do not** gate:
+//!
+//! - real SQLite WAL / `journal_mode` PRAGMAs
+//! - real schema migration semantics
+//! - foreign-key enforcement
+//! - BLOB / TEXT encoding boundaries
+//! - transaction rollback under SQLite error returns
+//! - concurrent reader/writer semantics
+//!
+//! Those invariants live in `tests/storage_adapter_integration.rs`, which
+//! drives the adapter against `FrankenConnection::open_memory()`. Renamed
+//! from `tests/storage_adapter.rs` to make the mock-seam intent explicit
+//! (bd-cm8p0).
+//!
+//! Note: the first four `#[test]` functions in this file exercise the
+//! standalone `InMemoryStorageAdapter` (a legitimate non-SQLite adapter
+//! type), not the mock — they share the helper functions and store-kind
+//! matrix used by the mock-seam suite.
+
 #![allow(
     clippy::field_reassign_with_default,
     clippy::assertions_on_constants,

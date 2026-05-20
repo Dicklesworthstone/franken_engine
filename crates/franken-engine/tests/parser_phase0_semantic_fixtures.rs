@@ -197,9 +197,42 @@ fn syntax_tree_canonical_contract_version_is_nonempty() {
 // ---------- ParseErrorCode ----------
 
 #[test]
-fn parse_error_code_all_has_seven_variants() {
+fn parse_error_code_all_lists_every_variant() {
     use frankenengine_engine::parser::ParseErrorCode;
-    assert_eq!(ParseErrorCode::ALL.len(), 7);
+
+    // Pin the current count so adding a variant without updating ParseErrorCode::ALL
+    // fails this test. Add the new variant to the explicit `expected` list below
+    // when you bump this count.
+    assert_eq!(ParseErrorCode::ALL.len(), 8);
+
+    // Every listed variant must have a distinct `as_str` representation; this
+    // catches "added a variant but reused an existing identifier" mistakes that
+    // a bare count check would miss.
+    let names: std::collections::BTreeSet<&str> =
+        ParseErrorCode::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(
+        names.len(),
+        ParseErrorCode::ALL.len(),
+        "ParseErrorCode::ALL has duplicate as_str values: {names:?}",
+    );
+
+    // Pin the exact set of variant identifiers to catch silent renames.
+    let expected: std::collections::BTreeSet<&str> = [
+        "empty_source",
+        "invalid_goal",
+        "unsupported_syntax",
+        "io_read_failed",
+        "invalid_utf8",
+        "source_too_large",
+        "budget_exceeded",
+        "strict_mode_with_statement",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        names, expected,
+        "ParseErrorCode variant identifiers drifted"
+    );
 }
 
 #[test]

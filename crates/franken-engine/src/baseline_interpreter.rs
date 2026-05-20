@@ -22594,6 +22594,205 @@ mod numeric_error_message_tests {
     }
 }
 
+#[cfg(test)]
+mod event_loop_timer_microtask_tests {
+    // Real coverage for two behaviors previously stubbed inside the
+    // feature-gated (broken) `tests` module below: timer firing order is
+    // controlled by virtual-clock delay (not registration order), and the
+    // microtask checkpoint drains before any pending timer macrotask fires.
+    // Filed under mock-hunt bead bd-5116c. The tests deliberately bypass the
+    // feature-gated `execute_builtin_call` test shim and instead drive the
+    // event loop directly via the public-in-crate `event_loop.set_timeout`
+    // API — the same code path that `builtin:SetTimeout` invokes after
+    // resolving its closure handle.
+    use super::*;
+    use crate::closure_model::ClosureHandle;
+    use crate::ifc_artifacts::Label;
+
+    fn test_core(trace_id: &str) -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::VmDispatch);
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::HeapAllocate);
+        InterpreterCore::new(config, trace_id)
+    }
+
+    fn push_empty_closure(core: &mut InterpreterCore, function_index: u32) -> ClosureHandle {
+        let id = core.closures.len() as u32;
+        core.closures.push(ClosureValue {
+            function_index,
+            captured_env: Vec::new(),
+        });
+        ClosureHandle(id)
+    }
+
+    #[test]
+    fn timer_ordering() {
+        // Shorter-delay timers must fire before longer-delay timers, even when
+        // scheduled in the opposite order. Observed via the deterministic
+        // `MacrotaskExecuted` events recorded by the event loop.
+        let mut core = test_core("timer-ordering-test");
+
+        let cb_long = push_empty_closure(&mut core, 0);
+        let cb_short = push_empty_closure(&mut core, 1);
+
+        // Schedule the long-delay timer first (registration_seq = 0) and
+        // the short-delay timer second (registration_seq = 1).
+        core.event_loop.set_timeout(cb_long, 200, Label::Public);
+        core.event_loop.set_timeout(cb_short, 50, Label::Public);
+
+        assert_eq!(
+            core.event_loop.macrotasks.len(),
+            2,
+            "both timers must be queued as macrotasks",
+        );
+
+        // Drain the event loop. Each Timer macrotask emits a
+        // `MacrotaskExecuted` witness event in firing order.
+        core.run_event_loop_until_idle();
+
+        let firing_order: Vec<u64> = core
+            .event_loop
+            .witness
+            .iter()
+            .filter_map(|event| match event {
+                crate::promise_model::WitnessEvent::MacrotaskExecuted {
+                    source: crate::promise_model::MacrotaskSource::Timer,
+                    registration_seq,
+                } => Some(*registration_seq),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            firing_order,
+            vec![1, 0],
+            "short-delay timer (registration_seq=1) must fire before \
+             long-delay timer (registration_seq=0)",
+        );
+        assert_eq!(
+            core.event_loop.macrotasks.len(),
+            0,
+            "all timer macrotasks must drain",
+        );
+    }
+
+    #[test]
+    fn microtask_before_timer() {
+        // ES2020 invariant: pending microtasks must drain at the microtask
+        // checkpoint before any subsequently-due timer macrotask fires.
+        // We pre-enqueue a microtask, schedule a setTimeout(closure, 0), then
+        // call `drain_microtasks` (the checkpoint). The microtask must
+        // complete — observable via the promise it fulfills — while the
+        // timer macrotask remains pending.
+        let mut core = test_core("microtask-vs-timer-test");
+
+        let cb = push_empty_closure(&mut core, 0);
+
+        // Pre-enqueue a microtask: an identity-propagation reaction that
+        // fulfills a fresh Pending promise with Int(42) when drained.
+        let pending = core.promise_store.create();
+        core.event_loop
+            .microtasks
+            .enqueue(crate::promise_model::Microtask::PromiseReaction {
+                handler: None,
+                argument: crate::object_model::JsValue::Int(42),
+                result_promise: pending,
+                label: Label::Public,
+            });
+
+        // Schedule the timer.
+        core.event_loop.set_timeout(cb, 0, Label::Public);
+
+        assert_eq!(
+            core.event_loop.macrotasks.len(),
+            1,
+            "timer macrotask is pending",
+        );
+        assert_eq!(
+            core.event_loop.microtasks.pending_count(),
+            1,
+            "microtask is pending",
+        );
+        assert!(
+            matches!(
+                core.promise_store
+                    .get(pending)
+                    .expect("pending promise exists")
+                    .state,
+                crate::promise_model::PromiseState::Pending,
+            ),
+            "promise must be Pending before microtask drain",
+        );
+
+        // Run the microtask checkpoint. The pre-enqueued microtask must
+        // execute (fulfilling `pending`) without the timer firing first.
+        core.drain_microtasks(None);
+
+        assert_eq!(
+            core.event_loop.microtasks.pending_count(),
+            0,
+            "microtask must have drained at the checkpoint",
+        );
+        assert!(
+            matches!(
+                core.promise_store
+                    .get(pending)
+                    .expect("pending promise still exists")
+                    .state,
+                crate::promise_model::PromiseState::Fulfilled(_),
+            ),
+            "microtask must have run and fulfilled the promise before any \
+             timer fired",
+        );
+        // The timer macrotask must still be pending — no MacrotaskExecuted
+        // witness yet.
+        assert_eq!(
+            core.event_loop.macrotasks.len(),
+            1,
+            "timer macrotask must not have fired before microtask checkpoint",
+        );
+        let timer_fired_pre_drain = core.event_loop.witness.iter().any(|event| {
+            matches!(
+                event,
+                crate::promise_model::WitnessEvent::MacrotaskExecuted {
+                    source: crate::promise_model::MacrotaskSource::Timer,
+                    ..
+                },
+            )
+        });
+        assert!(
+            !timer_fired_pre_drain,
+            "no Timer MacrotaskExecuted witness may appear before the \
+             microtask drain completes",
+        );
+
+        // Running the full event loop now fires the timer.
+        core.run_event_loop_until_idle();
+        let timer_fired_post_drain = core.event_loop.witness.iter().any(|event| {
+            matches!(
+                event,
+                crate::promise_model::WitnessEvent::MacrotaskExecuted {
+                    source: crate::promise_model::MacrotaskSource::Timer,
+                    ..
+                },
+            )
+        });
+        assert!(
+            timer_fired_post_drain,
+            "timer must fire after microtasks have drained",
+        );
+        assert_eq!(
+            core.event_loop.macrotasks.len(),
+            0,
+            "timer macrotask must drain",
+        );
+    }
+}
+
 #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
 mod tests {
     use super::*;
@@ -27482,26 +27681,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn timer_ordering() {
-        // TODO: Test that earlier timers fire before later timers
-        // When timer substrate is implemented, this will:
-        // 1. Schedule multiple timers with different delays
-        // 2. Run event loop until all fire
-        // 3. Verify execution order matches delay ordering
-        // Placeholder until implementation.
-    }
-
-    #[test]
-    fn microtask_before_timer() {
-        // TODO: Test that microtasks drain before timer callbacks
-        // When timer substrate is implemented, this will:
-        // 1. Schedule a setTimeout(callback, 0)
-        // 2. Enqueue a microtask (Promise.then)
-        // 3. Run event loop
-        // 4. Verify microtask executes before timer callback
-        // Placeholder until implementation.
-    }
+    // NOTE: prior `fn timer_ordering()` and `fn microtask_before_timer()`
+    // placeholder stubs (bd-5116c) were moved to the standalone
+    // `event_loop_timer_microtask_tests` module above, which compiles under
+    // plain `#[cfg(test)]` instead of this feature-gated (and currently
+    // broken — bd-2j7uk) `tests` module. The real tests now actually run.
 
     #[test]
     fn nested_set_timeout() {

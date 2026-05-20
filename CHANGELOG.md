@@ -24,7 +24,7 @@ The four chronological capability waves below are research-grouped, not release-
 
 ### Per-Wave Metric Snapshot
 
-Counts at each wave's closing commit, derived from `git ls-tree -r --name-only <wave-end-sha>` against the path patterns shown. Useful for "how much was built in this window?" without reading every commit. Engineering surfaces are unchanged between Wave 4's end (d51f2715, 2026-05-15) and current HEAD, because the only post-cutoff commits are documentation.
+Counts at each wave's closing commit, derived from `git ls-tree -r --name-only <wave-end-sha>` against the path patterns shown. Useful for "how much was built in this window?" without reading every commit. These are historical wave-end snapshots, not current-HEAD inventory counts.
 
 | Surface | End of Wave 1 (2026-02-28) | End of Wave 2 (2026-03-31) | End of Wave 3 (2026-04-30) | End of Wave 4 (2026-05-15) |
 |---|---:|---:|---:|---:|
@@ -37,7 +37,7 @@ Counts at each wave's closing commit, derived from `git ls-tree -r --name-only <
 
 Read across rows for "growth per wave": notice Wave 2's near-doubling of the test surface (437 → 1,194) under the iterator-protocol + exception-epic landings, Wave 3's surge in beads (621 new entries, from 1,118 to 1,739) under the claim-to-proof matrix introduction, and Wave 4's continued bead growth (+845 to 2,584) tracking the IDEA-WIZARD series.
 
-Two of the README's "Code Surface At A Glance" counts use top-level-only patterns (`src/*.rs` and `tests/*.rs`, not recursive), which gives slightly lower numbers (511 and 1,382 at HEAD respectively); the recursive figures above include `src/bin/`, `src/capability/`, `tests/_support/`, `tests/support/`, and `tests/conformance/`.
+Two of the README's "Code Surface At A Glance" counts use top-level-only patterns (`src/*.rs` and `tests/*.rs`, not recursive), which gives slightly lower numbers than the recursive wave snapshots; the recursive figures above include `src/bin/`, `src/capability/`, `tests/_support/`, `tests/support/`, and `tests/conformance/`.
 
 ---
 

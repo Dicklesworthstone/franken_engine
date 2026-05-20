@@ -416,7 +416,7 @@ The Lowering Gap Truth Invariant (`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`) enf
 | Generators + async generators | Executed | `.next()` body execution (May 2026); Generator/Async/AsyncGenerator dispatch in the baseline interpreter. |
 | `for..in` / `for..of` | Lowered | Iterator-protocol IR1 opcodes (`ForInInit`, `ForInNext`, `ForOfInit`, `ForOfNext`, `IteratorClose`) replace earlier UnsupportedSyntax placeholders. |
 | Try / catch / finally | Lowered | Function-body try/catch/finally with `BeginTry` / `EnterCatch` / `EnterFinally` / `EndFinally`; runtime unwinder (`CatchFrame`, `FinallyMode`, `pending_exception`). |
-| Throw / exception semantics | Executed | 13 exception-semantics conformance tests; cross-layer error metadata frozen by `run_rgc_exception_diagnostics_semantics.sh`. |
+| Throw / exception semantics | Partial | 21 active exception-semantics conformance tests pass, with 1 ignored closure-capture case blocked on real function/closure lowering; cross-layer error metadata frozen by `run_rgc_exception_diagnostics_semantics.sh`. |
 | Tagged-template expressions | Parsed + lowered | `Call` with template-literal argument; trailing line comments stripped; unseparated expression sequences rejected. |
 | Promise / microtask | Executed | `Promise.all` delegated to combinator; promise model in `promise_model.rs`. |
 | Map / Set / WeakMap / WeakSet | Executed | Seeded from iterables; underlying storage is `BTreeMap` for determinism. |
@@ -2099,6 +2099,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 - Fleet quarantine is a permanent ratchet today; de-escalation is unimplemented.
 - Cryptographic decision receipts with transparency-log and TEE attestation remain HYPOTHESIS until live proof artifacts split and ship.
 - Node/Bun denominator performance comparisons remain TARGETED until live denominator artifacts replace placeholders; the gate explicitly rejects `MockCertificate` and `hot_paths_simulation` fixtures.
+- Exception semantics are not fully Executed while catch-binding capture by a closure created inside the handler remains ignored pending real function/closure lowering.
 - Deterministic replay and evidence retention increase storage footprint.
 - Full Node ecosystem compatibility is an active target; edge behavior differences can still appear in low-level module or process APIs. `package.json type=module` extensionless relative imports are fail-closed in `native` / `node_compat` modes; only the explicit `bun_compat` bridge enables extension probing.
 - Fleet-level immune features assume stable cryptographic identity and time synchronization across participating nodes.

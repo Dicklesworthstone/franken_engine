@@ -294,9 +294,7 @@ impl AbstractOperationsHarness {
     ) -> BTreeMap<AbstractOperationCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<AbstractOperationCategory, CategoryCoverage> = BTreeMap::new();
         for test in &self.tests {
-            let entry = coverage
-                .entry(test.category.clone())
-                .or_insert_with(CategoryCoverage::default);
+            let entry = coverage.entry(test.category.clone()).or_default();
             entry.total += 1;
             if let Some(result) = results.get(&test.id)
                 && matches!(result, AbstractOperationResult::Pass)
@@ -353,7 +351,10 @@ mod tests {
     /// every run (line-by-line below). Intentionally empty for the
     /// initial wave — if the first batch needs a waiver, file a bead and
     /// add it here.
-    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[];
+    const EXPECTED_FAILING_MUSTS: &[(&str, &str)] = &[(
+        "ES2020-7.2.15-positive-zero-strictly-equals-negative-zero",
+        "bd-bs81a",
+    )];
 
     fn must_tests(harness: &AbstractOperationsHarness) -> Vec<&AbstractOperationTest> {
         harness

@@ -287,6 +287,38 @@ fn cases() -> Vec<AbstractOpCase> {
             ExpectedValue::Bool(true),
         ),
         case(
+            "to_boolean_false_is_falsy",
+            "ecma262:sec-toboolean",
+            ToBoolean,
+            "LogicalNot must observe false as falsy.",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: false,
+                },
+                Ir3Instruction::LogicalNot { dst: 0, src: 0 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            ExpectedValue::Bool(true),
+        ),
+        case(
+            "to_boolean_true_is_truthy",
+            "ecma262:sec-toboolean",
+            ToBoolean,
+            "LogicalNot must observe true as truthy.",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: true,
+                },
+                Ir3Instruction::LogicalNot { dst: 0, src: 0 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            ExpectedValue::Bool(false),
+        ),
+        case(
             "to_boolean_object_is_truthy",
             "ecma262:sec-toboolean",
             ToBoolean,
@@ -346,6 +378,22 @@ fn cases() -> Vec<AbstractOpCase> {
             ],
             &[],
             ExpectedValue::Int(1),
+        ),
+        case(
+            "to_number_false_is_zero",
+            "ecma262:sec-tonumber",
+            ToNumber,
+            "Unary plus must coerce false to +0.",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: false,
+                },
+                Ir3Instruction::UnaryPlus { dst: 0, src: 0 },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            ExpectedValue::Int(0),
         ),
         case(
             "to_number_null_is_zero",
@@ -491,6 +539,27 @@ fn cases() -> Vec<AbstractOpCase> {
                 Ir3Instruction::Halt,
             ],
             &["1"],
+            ExpectedValue::Bool(true),
+        ),
+        case(
+            "abstract_equality_boolean_number",
+            "ecma262:sec-islooselyequal",
+            Equality,
+            "Loose equality must compare booleans and numbers after numeric coercion.",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: true,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 1 },
+                Ir3Instruction::Eq {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            &[],
             ExpectedValue::Bool(true),
         ),
         case(
@@ -659,6 +728,27 @@ fn cases() -> Vec<AbstractOpCase> {
             ExpectedValue::Int(1),
         ),
         case(
+            "bitwise_or_false_four",
+            "ecma262:sec-binary-bitwise-operators-runtime-semantics-evaluation",
+            Bitwise,
+            "Bitwise or must apply ToInt32 to false before combining with an integer.",
+            vec![
+                Ir3Instruction::LoadBool {
+                    dst: 0,
+                    value: false,
+                },
+                Ir3Instruction::LoadInt { dst: 1, value: 4 },
+                Ir3Instruction::BitOr {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            &[],
+            ExpectedValue::Int(4),
+        ),
+        case(
             "bitwise_left_shift_masks_count",
             "ecma262:sec-left-shift-operator-runtime-semantics-evaluation",
             Bitwise,
@@ -701,7 +791,7 @@ fn cases() -> Vec<AbstractOpCase> {
 fn runtime_abstract_ops_conformance_matrix_must_pass() {
     let report = build_report().expect("runtime abstract-op conformance cases must pass");
 
-    assert_eq!(report.case_count, 28);
+    assert_eq!(report.case_count, 34);
     for category in [
         AbstractOpCategory::Bitwise,
         AbstractOpCategory::Equality,

@@ -276,10 +276,13 @@ Repository topology rule:
 - `franken_node` is the compatibility/product repository.
 - Dependency direction is one-way: `franken_node` depends on `franken_engine`; engine code must not be re-forked in `franken_node`.
 
-### 8.2 Engine Lanes
-- `quickjs_inspired_native`: deterministic and low-overhead execution lane
-- `v8_inspired_native`: throughput/compatibility-oriented lane
-- `hybrid_router`: policy-directed selection with deterministic fallback
+### 8.2 Execution Profiles and Compatibility Lane Tags
+The current native engine topology is profile-based, not three independent execution backends:
+- `baseline_deterministic_profile`: conservative native-baseline interpreter profile for deterministic replay and low-surprise fallback.
+- `baseline_throughput_profile`: the same native-baseline interpreter with throughput-oriented budgets and scheduling policy.
+- `adaptive_profile_router`: policy-directed selector between the baseline profiles, with deterministic fallback.
+
+The historical `quickjs_inspired_native` and `v8_inspired_native` names remain only as compatibility route tags for existing APIs and evidence records. They must not be read as bindings to QuickJS/V8, separate source-module backends, or implementations under `legacy_quickjs/` / `legacy_v8/`; those trees are reference corpora only.
 
 ### 8.3 Planes
 - data plane: parser, IR, execution, GC, module loading

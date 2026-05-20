@@ -61,10 +61,10 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
 | `FE-CLAIM-015` | ifc | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:96` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
 | `FE-CLAIM-016` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |
-| `FE-CLAIM-017` | compiler | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:590` | `hypothesis` | downgrade until proof-carrying compilation artifacts exist | `bd-csnqb` |
-| `FE-CLAIM-018` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:608` | `hypothesis` | downgrade until formal policy semantics proofs exist | `bd-csnqb` |
-| `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:633` | `hypothesis` | downgrade until isomorphism equivalence proofs exist | `bd-csnqb` |
-| `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:741` | `hypothesis` | downgrade until theorem-backed compiler exists | `bd-csnqb` |
+| `FE-CLAIM-017` | compiler | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:593` | `hypothesis` | downgrade until proof-carrying compilation artifacts exist | `bd-csnqb` |
+| `FE-CLAIM-018` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:611` | `hypothesis` | downgrade until formal policy semantics proofs exist | `bd-csnqb` |
+| `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | downgrade until isomorphism equivalence proofs exist | `bd-csnqb` |
+| `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | downgrade until theorem-backed compiler exists | `bd-csnqb` |
 | `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | downgrade until Policy Theorem Engine with formal verification exists | `bd-csnqb` |
 
 ## Failure Output

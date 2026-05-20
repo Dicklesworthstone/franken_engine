@@ -350,8 +350,8 @@
       "claim_text": "Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 590,
-        "end_line": 590,
+        "start_line": 593,
+        "end_line": 593,
         "must_contain": "proof-carrying compilation contract"
       },
       "allowed_state": "hypothesis",
@@ -370,8 +370,8 @@
       "claim_text": "Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 608,
-        "end_line": 608,
+        "start_line": 611,
+        "end_line": 611,
         "must_contain": "formal semantics with explicit monotonicity"
       },
       "allowed_state": "hypothesis",
@@ -390,8 +390,8 @@
       "claim_text": "Mathematically equivalent fast paths behind isomorphism proof notes.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 633,
-        "end_line": 633,
+        "start_line": 636,
+        "end_line": 636,
         "must_contain": "isomorphism proof notes"
       },
       "allowed_state": "hypothesis",
@@ -410,8 +410,8 @@
       "claim_text": "Theorem-backed compiler for high-assurance policy governance.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 741,
-        "end_line": 741,
+        "start_line": 744,
+        "end_line": 744,
         "must_contain": "theorem-backed compiler"
       },
       "allowed_state": "hypothesis",

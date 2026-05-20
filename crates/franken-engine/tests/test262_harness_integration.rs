@@ -94,7 +94,6 @@ fn harness_discovers_cases_from_test262_tarball_and_filters_module_flags() {
 }
 
 #[test]
-#[ignore = "requires JsEngine eval capability grant policy wiring"]
 fn harness_executes_discovered_case_through_supported_engine_lanes() {
     let temp = tempdir().expect("create tempdir");
     let archive_path = temp.path().join("test262-sample.tar.gz");

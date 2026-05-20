@@ -97,7 +97,7 @@ fn parser_phase0_semantic_fixtures_match_expected_hashes() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "developer tool: prints fresh canonical hashes for regenerating tests/fixtures/parser_phase0_semantic_fixtures.json. CI assertion-based coverage lives in the unignored phase0_fixture_hashes_match_catalog test above; run with `cargo test --test parser_phase0_semantic_fixtures -- --ignored print_parser_phase0_fixture_hashes --nocapture` to refresh expected hashes after intentional parser changes"]
 fn print_parser_phase0_fixture_hashes() {
     let path = Path::new("tests/fixtures/parser_phase0_semantic_fixtures.json");
     let bytes = fs::read(path).expect("read parser phase0 fixture catalog");

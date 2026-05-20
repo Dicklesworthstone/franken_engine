@@ -11,9 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::causal_replay::{
-    CounterfactualConfig, DecisionSnapshot, TraceRecord,
-};
+use crate::causal_replay::{CounterfactualConfig, DecisionSnapshot, TraceRecord};
 use crate::counterfactual_evaluator::{
     ConfidenceEnvelope, EnvelopeStatus, EstimatorKind, PolicyId,
 };

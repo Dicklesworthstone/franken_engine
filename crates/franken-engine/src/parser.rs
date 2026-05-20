@@ -4131,7 +4131,10 @@ fn parse_primary_expression(
     // We deliberately exclude `+`, `-`, `!`, `~`, `/` (unary or regex contexts)
     // and `:` / `,` (already structurally invalid via other paths).
     if let Some(first) = expression.as_bytes().first()
-        && matches!(*first, b'*' | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'?')
+        && matches!(
+            *first,
+            b'*' | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'?'
+        )
     {
         return Err(unsupported_expression_syntax_error(
             "expression begins with a binary operator with no left-hand operand",
@@ -8860,9 +8863,11 @@ mod tests {
             "let",
         ] {
             let source = format!("var {ident} = 1;");
-            parser.parse(source.as_str(), ParseGoal::Script).unwrap_or_else(|err| {
-                panic!("`{source}` should still parse in script mode, got {err:?}")
-            });
+            parser
+                .parse(source.as_str(), ParseGoal::Script)
+                .unwrap_or_else(|err| {
+                    panic!("`{source}` should still parse in script mode, got {err:?}")
+                });
         }
     }
 

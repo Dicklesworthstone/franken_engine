@@ -313,7 +313,10 @@ fn taxonomy_recovery_anchors_parse_cleanly() {
             case.id
         );
     }
-    assert!(anchor_count >= 2, "harness must define ≥ 2 recovery anchors");
+    assert!(
+        anchor_count >= 2,
+        "harness must define ≥ 2 recovery anchors"
+    );
 }
 
 #[test]
@@ -336,7 +339,10 @@ fn taxonomy_report_round_trip_through_serde() {
         serde_json::from_str(&json).expect("report should deserialize");
     assert_eq!(round_trip.schema_version, report.schema_version);
     assert_eq!(round_trip.bead_id, report.bead_id);
-    assert_eq!(round_trip.statistics.total_tests, report.statistics.total_tests);
+    assert_eq!(
+        round_trip.statistics.total_tests,
+        report.statistics.total_tests
+    );
 }
 
 #[test]
@@ -361,20 +367,7 @@ fn taxonomy_input_empty_cases_classified_correctly() {
 /// bd-wa01t. The end-to-end test below tolerates exactly these gaps and
 /// fails fast on any new mismatch — that is the regression detection the
 /// bead exists to provide.
-const KNOWN_TAXONOMY_GAPS: &[(&str, ParserTaxonomyResult)] = &[
-    (
-        "FE-PARSER-SYNTAX-RESERVED-AS-IDENT",
-        ParserTaxonomyResult::UnexpectedAcceptance,
-    ),
-    (
-        "FE-PARSER-SYNTAX-STRAY-OPERATOR",
-        ParserTaxonomyResult::UnexpectedAcceptance,
-    ),
-    (
-        "FE-PARSER-SYNTAX-UNTERMINATED-STRING",
-        ParserTaxonomyResult::UnexpectedAcceptance,
-    ),
-];
+const KNOWN_TAXONOMY_GAPS: &[(&str, ParserTaxonomyResult)] = &[];
 
 #[test]
 fn taxonomy_full_matrix_matches_known_gap_set() {

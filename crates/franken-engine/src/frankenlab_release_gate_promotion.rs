@@ -46,9 +46,11 @@ const SCALE: u64 = 1_000_000;
 /// Default minimum oracle pass rate for release (95%).
 const DEFAULT_MIN_ORACLE_PASS_RATE: u64 = 950_000;
 
-/// Default maximum tolerated release-blocking violations.
-#[allow(dead_code)]
-const DEFAULT_MAX_BLOCKING_VIOLATIONS: usize = 0;
+// bd-g41hr: `DEFAULT_MAX_BLOCKING_VIOLATIONS: usize = 0` lived here under
+// `#[allow(dead_code)]` with the docstring 'Default maximum tolerated
+// release-blocking violations.' but had zero callers workspace-wide
+// since introduction. Removed in favor of letting `PromotionPolicy::Default`
+// own the value when a default is actually needed.
 
 // ---------------------------------------------------------------------------
 // PromotedGateKind — gate kinds with oracle backing

@@ -1,0 +1,78 @@
+{
+  "schema_version": "franken-engine.production-feature-catalog.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-cixqu.6.1",
+  "generated_by": "bd-cixqu.6.1",
+  "generated_at_utc": "2026-05-21T06:47:00Z",
+  "minimum_feature_count": 3,
+  "declared_production_features_count": 3,
+  "production_feature_catalog_threshold_met": true,
+  "features": [
+    {
+      "feature_id": "signed_ifc_declassification_receipts",
+      "title": "Signed IFC Declassification Receipts",
+      "source_claim": "FE-CLAIM-015",
+      "parent_claim_row": "FE-CLAIM-015",
+      "bundle_bead_id": "bd-cixqu.6.2",
+      "operator_description": "Deterministic information-flow confinement with signed declassification receipts and replay-verifiable data-provenance artifacts. Impossible by default in Node/Bun deployments without external IFC tooling.",
+      "required_bundle_contents": [
+        "Live IFC declassification smoke test script",
+        "Signed declassification receipt artifacts",
+        "Replay-verifiable provenance artifacts",
+        "Source-to-sink flow validation",
+        "IFC confinement enforcement proof"
+      ],
+      "verification_commands": [
+        "./scripts/e2e/live_ifc_declassification_smoke.sh",
+        "frankenctl verify ifc --input artifacts/<bundle_id>/ifc_verification_input.json --summary"
+      ],
+      "artifact_root": "artifacts/ifc_declassification/<timestamp>/",
+      "primary_doc": "docs/IFC_DECLASSIFICATION_VERIFICATION_V1.md",
+      "impossible_in_node_bun": "Node/Bun have no built-in information-flow tracking or declassification receipt generation capabilities"
+    },
+    {
+      "feature_id": "deterministic_replay_coverage",
+      "title": "100% Deterministic Replay Coverage",
+      "source_claim": "FE-CLAIM-013",
+      "parent_claim_row": "FE-CLAIM-013",
+      "bundle_bead_id": "bd-cixqu.6.3",
+      "operator_description": "100% deterministic replay coverage for declared security-critical allow/deny/escalation decisions. Node/Bun lack deterministic replay guarantees for security decisions.",
+      "required_bundle_contents": [
+        "Replay coverage metric gate script",
+        "Security-critical decision inventory",
+        "Byte-identical artifact proof",
+        "Fixed-input deterministic validation",
+        "Complete evidence field verification"
+      ],
+      "verification_commands": [
+        "./scripts/run_replay_coverage_metric_gate.sh ci",
+        "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration"
+      ],
+      "artifact_root": "artifacts/replay_coverage/<timestamp>/",
+      "primary_doc": "docs/DETERMINISTIC_REPLAY_COVERAGE_V1.md",
+      "impossible_in_node_bun": "Node/Bun do not provide deterministic replay guarantees or security-decision coverage tracking"
+    },
+    {
+      "feature_id": "red_team_compromise_rate_reduction",
+      "title": ">=10x Red-team Compromise Rate Reduction",
+      "source_claim": "FE-CLAIM-011",
+      "parent_claim_row": "FE-CLAIM-011",
+      "bundle_bead_id": "bd-cixqu.6.4",
+      "operator_description": ">=10x reduction in successful red-team host compromise rate versus Node/Bun defaults through containment and capability restrictions. Standard Node/Bun deployments lack comparable containment.",
+      "required_bundle_contents": [
+        "Red-team compromise rate metric gate",
+        "Host compromise comparison artifacts",
+        "Baseline Node/Bun scenario validation",
+        "Containment effectiveness measurements",
+        "Attack surface reduction proof"
+      ],
+      "verification_commands": [
+        "./scripts/run_red_team_compromise_rate_metric_gate.sh ci",
+        "frankenctl verify containment --input artifacts/<bundle_id>/containment_verification_input.json --summary"
+      ],
+      "artifact_root": "artifacts/red_team_compromise_rate/<timestamp>/",
+      "primary_doc": "docs/RED_TEAM_COMPROMISE_RATE_V1.md",
+      "impossible_in_node_bun": "Node/Bun default deployments lack capability restrictions and containment mechanisms achieving equivalent compromise rate reduction"
+    }
+  ]
+}

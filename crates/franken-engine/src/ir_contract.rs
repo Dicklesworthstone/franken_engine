@@ -1309,818 +1309,501 @@ pub enum Ir3Instruction {
 
 impl Ir3Instruction {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
-            Self::LoadInt { dst, value } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_int".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("value".to_string(), CanonicalValue::I64(*value));
-            }
-            Self::LoadFloat { dst, bits } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_float".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("bits".to_string(), CanonicalValue::U64(*bits));
-            }
-            Self::LoadStr { dst, pool_index } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_str".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*pool_index)),
-                );
-            }
-            Self::LoadBool { dst, value } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_bool".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("value".to_string(), CanonicalValue::Bool(*value));
-            }
-            Self::LoadNull { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_null".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::LoadUndefined { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_undefined".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::Add { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("add".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Sub { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("sub".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Mul { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("mul".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Div { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("div".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::ForInInit { src, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("for_in_init".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
+            Self::LoadInt { dst, value } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_int")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("value", CanonicalValue::I64(*value)),
+            ]),
+            Self::LoadFloat { dst, bits } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_float")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("bits", CanonicalValue::U64(*bits)),
+            ]),
+            Self::LoadStr { dst, pool_index } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_str")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("pool_index", CanonicalValue::U64(u64::from(*pool_index))),
+            ]),
+            Self::LoadBool { dst, value } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_bool")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("value", CanonicalValue::Bool(*value)),
+            ]),
+            Self::LoadNull { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_null")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::LoadUndefined { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_undefined")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::Add { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("add")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Sub { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("sub")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Mul { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("mul")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Div { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("div")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::ForInInit { src, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("for_in_init")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
             Self::ForInNext {
                 iterator,
                 value_dst,
                 done_target,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("for_in_next".to_string()),
-                );
-                map.insert(
-                    "done_target".to_string(),
-                    CanonicalValue::U64(u64::from(*done_target)),
-                );
-                map.insert(
-                    "iterator".to_string(),
-                    CanonicalValue::U64(u64::from(*iterator)),
-                );
-                map.insert(
-                    "value_dst".to_string(),
-                    CanonicalValue::U64(u64::from(*value_dst)),
-                );
-            }
-            Self::ForOfInit { src, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("for_of_init".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("for_in_next")),
+                ("done_target", CanonicalValue::U64(u64::from(*done_target))),
+                ("iterator", CanonicalValue::U64(u64::from(*iterator))),
+                ("value_dst", CanonicalValue::U64(u64::from(*value_dst))),
+            ]),
+            Self::ForOfInit { src, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("for_of_init")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
             Self::ForOfNext {
                 iterator,
                 value_dst,
                 done_target,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("for_of_next".to_string()),
-                );
-                map.insert(
-                    "done_target".to_string(),
-                    CanonicalValue::U64(u64::from(*done_target)),
-                );
-                map.insert(
-                    "iterator".to_string(),
-                    CanonicalValue::U64(u64::from(*iterator)),
-                );
-                map.insert(
-                    "value_dst".to_string(),
-                    CanonicalValue::U64(u64::from(*value_dst)),
-                );
-            }
-            Self::IteratorClose { iterator, reason } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("iterator_close".to_string()),
-                );
-                map.insert(
-                    "iterator".to_string(),
-                    CanonicalValue::U64(u64::from(*iterator)),
-                );
-                map.insert(
-                    "reason".to_string(),
-                    CanonicalValue::String(reason.as_str().to_string()),
-                );
-            }
-            Self::Move { dst, src } => {
-                map.insert("op".to_string(), CanonicalValue::String("move".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::Jump { target } => {
-                map.insert("op".to_string(), CanonicalValue::String("jump".to_string()));
-                map.insert(
-                    "target".to_string(),
-                    CanonicalValue::U64(u64::from(*target)),
-                );
-            }
-            Self::JumpIf { cond, target } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("jump_if".to_string()),
-                );
-                map.insert("cond".to_string(), CanonicalValue::U64(u64::from(*cond)));
-                map.insert(
-                    "target".to_string(),
-                    CanonicalValue::U64(u64::from(*target)),
-                );
-            }
-            Self::JumpIfNullish { cond, target } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("jump_if_nullish".to_string()),
-                );
-                map.insert("cond".to_string(), CanonicalValue::U64(u64::from(*cond)));
-                map.insert(
-                    "target".to_string(),
-                    CanonicalValue::U64(u64::from(*target)),
-                );
-            }
-            Self::Call { callee, args, dst } => {
-                map.insert("op".to_string(), CanonicalValue::String("call".to_string()));
-                map.insert("args".to_string(), args.canonical_value());
-                map.insert(
-                    "callee".to_string(),
-                    CanonicalValue::U64(u64::from(*callee)),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("for_of_next")),
+                ("done_target", CanonicalValue::U64(u64::from(*done_target))),
+                ("iterator", CanonicalValue::U64(u64::from(*iterator))),
+                ("value_dst", CanonicalValue::U64(u64::from(*value_dst))),
+            ]),
+            Self::IteratorClose { iterator, reason } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("iterator_close")),
+                ("iterator", CanonicalValue::U64(u64::from(*iterator))),
+                ("reason", CanonicalValue::str(reason.as_str())),
+            ]),
+            Self::Move { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("move")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::Jump { target } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("jump")),
+                ("target", CanonicalValue::U64(u64::from(*target))),
+            ]),
+            Self::JumpIf { cond, target } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("jump_if")),
+                ("cond", CanonicalValue::U64(u64::from(*cond))),
+                ("target", CanonicalValue::U64(u64::from(*target))),
+            ]),
+            Self::JumpIfNullish { cond, target } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("jump_if_nullish")),
+                ("cond", CanonicalValue::U64(u64::from(*cond))),
+                ("target", CanonicalValue::U64(u64::from(*target))),
+            ]),
+            Self::Call { callee, args, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("call")),
+                ("args", args.canonical_value()),
+                ("callee", CanonicalValue::U64(u64::from(*callee))),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
             Self::CallMethod {
                 receiver,
                 callee,
                 args,
                 dst,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("call_method".to_string()),
-                );
-                map.insert("args".to_string(), args.canonical_value());
-                map.insert(
-                    "callee".to_string(),
-                    CanonicalValue::U64(u64::from(*callee)),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "receiver".to_string(),
-                    CanonicalValue::U64(u64::from(*receiver)),
-                );
-            }
-            Self::Return { value } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("return".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::U64(u64::from(*value)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("call_method")),
+                ("args", args.canonical_value()),
+                ("callee", CanonicalValue::U64(u64::from(*callee))),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("receiver", CanonicalValue::U64(u64::from(*receiver))),
+            ]),
+            Self::Return { value } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("return")),
+                ("value", CanonicalValue::U64(u64::from(*value))),
+            ]),
             Self::HostCall {
                 capability,
                 args,
                 dst,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("hostcall".to_string()),
-                );
-                map.insert("args".to_string(), args.canonical_value());
-                map.insert("capability".to_string(), capability.canonical_value());
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::GetProperty { obj, key, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("get_property".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
-                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
-            }
-            Self::SetProperty { obj, key, val } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("set_property".to_string()),
-                );
-                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
-                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
-                map.insert("val".to_string(), CanonicalValue::U64(u64::from(*val)));
-            }
-            Self::DeleteProperty { obj, key, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("delete_property".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("key".to_string(), CanonicalValue::U64(u64::from(*key)));
-                map.insert("obj".to_string(), CanonicalValue::U64(u64::from(*obj)));
-            }
-            Self::NewObject { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("new_object".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::NewArray { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("new_array".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::ArrayPush { array, element } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("array_push".to_string()),
-                );
-                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
-                map.insert(
-                    "element".to_string(),
-                    CanonicalValue::U64(u64::from(*element)),
-                );
-            }
-            Self::ArraySlice { array, start, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("array_slice".to_string()),
-                );
-                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
-                map.insert("start".to_string(), CanonicalValue::U64(u64::from(*start)));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::SpreadIntoArray { array, iterable } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("spread_into_array".to_string()),
-                );
-                map.insert("array".to_string(), CanonicalValue::U64(u64::from(*array)));
-                map.insert(
-                    "iterable".to_string(),
-                    CanonicalValue::U64(u64::from(*iterable)),
-                );
-            }
-            Self::SpreadIntoObject { target, source } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("spread_into_object".to_string()),
-                );
-                map.insert(
-                    "target".to_string(),
-                    CanonicalValue::U64(u64::from(*target)),
-                );
-                map.insert(
-                    "source".to_string(),
-                    CanonicalValue::U64(u64::from(*source)),
-                );
-            }
-            Self::TemplateLiteral { parts, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("template_literal".to_string()),
-                );
-                map.insert("parts".to_string(), parts.canonical_value());
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::Halt => {
-                map.insert("op".to_string(), CanonicalValue::String("halt".to_string()));
-            }
-            Self::LoadThis { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_this".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::LoadSuper { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_super".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("hostcall")),
+                ("args", args.canonical_value()),
+                ("capability", capability.canonical_value()),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::GetProperty { obj, key, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("get_property")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("key", CanonicalValue::U64(u64::from(*key))),
+                ("obj", CanonicalValue::U64(u64::from(*obj))),
+            ]),
+            Self::SetProperty { obj, key, val } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("set_property")),
+                ("key", CanonicalValue::U64(u64::from(*key))),
+                ("obj", CanonicalValue::U64(u64::from(*obj))),
+                ("val", CanonicalValue::U64(u64::from(*val))),
+            ]),
+            Self::DeleteProperty { obj, key, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("delete_property")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("key", CanonicalValue::U64(u64::from(*key))),
+                ("obj", CanonicalValue::U64(u64::from(*obj))),
+            ]),
+            Self::NewObject { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("new_object")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::NewArray { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("new_array")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::ArrayPush { array, element } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("array_push")),
+                ("array", CanonicalValue::U64(u64::from(*array))),
+                ("element", CanonicalValue::U64(u64::from(*element))),
+            ]),
+            Self::ArraySlice { array, start, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("array_slice")),
+                ("array", CanonicalValue::U64(u64::from(*array))),
+                ("start", CanonicalValue::U64(u64::from(*start))),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::SpreadIntoArray { array, iterable } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("spread_into_array")),
+                ("array", CanonicalValue::U64(u64::from(*array))),
+                ("iterable", CanonicalValue::U64(u64::from(*iterable))),
+            ]),
+            Self::SpreadIntoObject { target, source } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("spread_into_object")),
+                ("target", CanonicalValue::U64(u64::from(*target))),
+                ("source", CanonicalValue::U64(u64::from(*source))),
+            ]),
+            Self::TemplateLiteral { parts, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("template_literal")),
+                ("parts", parts.canonical_value()),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::Halt => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("halt")),
+            ]),
+            Self::LoadThis { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_this")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::LoadSuper { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_super")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
             Self::BeginTry {
                 catch_target,
                 finally_target,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("begin_try".to_string()),
-                );
-                map.insert(
-                    "catch_target".to_string(),
-                    CanonicalValue::U64(u64::from(*catch_target)),
-                );
-                map.insert(
-                    "finally_target".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("begin_try")),
+                ("catch_target", CanonicalValue::U64(u64::from(*catch_target))),
+                (
+                    "finally_target",
                     match finally_target {
                         Some(ft) => CanonicalValue::U64(u64::from(*ft)),
                         None => CanonicalValue::Null,
                     },
-                );
-            }
-            Self::EndTry => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("end_try".to_string()),
-                );
-            }
-            Self::Throw { value } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("throw".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::U64(u64::from(*value)));
-            }
-            Self::EnterCatch { dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("enter_catch".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
-            Self::EnterFinally => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("enter_finally".to_string()),
-                );
-            }
-            Self::EndFinally => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("end_finally".to_string()),
-                );
-            }
-            Self::Mod { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("mod".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Exp { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("exp".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::UnaryNeg { dst, src } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("unary_neg".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::UnaryPlus { dst, src } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("unary_plus".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::LogicalNot { dst, src } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("logical_not".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::BitNot { dst, src } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("bit_not".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::TypeOf { dst, src } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("typeof".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::Void { dst, src } => {
-                map.insert("op".to_string(), CanonicalValue::String("void".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::Lt { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("lt".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Lte { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("lte".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Gt { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("gt".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Gte { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("gte".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Eq { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("eq".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::StrictEq { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("strict_eq".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::NotEq { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("not_eq".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::StrictNotEq { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("strict_not_eq".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::BitAnd { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("bit_and".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::BitOr { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("bit_or".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::BitXor { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("bit_xor".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Shl { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("shl".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Shr { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("shr".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Ushr { dst, lhs, rhs } => {
-                map.insert("op".to_string(), CanonicalValue::String("ushr".to_string()));
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::InstanceOf { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("instance_of".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::InOp { dst, lhs, rhs } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("in_op".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert("lhs".to_string(), CanonicalValue::U64(u64::from(*lhs)));
-                map.insert("rhs".to_string(), CanonicalValue::U64(u64::from(*rhs)));
-            }
-            Self::Construct { callee, args, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("construct".to_string()),
-                );
-                map.insert(
-                    "callee".to_string(),
-                    CanonicalValue::U64(u64::from(*callee)),
-                );
-                map.insert("args".to_string(), args.canonical_value());
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
+                ),
+            ]),
+            Self::EndTry => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("end_try")),
+            ]),
+            Self::Throw { value } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("throw")),
+                ("value", CanonicalValue::U64(u64::from(*value))),
+            ]),
+            Self::EnterCatch { dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("enter_catch")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
+            Self::EnterFinally => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("enter_finally")),
+            ]),
+            Self::EndFinally => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("end_finally")),
+            ]),
+            Self::Mod { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("mod")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Exp { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("exp")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::UnaryNeg { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("unary_neg")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::UnaryPlus { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("unary_plus")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::LogicalNot { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("logical_not")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::BitNot { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("bit_not")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::TypeOf { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("typeof")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::Void { dst, src } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("void")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::Lt { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("lt")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Lte { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("lte")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Gt { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("gt")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Gte { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("gte")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Eq { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("eq")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::StrictEq { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("strict_eq")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::NotEq { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("not_eq")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::StrictNotEq { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("strict_not_eq")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::BitAnd { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("bit_and")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::BitOr { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("bit_or")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::BitXor { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("bit_xor")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Shl { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("shl")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Shr { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("shr")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Ushr { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("ushr")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::InstanceOf { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("instance_of")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::InOp { dst, lhs, rhs } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("in_op")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("lhs", CanonicalValue::U64(u64::from(*lhs))),
+                ("rhs", CanonicalValue::U64(u64::from(*rhs))),
+            ]),
+            Self::Construct { callee, args, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("construct")),
+                ("callee", CanonicalValue::U64(u64::from(*callee))),
+                ("args", args.canonical_value()),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
             Self::CreateClosure {
                 dst,
                 function_index,
                 capture_count,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("create_closure".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "function_index".to_string(),
-                    CanonicalValue::U64(u64::from(*function_index)),
-                );
-                map.insert(
-                    "capture_count".to_string(),
-                    CanonicalValue::U64(u64::from(*capture_count)),
-                );
-            }
-            Self::PushCapture { name_pool_index } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("push_capture".to_string()),
-                );
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-            }
-            Self::PushScope => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("push_scope".to_string()),
-                );
-            }
-            Self::PopScope => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("pop_scope".to_string()),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_closure")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
+                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+            ]),
+            Self::PushCapture { name_pool_index } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("push_capture")),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+            ]),
+            Self::PushScope => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("push_scope")),
+            ]),
+            Self::PopScope => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("pop_scope")),
+            ]),
             Self::DeclareBinding {
                 name_pool_index,
                 kind,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("declare_binding".to_string()),
-                );
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-                map.insert("kind".to_string(), CanonicalValue::U64(u64::from(*kind)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("declare_binding")),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                ("kind", CanonicalValue::U64(u64::from(*kind))),
+            ]),
             Self::LoadScoped {
                 dst,
                 name_pool_index,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("load_scoped".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_scoped")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+            ]),
             Self::StoreScoped {
                 src,
                 name_pool_index,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("store_scoped".to_string()),
-                );
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("store_scoped")),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+            ]),
             Self::InitBinding {
                 name_pool_index,
                 src,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("init_binding".to_string()),
-                );
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
-            Self::ImportModule { specifier, dst } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("import_module".to_string()),
-                );
-                map.insert(
-                    "specifier".to_string(),
-                    CanonicalValue::U64(u64::from(*specifier)),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("init_binding")),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
+            Self::ImportModule { specifier, dst } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("import_module")),
+                ("specifier", CanonicalValue::U64(u64::from(*specifier))),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+            ]),
             Self::ExportBinding {
                 name_pool_index,
                 src,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("export_binding".to_string()),
-                );
-                map.insert(
-                    "name_pool_index".to_string(),
-                    CanonicalValue::U64(u64::from(*name_pool_index)),
-                );
-                map.insert("src".to_string(), CanonicalValue::U64(u64::from(*src)));
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("export_binding")),
+                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                ("src", CanonicalValue::U64(u64::from(*src))),
+            ]),
             Self::CreateGenerator {
                 dst,
                 function_index,
                 capture_count,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("create_generator".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "function_index".to_string(),
-                    CanonicalValue::U64(u64::from(*function_index)),
-                );
-                map.insert(
-                    "capture_count".to_string(),
-                    CanonicalValue::U64(u64::from(*capture_count)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_generator")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
+                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+            ]),
             Self::Yield {
                 value,
                 delegate,
                 resume_dst,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("yield".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::U64(u64::from(*value)));
-                map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
-                map.insert(
-                    "resume_dst".to_string(),
-                    CanonicalValue::U64(u64::from(*resume_dst)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("yield")),
+                ("value", CanonicalValue::U64(u64::from(*value))),
+                ("delegate", CanonicalValue::Bool(*delegate)),
+                ("resume_dst", CanonicalValue::U64(u64::from(*resume_dst))),
+            ]),
             Self::CreateAsyncFunction {
                 dst,
                 function_index,
                 capture_count,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("create_async_function".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "function_index".to_string(),
-                    CanonicalValue::U64(u64::from(*function_index)),
-                );
-                map.insert(
-                    "capture_count".to_string(),
-                    CanonicalValue::U64(u64::from(*capture_count)),
-                );
-            }
-            Self::AwaitValue { promise_reg } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("await_value".to_string()),
-                );
-                map.insert(
-                    "promise_reg".to_string(),
-                    CanonicalValue::U64(u64::from(*promise_reg)),
-                );
-            }
-            Self::AsyncReturn { value_reg } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("async_return".to_string()),
-                );
-                map.insert(
-                    "value_reg".to_string(),
-                    CanonicalValue::U64(u64::from(*value_reg)),
-                );
-            }
-            Self::AsyncThrow { error_reg } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("async_throw".to_string()),
-                );
-                map.insert(
-                    "error_reg".to_string(),
-                    CanonicalValue::U64(u64::from(*error_reg)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_async_function")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
+                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+            ]),
+            Self::AwaitValue { promise_reg } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("await_value")),
+                ("promise_reg", CanonicalValue::U64(u64::from(*promise_reg))),
+            ]),
+            Self::AsyncReturn { value_reg } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("async_return")),
+                ("value_reg", CanonicalValue::U64(u64::from(*value_reg))),
+            ]),
+            Self::AsyncThrow { error_reg } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("async_throw")),
+                ("error_reg", CanonicalValue::U64(u64::from(*error_reg))),
+            ]),
             Self::CreateAsyncGenerator {
                 dst,
                 function_index,
                 capture_count,
-            } => {
-                map.insert(
-                    "op".to_string(),
-                    CanonicalValue::String("create_async_generator".to_string()),
-                );
-                map.insert("dst".to_string(), CanonicalValue::U64(u64::from(*dst)));
-                map.insert(
-                    "function_index".to_string(),
-                    CanonicalValue::U64(u64::from(*function_index)),
-                );
-                map.insert(
-                    "capture_count".to_string(),
-                    CanonicalValue::U64(u64::from(*capture_count)),
-                );
-            }
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("create_async_generator")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
+                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 }
 

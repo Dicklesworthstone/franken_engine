@@ -458,6 +458,7 @@ pub mod stage_envelope_certificate;
 pub mod static_analysis_graph;
 pub mod static_authority_analyzer;
 pub mod static_semantics;
+pub mod statement_translation_validator;
 pub mod stdlib;
 pub mod stdlib_workload_verification;
 pub mod storage_adapter;

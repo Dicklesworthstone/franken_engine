@@ -93,3 +93,34 @@ Heavy Rust verification for this lane must stay remote:
 ```
 
 Both scripts are expected to route heavy Cargo commands through `rch`.
+
+## Sibling Repository SHA Pinning
+
+The following commit SHAs represent the exact state of sibling repositories that
+the most recent CI run was built against. These must be updated on each release cut.
+
+| Repository | Commit SHA | Updated |
+|------------|------------|---------|
+| `asupersync` | `094b59c859611f7f804fac79d185538d6e7aa171` | 2026-05-21 |
+| `frankentui` | `33ad1c57d545292242e41a477c8278c70ed7e0d6` | 2026-05-21 |
+| `frankensqlite` | `c0c8f32892a71f432a3ead0e5a04a9352549ccd4` | 2026-05-21 |
+| `sqlmodel_rust` | `542292f276aad96702be42bc84f7e2bf341600e9` | 2026-05-21 |
+| `fastapi_rust` | `bbbb388fd4b4a16dc2e7afb50275e56e37323dac` | 2026-05-21 |
+| `frankenpandas` | `19aebfec6677f0866062efb0ec0d8d520e7e89ca` | 2026-05-21 |
+
+### Verification Commands
+
+To verify current sibling repository states match these pinned SHAs:
+
+```bash
+for repo in asupersync frankentui frankensqlite sqlmodel_rust fastapi_rust frankenpandas; do
+  cd "/dp/$repo" && echo "$repo: $(git rev-parse HEAD)"
+done
+```
+
+To update this table after a release cut:
+
+1. Verify all sibling repositories are at the desired commit states
+2. Run the verification commands above to capture current SHAs  
+3. Update the table with new SHAs and current date
+4. Commit the updated documentation as part of the release process

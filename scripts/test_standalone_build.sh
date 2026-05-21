@@ -6,13 +6,17 @@ cd "$root_dir"
 
 print_usage() {
   cat <<'EOF'
-usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|ci]
+usage: ./scripts/test_standalone_build.sh [standalone-check|standalone-test|full-check|full-integration|ci]
 
 Modes:
-  standalone-check  rch-backed cargo check in standalone mode
-  standalone-test   rch-backed cargo test in standalone mode
-  full-check        rch-backed cargo check with all features when sibling deps exist
-  ci                standalone-check + standalone-test + full-check manifest/report
+  standalone-check    rch-backed cargo check in standalone mode
+  standalone-test     rch-backed cargo test in standalone mode
+  full-check          rch-backed cargo check with all features when sibling deps exist
+  full-integration    per-sibling smoke (asupersync, frankentui, frankensqlite,
+                      sqlmodel_rust, fastapi_rust, frankenpandas) recording each
+                      as passed / skipped / failed (bd-cixqu.13.1)
+  ci                  standalone-check + standalone-test + full-check + full-integration
+                      manifest/report
 
 Environment:
   STANDALONE_BUILD_GATE_ARTIFACT_ROOT  Output root (default: artifacts/standalone_build_gate)
@@ -42,7 +46,7 @@ commands_path="${run_dir}/commands.txt"
 step_logs_dir="${run_dir}/step_logs"
 
 case "$mode" in
-  standalone-check|standalone-test|full-check|ci)
+  standalone-check|standalone-test|full-check|full-integration|ci)
     ;;
   -h|--help)
     print_usage
@@ -239,6 +243,88 @@ mark_full_check_skipped() {
   lane_results+=("$(lane_result_json "full-check" "skipped_missing_external_deps" "$command_text" "$log_path" "$note")")
 }
 
+# ---------------------------------------------------------------------------
+# bd-cixqu.13.1 — per-sibling pass criteria
+# ---------------------------------------------------------------------------
+# The integration boundary with each sibling repo is exercised via a
+# lightweight presence + manifest-shape smoke. The check is intentionally
+# cheap (no cargo invocation) so the per-sibling lane runs even when
+# heavy cargo lanes are skipped via STANDALONE_BUILD_GATE_SKIP_REMOTE=1.
+#
+# Pass criterion per sibling:
+#   1. /dp/<sibling> directory exists.
+#   2. /dp/<sibling>/Cargo.toml is readable.
+#   3. /dp/<sibling>/Cargo.toml declares either a [package] or a
+#      [workspace] section (i.e. the manifest is at least a valid
+#      cargo entry point).
+#
+# Outcome per sibling: passed | skipped | failed.
+#
+# The fail-shape (manifest exists but is malformed) is treated as
+# `failed`. The missing-shape (no directory) is treated as `skipped`
+# because a deployment may legitimately not have the sibling checked
+# out — we record but don't fail the lane.
+
+readonly SIBLING_PASS_CRITERIA_BASE="/dp"
+readonly SIBLINGS=(
+  "asupersync"
+  "frankentui"
+  "frankensqlite"
+  "sqlmodel_rust"
+  "fastapi_rust"
+  "frankenpandas"
+)
+
+run_sibling_smoke() {
+  local sibling="$1"
+  local lane="full-integration-${sibling}"
+  local sibling_path="${SIBLING_PASS_CRITERIA_BASE}/${sibling}"
+  local manifest="${sibling_path}/Cargo.toml"
+  local command_text="check ${sibling_path} (presence + Cargo.toml shape)"
+  local log_path="${step_logs_dir}/${lane}.log"
+  local status=""
+  local note=""
+
+  commands_run+=("$command_text")
+  : >"$log_path"
+
+  if [[ ! -d "$sibling_path" ]]; then
+    status="skipped"
+    note="sibling directory not present at ${sibling_path}"
+  elif [[ ! -f "$manifest" ]]; then
+    status="failed"
+    note="sibling directory present but Cargo.toml missing at ${manifest}"
+  elif ! grep -Eq '^\[(package|workspace)\]' "$manifest"; then
+    status="failed"
+    note="Cargo.toml at ${manifest} declares neither [package] nor [workspace]"
+  else
+    status="passed"
+    note="presence + Cargo.toml shape ok"
+    {
+      printf -- '-- sibling: %s\n' "$sibling"
+      printf -- '-- manifest: %s\n' "$manifest"
+      printf -- '-- sections: '
+      grep -E '^\[(package|workspace)\]' "$manifest" | tr '\n' ' '
+      printf -- '\n'
+    } >"$log_path"
+  fi
+
+  record_event "$lane" "$status" "$note"
+  lane_results+=("$(lane_result_json "$lane" "$status" "$command_text" "$log_path" "$note")")
+
+  if [[ "$status" == "failed" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+run_full_integration_lane() {
+  local sibling
+  for sibling in "${SIBLINGS[@]}"; do
+    run_sibling_smoke "$sibling" || run_failures=$((run_failures + 1))
+  done
+}
+
 declare -a external_dependency_paths=()
 declare -a missing_external_dependency_paths=()
 
@@ -275,6 +361,10 @@ run_mode() {
           cargo check -p frankenengine-engine --all-features || run_failures=$((run_failures + 1))
       fi
       ;;
+    full-integration)
+      # bd-cixqu.13.1 — per-sibling presence + manifest-shape smoke.
+      run_full_integration_lane
+      ;;
     ci)
       run_rch_lane \
         "standalone-check" \
@@ -292,6 +382,8 @@ run_mode() {
           "cargo check -p frankenengine-engine --all-features" \
           cargo check -p frankenengine-engine --all-features || run_failures=$((run_failures + 1))
       fi
+      # bd-cixqu.13.1 — sibling-presence smoke as part of ci.
+      run_full_integration_lane
       ;;
   esac
 }

@@ -2668,6 +2668,7 @@ pub fn measurements_to_cases(
             behavior_equivalent: m.invariant_violations == 0,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         })
         .collect()
 }

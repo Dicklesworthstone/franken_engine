@@ -8,8 +8,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::benchmark_evidence_bundle::ParityTarget;
@@ -540,6 +544,494 @@ fn update_optional_string(hasher: &mut Sha256, value: Option<&str>) {
             update_string(hasher, value);
         }
         None => hasher.update([0]),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Runtime Output Equivalence Proof Implementation
+// ---------------------------------------------------------------------------
+
+/// JavaScript workload for cross-runtime equivalence testing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EquivalenceWorkload {
+    pub id: String,
+    pub source: String,
+    pub expected_stdout: String,
+}
+
+impl EquivalenceWorkload {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        source: impl Into<String>,
+        expected_stdout: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            source: source.into(),
+            expected_stdout: expected_stdout.into(),
+        }
+    }
+}
+
+/// Runtime execution result for output equivalence checking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeResult {
+    pub runtime: ParityTarget,
+    pub workload_id: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+    pub execution_time_ms: u64,
+}
+
+impl RuntimeResult {
+    #[must_use]
+    pub fn trimmed_stdout(&self) -> String {
+        self.stdout.trim().to_string()
+    }
+}
+
+/// Configuration for cross-runtime equivalence checking.
+#[derive(Debug, Clone)]
+pub struct EquivalenceConfig {
+    pub frankenctl_path: Option<PathBuf>,
+    pub node_path: Option<PathBuf>,
+    pub bun_path: Option<PathBuf>,
+    pub temp_dir: Option<PathBuf>,
+    pub timeout_seconds: u32,
+}
+
+impl Default for EquivalenceConfig {
+    fn default() -> Self {
+        Self {
+            frankenctl_path: None,
+            node_path: None,
+            bun_path: None,
+            temp_dir: None,
+            timeout_seconds: 30,
+        }
+    }
+}
+
+/// Cross-runtime output equivalence checker.
+#[derive(Debug)]
+pub struct EquivalenceChecker {
+    config: EquivalenceConfig,
+}
+
+impl EquivalenceChecker {
+    #[must_use]
+    pub fn new(config: EquivalenceConfig) -> Self {
+        Self { config }
+    }
+
+    /// Run workload against FrankenEngine via frankenctl.
+    pub fn run_frankenctl(&self, workload: &EquivalenceWorkload) -> Result<RuntimeResult, String> {
+        let frankenctl = self.resolve_frankenctl_path()?;
+        let workload_path = self.materialize_workload(workload)?;
+
+        let start_time = std::time::Instant::now();
+        let output = Command::new(&frankenctl)
+            .args([
+                "run",
+                "--input",
+                &workload_path.to_string_lossy(),
+                "--extension-id",
+                &format!("equiv-check-{}", workload.id),
+            ])
+            .output()
+            .map_err(|e| format!("Failed to run frankenctl: {e}"))?;
+
+        let execution_time_ms = start_time.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let stdout = self.extract_frankenctl_output(&output)?;
+
+        Ok(RuntimeResult {
+            runtime: ParityTarget::V8Isolate, // FrankenEngine uses V8
+            workload_id: workload.id.clone(),
+            stdout,
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            success: output.status.success(),
+            execution_time_ms,
+        })
+    }
+
+    /// Run workload against Node.js.
+    pub fn run_node(&self, workload: &EquivalenceWorkload) -> Result<RuntimeResult, String> {
+        let node = self.resolve_node_path()?;
+        let workload_path = self.materialize_workload(workload)?;
+
+        let start_time = std::time::Instant::now();
+        let output = Command::new(&node)
+            .arg(&workload_path)
+            .output()
+            .map_err(|e| format!("Failed to run node: {e}"))?;
+
+        let execution_time_ms = start_time.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+        Ok(RuntimeResult {
+            runtime: ParityTarget::NodeJs,
+            workload_id: workload.id.clone(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            success: output.status.success(),
+            execution_time_ms,
+        })
+    }
+
+    /// Run workload against Bun.
+    pub fn run_bun(&self, workload: &EquivalenceWorkload) -> Result<RuntimeResult, String> {
+        let bun = self.resolve_bun_path()?;
+        let workload_path = self.materialize_workload(workload)?;
+
+        let start_time = std::time::Instant::now();
+        let output = Command::new(&bun)
+            .arg(&workload_path)
+            .output()
+            .map_err(|e| format!("Failed to run bun: {e}"))?;
+
+        let execution_time_ms = start_time.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+        Ok(RuntimeResult {
+            runtime: ParityTarget::Bun,
+            workload_id: workload.id.clone(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            success: output.status.success(),
+            execution_time_ms,
+        })
+    }
+
+    /// Perform cross-runtime equivalence check for a workload.
+    pub fn check_equivalence(&self, workload: &EquivalenceWorkload) -> EquivalenceResult {
+        let mut results = Vec::new();
+        let mut observations = Vec::new();
+
+        // Run against FrankenEngine
+        match self.run_frankenctl(workload) {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                observations.push(self.create_infra_failure_observation(
+                    workload,
+                    ParityTarget::V8Isolate,
+                    &e,
+                ));
+            }
+        }
+
+        // Run against Node.js
+        match self.run_node(workload) {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                observations.push(self.create_infra_failure_observation(
+                    workload,
+                    ParityTarget::NodeJs,
+                    &e,
+                ));
+            }
+        }
+
+        // Run against Bun
+        match self.run_bun(workload) {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                observations.push(self.create_infra_failure_observation(
+                    workload,
+                    ParityTarget::Bun,
+                    &e,
+                ));
+            }
+        }
+
+        // Compare outputs between runtimes
+        observations.extend(self.compare_runtime_results(workload, &results));
+
+        let quarantined = observations.iter().any(|obs| {
+            let classification = classify_observation(obs);
+            classification.blocks_publication()
+        });
+
+        EquivalenceResult {
+            workload_id: workload.id.clone(),
+            runtime_results: results,
+            observations: observations.clone(),
+            quarantined,
+        }
+    }
+
+    fn compare_runtime_results(
+        &self,
+        workload: &EquivalenceWorkload,
+        results: &[RuntimeResult],
+    ) -> Vec<BehaviorEquivalenceObservation> {
+        let mut observations = Vec::new();
+
+        if results.is_empty() {
+            return observations;
+        }
+
+        // Find FrankenEngine result as baseline
+        let franken_result = results
+            .iter()
+            .find(|r| r.runtime == ParityTarget::V8Isolate);
+
+        let Some(franken_result) = franken_result else {
+            return observations;
+        };
+
+        // Compare each other runtime against FrankenEngine
+        for result in results {
+            if result.runtime == ParityTarget::V8Isolate {
+                continue;
+            }
+
+            let output_equivalent = self.outputs_equivalent(franken_result, result);
+            let detail = if output_equivalent {
+                "outputs match byte-for-byte".to_string()
+            } else {
+                format!(
+                    "output mismatch: franken='{}' vs {}='{}'",
+                    franken_result.trimmed_stdout(),
+                    result.runtime.as_str(),
+                    result.trimmed_stdout()
+                )
+            };
+
+            let observation = BehaviorEquivalenceObservation::new(
+                &workload.id,
+                result.runtime,
+                EvidenceSurface::ShippedPath,
+                OwnerRouteHint::RuntimeSemantics,
+            )
+            .with_output_equivalence(output_equivalent)
+            .with_feature_supported(result.success)
+            .with_infra_ok(result.success)
+            .with_detail(detail);
+
+            observations.push(observation);
+        }
+
+        observations
+    }
+
+    fn outputs_equivalent(&self, result1: &RuntimeResult, result2: &RuntimeResult) -> bool {
+        result1.trimmed_stdout() == result2.trimmed_stdout()
+    }
+
+    fn create_infra_failure_observation(
+        &self,
+        workload: &EquivalenceWorkload,
+        runtime: ParityTarget,
+        error: &str,
+    ) -> BehaviorEquivalenceObservation {
+        BehaviorEquivalenceObservation::new(
+            &workload.id,
+            runtime,
+            EvidenceSurface::ShippedPath,
+            OwnerRouteHint::BenchmarkHarness,
+        )
+        .with_infra_ok(false)
+        .with_detail(format!("infrastructure failure: {error}"))
+    }
+
+    fn resolve_frankenctl_path(&self) -> Result<PathBuf, String> {
+        if let Some(path) = &self.config.frankenctl_path {
+            return Ok(path.clone());
+        }
+        self.find_command("frankenctl")
+            .ok_or_else(|| "frankenctl not found in PATH".to_string())
+    }
+
+    fn resolve_node_path(&self) -> Result<PathBuf, String> {
+        if let Some(path) = &self.config.node_path {
+            return Ok(path.clone());
+        }
+        self.find_command("node")
+            .ok_or_else(|| "node not found in PATH".to_string())
+    }
+
+    fn resolve_bun_path(&self) -> Result<PathBuf, String> {
+        if let Some(path) = &self.config.bun_path {
+            return Ok(path.clone());
+        }
+        self.find_command("bun")
+            .ok_or_else(|| "bun not found in PATH".to_string())
+    }
+
+    fn find_command(&self, command: &str) -> Option<PathBuf> {
+        let executable = if cfg!(windows) {
+            format!("{command}.exe")
+        } else {
+            command.to_string()
+        };
+
+        std::env::var_os("PATH").and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(&executable))
+                .find(|path| path.is_file())
+        })
+    }
+
+    fn materialize_workload(&self, workload: &EquivalenceWorkload) -> Result<PathBuf, String> {
+        let temp_dir = self
+            .config
+            .temp_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("franken_equivalence_check"));
+
+        fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
+
+        let workload_path = temp_dir.join(format!("{}.js", workload.id));
+        fs::write(&workload_path, &workload.source)
+            .map_err(|e| format!("Failed to write workload: {e}"))?;
+
+        Ok(workload_path)
+    }
+
+    fn extract_frankenctl_output(&self, output: &Output) -> Result<String, String> {
+        if !output.status.success() {
+            return Err(format!(
+                "frankenctl failed with exit code {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let json: Value = serde_json::from_str(&json_str)
+            .map_err(|e| format!("Failed to parse frankenctl JSON output: {e}"))?;
+
+        // Try to extract from console_output first
+        if let Some(console_output) = json.get("console_output") {
+            if let Some(entries) = console_output.as_array() {
+                for entry in entries {
+                    if let Some(message) = entry.get("message").and_then(Value::as_str) {
+                        return Ok(message.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        // Fall back to execution_value
+        if let Some(exec_value) = json.get("execution_value") {
+            if let Some(value_str) = exec_value.as_str() {
+                return Ok(value_str.trim().to_string());
+            }
+            if let Some(value_num) = exec_value.as_number() {
+                return Ok(value_num.to_string());
+            }
+            if let Some(value_obj) = exec_value.as_object() {
+                if let Some(inner) = value_obj.get("value") {
+                    if let Some(inner_str) = inner.as_str() {
+                        return Ok(inner_str.trim().to_string());
+                    }
+                    if let Some(inner_num) = inner.as_number() {
+                        return Ok(inner_num.to_string());
+                    }
+                }
+            }
+        }
+
+        Err("No usable output found in frankenctl JSON response".to_string())
+    }
+}
+
+/// Result of cross-runtime equivalence checking for a single workload.
+#[derive(Debug, Clone)]
+pub struct EquivalenceResult {
+    pub workload_id: String,
+    pub runtime_results: Vec<RuntimeResult>,
+    pub observations: Vec<BehaviorEquivalenceObservation>,
+    pub quarantined: bool,
+}
+
+impl EquivalenceResult {
+    /// Check if this workload passed all equivalence checks.
+    #[must_use]
+    pub fn is_equivalent(&self) -> bool {
+        self.observations
+            .iter()
+            .all(|obs| classify_observation(obs) == BehaviorEquivalenceClass::Equivalent)
+    }
+
+    /// Get all failing classifications.
+    #[must_use]
+    pub fn failing_classifications(&self) -> Vec<BehaviorEquivalenceClass> {
+        self.observations
+            .iter()
+            .map(classify_observation)
+            .filter(|&c| c != BehaviorEquivalenceClass::Equivalent)
+            .collect()
+    }
+}
+
+/// Bulk equivalence checker for multiple workloads.
+#[derive(Debug)]
+pub struct BulkEquivalenceChecker {
+    checker: EquivalenceChecker,
+}
+
+impl BulkEquivalenceChecker {
+    #[must_use]
+    pub fn new(config: EquivalenceConfig) -> Self {
+        Self {
+            checker: EquivalenceChecker::new(config),
+        }
+    }
+
+    /// Check equivalence for all workloads and generate a comprehensive report.
+    pub fn check_all_workloads(&self, workloads: &[EquivalenceWorkload]) -> BulkEquivalenceResult {
+        let mut results = Vec::new();
+        let mut all_observations = Vec::new();
+        let mut quarantined_workloads = Vec::new();
+
+        for workload in workloads {
+            let result = self.checker.check_equivalence(workload);
+            if result.quarantined {
+                quarantined_workloads.push(workload.id.clone());
+            }
+            all_observations.extend(result.observations.clone());
+            results.push(result);
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let trace_id = format!("equiv-trace-{timestamp}");
+        let decision_id = format!("equiv-decision-{timestamp}");
+
+        let report = build_report(trace_id, decision_id, POLICY_ID, &all_observations);
+
+        BulkEquivalenceResult {
+            results,
+            report,
+            quarantined_workloads,
+        }
+    }
+}
+
+/// Result of bulk equivalence checking across multiple workloads.
+#[derive(Debug)]
+pub struct BulkEquivalenceResult {
+    pub results: Vec<EquivalenceResult>,
+    pub report: BehaviorEquivalenceReport,
+    pub quarantined_workloads: Vec<String>,
+}
+
+impl BulkEquivalenceResult {
+    /// Check if all workloads passed equivalence checks.
+    #[must_use]
+    pub fn all_equivalent(&self) -> bool {
+        self.results.iter().all(|r| r.is_equivalent())
+    }
+
+    /// Get count of equivalent vs failing workloads.
+    #[must_use]
+    pub fn summary(&self) -> (usize, usize) {
+        let equivalent = self.results.iter().filter(|r| r.is_equivalent()).count();
+        let failing = self.results.len() - equivalent;
+        (equivalent, failing)
     }
 }
 

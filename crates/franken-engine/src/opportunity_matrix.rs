@@ -817,6 +817,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         };
         let slow = BenchmarkCase {
             workload_id: "w2".to_string(),
@@ -826,6 +827,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         };
         let pressure = benchmark_pressure_from_cases(&[slow], &[fast]);
         assert!(pressure > 1_000_000);
@@ -1114,6 +1116,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         };
         let pressure = benchmark_pressure_from_cases(&[fast], &[]);
         assert_eq!(pressure, 1_000_000);
@@ -1134,6 +1137,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         };
         assert_eq!(benchmark_pressure_from_cases(&[bad], &[]), 1_000_000);
     }
@@ -1148,6 +1152,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         };
         let pressure = benchmark_pressure_from_cases(&[very_slow], &[]);
         assert!(pressure > 1_000_000);

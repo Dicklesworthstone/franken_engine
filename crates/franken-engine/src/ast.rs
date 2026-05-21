@@ -1422,201 +1422,134 @@ pub enum Expression {
 
 impl Expression {
     pub fn canonical_value(&self) -> CanonicalValue {
-        let mut map = BTreeMap::new();
         match self {
-            Self::Identifier(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("identifier".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
-            }
-            Self::StringLiteral(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("string".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
-            }
-            Self::NumericLiteral(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("numeric".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::I64(*value));
-            }
-            Self::FloatLiteral(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("float".to_string()),
-                );
+            Self::Identifier(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("identifier")),
+                ("value", CanonicalValue::str(value.clone())),
+            ]),
+            Self::StringLiteral(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("string")),
+                ("value", CanonicalValue::str(value.clone())),
+            ]),
+            Self::NumericLiteral(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("numeric")),
+                ("value", CanonicalValue::I64(*value)),
+            ]),
+            Self::FloatLiteral(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("float")),
                 // FloatLiteral stores bits directly as u64
-                map.insert("bits".to_string(), CanonicalValue::U64(*value));
-            }
-            Self::BooleanLiteral(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("boolean".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::Bool(*value));
-            }
-            Self::NullLiteral => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("null".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::Null);
-            }
-            Self::UndefinedLiteral => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("undefined".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::Null);
-            }
-            Self::Await(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("await".to_string()),
-                );
-                map.insert("value".to_string(), value.canonical_value());
-            }
-            Self::Yield { argument, delegate } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("yield".to_string()),
-                );
-                map.insert(
-                    "argument".to_string(),
+                ("bits", CanonicalValue::U64(*value)),
+            ]),
+            Self::BooleanLiteral(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("boolean")),
+                ("value", CanonicalValue::Bool(*value)),
+            ]),
+            Self::NullLiteral => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("null")),
+                ("value", CanonicalValue::Null),
+            ]),
+            Self::UndefinedLiteral => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("undefined")),
+                ("value", CanonicalValue::Null),
+            ]),
+            Self::Await(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("await")),
+                ("value", value.canonical_value()),
+            ]),
+            Self::Yield { argument, delegate } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("yield")),
+                (
+                    "argument",
                     argument
                         .as_ref()
                         .map(|a| a.canonical_value())
                         .unwrap_or(CanonicalValue::Null),
-                );
-                map.insert("delegate".to_string(), CanonicalValue::Bool(*delegate));
-            }
+                ),
+                ("delegate", CanonicalValue::Bool(*delegate)),
+            ]),
             Self::Binary {
                 operator,
                 left,
                 right,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("binary".to_string()),
-                );
-                map.insert(
-                    "operator".to_string(),
-                    CanonicalValue::String(operator.as_str().to_string()),
-                );
-                map.insert("left".to_string(), left.canonical_value());
-                map.insert("right".to_string(), right.canonical_value());
-            }
-            Self::Unary { operator, argument } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("unary".to_string()),
-                );
-                map.insert(
-                    "operator".to_string(),
-                    CanonicalValue::String(operator.as_str().to_string()),
-                );
-                map.insert("argument".to_string(), argument.canonical_value());
-            }
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("binary")),
+                ("operator", CanonicalValue::str(operator.as_str())),
+                ("left", left.canonical_value()),
+                ("right", right.canonical_value()),
+            ]),
+            Self::Unary { operator, argument } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("unary")),
+                ("operator", CanonicalValue::str(operator.as_str())),
+                ("argument", argument.canonical_value()),
+            ]),
             Self::Assignment {
                 operator,
                 left,
                 right,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("assignment".to_string()),
-                );
-                map.insert(
-                    "operator".to_string(),
-                    CanonicalValue::String(operator.as_str().to_string()),
-                );
-                map.insert("left".to_string(), left.canonical_value());
-                map.insert("right".to_string(), right.canonical_value());
-            }
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("assignment")),
+                ("operator", CanonicalValue::str(operator.as_str())),
+                ("left", left.canonical_value()),
+                ("right", right.canonical_value()),
+            ]),
             Self::Conditional {
                 test,
                 consequent,
                 alternate,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("conditional".to_string()),
-                );
-                map.insert("test".to_string(), test.canonical_value());
-                map.insert("consequent".to_string(), consequent.canonical_value());
-                map.insert("alternate".to_string(), alternate.canonical_value());
-            }
-            Self::Call { callee, arguments } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("call".to_string()),
-                );
-                map.insert("callee".to_string(), callee.canonical_value());
-                map.insert(
-                    "arguments".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("conditional")),
+                ("test", test.canonical_value()),
+                ("consequent", consequent.canonical_value()),
+                ("alternate", alternate.canonical_value()),
+            ]),
+            Self::Call { callee, arguments } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("call")),
+                ("callee", callee.canonical_value()),
+                (
+                    "arguments",
                     CanonicalValue::Array(
                         arguments.iter().map(Expression::canonical_value).collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::Member {
                 object,
                 property,
                 computed,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("member".to_string()),
-                );
-                map.insert("object".to_string(), object.canonical_value());
-                map.insert("property".to_string(), property.canonical_value());
-                map.insert("computed".to_string(), CanonicalValue::Bool(*computed));
-            }
-            Self::OptionalCall { callee, arguments } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("optional_call".to_string()),
-                );
-                map.insert("callee".to_string(), callee.canonical_value());
-                map.insert(
-                    "arguments".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("member")),
+                ("object", object.canonical_value()),
+                ("property", property.canonical_value()),
+                ("computed", CanonicalValue::Bool(*computed)),
+            ]),
+            Self::OptionalCall { callee, arguments } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("optional_call")),
+                ("callee", callee.canonical_value()),
+                (
+                    "arguments",
                     CanonicalValue::Array(
                         arguments.iter().map(Expression::canonical_value).collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::OptionalMember {
                 object,
                 property,
                 computed,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("optional_member".to_string()),
-                );
-                map.insert("object".to_string(), object.canonical_value());
-                map.insert("property".to_string(), property.canonical_value());
-                map.insert("computed".to_string(), CanonicalValue::Bool(*computed));
-            }
-            Self::This => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("this".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::Null);
-            }
-            Self::ArrayLiteral(elements) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("array".to_string()),
-                );
-                map.insert(
-                    "elements".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("optional_member")),
+                ("object", object.canonical_value()),
+                ("property", property.canonical_value()),
+                ("computed", CanonicalValue::Bool(*computed)),
+            ]),
+            Self::This => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("this")),
+                ("value", CanonicalValue::Null),
+            ]),
+            Self::ArrayLiteral(elements) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("array")),
+                (
+                    "elements",
                     CanonicalValue::Array(
                         elements
                             .iter()
@@ -1627,132 +1560,97 @@ impl Expression {
                             })
                             .collect(),
                     ),
-                );
-            }
-            Self::ObjectLiteral(properties) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("object".to_string()),
-                );
-                map.insert(
-                    "properties".to_string(),
+                ),
+            ]),
+            Self::ObjectLiteral(properties) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("object")),
+                (
+                    "properties",
                     CanonicalValue::Array(
                         properties
                             .iter()
                             .map(ObjectProperty::canonical_value)
                             .collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::ArrowFunction {
                 params,
                 body,
                 is_async,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("arrow_function".to_string()),
-                );
-                map.insert(
-                    "params".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("arrow_function")),
+                (
+                    "params",
                     CanonicalValue::Array(
                         params.iter().map(FunctionParam::canonical_value).collect(),
                     ),
-                );
-                map.insert("body".to_string(), body.canonical_value());
-                map.insert("is_async".to_string(), CanonicalValue::Bool(*is_async));
-            }
-            Self::New { callee, arguments } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("new".to_string()),
-                );
-                map.insert("callee".to_string(), callee.canonical_value());
-                map.insert(
-                    "arguments".to_string(),
+                ),
+                ("body", body.canonical_value()),
+                ("is_async", CanonicalValue::Bool(*is_async)),
+            ]),
+            Self::New { callee, arguments } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("new")),
+                ("callee", callee.canonical_value()),
+                (
+                    "arguments",
                     CanonicalValue::Array(
                         arguments.iter().map(Expression::canonical_value).collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::TemplateLiteral {
                 quasis,
                 expressions,
-            } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("template_literal".to_string()),
-                );
-                map.insert(
-                    "quasis".to_string(),
+            } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("template_literal")),
+                (
+                    "quasis",
                     CanonicalValue::Array(
-                        quasis
-                            .iter()
-                            .map(|q| CanonicalValue::String(q.clone()))
-                            .collect(),
+                        quasis.iter().map(|q| CanonicalValue::str(q.clone())).collect(),
                     ),
-                );
-                map.insert(
-                    "expressions".to_string(),
+                ),
+                (
+                    "expressions",
                     CanonicalValue::Array(
                         expressions
                             .iter()
                             .map(Expression::canonical_value)
                             .collect(),
                     ),
-                );
-            }
+                ),
+            ]),
             Self::Function { name, .. } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("function_expression".to_string()),
-                );
+                let mut entries = vec![("kind", CanonicalValue::str("function_expression"))];
                 if let Some(n) = name {
-                    map.insert("name".to_string(), CanonicalValue::String(n.clone()));
+                    entries.push(("name", CanonicalValue::str(n.clone())));
                 }
+                CanonicalValue::map_from_entries(entries)
             }
-            Self::Raw(value) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("raw".to_string()),
-                );
-                map.insert("value".to_string(), CanonicalValue::String(value.clone()));
-            }
-            Self::SpreadElement(inner) => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("spread".to_string()),
-                );
-                map.insert("argument".to_string(), inner.canonical_value());
-            }
-            Self::RegExpLiteral { pattern, flags } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("regexp".to_string()),
-                );
-                map.insert(
-                    "pattern".to_string(),
-                    CanonicalValue::String(pattern.clone()),
-                );
-                map.insert("flags".to_string(), CanonicalValue::String(flags.clone()));
-            }
+            Self::Raw(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("raw")),
+                ("value", CanonicalValue::str(value.clone())),
+            ]),
+            Self::SpreadElement(inner) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("spread")),
+                ("argument", inner.canonical_value()),
+            ]),
+            Self::RegExpLiteral { pattern, flags } => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("regexp")),
+                ("pattern", CanonicalValue::str(pattern.clone())),
+                ("flags", CanonicalValue::str(flags.clone())),
+            ]),
             Self::ClassExpression { name, .. } => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("class_expression".to_string()),
-                );
+                let mut entries = vec![("kind", CanonicalValue::str("class_expression"))];
                 if let Some(n) = name {
-                    map.insert("name".to_string(), CanonicalValue::String(n.clone()));
+                    entries.push(("name", CanonicalValue::str(n.clone())));
                 }
+                CanonicalValue::map_from_entries(entries)
             }
-            Self::Super => {
-                map.insert(
-                    "kind".to_string(),
-                    CanonicalValue::String("super".to_string()),
-                );
-            }
+            Self::Super => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("super")),
+            ]),
         }
-        CanonicalValue::Map(map)
     }
 }
 

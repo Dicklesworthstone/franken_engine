@@ -1,0 +1,10 @@
+[package]
+name = "franken-engine-deterministic-trait"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Deterministic marker trait for franken-engine"
+
+[dependencies]
+# No dependencies needed for the trait itself

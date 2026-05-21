@@ -65,10 +65,20 @@ Use raw `/dp/frankensqlite` primitives when all are true:
 2. Domain invariants are minimal and do not justify typed model overhead.
 3. Migration patterns are straightforward and low risk.
 
-Expected examples:
+Explicit store classification (verified 2026-05-21 via bd-cixqu.12.1 audit):
 
-- Usually raw `/dp/frankensqlite`: replay index, benchmark ledger, policy artifact cache.
-- Usually `sqlmodel_rust` over `/dp/frankensqlite`: replacement lineage log, IFC provenance index, specialization index.
+**Raw `/dp/frankensqlite` stores:**
+- `ReplayIndex`: `frankensqlite::control_plane::replay_index`
+- `BenchmarkLedger`: `frankensqlite::benchmark::ledger`
+- `PolicyCache`: `frankensqlite::control_plane::policy_cache`
+- `EvidenceIndex`: `frankensqlite::control_plane::evidence_index`
+- `PlasWitness`: `frankensqlite::analysis::plas_witness`
+
+**`sqlmodel_rust` typed stores:**
+- `ShadowEvidenceJournal`: `sqlmodel_rust::ShadowEvidenceJournalEntry`
+- `ReplacementLineage`: `sqlmodel_rust::ReplacementLineageEntry`
+- `IfcProvenance`: `sqlmodel_rust::IfcProvenanceEntry`
+- `SpecializationIndex`: `sqlmodel_rust::SpecializationIndexEntry`
 
 ## Persistence Boundary Definition
 
@@ -159,3 +169,18 @@ For `bd-89l2` storage-adapter verification, follow these steps:
    - `run_manifest.json`: toolchain/seed/commands/commit metadata
    - `commands.txt`: exact command list executed
 3. If replay validation is required, rerun with the same `STORAGE_ADAPTER_SEED` value and compare the emitted manifest and command log.
+
+## Amendment Record
+
+### 2026-05-21: Explicit Typed Store Enumeration (bd-cixqu.12.3)
+
+**Amendment Scope:** Replace general "expected examples" guidance with explicit per-store classification.
+
+**Rationale:** The storage adapter audit (bd-cixqu.12.1) provided definitive inventory of which stores use raw frankensqlite vs sqlmodel_rust typed boundaries. This amendment supersedes the previous "usually" language with verified implementation details.
+
+**Changes Made:**
+1. **Explicit store enumeration**: Listed exact integration points for all 9 control-plane stores
+2. **Verification reference**: All classifications verified against `storage_adapter.rs`, `typed_persistence_models.rs`, and `FRANKENSQLITE_PERSISTENCE_INVENTORY.md`
+3. **Status preservation**: "Accepted" status remains unchanged; amendment adds specificity without altering the core decision framework
+
+**Audit Trail:** This amendment implements the formal closure of Track L storage adapter deviation work, completing the trilogy: audit (bd-cixqu.12.1), documentation resolution (bd-cixqu.12.2), and ADR specificity (bd-cixqu.12.3).

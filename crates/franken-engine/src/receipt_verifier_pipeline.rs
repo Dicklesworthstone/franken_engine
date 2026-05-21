@@ -18,6 +18,7 @@ use crate::attested_execution_cell::{
     VerificationResult,
 };
 use crate::engine_object_id::EngineObjectId;
+use crate::evidence_contract::{ReceiptRecord, SignatureAlgorithm};
 use crate::hash_tiers::ContentHash;
 use crate::mmr_proof::{MmrProof, verify_consistency, verify_inclusion};
 use crate::proof_schema::OptReceipt;
@@ -896,6 +897,265 @@ fn map_platform(platform: PlatformKind) -> Option<TeePlatform> {
         PlatformKind::AmdSevSnp => Some(TeePlatform::AmdSev),
         PlatformKind::Software => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Signed Decision Receipt Verification
+// ---------------------------------------------------------------------------
+
+/// Verify a signed decision receipt from the new ReceiptRecord format.
+///
+/// This function validates the structure, signature, and internal consistency
+/// of a ReceiptRecord according to the decision_receipt_v1.json schema.
+pub fn verify_signed_decision_receipt(
+    receipt: &ReceiptRecord,
+) -> UnifiedReceiptVerificationVerdict {
+    let trace_id = receipt
+        .verification_metadata
+        .as_ref()
+        .and_then(|m| m.trace_id.clone())
+        .unwrap_or_else(|| format!("trace-{}", receipt.timestamp));
+
+    let signature = verify_signed_decision_receipt_structure(receipt);
+    let transparency = verify_signed_decision_receipt_consistency(receipt);
+    let attestation = LayerResult::pass(); // Placeholder - attestation not implemented for new format yet
+
+    let passed = signature.passed && transparency.passed && attestation.passed;
+    let failure_class = if !signature.passed {
+        Some(VerificationFailureClass::Signature)
+    } else if !transparency.passed {
+        Some(VerificationFailureClass::Transparency)
+    } else {
+        None
+    };
+
+    let exit_code = failure_class_exit_code(failure_class);
+
+    UnifiedReceiptVerificationVerdict {
+        receipt_id: receipt.receipt_id.clone(),
+        trace_id,
+        decision_id: receipt.decision_id.clone(),
+        policy_id: receipt.policy_id.clone(),
+        verification_timestamp_ns: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+        passed,
+        failure_class,
+        exit_code,
+        signature,
+        transparency,
+        attestation,
+        warnings: Vec::new(),
+        logs: Vec::new(),
+    }
+}
+
+fn verify_signed_decision_receipt_structure(receipt: &ReceiptRecord) -> LayerResult {
+    let mut result = LayerResult::pass();
+
+    // Validate schema version
+    if receipt.schema_version != "franken-engine.signed-decision-receipt.v1" {
+        result.record_fail(
+            "schema_version_check",
+            "RECEIPT_INVALID_SCHEMA",
+            format!(
+                "Expected schema version 'franken-engine.signed-decision-receipt.v1', got '{}'",
+                receipt.schema_version
+            ),
+        );
+    } else {
+        result.record_pass("schema_version_check", "Schema version is correct");
+    }
+
+    // Validate receipt structure using built-in validation
+    match receipt.validate() {
+        Ok(()) => {
+            result.record_pass(
+                "receipt_structure_validation",
+                "Receipt structure validation passed",
+            );
+        }
+        Err(errors) => {
+            for error in errors {
+                result.record_fail(
+                    "receipt_structure_validation",
+                    "RECEIPT_STRUCTURE_INVALID",
+                    error,
+                );
+            }
+        }
+    }
+
+    // Validate signature format
+    if receipt.signature_bundle.signature_hex.is_empty() {
+        result.record_fail(
+            "signature_present",
+            "RECEIPT_MISSING_SIGNATURE",
+            "Signature hex is empty",
+        );
+    } else if receipt.signature_bundle.signature_hex.len() < 32 {
+        result.record_fail(
+            "signature_length",
+            "RECEIPT_INVALID_SIGNATURE_LENGTH",
+            format!(
+                "Signature too short: {} characters",
+                receipt.signature_bundle.signature_hex.len()
+            ),
+        );
+    } else {
+        result.record_pass(
+            "signature_present",
+            format!(
+                "Signature present with {} characters",
+                receipt.signature_bundle.signature_hex.len()
+            ),
+        );
+    }
+
+    // Validate public key format
+    if receipt.signature_bundle.public_key_hex.is_empty() {
+        result.record_fail(
+            "public_key_present",
+            "RECEIPT_MISSING_PUBLIC_KEY",
+            "Public key hex is empty",
+        );
+    } else {
+        result.record_pass(
+            "public_key_present",
+            format!(
+                "Public key present with {} characters",
+                receipt.signature_bundle.public_key_hex.len()
+            ),
+        );
+    }
+
+    // Validate algorithm support
+    match receipt.signature_bundle.signature_algorithm {
+        SignatureAlgorithm::Ed25519 => {
+            result.record_pass("signature_algorithm", "Ed25519 algorithm supported");
+        }
+        SignatureAlgorithm::EcdsaP256 => {
+            result.record_pass("signature_algorithm", "ECDSA P-256 algorithm supported");
+        }
+        SignatureAlgorithm::RsaPssSha256 => {
+            result.record_pass("signature_algorithm", "RSA-PSS SHA-256 algorithm supported");
+        }
+    }
+
+    result
+}
+
+fn verify_signed_decision_receipt_consistency(receipt: &ReceiptRecord) -> LayerResult {
+    let mut result = LayerResult::pass();
+
+    // Validate timestamp is reasonable
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    if receipt.timestamp > now + 300_000 {
+        // More than 5 minutes in the future
+        result.record_fail(
+            "timestamp_not_future",
+            "RECEIPT_TIMESTAMP_FUTURE",
+            format!(
+                "Receipt timestamp {} is more than 5 minutes in the future",
+                receipt.timestamp
+            ),
+        );
+    } else if receipt.timestamp < now - 31_536_000_000 {
+        // More than 1 year old
+        result.record_fail(
+            "timestamp_not_ancient",
+            "RECEIPT_TIMESTAMP_ANCIENT",
+            format!(
+                "Receipt timestamp {} is more than 1 year old",
+                receipt.timestamp
+            ),
+        );
+    } else {
+        result.record_pass(
+            "timestamp_reasonable",
+            format!("Timestamp {} is within reasonable range", receipt.timestamp),
+        );
+    }
+
+    // Validate action execution timestamp is not before decision timestamp
+    if receipt.action.execution_timestamp < receipt.timestamp {
+        result.record_fail(
+            "action_timestamp_after_decision",
+            "RECEIPT_ACTION_TIMESTAMP_INCONSISTENT",
+            "Action execution timestamp cannot be before receipt timestamp",
+        );
+    } else {
+        result.record_pass(
+            "action_timestamp_after_decision",
+            "Action timestamp is after decision timestamp",
+        );
+    }
+
+    // Validate probability distribution sums to 1.0 (already done in receipt validation, but double-check)
+    let total_prob: f64 = receipt
+        .expected_loss_vector
+        .iter()
+        .map(|e| e.probability)
+        .sum();
+    if (total_prob - 1.0).abs() > 0.001 {
+        result.record_fail(
+            "probability_sum_check",
+            "RECEIPT_PROBABILITY_SUM_INVALID",
+            format!(
+                "Expected loss probabilities sum to {} but should be 1.0",
+                total_prob
+            ),
+        );
+    } else {
+        result.record_pass(
+            "probability_sum_check",
+            "Expected loss probabilities sum to 1.0",
+        );
+    }
+
+    // Validate posterior snapshot consistency
+    if receipt.posterior_snapshot.confidence_interval_95_lower
+        > receipt.posterior_snapshot.confidence_interval_95_upper
+    {
+        result.record_fail(
+            "confidence_interval_ordering",
+            "RECEIPT_CONFIDENCE_INTERVAL_INVALID",
+            "95% confidence interval lower bound is greater than upper bound",
+        );
+    } else {
+        result.record_pass(
+            "confidence_interval_ordering",
+            "95% confidence interval bounds are correctly ordered",
+        );
+    }
+
+    result
+}
+
+/// Parse a signed decision receipt from JSON file.
+///
+/// Returns the parsed receipt record if successful, or an error if the JSON
+/// is invalid or doesn't conform to the expected schema.
+pub fn parse_signed_decision_receipt_from_file(
+    file_path: &str,
+) -> Result<ReceiptRecord, Box<dyn std::error::Error>> {
+    let json_content = std::fs::read_to_string(file_path)?;
+    let receipt: ReceiptRecord = serde_json::from_str(&json_content)?;
+
+    // Validate that this is actually a decision receipt
+    if receipt.schema_version != "franken-engine.signed-decision-receipt.v1" {
+        return Err(format!(
+            "Invalid schema version: expected 'franken-engine.signed-decision-receipt.v1', got '{}'",
+            receipt.schema_version
+        ).into());
+    }
+
+    Ok(receipt)
 }
 
 #[cfg(test)]

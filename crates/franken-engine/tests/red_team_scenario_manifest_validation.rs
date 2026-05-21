@@ -9,6 +9,7 @@ const SCENARIO_DIR: &str = "tests/red_team_scenarios";
 const SCHEMA_VERSION: &str = "franken-engine.red-team-scenario.v1";
 const BASELINE_VERSION: &str = "node-bun-frankenengine-red-team-v1";
 const EXPECTED_SCENARIOS: &[&str] = &[
+    "capability_shadowed_import",
     "environment_variable_exfiltration",
     "process_privilege_surface_probe",
     "prototype_pollution_capability_escape",

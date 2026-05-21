@@ -29,3 +29,20 @@ fsqlite = { path = "/dp/frankensqlite/crates/fsqlite" }
 fsqlite-core = { path = "/dp/frankensqlite/crates/fsqlite-core" }
 fsqlite-types = { path = "/dp/frankensqlite/crates/fsqlite-types" }
 fsqlite-error = { path = "/dp/frankensqlite/crates/fsqlite-error" }
+
+# Measurement-only profile additions for the profiling-software-performance
+# skill pass (2026-05-20). These do not change shipped opt-level or LTO; they
+# only preserve debug info and prevent stripping so samply / perf / heaptrack
+# can resolve frames. Safe to keep long-term — they only affect `cargo bench`
+# and the named `release-perf` profile.
+[profile.bench]
+debug = "line-tables-only"
+strip = false
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+strip = false

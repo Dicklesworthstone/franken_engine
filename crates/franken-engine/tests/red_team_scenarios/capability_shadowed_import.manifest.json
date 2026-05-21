@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "capability_shadowed_import",
+  "title": "Capability-shadowed import laundering through transitive re-export chain",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "capability_shadowed_import",
+  "cwe": ["CWE-829", "CWE-749"],
+  "payload": {
+    "program": "capability_shadowed_import.js",
+    "entrypoint": "node capability_shadowed_import.js",
+    "input": "transitive re-export chain (child_process -> compatHelperReexport -> apiFacade.fetchConfig) ending in execSync(\"printf laundered-canary\")",
+    "success_criteria": "laundered binding invokes the underlying ambient authority and returns its output to the attacker"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "execSync is reachable through the laundered alias and emits the canary to stdout"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "execSync is reachable through the laundered alias and emits the canary to stdout"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering follows the re-export chain transitively and refuses the call site whose root binding resolves to an uncovered ambient-authority surface",
+      "denial_reason": "capability_shadowed_import_chain_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the call site at compile time (no execSync invocation reaches the runtime)"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/capability_shadowed_import.js"
+  ]
+}

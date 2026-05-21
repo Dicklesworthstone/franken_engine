@@ -255,3 +255,27 @@ Verification:
 
 Commit:
 - No new commit from this pane. The required broad all-target gate did not complete after the type fixes; leaving the changes uncommitted until the remote build can finish without SIGKILL.
+
+---
+
+## 2026-05-20 Review Round 1i - Proof Artifact Harness Inference Tail (Codex)
+
+Areas reviewed:
+- Required context from `AGENTS.md`, `README.md`, `git log --since="6 hours ago" --oneline`, and `git diff HEAD~30..HEAD`, with emphasis on the review-window `Arc<str>`, `SourceSpan: Copy`, declassification, and clippy-gate commits.
+- The all-target clippy tail after Round 1h's `or_default()` cleanup.
+- `crates/franken-engine/tests/conformance/proof_artifact/harness.rs` proof-artifact coverage aggregation.
+
+Findings:
+
+- [MEDIUM] `crates/franken-engine/tests/conformance/proof_artifact/harness.rs:125-148` - `coverage_by_section` was initialized as plain `BTreeMap::new()` and then populated via `coverage_by_section.entry(section).or_default()`. In the all-target clippy/test build path, this left the map value type underconstrained and failed with `E0282` at line 148. Root cause: the same `or_insert_with(SectionStats::default)` -> `or_default()` cleanup class fixed in Test262 coverage maps missed the proof-artifact conformance harness. Fixed by typing the map as `BTreeMap<String, SectionStats>`.
+
+Verification:
+- PASS: `env CARGO_TARGET_DIR=target_rch_review cargo fmt --check`.
+- PASS: `rch exec -- env RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo check -p frankenengine-engine --test proof_artifact_conformance_enhanced --target-dir target_rch_review` (`Finished dev profile`, 22m25s remote compile).
+- PASS: `git diff --check`.
+- FAIL, then patched: `rch exec -- env RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo clippy --all-targets --target-dir target_rch_review -- -D warnings` emitted `E0282` at `tests/conformance/proof_artifact/harness.rs:148`, then the rch SSH wrapper timed out after 1800s while draining the failed build.
+- BLOCKED after patch: `rch exec -- env RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo clippy --all-targets --target-dir target_rch_review -- -D warnings` reached `frankenengine-engine`, then `frankenengine-test-support` / control-plane / metamorphic targets with no captured Rust diagnostic, but rch timed out at 1800s before final success/failure.
+- BLOCKED after patch: `rch exec -- env RUSTFLAGS='-C linker=cc' CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo check --all-targets --target-dir target_rch_review` reached `frankenengine-engine`, then `frankenengine-test-support` / control-plane / metamorphic targets with no captured Rust diagnostic. The PTY buffer was lost after the process exited, so no final exit status was retained; no Rust error was captured before the final local-crate phase.
+
+Commit:
+- No commit from this pane in review-only mode. Current working tree also contains unrelated concurrent changes in `.beads/issues.jsonl` and `Cargo.toml`; this pass only intentionally changed `crates/franken-engine/tests/conformance/proof_artifact/harness.rs` and appended this review note.

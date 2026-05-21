@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FrankenEngine Signed Decision Receipt v1",
+  "description": "Externally-verifiable receipt artifact for signed security decisions",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "franken-engine.signed-decision-receipt.v1"
+    },
+    "receipt_id": {
+      "type": "string",
+      "description": "Unique identifier for this receipt",
+      "pattern": "^receipt-[a-zA-Z0-9_-]+$"
+    },
+    "decision_id": {
+      "type": "string",
+      "description": "Unique identifier for the decision being receipted",
+      "pattern": "^decision-[a-zA-Z0-9_-]+$"
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Policy under which this decision was made",
+      "pattern": "^policy-[a-zA-Z0-9_.-]+$"
+    },
+    "evidence_hash_chain_root": {
+      "type": "string",
+      "description": "Root hash of the evidence chain supporting this decision",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "posterior_snapshot": {
+      "type": "object",
+      "description": "Posterior distribution snapshot after decision evaluation",
+      "properties": {
+        "mean_expected_loss": {
+          "type": "number",
+          "description": "Mean expected loss from posterior distribution"
+        },
+        "confidence_interval_95_lower": {
+          "type": "number",
+          "description": "95% confidence interval lower bound"
+        },
+        "confidence_interval_95_upper": {
+          "type": "number",
+          "description": "95% confidence interval upper bound"
+        },
+        "posterior_mode": {
+          "type": "number",
+          "description": "Mode (most likely value) of posterior distribution"
+        },
+        "evaluation_count": {
+          "type": "integer",
+          "description": "Number of evaluations in the posterior",
+          "minimum": 1
+        }
+      },
+      "required": ["mean_expected_loss", "confidence_interval_95_lower", "confidence_interval_95_upper", "posterior_mode", "evaluation_count"],
+      "additionalProperties": false
+    },
+    "expected_loss_vector": {
+      "type": "array",
+      "description": "Expected loss values for each outcome scenario",
+      "items": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "string",
+            "description": "Scenario name or identifier"
+          },
+          "probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Probability of this scenario"
+          },
+          "expected_loss": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Expected loss for this scenario"
+          }
+        },
+        "required": ["scenario", "probability", "expected_loss"],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "action": {
+      "type": "object",
+      "description": "Action taken as a result of this decision",
+      "properties": {
+        "action_type": {
+          "type": "string",
+          "enum": ["allow", "deny", "escalate", "quarantine", "monitor"],
+          "description": "Type of action taken"
+        },
+        "action_parameters": {
+          "type": "object",
+          "description": "Parameters specific to the action type",
+          "additionalProperties": true
+        },
+        "execution_timestamp": {
+          "type": "integer",
+          "description": "Unix timestamp (milliseconds) when action was executed",
+          "minimum": 0
+        }
+      },
+      "required": ["action_type", "execution_timestamp"],
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix timestamp (milliseconds) when receipt was generated",
+      "minimum": 0
+    },
+    "signature_bundle": {
+      "type": "object",
+      "description": "Cryptographic signature bundle for this receipt",
+      "properties": {
+        "signature_algorithm": {
+          "type": "string",
+          "enum": ["ed25519", "ecdsa-p256", "rsa-pss-sha256"],
+          "description": "Signature algorithm used"
+        },
+        "signature_hex": {
+          "type": "string",
+          "description": "Signature in hexadecimal format",
+          "pattern": "^[a-fA-F0-9]+$"
+        },
+        "public_key_hex": {
+          "type": "string",
+          "description": "Public key in hexadecimal format",
+          "pattern": "^[a-fA-F0-9]+$"
+        },
+        "threshold_signature": {
+          "type": "boolean",
+          "description": "Whether this uses threshold signature scheme"
+        },
+        "signer_count": {
+          "type": "integer",
+          "description": "Number of signers (for threshold signatures)",
+          "minimum": 1
+        },
+        "threshold": {
+          "type": "integer",
+          "description": "Threshold required (for threshold signatures)",
+          "minimum": 1
+        }
+      },
+      "required": ["signature_algorithm", "signature_hex", "public_key_hex", "threshold_signature"],
+      "additionalProperties": false
+    },
+    "verification_metadata": {
+      "type": "object",
+      "description": "Additional metadata for verification",
+      "properties": {
+        "generator_version": {
+          "type": "string",
+          "description": "Version of FrankenEngine that generated this receipt"
+        },
+        "security_epoch": {
+          "type": "integer",
+          "description": "Security epoch when receipt was generated",
+          "minimum": 0
+        },
+        "trace_id": {
+          "type": "string",
+          "description": "Trace ID for linking with execution logs"
+        }
+      },
+      "required": ["generator_version", "security_epoch"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "decision_id",
+    "policy_id",
+    "evidence_hash_chain_root",
+    "posterior_snapshot",
+    "expected_loss_vector",
+    "action",
+    "timestamp",
+    "signature_bundle"
+  ],
+  "additionalProperties": false
+}

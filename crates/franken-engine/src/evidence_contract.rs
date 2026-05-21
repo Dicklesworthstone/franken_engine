@@ -7,6 +7,7 @@
 //! 5.1 (extreme-software-optimization baseline/profile/prove), 5.2 (alien-
 //! artifact-coding expected-loss), 5.3 (alien-graveyard EV threshold).
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -334,6 +335,221 @@ pub fn validate_contract(contract: &EvidenceContract) -> Vec<ContractValidationE
     }
 
     errors
+}
+
+// ---------------------------------------------------------------------------
+// Signed Decision Receipt
+// ---------------------------------------------------------------------------
+
+/// A signed decision receipt record for externally-verifiable decisions.
+///
+/// This structure represents a complete receipt artifact that can be verified
+/// independently without requiring the original FrankenEngine source code.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReceiptRecord {
+    /// Schema version for the receipt format.
+    pub schema_version: String,
+    /// Unique identifier for this receipt.
+    pub receipt_id: String,
+    /// Unique identifier for the decision being receipted.
+    pub decision_id: String,
+    /// Policy under which this decision was made.
+    pub policy_id: String,
+    /// Root hash of the evidence chain supporting this decision.
+    pub evidence_hash_chain_root: String,
+    /// Posterior distribution snapshot after decision evaluation.
+    pub posterior_snapshot: PosteriorSnapshot,
+    /// Expected loss values for each outcome scenario.
+    pub expected_loss_vector: Vec<ExpectedLossEntry>,
+    /// Action taken as a result of this decision.
+    pub action: DecisionAction,
+    /// Unix timestamp (milliseconds) when receipt was generated.
+    pub timestamp: u64,
+    /// Cryptographic signature bundle for this receipt.
+    pub signature_bundle: SignatureBundle,
+    /// Additional metadata for verification (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_metadata: Option<VerificationMetadata>,
+}
+
+/// Posterior distribution snapshot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PosteriorSnapshot {
+    /// Mean expected loss from posterior distribution.
+    pub mean_expected_loss: f64,
+    /// 95% confidence interval lower bound.
+    pub confidence_interval_95_lower: f64,
+    /// 95% confidence interval upper bound.
+    pub confidence_interval_95_upper: f64,
+    /// Mode (most likely value) of posterior distribution.
+    pub posterior_mode: f64,
+    /// Number of evaluations in the posterior.
+    pub evaluation_count: u32,
+}
+
+/// Expected loss entry for a specific scenario.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExpectedLossEntry {
+    /// Scenario name or identifier.
+    pub scenario: String,
+    /// Probability of this scenario.
+    pub probability: f64,
+    /// Expected loss for this scenario.
+    pub expected_loss: f64,
+}
+
+/// Action taken as a result of a decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionAction {
+    /// Type of action taken.
+    pub action_type: ActionType,
+    /// Parameters specific to the action type.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub action_parameters: BTreeMap<String, String>,
+    /// Unix timestamp (milliseconds) when action was executed.
+    pub execution_timestamp: u64,
+}
+
+/// Type of action taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionType {
+    Allow,
+    Deny,
+    Escalate,
+    Quarantine,
+    Monitor,
+}
+
+/// Cryptographic signature bundle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignatureBundle {
+    /// Signature algorithm used.
+    pub signature_algorithm: SignatureAlgorithm,
+    /// Signature in hexadecimal format.
+    pub signature_hex: String,
+    /// Public key in hexadecimal format.
+    pub public_key_hex: String,
+    /// Whether this uses threshold signature scheme.
+    pub threshold_signature: bool,
+    /// Number of signers (for threshold signatures).
+    #[serde(default = "default_signer_count")]
+    pub signer_count: u32,
+    /// Threshold required (for threshold signatures).
+    #[serde(default = "default_threshold")]
+    pub threshold: u32,
+}
+
+fn default_signer_count() -> u32 {
+    1
+}
+
+fn default_threshold() -> u32 {
+    1
+}
+
+/// Signature algorithm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignatureAlgorithm {
+    Ed25519,
+    EcdsaP256,
+    RsaPssSha256,
+}
+
+/// Additional metadata for verification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VerificationMetadata {
+    /// Version of FrankenEngine that generated this receipt.
+    pub generator_version: String,
+    /// Security epoch when receipt was generated.
+    pub security_epoch: u64,
+    /// Trace ID for linking with execution logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+}
+
+impl ReceiptRecord {
+    /// Create a new receipt record with the current schema version.
+    pub fn new(
+        receipt_id: String,
+        decision_id: String,
+        policy_id: String,
+        evidence_hash_chain_root: String,
+        posterior_snapshot: PosteriorSnapshot,
+        expected_loss_vector: Vec<ExpectedLossEntry>,
+        action: DecisionAction,
+        signature_bundle: SignatureBundle,
+    ) -> Self {
+        Self {
+            schema_version: "franken-engine.signed-decision-receipt.v1".to_string(),
+            receipt_id,
+            decision_id,
+            policy_id,
+            evidence_hash_chain_root,
+            posterior_snapshot,
+            expected_loss_vector,
+            action,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            signature_bundle,
+            verification_metadata: None,
+        }
+    }
+
+    /// Set verification metadata.
+    pub fn with_verification_metadata(mut self, metadata: VerificationMetadata) -> Self {
+        self.verification_metadata = Some(metadata);
+        self
+    }
+
+    /// Validate the receipt record structure.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+
+        if self.receipt_id.is_empty() {
+            errors.push("receipt_id cannot be empty".to_string());
+        }
+        if self.decision_id.is_empty() {
+            errors.push("decision_id cannot be empty".to_string());
+        }
+        if self.policy_id.is_empty() {
+            errors.push("policy_id cannot be empty".to_string());
+        }
+        if self.evidence_hash_chain_root.is_empty() {
+            errors.push("evidence_hash_chain_root cannot be empty".to_string());
+        }
+        if self.expected_loss_vector.is_empty() {
+            errors.push("expected_loss_vector cannot be empty".to_string());
+        }
+        if self.signature_bundle.signature_hex.is_empty() {
+            errors.push("signature_hex cannot be empty".to_string());
+        }
+        if self.signature_bundle.public_key_hex.is_empty() {
+            errors.push("public_key_hex cannot be empty".to_string());
+        }
+
+        // Validate probabilities sum to approximately 1.0
+        let total_probability: f64 = self
+            .expected_loss_vector
+            .iter()
+            .map(|e| e.probability)
+            .sum();
+        if (total_probability - 1.0).abs() > 0.001 {
+            errors.push(format!(
+                "expected_loss_vector probabilities sum to {} but should sum to 1.0",
+                total_probability
+            ));
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

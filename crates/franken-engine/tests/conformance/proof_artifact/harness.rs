@@ -122,7 +122,7 @@ impl ConformanceHarness {
     }
 
     fn generate_report(&self, results: Vec<ConformanceResult>) -> ConformanceReport {
-        let mut coverage_by_section = BTreeMap::new();
+        let mut coverage_by_section: BTreeMap<String, SectionStats> = BTreeMap::new();
         let mut passed = 0;
         let mut failed = 0;
         let mut skipped = 0;

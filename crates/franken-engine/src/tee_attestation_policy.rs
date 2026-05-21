@@ -590,6 +590,36 @@ impl TeeAttestationPolicy {
             (a.platform, a.root_id.as_str()).cmp(&(b.platform, b.root_id.as_str()))
         });
     }
+
+    /// Create a default policy for testing purposes.
+    ///
+    /// This creates a minimal valid policy that passes validation but should
+    /// not be used in production environments.
+    #[cfg(test)]
+    pub fn default_for_testing() -> Self {
+        use std::collections::BTreeMap;
+
+        let mut approved_measurements = BTreeMap::new();
+        for platform in TeePlatform::ALL {
+            approved_measurements.insert(platform, vec![
+                MeasurementDigest {
+                    algorithm: MeasurementAlgorithm::Sha256,
+                    digest_hex: "deadbeefcafebabe".repeat(4), // 32 bytes for SHA256
+                }
+            ]);
+        }
+
+        Self {
+            schema_version: 1,
+            freshness_window: FreshnessWindow {
+                standard_decision_window: Duration::from_secs(300).as_millis() as u64,
+                high_impact_decision_window: Duration::from_secs(60).as_millis() as u64,
+            },
+            approved_measurements,
+            revocation_sources: vec![],
+            platform_trust_roots: vec![],
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

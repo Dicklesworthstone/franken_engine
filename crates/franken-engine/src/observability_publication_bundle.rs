@@ -1501,9 +1501,9 @@ mod tests {
     #[test]
     fn workload_class_serde_roundtrip() {
         for class in ObservabilityWorkloadClass::ALL {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: ObservabilityWorkloadClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, class);
         }
     }
@@ -1562,9 +1562,9 @@ mod tests {
     #[test]
     fn mode_serde_roundtrip() {
         for mode in ObservabilityMode::ALL {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: ObservabilityMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, mode);
         }
     }
@@ -1876,9 +1876,9 @@ mod tests {
             thinning_retention_millionths: Some(500_000),
             rejection_reasons: vec!["reason-a".to_string()],
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: HotPathPublicationSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.manifest_id, "test-manifest");
         assert_eq!(back.calibration_pass_count, 2);
         assert!(back.publishable);
@@ -1892,9 +1892,9 @@ mod tests {
             mode: ObservabilityMode::Off,
             reasons: vec!["observability_off".to_string()],
         };
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         let back: SuppressedClaim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.workload_id, "dispatch_sensitive");
         assert_eq!(back.mode, ObservabilityMode::Off);
     }
@@ -1902,9 +1902,9 @@ mod tests {
     #[test]
     fn observability_claim_surface_serde_roundtrip() {
         let surface = make_surface(true, false);
-        let json = serde_json::to_string(&surface).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&surface).expect("serialize derived Serialize");
         let back: ObservabilityClaimSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.claim_allowed);
         assert!(!back.exact_capture);
     }
@@ -1922,9 +1922,9 @@ mod tests {
             exact_capture_improved: true,
             claim_state_transition: "suppressed_to_allowed".to_string(),
         };
-        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&delta).expect("serialize derived Serialize");
         let back: ObservabilityClaimDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.captured_delta, 10);
         assert!(back.exact_capture_improved);
     }

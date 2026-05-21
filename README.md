@@ -1674,7 +1674,7 @@ The project ships a layered test stack; each layer answers a different question.
 | **Mock-leak audit** | `scripts/run_rgc_zero_placeholder_gate.sh ci` + `mock-code-finder` skill | Refuses release if protected surfaces contain placeholder/mock/stub code that is not explicitly waived. |
 | **Claim-language gate** | `./scripts/run_claim_to_proof_matrix_gate.sh ci` | Refuses README/doc edits whose actual wording state is stronger than the matrix's `allowed_state`. |
 | **Determinism harness** | `crates/franken-metamorphic/` runners, `scripts/run_deterministic_e2e_harness.sh` | Equivalent re-execution under varied environments. |
-| **Cross-platform matrix** | `scripts/run_rgc_cross_platform_matrix_gate.sh ci` | Linux / macOS / Windows × x64 / arm64. |
+| **Cross-platform matrix** | `scripts/run_rgc_cross_platform_matrix_gate.sh ci` | Linux / macOS / Windows × x64 / arm64 reproducibility validation. Claim FE-CLAIM-023 in the claim-to-proof matrix. |
 | **Compiler/lint/format gates** | `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | Required after every substantive change per `AGENTS.md`. |
 
 The full layered stack is what enforces the project's *evidence-before-claims* posture: every README assertion is backed by at least one of these layers.

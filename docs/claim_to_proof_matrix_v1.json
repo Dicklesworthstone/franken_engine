@@ -161,17 +161,16 @@
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
     {
-      "actual_wording_state": "target",
-      "allowed_state": "target",
-      "artifact_path": "docs/RUNTIME_CHARTER.md",
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-009",
       "claim_id": "FE-CLAIM-009",
       "claim_scope": "evidence",
       "claim_text": "Every published performance and security claim ships with reproducible artifact bundles.",
-      "decision": "downgrade_until_live_proof",
-      "downgrade_text": "Target: published performance and security claims must ship with reproducible artifact bundles.",
-      "freshness_days": null,
-      "owning_bead": "bd-1qkrc",
-      "reason": "The policy exists, and this gate is the enforcement start; full publication coverage remains an ongoing target.",
+      "decision": "allow_observed",
+      "freshness_days": 30,
+      "owning_bead": "bd-cixqu.4.4",
+      "reason": "Promoted to OBSERVED under bd-cixqu.4.4 after D.1 (repro.lock audit), D.2 (backfill: 9/9 OBSERVED rows have repro.lock partners), and D.3 (gate now fail-closed on missing repro.lock per ClaimMatrixError::MissingReproducibilityBundle). Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-009/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 213,
@@ -439,6 +438,26 @@
         "start_line": 1377
       },
       "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-023",
+      "claim_id": "FE-CLAIM-023",
+      "claim_scope": "reproducibility",
+      "claim_text": "Cross-platform reproducibility: Linux×x64, macOS×arm64, Windows×x64 produce identical content hashes from same input.",
+      "decision": "allow_observed",
+      "downgrade_text": "Cross-platform deterministic execution validated across primary platforms with reproducible artifacts.",
+      "freshness_days": 7,
+      "owning_bead": "bd-cixqu.11.7",
+      "reason": "Cross-platform matrix gate validates deterministic execution across Linux, macOS, and Windows platforms with content hash verification.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 1677,
+        "must_contain": "Cross-platform matrix",
+        "start_line": 1677
+      },
+      "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     }
   ],
   "generated_by": "manual-ga-proof-audit",

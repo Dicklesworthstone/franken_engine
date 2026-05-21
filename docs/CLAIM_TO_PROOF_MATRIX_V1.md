@@ -53,7 +53,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-006` | security | `README.md:141` | `hypothesis` | downgrade until ambient-authority rejection proof exists | `bd-1bao8` |
 | `FE-CLAIM-007` | operations | `README.md:93-99` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:2307` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
-| `FE-CLAIM-009` | evidence | `README.md:213` | `target` | policy exists; complete publication enforcement remains target | `bd-1qkrc` |
+| `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |
 | `FE-CLAIM-010` | performance | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:56-58` | `target` | downgrade until live Node/Bun denominator artifacts replace targeted placeholder throughput evidence | `bd-y6v8s` |
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |

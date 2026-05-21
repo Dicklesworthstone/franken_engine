@@ -2039,6 +2039,8 @@ Per `docs/RUNTIME_CHARTER.md` §5, FrankenEngine reuses (and does not duplicate)
 
 `/dp/franken_node` is the downstream product/compatibility repository; the deterministic handoff is gated by `scripts/run_rgc_franken_node_handoff_bundle.sh` and emits a packaged handoff bundle plus engine→product blocker ledger.
 
+**Enforcement (`FE-CLAIM-024`, `bd-cixqu.13.3`):** the sibling-reuse contract is machine-enforced by the `full-integration` lane of `./scripts/test_standalone_build.sh` (`bd-cixqu.13.1`). For each of the six declared siblings the gate records a `passed` / `skipped` / `failed` outcome per the criterion *(1) `/dp/<sibling>` directory present, (2) `Cargo.toml` readable, (3) manifest declares `[package]` or `[workspace]`*. Outcomes are structured into `lane_results[]` and `events.jsonl` for downstream operator dashboards.
+
 ---
 
 ## Troubleshooting

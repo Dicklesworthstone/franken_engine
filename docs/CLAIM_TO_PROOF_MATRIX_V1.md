@@ -66,6 +66,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | downgrade until isomorphism equivalence proofs exist | `bd-csnqb` |
 | `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | downgrade until theorem-backed compiler exists | `bd-csnqb` |
 | `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | downgrade until Policy Theorem Engine with formal verification exists | `bd-csnqb` |
+| `FE-CLAIM-024` | integration | `README.md:2027` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
 
 ## Failure Output
 

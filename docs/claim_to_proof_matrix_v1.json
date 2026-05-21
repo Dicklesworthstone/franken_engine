@@ -456,6 +456,25 @@
         "start_line": 1677
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-024",
+      "claim_id": "FE-CLAIM-024",
+      "claim_scope": "integration",
+      "claim_text": "Sibling-repo integration verification across asupersync, frankentui, frankensqlite, sqlmodel_rust, fastapi_rust, frankenpandas: each sibling has a per-bundle presence + Cargo.toml shape pass criterion recorded as passed / skipped / failed.",
+      "decision": "allow_observed",
+      "freshness_days": 30,
+      "owning_bead": "bd-cixqu.13.3",
+      "reason": "Sibling repo reuse contract is now machine-enforced. M.1 (bd-cixqu.13.1, commit 87418e94) added a full-integration lane to scripts/test_standalone_build.sh that records pass/skipped/failed for each of the six declared siblings; the smoke at scripts/e2e/sibling_integration_smoke.sh asserts the lane's structured output. Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-024/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 2027,
+        "must_contain": "Sibling Repositories (Binding Reuse Contract)",
+        "start_line": 2027
+      },
+      "verification_command": "./scripts/test_standalone_build.sh full-integration"
     }
   ],
   "generated_by": "manual-ga-proof-audit",

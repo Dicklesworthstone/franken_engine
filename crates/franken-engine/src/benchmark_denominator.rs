@@ -50,6 +50,8 @@ pub struct BenchmarkCase {
     pub latency_envelope_ok: bool,
     #[serde(default = "default_true")]
     pub error_envelope_ok: bool,
+    #[serde(default = "default_true")]
+    pub execution_authentic: bool,
 }
 
 impl BenchmarkCase {
@@ -323,6 +325,13 @@ fn append_case_quality_blockers(
                 case.workload_id
             ));
         }
+        if !case.execution_authentic {
+            blockers.push(format!(
+                "{} case `{}` failed execution authenticity (mock response detected)",
+                baseline.as_str(),
+                case.workload_id
+            ));
+        }
     }
 }
 
@@ -434,6 +443,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         }
     }
 
@@ -446,6 +456,7 @@ mod tests {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         }
     }
 
@@ -789,6 +800,38 @@ mod tests {
     }
 
     #[test]
+    fn gate_execution_authentic_false_blocks_node() {
+        let mut input = test_gate_input();
+        input.node_cases[0].execution_authentic = false;
+        let decision = evaluate_publication_gate(&input, &test_context())
+            .expect("serde deserialization should succeed");
+        assert!(!decision.publish_allowed);
+        assert!(
+            decision
+                .blockers
+                .iter()
+                .any(|b| b.contains("execution authenticity")
+                    && b.contains("mock response detected"))
+        );
+    }
+
+    #[test]
+    fn gate_execution_authentic_false_blocks_bun() {
+        let mut input = test_gate_input();
+        input.bun_cases[0].execution_authentic = false;
+        let decision = evaluate_publication_gate(&input, &test_context())
+            .expect("serde deserialization should succeed");
+        assert!(!decision.publish_allowed);
+        assert!(
+            decision
+                .blockers
+                .iter()
+                .any(|b| b.contains("execution authenticity")
+                    && b.contains("mock response detected"))
+        );
+    }
+
+    #[test]
     fn gate_missing_coverage_progression() {
         let mut input = test_gate_input();
         input.native_coverage_progression.clear();
@@ -946,6 +989,7 @@ mod tests {
         assert!(c.behavior_equivalent);
         assert!(c.latency_envelope_ok);
         assert!(c.error_envelope_ok);
+        assert!(c.execution_authentic);
         assert!(c.weight.is_none());
     }
 
@@ -1134,6 +1178,7 @@ mod tests {
         assert!(json.contains("\"behavior_equivalent\""));
         assert!(json.contains("\"latency_envelope_ok\""));
         assert!(json.contains("\"error_envelope_ok\""));
+        assert!(json.contains("\"execution_authentic\""));
     }
 
     #[test]

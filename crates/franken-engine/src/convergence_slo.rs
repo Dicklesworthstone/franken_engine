@@ -545,6 +545,300 @@ pub enum ConvergenceError {
     NoConvergedMeasurements,
     #[error("Artifact publication failed: {reason}")]
     ArtifactPublicationFailed { reason: String },
+    #[error("Partition profile not found: {profile_name}")]
+    PartitionProfileNotFound { profile_name: String },
+    #[error("Convergence impossible due to partition profile: {profile_name} - {reason}")]
+    ConvergenceImpossible {
+        profile_name: String,
+        reason: String,
+    },
+    #[error("Failed to load partition profiles: {reason}")]
+    PartitionProfileLoadError { reason: String },
+}
+
+// ---------------------------------------------------------------------------
+// Partition Profile Types for Convergence Gate
+// ---------------------------------------------------------------------------
+
+/// Fleet partition fault profile for testing convergence behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetPartitionProfile {
+    /// Profile description.
+    pub description: String,
+    /// Partition mode to simulate.
+    pub partition_mode: String,
+    /// Message success rate percentage.
+    pub message_success_rate: u8,
+    /// Local partition size (if applicable).
+    pub local_partition_size: Option<usize>,
+    /// Total fleet size (if applicable).
+    pub total_fleet_size: Option<usize>,
+    /// Whether convergence is expected under this profile.
+    pub expected_convergence: bool,
+    /// Convergence timeout in milliseconds.
+    pub convergence_timeout_ms: Option<u64>,
+    /// Reason why convergence is impossible (for negative test profiles).
+    pub convergence_impossible_reason: Option<String>,
+    /// Failure mode classification.
+    pub failure_mode: Option<String>,
+    /// Gate verdict to emit for this profile.
+    pub gate_verdict: Option<String>,
+}
+
+/// Collection of fleet partition fault profiles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetPartitionProfiles {
+    /// Schema version.
+    pub schema_version: String,
+    /// Description of the profiles.
+    pub description: String,
+    /// Creation timestamp.
+    pub created_at: String,
+    /// Profile definitions indexed by name.
+    pub profiles: BTreeMap<String, FleetPartitionProfile>,
+    /// Gate configuration.
+    pub gate_configuration: PartitionGateConfig,
+}
+
+/// Configuration for the convergence gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PartitionGateConfig {
+    /// Quorum threshold percentage.
+    pub quorum_threshold_percent: u8,
+    /// Minimum required nodes.
+    pub minimum_required_nodes: usize,
+    /// Profile names that make convergence impossible.
+    pub convergence_impossible_profiles: Vec<String>,
+    /// Whether to block SLO publication when convergence is impossible.
+    pub slo_publication_blocked_on_impossible: bool,
+    /// Whether to report failure details in run manifest.
+    pub manifest_failure_reporting: bool,
+}
+
+/// Result of convergence gate evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvergenceGateResult {
+    /// Profile name that was evaluated.
+    pub profile_name: String,
+    /// Gate verdict: "convergence-possible", "convergence-impossible", "convergence-degraded".
+    pub gate_verdict: String,
+    /// Whether convergence is possible under this profile.
+    pub convergence_possible: bool,
+    /// SLO publication status.
+    pub slo_publication_status: String,
+    /// Reason for the verdict.
+    pub verdict_reason: String,
+    /// Failure mode if applicable.
+    pub failure_mode: Option<String>,
+    /// Gate evaluation timestamp.
+    pub evaluation_timestamp: SystemTime,
+    /// Profile details that led to this result.
+    pub profile_details: FleetPartitionProfile,
+}
+
+/// Convergence gate that evaluates partition profiles and emits verdicts.
+#[derive(Debug)]
+pub struct ConvergenceGate {
+    /// Loaded partition profiles.
+    pub partition_profiles: FleetPartitionProfiles,
+    /// Path to the partition profiles file.
+    pub profiles_file_path: PathBuf,
+    /// Gate evaluation history.
+    pub evaluation_history: Vec<ConvergenceGateResult>,
+}
+
+impl ConvergenceGate {
+    /// Load convergence gate from partition profiles file.
+    pub fn load_from_file(profiles_file_path: PathBuf) -> Result<Self, ConvergenceError> {
+        let profiles_content = fs::read_to_string(&profiles_file_path).map_err(|e| {
+            ConvergenceError::PartitionProfileLoadError {
+                reason: format!("Failed to read profiles file: {}", e),
+            }
+        })?;
+
+        let partition_profiles: FleetPartitionProfiles = serde_json::from_str(&profiles_content)
+            .map_err(|e| ConvergenceError::PartitionProfileLoadError {
+                reason: format!("Failed to parse profiles JSON: {}", e),
+            })?;
+
+        Ok(Self {
+            partition_profiles,
+            profiles_file_path,
+            evaluation_history: Vec::new(),
+        })
+    }
+
+    /// Evaluate convergence possibility under a given partition profile.
+    ///
+    /// This is the core gate logic that implements the NEGATIVE TEST requirement:
+    /// under permanent_split profile, it MUST emit 'convergence-impossible' verdict.
+    pub fn evaluate_profile(
+        &mut self,
+        profile_name: &str,
+    ) -> Result<ConvergenceGateResult, ConvergenceError> {
+        let profile = self
+            .partition_profiles
+            .profiles
+            .get(profile_name)
+            .ok_or_else(|| ConvergenceError::PartitionProfileNotFound {
+                profile_name: profile_name.to_string(),
+            })?
+            .clone();
+
+        // Determine gate verdict and convergence possibility
+        let (gate_verdict, convergence_possible, verdict_reason, slo_publication_status) =
+            if !profile.expected_convergence {
+                // NEGATIVE TEST: Profile indicates convergence is impossible
+                let verdict = profile
+                    .gate_verdict
+                    .as_deref()
+                    .unwrap_or("convergence-impossible");
+                let reason = profile
+                    .convergence_impossible_reason
+                    .as_deref()
+                    .unwrap_or("partition profile indicates convergence impossible");
+                let publication_status = if self
+                    .partition_profiles
+                    .gate_configuration
+                    .slo_publication_blocked_on_impossible
+                {
+                    "blocked-convergence-impossible"
+                } else {
+                    "allowed-despite-impossible"
+                };
+                (
+                    verdict.to_string(),
+                    false,
+                    reason.to_string(),
+                    publication_status.to_string(),
+                )
+            } else if profile.message_success_rate < 50 {
+                // Degraded but potentially possible
+                (
+                    "convergence-degraded".to_string(),
+                    true,
+                    format!(
+                        "degraded conditions with {}% message success rate",
+                        profile.message_success_rate
+                    ),
+                    "allowed-degraded-conditions".to_string(),
+                )
+            } else {
+                // Normal convergence expected
+                (
+                    "convergence-possible".to_string(),
+                    true,
+                    "normal convergence conditions".to_string(),
+                    "allowed-normal-conditions".to_string(),
+                )
+            };
+
+        // Check quorum requirements if partition sizes are specified
+        let (final_verdict, final_possible, final_reason) =
+            if let (Some(local_size), Some(total_size)) =
+                (profile.local_partition_size, profile.total_fleet_size)
+            {
+                let quorum_required = (total_size
+                    * self
+                        .partition_profiles
+                        .gate_configuration
+                        .quorum_threshold_percent as usize)
+                    / 100;
+                let min_required = self
+                    .partition_profiles
+                    .gate_configuration
+                    .minimum_required_nodes;
+                let effective_required = quorum_required.max(min_required);
+
+                if local_size < effective_required {
+                    // Quorum impossible - REFUSE convergence
+                    (
+                        "convergence-impossible".to_string(),
+                        false,
+                        format!(
+                            "quorum impossible: local partition {} < required {}",
+                            local_size, effective_required
+                        ),
+                    )
+                } else {
+                    (gate_verdict, convergence_possible, verdict_reason)
+                }
+            } else {
+                (gate_verdict, convergence_possible, verdict_reason)
+            };
+
+        let result = ConvergenceGateResult {
+            profile_name: profile_name.to_string(),
+            gate_verdict: final_verdict,
+            convergence_possible: final_possible,
+            slo_publication_status,
+            verdict_reason: final_reason,
+            failure_mode: profile.failure_mode.clone(),
+            evaluation_timestamp: SystemTime::now(),
+            profile_details: profile,
+        };
+
+        // Store in evaluation history
+        self.evaluation_history.push(result.clone());
+
+        Ok(result)
+    }
+
+    /// Check if convergence is impossible under a profile (NEGATIVE TEST).
+    pub fn is_convergence_impossible(
+        &mut self,
+        profile_name: &str,
+    ) -> Result<bool, ConvergenceError> {
+        let result = self.evaluate_profile(profile_name)?;
+        Ok(!result.convergence_possible)
+    }
+
+    /// Generate run manifest entry for convergence gate results.
+    pub fn generate_run_manifest_entry(&self, profile_name: &str) -> Option<serde_json::Value> {
+        if let Some(latest_result) = self
+            .evaluation_history
+            .iter()
+            .rev()
+            .find(|r| r.profile_name == profile_name)
+        {
+            Some(serde_json::json!({
+                "convergence_gate": {
+                    "profile_name": latest_result.profile_name,
+                    "gate_verdict": latest_result.gate_verdict,
+                    "convergence_possible": latest_result.convergence_possible,
+                    "slo_publication_status": latest_result.slo_publication_status,
+                    "verdict_reason": latest_result.verdict_reason,
+                    "failure_mode": latest_result.failure_mode,
+                    "evaluation_timestamp": latest_result.evaluation_timestamp.duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs()).unwrap_or(0),
+                    "partition_profile_file": self.profiles_file_path.to_string_lossy()
+                }
+            }))
+        } else {
+            None
+        }
+    }
+
+    /// Get the latest evaluation result for a profile.
+    pub fn get_latest_result(&self, profile_name: &str) -> Option<&ConvergenceGateResult> {
+        self.evaluation_history
+            .iter()
+            .rev()
+            .find(|r| r.profile_name == profile_name)
+    }
+
+    /// Check if SLO publication should be blocked for a profile.
+    pub fn should_block_slo_publication(
+        &mut self,
+        profile_name: &str,
+    ) -> Result<bool, ConvergenceError> {
+        let result = self.evaluate_profile(profile_name)?;
+        Ok(!result.convergence_possible
+            && self
+                .partition_profiles
+                .gate_configuration
+                .slo_publication_blocked_on_impossible)
+    }
 }
 
 /// Compute percentile from sorted vector.

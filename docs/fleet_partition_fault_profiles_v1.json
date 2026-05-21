@@ -1,0 +1,78 @@
+{
+  "schema_version": "franken-engine.fleet-partition-fault-profiles.v1",
+  "description": "Fleet partition fault injection profiles for convergence gate testing",
+  "created_at": "2026-05-21T19:31:00Z",
+  "profiles": {
+    "normal": {
+      "description": "Normal operation with no partition faults",
+      "partition_mode": "normal",
+      "message_success_rate": 100,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 500
+    },
+    "degraded": {
+      "description": "Degraded network conditions with 30% message loss",
+      "partition_mode": "degraded",
+      "message_success_rate": 70,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 2000
+    },
+    "healing": {
+      "description": "Network healing after partition with improved message delivery",
+      "partition_mode": "healing",
+      "message_success_rate": 85,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 1000
+    },
+    "permanent_split": {
+      "description": "Permanent network partition that prevents quorum - convergence MUST BE IMPOSSIBLE",
+      "partition_mode": "degraded",
+      "message_success_rate": 0,
+      "local_partition_size": 1,
+      "total_fleet_size": 7,
+      "expected_convergence": false,
+      "convergence_impossible_reason": "permanent_network_partition",
+      "failure_mode": "quorum_impossible",
+      "gate_verdict": "convergence-impossible"
+    },
+    "minority_partition": {
+      "description": "Minority partition that should tighten but not prevent convergence",
+      "partition_mode": "degraded",
+      "message_success_rate": 40,
+      "local_partition_size": 3,
+      "total_fleet_size": 7,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 3000
+    },
+    "majority_partition": {
+      "description": "Majority partition maintains quorum and should allow convergence",
+      "partition_mode": "degraded",
+      "message_success_rate": 60,
+      "local_partition_size": 4,
+      "total_fleet_size": 7,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 2500
+    },
+    "split_brain": {
+      "description": "Even split that breaks quorum - convergence MUST BE IMPOSSIBLE",
+      "partition_mode": "degraded",
+      "message_success_rate": 10,
+      "local_partition_size": 3,
+      "total_fleet_size": 6,
+      "expected_convergence": false,
+      "convergence_impossible_reason": "split_brain_partition",
+      "failure_mode": "quorum_impossible",
+      "gate_verdict": "convergence-impossible"
+    }
+  },
+  "gate_configuration": {
+    "quorum_threshold_percent": 50,
+    "minimum_required_nodes": 2,
+    "convergence_impossible_profiles": [
+      "permanent_split",
+      "split_brain"
+    ],
+    "slo_publication_blocked_on_impossible": true,
+    "manifest_failure_reporting": true
+  }
+}

@@ -201,7 +201,7 @@ impl FleetConvergenceHarness {
 
     /// Run the simulation for a specified number of steps.
     pub fn run_steps(&mut self, steps: u64) -> Result<u64, ConvergenceHarnessError> {
-        let mut executed = 0;
+        let mut executed: u64 = 0;
         for _ in 0..steps {
             if self.step()? {
                 executed = executed.saturating_add(1);
@@ -865,7 +865,7 @@ mod tests {
             .expect("Should create harness");
 
         // Multiple convergence attempts should work
-        for i in 0..3 {
+        for _ in 0..3 {
             let _result = harness
                 .verify_convergence()
                 .expect("Convergence verification should work");

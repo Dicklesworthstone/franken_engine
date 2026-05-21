@@ -5,7 +5,8 @@
 
 #![forbid(unsafe_code)]
 
-use crate::macos_arm64_worker::{MacOSArm64WorkerManager, MacOSArm64WorkerConfig, MacOSWorkerError, WorkerExecutionResult};
+use crate::macos_arm64_worker::{MacOSArm64WorkerManager, MacOSArm64WorkerConfig, MacOSWorkerError};
+use crate::windows_x64_worker::{WindowsX64WorkerManager, WindowsX64WorkerConfig, WindowsWorkerError, WorkerExecutionResult};
 use crate::worker_env_capture::{WorkerEnvironment, WorkerEnvCapture, MacOSArm64EnvCapture, WindowsX64EnvCapture};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -101,6 +102,12 @@ impl Default for RchWorkerRegistryConfig {
             PlatformConfig::MacOSArm64(MacOSArm64WorkerConfig::default()),
         );
 
+        // Windows x64 default config
+        platform_configs.insert(
+            WorkerPlatform::WindowsX64,
+            PlatformConfig::WindowsX64(WindowsX64WorkerConfig::default()),
+        );
+
         Self {
             base_work_dir: std::env::temp_dir().join("rch_workers"),
             max_workers_per_platform: 4,
@@ -115,8 +122,8 @@ impl Default for RchWorkerRegistryConfig {
 pub enum PlatformConfig {
     /// macOS ARM64 configuration.
     MacOSArm64(MacOSArm64WorkerConfig),
-    /// Windows x64 configuration (placeholder).
-    WindowsX64 { work_dir: PathBuf, verbose: bool },
+    /// Windows x64 configuration.
+    WindowsX64(WindowsX64WorkerConfig),
     /// Linux x64 configuration (placeholder).
     LinuxX64 { work_dir: PathBuf, verbose: bool },
     /// Linux ARM64 configuration (placeholder).
@@ -130,6 +137,8 @@ pub struct RchWorkerRegistry {
     config: RchWorkerRegistryConfig,
     /// macOS ARM64 worker manager.
     macos_arm64_manager: Option<MacOSArm64WorkerManager>,
+    /// Windows x64 worker manager.
+    windows_x64_manager: Option<WindowsX64WorkerManager>,
     /// Environment capture instances for each platform.
     env_captures: BTreeMap<WorkerPlatform, Box<dyn WorkerEnvCapture>>,
 }
@@ -140,6 +149,7 @@ impl RchWorkerRegistry {
         let mut registry = Self {
             config,
             macos_arm64_manager: None,
+            windows_x64_manager: None,
             env_captures: BTreeMap::new(),
         };
 
@@ -161,6 +171,15 @@ impl RchWorkerRegistry {
             config.verbose = self.config.verbose;
 
             self.macos_arm64_manager = Some(MacOSArm64WorkerManager::new(config));
+        }
+
+        // Initialize Windows x64 manager if configured
+        if let Some(PlatformConfig::WindowsX64(windows_config)) = self.config.platform_configs.get(&WorkerPlatform::WindowsX64) {
+            let mut config = windows_config.clone();
+            config.work_dir = self.config.base_work_dir.join("windows_x64");
+            config.verbose = self.config.verbose;
+
+            self.windows_x64_manager = Some(WindowsX64WorkerManager::new(config));
         }
 
         // Initialize environment capture instances

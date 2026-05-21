@@ -1,0 +1,4 @@
+schema_version=franken-engine.fixture.repro-lock.v1
+source_revision=fixture-commit-abc123
+toolchain=nightly-2026-04-30
+generated_utc=2026-05-21T20:00:00Z

@@ -1,0 +1,39 @@
+{
+  "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+  "claims": [
+    {
+      "claim_id": "REPRO-LOCK-WITH",
+      "claim_scope": "fixture",
+      "source_path": "scripts/testdata/claim_to_proof_matrix_repro_lock/docs/README.md",
+      "source_span": {
+        "start_line": 7,
+        "end_line": 7,
+        "must_contain": "Claim with reproducibility lock: status OBSERVED [REPRO-LOCK-WITH]"
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "scripts/testdata/claim_to_proof_matrix_repro_lock/with_lock",
+      "verification_command": "./scripts/e2e/claim_to_proof_matrix_repro_lock_smoke.sh check",
+      "freshness_days": 30,
+      "decision": "allow_observed",
+      "owning_bead": "bd-cixqu.4.3"
+    },
+    {
+      "claim_id": "REPRO-LOCK-WITHOUT",
+      "claim_scope": "fixture",
+      "source_path": "scripts/testdata/claim_to_proof_matrix_repro_lock/docs/README.md",
+      "source_span": {
+        "start_line": 9,
+        "end_line": 9,
+        "must_contain": "Claim without reproducibility lock: status OBSERVED [REPRO-LOCK-WITHOUT]"
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "scripts/testdata/claim_to_proof_matrix_repro_lock/without_lock",
+      "verification_command": "./scripts/e2e/claim_to_proof_matrix_repro_lock_smoke.sh check",
+      "freshness_days": 30,
+      "decision": "allow_observed",
+      "owning_bead": "bd-cixqu.4.3"
+    }
+  ]
+}

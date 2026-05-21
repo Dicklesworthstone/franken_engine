@@ -1374,7 +1374,7 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Fleet quarantine convergence model | TARGETED; de-escalation is unimplemented today (containment is a permanent ratchet) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract is not shipped | Not native to runtime | Not native to runtime | Permission flags at process scope (`--allow-net`, etc.); not capability-typed at IR level | Bindings-mediated capabilities; not IR-typed | WASI capability surface; bound to imports, not source-level types |
 | Information-flow control with signed declassification receipts | OBSERVED (finite IFC lattice + signed declassification receipts) | Not in core | Not in core | Not in core | Not in core | Not in core |
-| Cross-runtime lockstep oracle | Differential Node/Bun harness; full pipeline integration in progress | N/A | N/A | N/A | N/A | N/A |
+| Cross-runtime lockstep oracle | OBSERVED (differential Node/Bun harness with divergence classification) | N/A | N/A | N/A | N/A | N/A |
 | Unsafe in the implementation language | Forbidden in repository code (`#![forbid(unsafe_code)]`) | V8 is C++ (extensive unsafe by design) | JavaScriptCore is C++, Zig wrapper | V8 is C++; Deno's Rust core uses `unsafe` selectively | V8 C++ + workerd C++/Rust mix | Rust with controlled `unsafe` (audited) |
 | Primary intended workload | Adversarial extension hosting with auditable forensics | General-purpose server-side JS | High-throughput server-side JS + tooling | Server-side JS with permission-system UX | Edge-deployed isolated workers | WebAssembly host embedding |
 
@@ -1669,7 +1669,7 @@ The project ships a layered test stack; each layer answers a different question.
 | **Test262 conformance** | `frankenctl test test262`, `crates/franken-engine/tests/test262_*` | Real Test262 conformance (since April 2026, when `21b485a0` replaced the hardcoded fake test data with real JS execution). |
 | **Golden artifacts** | `crates/franken-engine/tests/**/*_golden*.rs`, `tests/**/goldens/*.json` | Byte-equality tests against committed canonical outputs. `669b6319 feat(ast-parser): Add comprehensive golden test infrastructure` is the load-bearing commit. |
 | **Metamorphic relations** | `crates/franken-metamorphic/` | Whitespace invariance, source/AST roundtrip, semantic equivalence under refactor. Run via `cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite`. |
-| **Lockstep oracle** | `frankenctl test lockstep`, `frx_lockstep_oracle.rs` | Differential execution against Node and Bun (currently `SIMULATED`; full pipeline integration is in progress). |
+| **Lockstep oracle** | `frankenctl test lockstep`, `frx_lockstep_oracle.rs` | OBSERVED differential execution against Node and Bun with divergence classification taxonomy. |
 | **Fuzz harnesses** | top-level `fuzz/fuzz_targets/` + `crates/franken-engine/fuzz/fuzz_targets/` | Coverage-guided fuzz over parser, proof-artifact JSON validation, shadow panel bundles, TS module resolution, parallel parser. `cargo +nightly fuzz run <target>`. |
 | **Mock-leak audit** | `scripts/run_rgc_zero_placeholder_gate.sh ci` + `mock-code-finder` skill | Refuses release if protected surfaces contain placeholder/mock/stub code that is not explicitly waived. |
 | **Claim-language gate** | `./scripts/run_claim_to_proof_matrix_gate.sh ci` | Refuses README/doc edits whose actual wording state is stronger than the matrix's `allowed_state`. |
@@ -2206,7 +2206,7 @@ Project-specific jargon, defined once.
 | **IDEA-WIZARD-N** | A named multi-stage initiative tracked as `bd-<id>` with children `.A` – `.F`. The tracker contains series II through XIII (12 waves total); X / XI / XII / XIII landed primarily in May 2026 and are the ones the current README cites. |
 | **IFC** | Information-flow control. Finite lattice `Public < Internal < Confidential < Secret < TopSecret` plus custom labels via `Label::level()`. |
 | **IR0 / IR1 / IR2 / IR3 / IR4** | The five-level IR contract: four lowering/execution stages (raw AST, scope-normalized, simplified control-flow / SSA-ish, register-allocated executable) plus IR4/WitnessIR post-execution evidence artifacts. |
-| **Lockstep oracle** | `frx_lockstep_oracle.rs`, the differential execution oracle that compares FrankenEngine output against Node and Bun on the same input. Currently SIMULATED for the differential surface. |
+| **Lockstep oracle** | `frx_lockstep_oracle.rs`, the differential execution oracle that compares FrankenEngine output against Node and Bun on the same input. OBSERVED with divergence classification taxonomy. |
 | **Lowering gap inventory** | Catalogue of syntactic constructs and their lowering status. Bound by the `LOWERING_GAP_TRUTH_INVARIANT_V1` contract. |
 | **Metamorphic relations** | Equivalence properties that should be preserved by a transformation (whitespace invariance, AST roundtrip, semantic equivalence under refactor). `crates/franken-metamorphic/`. |
 | **OBSERVED** | A matrix state meaning evidence is attached and a verification command is linked. The strongest permitted wording. |

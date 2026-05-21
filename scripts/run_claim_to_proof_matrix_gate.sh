@@ -202,6 +202,50 @@ classify_quality_candidate() {
   fi
 }
 
+detect_reproducibility_bundle() {
+  # bd-cixqu.4.3: every OBSERVED claim must point at an artifact whose
+  # reproducibility evidence is captured in a `repro.lock` file. The lock
+  # records the exact source revision + toolchain + input set the
+  # artifact was produced from, so a future replay can reconstruct it.
+  # Without the lock the "observed" wording is unsupported by re-runnable
+  # evidence and the gate must fail closed.
+  #
+  # Search policy:
+  # - If `artifact_path` is a file, look in its directory for repro.lock.
+  # - If `artifact_path` is a directory, look for repro.lock recursively
+  #   under it (depth-capped at 4 to bound traversal cost on large
+  #   bundle trees).
+  #
+  # Sets the global `reproducibility_lock_path` to the matched path on
+  # success, empty on failure.
+  local artifact_path="$1"
+  reproducibility_lock_path=""
+
+  if [[ -f "$artifact_path" ]]; then
+    local parent
+    parent="$(dirname "$artifact_path")"
+    if [[ -f "${parent}/repro.lock" ]]; then
+      reproducibility_lock_path="${parent}/repro.lock"
+      return 0
+    fi
+    return 1
+  fi
+
+  if [[ -d "$artifact_path" ]]; then
+    local found
+    if found="$(find "$artifact_path" -maxdepth 4 -name "repro.lock" -type f -print -quit 2>/dev/null)" \
+        && [[ -n "$found" ]]; then
+      reproducibility_lock_path="$found"
+      return 0
+    fi
+    return 1
+  fi
+
+  # Neither file nor directory — caller's freshness/existence checks
+  # already failed-closed on this; we just report no lock found.
+  return 1
+}
+
 detect_simulated_hot_path_evidence() {
   local artifact_path="$1"
   simulated_hot_path_evidence_report_path=""
@@ -525,6 +569,26 @@ while IFS= read -r claim; do
           artifact_quality_report_path="$simulated_hot_path_evidence_report_path"
           artifact_quality_reason="observed performance claim artifact cites simulated hot-path evidence: ${simulated_hot_path_evidence_report_path}; hot_paths_simulation and MockCertificate are fixture-only markers, not observed real-runtime proof"
           local_reason="$artifact_quality_reason"
+        fi
+      fi
+
+      # bd-cixqu.4.3: any OBSERVED claim that still looks promotable at
+      # this point must also have a reproducibility lock alongside its
+      # artifact. Without it, the "observed" wording is supported by an
+      # artifact nobody can re-derive — i.e. a one-shot screenshot
+      # rather than evidence. Fail closed with a stable error code
+      # (ClaimMatrixError::MissingReproducibilityBundle) so structured
+      # consumers can route on it.
+      if [[ "$status" == "pass" ]]; then
+        if detect_reproducibility_bundle "$artifact_path"; then
+          # `reproducibility_lock_path` is set by detect_reproducibility_bundle
+          # for diagnostic / future-evidence-field use; reference it here
+          # so a stale-tooling warning doesn't trip on the set-but-unused
+          # local.
+          : "${reproducibility_lock_path:?repro-lock path must be set on success}"
+        else
+          status="fail"
+          local_reason="ClaimMatrixError::MissingReproducibilityBundle: observed claim artifact has no repro.lock alongside ${artifact_path}; reproducibility lock is required for any claim whose allowed_state is 'observed' (bd-cixqu.4.3)"
         fi
       fi
     fi

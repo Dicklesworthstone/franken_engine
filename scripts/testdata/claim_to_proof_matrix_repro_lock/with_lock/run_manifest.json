@@ -1,0 +1,8 @@
+{
+  "schema_version": "franken-engine.proof-artifact-manifest.v1",
+  "generated_utc": "2026-05-21T20:00:00Z",
+  "freshness": {
+    "generated_utc": "2026-05-21T20:00:00Z"
+  },
+  "verification_command": "./scripts/test/with_lock_fixture.sh"
+}

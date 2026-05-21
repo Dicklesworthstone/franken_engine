@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use franken_engine_deterministic_trait::Deterministic;
+use franken_engine_deterministic_derive::Deterministic;
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, encode_value};

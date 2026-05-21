@@ -138,7 +138,7 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + byte-identical fixed-input `compile`/`run` artifacts in CLI integration tests. |
 | Cryptographic decision receipts with transparency-log + TEE attestation | HYPOTHESIS | Receipt, transparency-log, and TEE proof must be split and shipped before this can be promoted. |
 | Fleet immune system / quarantine propagation convergence SLO | TARGETED | A live quarantine-mesh proof wrapper now exists (`bd-ly6hp.3`); bounded convergence SLOs remain target until that evidence is published. |
-| Capability-typed end-to-end TS-to-IR contract / ambient-authority rejection | TARGETED | Selected runtime capability gates are present; the compile-time end-to-end contract is not shipped. |
+| Capability-typed end-to-end TS-to-IR contract / ambient-authority rejection | OBSERVED | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls (`bd-cixqu.3.2`), 16-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). |
 | Information-flow control with signed declassification receipts | OBSERVED | Live IFC example in `examples/live_ifc_declassification_example.rs` (`bd-dpfvh`). |
 | Red-team compromise-rate comparison | OBSERVED | Real attacker harness (`bd-28otw`), not hardcoded baselines. |
 | Signal-to-action latency for containment | OBSERVED | Real latency artifacts; operational target is at or below 250ms median under defined load envelopes. |

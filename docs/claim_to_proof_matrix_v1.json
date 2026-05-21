@@ -101,24 +101,23 @@
       "verification_command": "TBD: replace provisional synthetic example with live runtime/CLI quarantine propagation proof"
     },
     {
-      "actual_wording_state": "hypothesis",
-      "allowed_state": "hypothesis",
-      "artifact_path": null,
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-006",
       "claim_id": "FE-CLAIM-006",
       "claim_scope": "security",
-      "claim_text": "Capability-typed execution with ambient-authority rejection is a hypothesis until the TS-to-IR contract ships.",
-      "decision": "downgrade_until_live_proof",
-      "downgrade_text": "Hypothesis: capability-typed TS-to-IR execution and ambient-authority rejection may be promoted only after the compiler/runtime proof lands; shipped code currently provides selected runtime capability gates.",
-      "freshness_days": null,
-      "owning_bead": "bd-1zwml",
-      "reason": "Selected runtime capability gates exist, but the end-to-end compile-time capability-typed TS workflow and by-construction ambient-authority rejection are not shipped.",
+      "claim_text": "Capability-typed execution with compile-time ambient-authority rejection via the C.3 red-team scenario corpus (16 scenarios) and the bd-cixqu.3.4 gate.",
+      "decision": "allow_observed",
+      "freshness_days": 30,
+      "owning_bead": "bd-cixqu.3.5",
+      "reason": "Promoted to OBSERVED under bd-cixqu.3.5 after C.1 (effect-set IR2 annotation), C.2 (lowering-side ambient-authority rejection), C.3 (16-scenario red-team negative corpus extending tests/red_team_scenarios/), and C.4 (run_rgc_capability_typed_compile_time.sh + replay wrapper). Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-006/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md; gate selftest passes 16/16 manifest-shape compliance.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 141,
         "must_contain": "ambient-authority rejection",
         "start_line": 141
       },
-      "verification_command": "TBD: implement TS-to-capability-typed-IR compiler and live ambient-authority rejection proof before promoting beyond hypothesis"
+      "verification_command": "./scripts/run_rgc_capability_typed_compile_time.sh ci"
     },
     {
       "actual_wording_state": "observed",

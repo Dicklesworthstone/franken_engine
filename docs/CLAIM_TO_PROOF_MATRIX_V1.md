@@ -50,7 +50,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-003` | replay | `README.md:138` | `observed` | allow observed replay coverage, counterfactual replay support, and fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-004` | security | `README.md:139` | `hypothesis` | split receipt, transparency-log, and TEE proof before release | `bd-1qkrc` |
 | `FE-CLAIM-005` | operations | `README.md:140` | `target` | downgrade until live quarantine propagation proof exists | `bd-ls22h` |
-| `FE-CLAIM-006` | security | `README.md:141` | `hypothesis` | downgrade until ambient-authority rejection proof exists | `bd-1bao8` |
+| `FE-CLAIM-006` | security | `README.md:141` | `observed` | compile-time capability-typed rejection via C.1-C.4 (effect_set IR2, lowering refusal, 16-scenario red-team corpus, RGC gate + replay) | `bd-cixqu.3.5` |
 | `FE-CLAIM-007` | operations | `README.md:93-99` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:2307` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
 | `FE-CLAIM-009` | evidence | `README.md:213` | `observed` | gate refuses OBSERVED state without repro.lock (bd-cixqu.4.3); all OBSERVED rows have reproducibility bundles | `bd-cixqu.4.4` |

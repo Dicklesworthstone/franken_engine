@@ -93,7 +93,11 @@ readonly LAYER2_PATH="${RUN_DIR}/layer_2_execution.json"
 readonly LAYER3_PATH="${RUN_DIR}/layer_3_lowering.json"
 
 readonly SCENARIO_DIR="${PROJECT_DIR}/crates/franken-engine/tests/red_team_scenarios"
-readonly VALIDATION_TEST="red_team_scenario_manifest_validation"
+# Layer 1 (manifest shape) is exercised directly by this script via jq;
+# the canonical Rust-side equivalent is
+#   `cargo test red_team_scenario_manifest_validation -p frankenengine-engine`
+# kept as a documentation reference rather than invoked here so the gate
+# stays usable when the workspace lib has unrelated compile errors.
 readonly EXECUTION_TEST="red_team_execution_harness"
 readonly LOWERING_TEST="ambient_authority_lowering_rejection_integration"
 

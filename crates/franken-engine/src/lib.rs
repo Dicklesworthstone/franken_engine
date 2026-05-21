@@ -517,6 +517,7 @@ pub mod ts_resolution_manifest;
 pub mod ts_shipped_path_evidence;
 pub mod typed_array_fast_lane;
 pub mod typed_persistence_models;
+pub mod unified_authority_algebra;
 pub mod unit_test_taxonomy;
 pub mod universal_dominance_ratchet;
 pub mod vectorized_builtin_governance;

@@ -1,448 +1,452 @@
 {
-  "schema_version": "franken-engine.claim-to-proof-matrix.v1",
-  "policy_id": "runtime-charter-claim-language-v1",
-  "owning_bead": "bd-1qkrc",
-  "generated_by": "manual-ga-proof-audit",
-  "max_observed_freshness_days": 30,
-  "state_order": ["hypothesis", "target", "observed"],
-  "performance_evidence_policy": {
-    "real_hot_path_observed_internal_evidence": {
-      "runtime_lane": "real_runtime_hot_paths",
-      "proof_wrapper": "scripts/run_real_hot_path_proof.sh smoke",
-      "contract_gate": "scripts/real_hot_path_proof_contract_gate.sh",
-      "contract_schema": "franken-engine.real-hot-path-proof-contract-gate.v1",
-      "observed_scope": "Internal FrankenEngine hot-path workloads execute through rch and emit deterministic command, worker, target-dir, digest, metric, and proof-state artifacts."
-    },
-    "throughput_denominator_target_evidence": {
-      "claim_id": "FE-CLAIM-010",
-      "required_before_observed": "Fresh Node and Bun denominator artifacts under the benchmark denominator contract.",
-      "current_state": "target"
-    },
-    "banned_observed_performance_fragments": [
-      "hot_paths_simulation",
-      "MockCertificate"
-    ]
-  },
   "claims": [
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-001",
       "claim_id": "FE-CLAIM-001",
       "claim_scope": "runtime",
       "claim_text": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+      "decision": "allow_observed",
+      "downgrade_text": "Native Rust runtime target with deterministic replay and evidence-led containment under active verification.",
+      "freshness_days": 1,
+      "owning_bead": "bd-1qkrc",
+      "reason": "Native runtime source and focused compile evidence were checked during the GA proof audit; full release gates remain separate.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 17,
         "end_line": 17,
-        "must_contain": "A native Rust runtime for adversarial JavaScript/TypeScript extension workloads"
+        "must_contain": "A native Rust runtime for adversarial JavaScript/TypeScript extension workloads",
+        "start_line": 17
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "docs/audit/ga_success_criteria_gap_analysis.md",
-      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Native runtime source and focused compile evidence were checked during the GA proof audit; full release gates remain separate.",
-      "owning_bead": "bd-1qkrc",
-      "downgrade_text": "Native Rust runtime target with deterministic replay and evidence-led containment under active verification."
+      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-002",
       "claim_id": "FE-CLAIM-002",
       "claim_scope": "security",
       "claim_text": "Probabilistic guardplane with expected-loss actioning.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: probabilistic guardplane with expected-loss actioning; observed proof pending linked decision artifacts.",
+      "freshness_days": 1,
+      "owning_bead": "bd-1ypps",
+      "reason": "Live guardplane decision example (bd-1ypps) generates actual posterior computation and expected-loss decision artifacts with smoke test validation.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 137,
         "end_line": 137,
-        "must_contain": "Probabilistic guardplane (Bayesian + e-process boundaries)"
+        "must_contain": "Probabilistic guardplane (Bayesian + e-process boundaries)",
+        "start_line": 137
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/e2e/live_guardplane_decision_smoke.sh",
-      "verification_command": "./scripts/e2e/live_guardplane_decision_smoke.sh",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Live guardplane decision example (bd-1ypps) generates actual posterior computation and expected-loss decision artifacts with smoke test validation.",
-      "owning_bead": "bd-1ypps",
-      "downgrade_text": "Target: probabilistic guardplane with expected-loss actioning; observed proof pending linked decision artifacts."
+      "verification_command": "./scripts/e2e/live_guardplane_decision_smoke.sh"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-003",
       "claim_id": "FE-CLAIM-003",
       "claim_scope": "replay",
       "claim_text": "Deterministic replay for high-severity decisions with counterfactual policy simulation.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: deterministic replay and counterfactual simulation for high-severity decisions; full coverage proof pending.",
+      "freshness_days": 0,
+      "owning_bead": "bd-2488a",
+      "reason": "Replay APIs, counterfactual replay engine support, and declared security-critical replay coverage are now backed by executable gates and fixed-input byte-identical CLI artifact proof.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 138,
         "end_line": 138,
-        "must_contain": "Deterministic replay for the declared high-severity inventory"
+        "must_contain": "Deterministic replay for the declared high-severity inventory",
+        "start_line": 138
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "crates/franken-engine/src/counterfactual_replay_engine.rs",
-      "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration",
-      "freshness_days": 0,
-      "decision": "allow_observed",
-      "reason": "Replay APIs, counterfactual replay engine support, and declared security-critical replay coverage are now backed by executable gates and fixed-input byte-identical CLI artifact proof.",
-      "owning_bead": "bd-2488a",
-      "downgrade_text": "Target: deterministic replay and counterfactual simulation for high-severity decisions; full coverage proof pending."
+      "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-004",
       "claim_scope": "security",
       "claim_text": "Signed decision receipts with transparency-log proofs and optional TEE attestation bindings.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: cryptographic governance may include transparency-log proofs and optional TEE bindings after proof artifacts land.",
+      "freshness_days": null,
+      "owning_bead": "bd-1qkrc",
+      "reason": "Receipt support is real, but transparency-log and TEE bindings need separate live proof handles.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 139,
         "end_line": 139,
-        "must_contain": "transparency-log + TEE attestation"
+        "must_contain": "transparency-log + TEE attestation",
+        "start_line": 139
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: split receipt-signing, transparency-log, and TEE proof commands before release",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "Receipt support is real, but transparency-log and TEE bindings need separate live proof handles.",
-      "owning_bead": "bd-1qkrc",
-      "downgrade_text": "Hypothesis: cryptographic governance may include transparency-log proofs and optional TEE bindings after proof artifacts land."
+      "verification_command": "TBD: split receipt-signing, transparency-log, and TEE proof commands before release"
     },
     {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-005",
       "claim_scope": "operations",
       "claim_text": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence after a live runtime/CLI proof artifact exists.",
+      "freshness_days": null,
+      "owning_bead": "bd-ls22h",
+      "reason": "The available quarantine propagation example is explicitly PROVISIONAL synthetic documentation evidence, so it cannot back an observed fleet immune-system claim.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 140,
         "end_line": 140,
-        "must_contain": "bounded convergence SLOs remain target"
+        "must_contain": "bounded convergence SLOs remain target",
+        "start_line": 140
       },
-      "allowed_state": "target",
-      "actual_wording_state": "target",
-      "artifact_path": null,
-      "verification_command": "TBD: replace provisional synthetic example with live runtime/CLI quarantine propagation proof",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "The available quarantine propagation example is explicitly PROVISIONAL synthetic documentation evidence, so it cannot back an observed fleet immune-system claim.",
-      "owning_bead": "bd-ls22h",
-      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence after a live runtime/CLI proof artifact exists."
+      "verification_command": "TBD: replace provisional synthetic example with live runtime/CLI quarantine propagation proof"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-006",
       "claim_scope": "security",
       "claim_text": "Capability-typed execution with ambient-authority rejection is a hypothesis until the TS-to-IR contract ships.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: capability-typed TS-to-IR execution and ambient-authority rejection may be promoted only after the compiler/runtime proof lands; shipped code currently provides selected runtime capability gates.",
+      "freshness_days": null,
+      "owning_bead": "bd-1zwml",
+      "reason": "Selected runtime capability gates exist, but the end-to-end compile-time capability-typed TS workflow and by-construction ambient-authority rejection are not shipped.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 141,
         "end_line": 141,
-        "must_contain": "ambient-authority rejection"
+        "must_contain": "ambient-authority rejection",
+        "start_line": 141
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement TS-to-capability-typed-IR compiler and live ambient-authority rejection proof before promoting beyond hypothesis",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "Selected runtime capability gates exist, but the end-to-end compile-time capability-typed TS workflow and by-construction ambient-authority rejection are not shipped.",
-      "owning_bead": "bd-1zwml",
-      "downgrade_text": "Hypothesis: capability-typed TS-to-IR execution and ambient-authority rejection may be promoted only after the compiler/runtime proof lands; shipped code currently provides selected runtime capability gates."
+      "verification_command": "TBD: implement TS-to-capability-typed-IR compiler and live ambient-authority rejection proof before promoting beyond hypothesis"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-007",
       "claim_id": "FE-CLAIM-007",
       "claim_scope": "operations",
       "claim_text": "The shipped frankenctl CLI provides core execution surfaces and selective operator tooling.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: frankenctl CLI surfaces with smoke workflow pending current run artifacts.",
+      "freshness_days": 1,
+      "owning_bead": "bd-3tsah",
+      "reason": "README points at an executable smoke workflow and artifact contract for the documented CLI path.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 93,
         "end_line": 99,
-        "must_contain": "readme_cli_workflow_smoke.sh"
+        "must_contain": "readme_cli_workflow_smoke.sh",
+        "start_line": 93
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/e2e/readme_cli_workflow_smoke.sh",
-      "verification_command": "FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "README points at an executable smoke workflow and artifact contract for the documented CLI path.",
-      "owning_bead": "bd-3tsah",
-      "downgrade_text": "Target: frankenctl CLI surfaces with smoke workflow pending current run artifacts."
+      "verification_command": "FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-008",
       "claim_id": "FE-CLAIM-008",
       "claim_scope": "operations",
       "claim_text": "Unsupported surfaces and support contract language are explicitly documented.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: unsupported surface policy pending README source-span validation.",
+      "freshness_days": 1,
+      "owning_bead": "bd-1qkrc",
+      "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 2307,
         "end_line": 2307,
-        "must_contain": "Unsupported-surface usage voids reproduction assistance"
+        "must_contain": "Unsupported-surface usage voids reproduction assistance",
+        "start_line": 2307
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "README.md",
-      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
-      "owning_bead": "bd-1qkrc",
-      "downgrade_text": "Target: unsupported surface policy pending README source-span validation."
+      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
     {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": "docs/RUNTIME_CHARTER.md",
       "claim_id": "FE-CLAIM-009",
       "claim_scope": "evidence",
       "claim_text": "Every published performance and security claim ships with reproducible artifact bundles.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Target: published performance and security claims must ship with reproducible artifact bundles.",
+      "freshness_days": null,
+      "owning_bead": "bd-1qkrc",
+      "reason": "The policy exists, and this gate is the enforcement start; full publication coverage remains an ongoing target.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 213,
         "end_line": 213,
-        "must_contain": "No artifact, no claim."
+        "must_contain": "No artifact, no claim.",
+        "start_line": 213
       },
-      "allowed_state": "target",
-      "actual_wording_state": "target",
-      "artifact_path": "docs/RUNTIME_CHARTER.md",
-      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "The policy exists, and this gate is the enforcement start; full publication coverage remains an ongoing target.",
-      "owning_bead": "bd-1qkrc",
-      "downgrade_text": "Target: published performance and security claims must ship with reproducible artifact bundles."
+      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
     {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": "scripts/run_throughput_disruptive_floor_metric_gate.sh",
       "claim_id": "FE-CLAIM-010",
       "claim_scope": "performance",
       "claim_text": ">= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.",
+      "decision": "downgrade_until_live_baselines",
+      "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract.",
+      "freshness_days": null,
+      "owning_bead": "bd-y6v8s",
+      "reason": "The throughput disruptive-floor gate exists, but no observed Node/Bun denominator artifact is linked; this claim remains target.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 56,
         "end_line": 58,
-        "must_contain": ">= 3x"
+        "must_contain": ">= 3x",
+        "start_line": 56
       },
-      "allowed_state": "target",
-      "actual_wording_state": "target",
-      "artifact_path": "scripts/run_throughput_disruptive_floor_metric_gate.sh",
-      "verification_command": "./scripts/run_throughput_disruptive_floor_metric_gate.sh ci",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_baselines",
-      "reason": "The throughput disruptive-floor gate exists, but no observed Node/Bun denominator artifact is linked; this claim remains target.",
-      "owning_bead": "bd-y6v8s",
-      "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract."
+      "verification_command": "./scripts/run_throughput_disruptive_floor_metric_gate.sh ci"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-011",
       "claim_id": "FE-CLAIM-011",
       "claim_scope": "security",
       "claim_text": ">= 10x reduction in successful red-team host compromise rate versus Node/Bun defaults.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: >= 10x host-compromise reduction versus declared Node/Bun baseline scenarios.",
+      "freshness_days": 1,
+      "owning_bead": "bd-1vwza",
+      "reason": "Red-team compromise-rate metric gate (bd-1vwza) generates actual host-compromise comparison artifacts with baseline Node/Bun scenario validation.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 58,
         "end_line": 58,
-        "must_contain": "`>= 10x` reduction"
+        "must_contain": "`>= 10x` reduction",
+        "start_line": 58
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/run_red_team_compromise_rate_metric_gate.sh",
-      "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Red-team compromise-rate metric gate (bd-1vwza) generates actual host-compromise comparison artifacts with baseline Node/Bun scenario validation.",
-      "owning_bead": "bd-1vwza",
-      "downgrade_text": "Target: >= 10x host-compromise reduction versus declared Node/Bun baseline scenarios."
+      "verification_command": "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-012",
       "claim_id": "FE-CLAIM-012",
       "claim_scope": "security",
       "claim_text": "<= 250ms median time from high-risk signal crossing to containment action.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions.",
+      "freshness_days": 1,
+      "owning_bead": "bd-38mby",
+      "reason": "Containment-latency metric gate (bd-38mby) computes actual signal-to-action timestamps and median latency artifacts with bounded timing validation.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 59,
         "end_line": 60,
-        "must_contain": "<= 250ms"
+        "must_contain": "<= 250ms",
+        "start_line": 59
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/run_containment_latency_metric_gate.sh",
-      "verification_command": "./scripts/run_containment_latency_metric_gate.sh ci",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Containment-latency metric gate (bd-38mby) computes actual signal-to-action timestamps and median latency artifacts with bounded timing validation.",
-      "owning_bead": "bd-38mby",
-      "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions."
+      "verification_command": "./scripts/run_containment_latency_metric_gate.sh ci"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-013",
       "claim_id": "FE-CLAIM-013",
       "claim_scope": "replay",
       "claim_text": "100% deterministic replay coverage for declared security-critical allow/deny/escalation decisions.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions with live end-to-end byte-identical artifact proof.",
+      "freshness_days": 0,
+      "owning_bead": "bd-2488a",
+      "reason": "Replay coverage gate now fails closed unless the declared allow/deny/escalate security-critical inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields; the shipped frankenctl compile/run integration test proves fixed-input artifacts are byte-identical.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 60,
         "end_line": 60,
-        "must_contain": "`100%` deterministic replay coverage"
+        "must_contain": "`100%` deterministic replay coverage",
+        "start_line": 60
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/run_replay_coverage_metric_gate.sh",
-      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs",
-      "freshness_days": 0,
-      "decision": "allow_observed",
-      "reason": "Replay coverage gate now fails closed unless the declared allow/deny/escalate security-critical inventory has verified evidence, matching hashes, strict replay status, and complete evidence fields; the shipped frankenctl compile/run integration test proves fixed-input artifacts are byte-identical.",
-      "owning_bead": "bd-2488a",
-      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions with live end-to-end byte-identical artifact proof."
+      "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
     },
     {
+      "actual_wording_state": "target",
+      "allowed_state": "target",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-014",
       "claim_scope": "capability",
       "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Target: at least three impossible-by-default production features with per-feature proof artifacts.",
+      "freshness_days": null,
+      "owning_bead": "bd-1qkrc",
+      "reason": "Production status and proof handles must be named per feature before observed wording is valid.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 61,
         "end_line": 61,
-        "must_contain": "At least `3` production features"
+        "must_contain": "At least `3` production features",
+        "start_line": 61
       },
-      "allowed_state": "target",
-      "actual_wording_state": "target",
-      "artifact_path": null,
-      "verification_command": "TBD: run impossible-by-default proof index once bd-3mp80, bd-dpfvh, bd-1py8v, and bd-1bao8 close",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "Production status and proof handles must be named per feature before observed wording is valid.",
-      "owning_bead": "bd-1qkrc",
-      "downgrade_text": "Target: at least three impossible-by-default production features with per-feature proof artifacts."
+      "verification_command": "TBD: run impossible-by-default proof index once bd-3mp80, bd-dpfvh, bd-1py8v, and bd-1bao8 close"
     },
     {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-015",
       "claim_id": "FE-CLAIM-015",
       "claim_scope": "ifc",
       "claim_text": "Deterministic information-flow confinement with signed declassification receipts and replay-verifiable data-provenance artifacts.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: deterministic information-flow confinement with signed declassification receipts.",
+      "freshness_days": 1,
+      "owning_bead": "bd-dpfvh",
+      "reason": "Live IFC declassification example (bd-dpfvh) generates actual source-to-sink flow with signed declassification receipts and replay-verifiable provenance artifacts.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 96,
         "end_line": 96,
-        "must_contain": "signed declassification receipts"
+        "must_contain": "signed declassification receipts",
+        "start_line": 96
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "scripts/e2e/live_ifc_declassification_smoke.sh",
-      "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Live IFC declassification example (bd-dpfvh) generates actual source-to-sink flow with signed declassification receipts and replay-verifiable provenance artifacts.",
-      "owning_bead": "bd-dpfvh",
-      "downgrade_text": "Target: deterministic information-flow confinement with signed declassification receipts."
+      "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-016",
       "claim_scope": "security",
       "claim_text": "Mathematically explicit security decisions.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: security decisions may use mathematically explicit specifications after formal modeling artifacts land.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No formal mathematical specification or proof artifacts exist for security decision algorithms.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 50,
         "end_line": 50,
-        "must_contain": "mathematically explicit security decisions"
+        "must_contain": "mathematically explicit security decisions",
+        "start_line": 50
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: formal mathematical specification for security decisions",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No formal mathematical specification or proof artifacts exist for security decision algorithms.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: security decisions may use mathematically explicit specifications after formal modeling artifacts land."
+      "verification_command": "TBD: formal mathematical specification for security decisions"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-017",
       "claim_scope": "compiler",
       "claim_text": "Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: compilation may include proof-carrying contracts after formal verification infrastructure lands.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No formal proof-carrying code implementation or verification artifacts exist.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 593,
         "end_line": 593,
-        "must_contain": "proof-carrying compilation contract"
+        "must_contain": "proof-carrying compilation contract",
+        "start_line": 593
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement formal proof-carrying compilation with Lean/Coq verification",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No formal proof-carrying code implementation or verification artifacts exist.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: compilation may include proof-carrying contracts after formal verification infrastructure lands."
+      "verification_command": "TBD: implement formal proof-carrying compilation with Lean/Coq verification"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-018",
       "claim_scope": "policy",
       "claim_text": "Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: policy evaluation may include formal semantics and mathematical proofs after specification artifacts land.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No formal semantics specification or mathematical proofs for policy operations exist.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 611,
         "end_line": 611,
-        "must_contain": "formal semantics with explicit monotonicity"
+        "must_contain": "formal semantics with explicit monotonicity",
+        "start_line": 611
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement formal policy semantics with TLA+/Coq proofs",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No formal semantics specification or mathematical proofs for policy operations exist.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: policy evaluation may include formal semantics and mathematical proofs after specification artifacts land."
+      "verification_command": "TBD: implement formal policy semantics with TLA+/Coq proofs"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-019",
       "claim_scope": "optimization",
       "claim_text": "Mathematically equivalent fast paths behind isomorphism proof notes.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: optimization fast paths may include mathematical equivalence proofs after formal verification artifacts land.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No mathematical isomorphism proofs or equivalence verification artifacts exist.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 636,
         "end_line": 636,
-        "must_contain": "isomorphism proof notes"
+        "must_contain": "isomorphism proof notes",
+        "start_line": 636
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement isomorphism proofs for optimization equivalence",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No mathematical isomorphism proofs or equivalence verification artifacts exist.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: optimization fast paths may include mathematical equivalence proofs after formal verification artifacts land."
+      "verification_command": "TBD: implement isomorphism proofs for optimization equivalence"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-020",
       "claim_scope": "policy",
       "claim_text": "Theorem-backed compiler for high-assurance policy governance.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: policy compilation may use theorem-backed approaches after formal theorem artifacts land.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No formal theorems or theorem-backed compilation implementation exists.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 744,
         "end_line": 744,
-        "must_contain": "theorem-backed compiler"
+        "must_contain": "theorem-backed compiler",
+        "start_line": 744
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement theorem-backed policy compilation with formal verification",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No formal theorems or theorem-backed compilation implementation exists.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: policy compilation may use theorem-backed approaches after formal theorem artifacts land."
+      "verification_command": "TBD: implement theorem-backed policy compilation with formal verification"
     },
     {
+      "actual_wording_state": "hypothesis",
+      "allowed_state": "hypothesis",
+      "artifact_path": null,
       "claim_id": "FE-CLAIM-021",
       "claim_scope": "policy",
       "claim_text": "Policy Theorem Engine with theorem checks for monotonic safety constraints.",
+      "decision": "downgrade_until_live_proof",
+      "downgrade_text": "Hypothesis: policy evaluation may include a theorem engine after formal verification infrastructure lands.",
+      "freshness_days": null,
+      "owning_bead": "bd-csnqb",
+      "reason": "No formal theorem engine implementation or theorem validation artifacts exist.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
-        "start_line": 828,
         "end_line": 898,
-        "must_contain": "Policy Theorem Engine"
+        "must_contain": "Policy Theorem Engine",
+        "start_line": 828
       },
-      "allowed_state": "hypothesis",
-      "actual_wording_state": "hypothesis",
-      "artifact_path": null,
-      "verification_command": "TBD: implement Policy Theorem Engine with formal theorem validation",
-      "freshness_days": null,
-      "decision": "downgrade_until_live_proof",
-      "reason": "No formal theorem engine implementation or theorem validation artifacts exist.",
-      "owning_bead": "bd-csnqb",
-      "downgrade_text": "Hypothesis: policy evaluation may include a theorem engine after formal verification infrastructure lands."
+      "verification_command": "TBD: implement Policy Theorem Engine with formal theorem validation"
     }
+  ],
+  "generated_by": "manual-ga-proof-audit",
+  "max_observed_freshness_days": 30,
+  "owning_bead": "bd-1qkrc",
+  "performance_evidence_policy": {
+    "banned_observed_performance_fragments": [
+      "hot_paths_simulation",
+      "MockCertificate"
+    ],
+    "real_hot_path_observed_internal_evidence": {
+      "contract_gate": "scripts/real_hot_path_proof_contract_gate.sh",
+      "contract_schema": "franken-engine.real-hot-path-proof-contract-gate.v1",
+      "observed_scope": "Internal FrankenEngine hot-path workloads execute through rch and emit deterministic command, worker, target-dir, digest, metric, and proof-state artifacts.",
+      "proof_wrapper": "scripts/run_real_hot_path_proof.sh smoke",
+      "runtime_lane": "real_runtime_hot_paths"
+    },
+    "throughput_denominator_target_evidence": {
+      "claim_id": "FE-CLAIM-010",
+      "current_state": "target",
+      "required_before_observed": "Fresh Node and Bun denominator artifacts under the benchmark denominator contract."
+    }
+  },
+  "policy_id": "runtime-charter-claim-language-v1",
+  "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+  "state_order": [
+    "hypothesis",
+    "target",
+    "observed"
   ]
 }

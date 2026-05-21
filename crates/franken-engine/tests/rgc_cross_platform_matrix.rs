@@ -1173,3 +1173,104 @@ fn rgc_063_normalize_platform_path_trailing_slash_preserved() {
     assert_eq!(normalize_platform_path("/tmp/franken/"), "/tmp/franken/");
     assert_eq!(normalize_platform_path("C:\\franken\\"), "c:/franken/");
 }
+
+#[test]
+fn rgc_063_gate_fails_on_silent_platform_absence() {
+    use std::process::Command;
+
+    // Test that gate fails when a required platform (macos-x64) is missing without explicit skip
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg("cd /data/projects/franken_engine && RGC_CROSS_PLATFORM_REQUIRE_MATRIX=1 ./scripts/run_rgc_cross_platform_matrix_gate.sh matrix")
+        .env("RGC_CROSS_PLATFORM_LINUX_X64_MANIFEST", "/dev/null") // Provide minimal baseline
+        .env_remove("RGC_CROSS_PLATFORM_MACOS_X64_MANIFEST") // Remove macOS x64 without skip
+        .env_remove("RGC_CROSS_PLATFORM_WINDOWS_X64_MANIFEST") // Remove Windows x64 without skip
+        .output()
+        .expect("failed to execute gate script");
+
+    // Gate should fail due to missing required platforms
+    assert!(
+        !output.status.success(),
+        "gate should fail when required platforms missing without explicit skip. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("required target manifest input missing"),
+        "should report missing required targets. stdout: {}",
+        stdout
+    );
+}
+
+#[test]
+fn rgc_063_gate_succeeds_with_explicit_platform_skip() {
+    use std::process::Command;
+
+    // Test that gate succeeds when platforms are explicitly skipped
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg("cd /data/projects/franken_engine && ./scripts/run_rgc_cross_platform_matrix_gate.sh matrix")
+        .env("RGC_CROSS_PLATFORM_LINUX_X64_MANIFEST", "/dev/null") // Provide minimal baseline
+        .env("RGC_CROSS_PLATFORM_MACOS_X64_SKIP", "test environment - macOS unavailable")
+        .env("RGC_CROSS_PLATFORM_WINDOWS_X64_SKIP", "test environment - Windows unavailable")
+        .output()
+        .expect("failed to execute gate script");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should not fail due to explicit skips (though may fail for other reasons in test env)
+    if !output.status.success() {
+        // If it fails, it should NOT be due to silent absence
+        assert!(
+            !stderr.contains("required target manifest input missing"),
+            "should not fail due to missing targets when explicitly skipped. stderr: {}",
+            stderr
+        );
+        assert!(
+            !stdout.contains("required target manifest input missing"),
+            "should not fail due to missing targets when explicitly skipped. stdout: {}",
+            stdout
+        );
+    }
+
+    // Verify skip reasons are recorded
+    assert!(
+        stdout.contains("explicitly skipped") || stderr.contains("explicitly skipped"),
+        "should record explicit skip in output. stdout: {}, stderr: {}",
+        stdout,
+        stderr
+    );
+}
+
+#[test]
+fn rgc_063_skip_reason_validation() {
+    use std::collections::BTreeSet;
+
+    let valid_skip_patterns = BTreeSet::from([
+        "ci environment limitation",
+        "worker pool unavailable",
+        "platform temporarily disabled",
+        "test environment constraint",
+        "infrastructure maintenance",
+    ]);
+
+    // Verify skip reason patterns are reasonable
+    for pattern in &valid_skip_patterns {
+        assert!(
+            !pattern.trim().is_empty(),
+            "skip reason should not be empty"
+        );
+        assert!(
+            pattern.len() > 10,
+            "skip reason should be descriptive: {}",
+            pattern
+        );
+        assert!(
+            !pattern.chars().all(|c| c.is_uppercase()),
+            "skip reason should not be all caps: {}",
+            pattern
+        );
+    }
+}

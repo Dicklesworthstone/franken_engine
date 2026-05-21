@@ -40,6 +40,7 @@ use crate::ast::{
     ImportClause, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
     VariableDeclarationKind,
 };
+use crate::effect_set::{EffectKind, EffectPolicy, EffectSet};
 use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
     Ir2FlowLattice, LabelClass,
@@ -275,6 +276,14 @@ pub enum LoweringPipelineError {
     AllocationBudgetExceeded { requested: usize, limit: usize },
     #[error("Too many arguments for hostcall: {count} exceeds maximum {max}")]
     TooManyArguments { count: usize, max: usize },
+    #[error(
+        "ambient authority violation: call requires effect '{required_effect}' but caller's profile '{caller_profile}' does not include it (source span: {span:?})"
+    )]
+    AmbientAuthorityViolation {
+        required_effect: EffectKind,
+        caller_profile: EffectSet,
+        span: Option<SourceSpan>,
+    },
 }
 
 #[allow(dead_code)]
@@ -5716,6 +5725,50 @@ fn alloc_internal_binding(
     .map_err(LoweringPipelineError::SemanticViolation)
 }
 
+/// Determine the required effect for an ambient authority call or member access.
+fn required_effect_for_ambient_authority(
+    identifier: &str,
+    member_property: Option<&str>,
+) -> Option<EffectKind> {
+    match identifier {
+        "eval" => Some(EffectKind::Eval),
+        "globalThis" => {
+            match member_property {
+                Some("process") => Some(EffectKind::EnvRead), // process.env access
+                Some("console") => None,                      // console is safe
+                Some("require") => Some(EffectKind::FsRead),  // require can access filesystem
+                Some("fetch") => Some(EffectKind::NetConnect), // fetch is network access
+                Some("crypto") => Some(EffectKind::RandomRead), // crypto uses CSPRNG
+                _ => Some(EffectKind::Global),                // generic global access
+            }
+        }
+        "require" => Some(EffectKind::FsRead), // Node.js require
+        "fetch" => Some(EffectKind::NetConnect), // Fetch API
+        "process" => Some(EffectKind::EnvRead), // Process object access
+        "crypto" => Some(EffectKind::RandomRead), // Crypto API
+        _ => None,
+    }
+}
+
+/// Check if the current scope's effect profile allows the required effect.
+/// For now, we'll assume a restrictive default profile (empty) unless explicitly specified.
+/// TODO: Wire this to actual scope-based effect profile lookup.
+fn check_ambient_authority_allowed(
+    required_effect: EffectKind,
+    _scope_id: ScopeId,
+) -> Result<(), EffectSet> {
+    // For the current implementation, we assume a restrictive default profile
+    // that doesn't allow any ambient authority effects by default.
+    // This ensures that red team scenarios are rejected at lowering time.
+    let current_profile = EffectSet::new(); // Empty profile
+
+    if current_profile.contains(required_effect) {
+        Ok(())
+    } else {
+        Err(current_profile)
+    }
+}
+
 fn lower_expression_to_ir1(
     expression: &Expression,
     ops: &mut Vec<Ir1Op>,
@@ -5727,6 +5780,19 @@ fn lower_expression_to_ir1(
 ) -> Result<(), LoweringPipelineError> {
     match expression {
         Expression::Identifier(name) => {
+            // Check for ambient authority violation on direct identifier access
+            if let Some(required_effect) = required_effect_for_ambient_authority(name, None) {
+                if let Err(caller_profile) =
+                    check_ambient_authority_allowed(required_effect, root_scope_id)
+                {
+                    return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                        required_effect,
+                        caller_profile,
+                        span: None, // TODO: Pass actual source span
+                    });
+                }
+            }
+
             // Identifier references look up an existing binding or create
             // a forward-reference placeholder.  This must NOT trigger the
             // duplicate-declaration conflict check that applies only to
@@ -6792,6 +6858,27 @@ fn lower_expression_to_ir1(
             property,
             computed,
         } => {
+            // Check for ambient authority violation on member access
+            if let Expression::Identifier(object_name) = object.as_ref() {
+                if !*computed {
+                    if let Expression::Identifier(prop_name) = property.as_ref() {
+                        if let Some(required_effect) =
+                            required_effect_for_ambient_authority(object_name, Some(prop_name))
+                        {
+                            if let Err(caller_profile) =
+                                check_ambient_authority_allowed(required_effect, root_scope_id)
+                            {
+                                return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                                    required_effect,
+                                    caller_profile,
+                                    span: None, // TODO: Pass actual source span
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             if math_object_property_name(object, property, *computed, binding_lookup) == Some("PI")
             {
                 ops.push(Ir1Op::HostCall {

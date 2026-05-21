@@ -45,6 +45,13 @@ windows_arm64_manifest="${RGC_CROSS_PLATFORM_WINDOWS_ARM64_MANIFEST:-}"
 manifest_set_root="${RGC_CROSS_PLATFORM_MANIFEST_SET_ROOT:-artifacts/rgc_cross_platform_matrix_inputs}"
 auto_discover_manifests="${RGC_CROSS_PLATFORM_AUTO_DISCOVER_MANIFESTS:-1}"
 
+linux_x64_skip_reason="${RGC_CROSS_PLATFORM_LINUX_X64_SKIP:-}"
+linux_arm64_skip_reason="${RGC_CROSS_PLATFORM_LINUX_ARM64_SKIP:-}"
+macos_x64_skip_reason="${RGC_CROSS_PLATFORM_MACOS_X64_SKIP:-}"
+macos_arm64_skip_reason="${RGC_CROSS_PLATFORM_MACOS_ARM64_SKIP:-}"
+windows_x64_skip_reason="${RGC_CROSS_PLATFORM_WINDOWS_X64_SKIP:-}"
+windows_arm64_skip_reason="${RGC_CROSS_PLATFORM_WINDOWS_ARM64_SKIP:-}"
+
 linux_x64_manifest_source="missing"
 linux_arm64_manifest_source="missing"
 macos_x64_manifest_source="missing"
@@ -302,6 +309,44 @@ target_manifest_source_var_name() {
 target_manifest_filename() {
   local target_id="$1"
   printf '%s.run_manifest.json\n' "$target_id"
+}
+
+target_skip_reason() {
+  local target_id="$1"
+  case "$target_id" in
+    linux-x64)
+      echo "$linux_x64_skip_reason"
+      ;;
+    linux-arm64)
+      echo "$linux_arm64_skip_reason"
+      ;;
+    macos-x64)
+      echo "$macos_x64_skip_reason"
+      ;;
+    macos-arm64)
+      echo "$macos_arm64_skip_reason"
+      ;;
+    windows-x64)
+      echo "$windows_x64_skip_reason"
+      ;;
+    windows-arm64)
+      echo "$windows_arm64_skip_reason"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+target_explicitly_skipped() {
+  local target_id="$1"
+  local skip_reason
+  skip_reason="$(target_skip_reason "$target_id")"
+  if [[ -n "$skip_reason" ]]; then
+    echo "true"
+  else
+    echo "false"
+  fi
 }
 
 set_target_manifest_resolution() {
@@ -762,37 +807,64 @@ evaluate_target() {
   target_arch_name="$(target_arch "$target_id")"
   required_target="$(target_required "$target_id")"
   target_manifest="$(target_manifest_path "$target_id")"
+  explicitly_skipped="$(target_explicitly_skipped "$target_id")"
+  skip_reason="$(target_skip_reason "$target_id")"
 
   if [[ -z "$target_manifest" || ! -f "$target_manifest" ]]; then
     if [[ "$required_target" == "true" && "$target_id" != "linux-x64" ]]; then
       required_target_missing_count=$((required_target_missing_count + 1))
     fi
-    delta_class="candidate_target_input_missing"
-    severity="warning"
-    reason="candidate target manifest input missing"
-    if [[ "$required_target" == "true" ]]; then
-      delta_class="missing_target_input"
-      severity="critical"
-      reason="required target manifest input missing"
-      critical_delta_count=$((critical_delta_count + 1))
+
+    if [[ "$explicitly_skipped" == "true" ]]; then
+      delta_class="explicit_target_skip"
+      severity="info"
+      reason="target explicitly skipped: $skip_reason"
     else
-      warning_delta_count=$((warning_delta_count + 1))
+      delta_class="candidate_target_input_missing"
+      severity="warning"
+      reason="candidate target manifest input missing"
+      if [[ "$required_target" == "true" ]]; then
+        delta_class="missing_target_input"
+        severity="critical"
+        reason="required target manifest input missing (silent absence - must be explicitly skipped)"
+        critical_delta_count=$((critical_delta_count + 1))
+      else
+        warning_delta_count=$((warning_delta_count + 1))
+      fi
     fi
-    append_delta_row \
-      "$target_id" \
-      "$target_os_name" \
-      "$target_arch_name" \
-      "$required_target" \
-      "$target_manifest" \
-      "unknown" \
-      "missing_input" \
-      "missing-input" \
-      "unknown" \
-      "unknown" \
-      "unknown" \
-      "$delta_class" \
-      "$severity" \
-      "$reason"
+    if [[ "$explicitly_skipped" == "true" ]]; then
+      append_delta_row \
+        "$target_id" \
+        "$target_os_name" \
+        "$target_arch_name" \
+        "$required_target" \
+        "$target_manifest" \
+        "skipped" \
+        "explicit_skip" \
+        "explicit-skip" \
+        "skipped" \
+        "skipped" \
+        "skipped" \
+        "$delta_class" \
+        "$severity" \
+        "$reason"
+    else
+      append_delta_row \
+        "$target_id" \
+        "$target_os_name" \
+        "$target_arch_name" \
+        "$required_target" \
+        "$target_manifest" \
+        "unknown" \
+        "missing_input" \
+        "missing-input" \
+        "unknown" \
+        "unknown" \
+        "unknown" \
+        "$delta_class" \
+        "$severity" \
+        "$reason"
+    fi
     return
   fi
 

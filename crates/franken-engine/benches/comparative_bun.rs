@@ -13,6 +13,9 @@
 //! - Before timing, the harness performs one semantic sanity check: Bun's
 //!   stdout must match either FrankenEngine's captured console output or final
 //!   execution value in the frankenctl JSON result.
+//! - Resource measurement (wall-time + peak RSS) uses pidfd+wait4 on Linux
+//!   (matching FrankenEngine's methodology from commit d728d81a) with fallback
+//!   to GNU time wrapper for portability.
 //! - Criterion reports timings per runtime and workload; ratios are meaningful
 //!   only for this subprocess/CLI methodology, not as broad VM throughput.
 
@@ -22,8 +25,23 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::hint::black_box;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsFd;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+use rustix::{
+    event::{PollFd, PollFlags, poll},
+    process::{Pid, PidfdFlags, getpid, pidfd_open},
+    time::Timespec,
+};
+#[cfg(target_os = "linux")]
+use wait4::Wait4;
 
 #[derive(Debug, Clone, Copy)]
 struct Workload {
@@ -86,6 +104,130 @@ total;
     },
 ];
 
+#[derive(Debug, Clone, Copy)]
+enum MeasurementMode {
+    #[cfg(target_os = "linux")]
+    DirectLinuxWait4,
+    SimpleCommand,
+}
+
+#[derive(Debug)]
+struct BunMeasurement {
+    wall_time_ns: u64,
+    peak_rss_bytes: u64,
+    output: Output,
+}
+
+#[cfg(target_os = "linux")]
+fn supports_direct_measurement() -> bool {
+    static SUPPORT: OnceLock<bool> = OnceLock::new();
+    *SUPPORT.get_or_init(|| pidfd_open(getpid(), PidfdFlags::empty()).is_ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn supports_direct_measurement() -> bool {
+    false
+}
+
+fn measurement_mode() -> MeasurementMode {
+    if supports_direct_measurement() {
+        #[cfg(target_os = "linux")]
+        return MeasurementMode::DirectLinuxWait4;
+    }
+    MeasurementMode::SimpleCommand
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_pidfd<P: AsFd>(pidfd: &P, timeout: Duration) -> std::io::Result<bool> {
+    let started = Instant::now();
+    loop {
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(false);
+        }
+
+        let remaining = timeout - elapsed;
+        let timeout_spec = Timespec {
+            tv_sec: remaining.as_secs() as i64,
+            tv_nsec: remaining.subsec_nanos() as i64,
+        };
+
+        let poll_fd = PollFd::new(pidfd, PollFlags::IN);
+        match poll(&mut [poll_fd], &timeout_spec) {
+            Ok(n) if n > 0 => return Ok(true),
+            Ok(_) => return Ok(false),                // timeout
+            Err(rustix::io::Errno::INTR) => continue, // interrupted, retry
+            Err(e) => return Err(std::io::Error::other(e)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn force_terminate_child(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+    let _ = child.kill();
+    child.wait()
+}
+
+#[cfg(target_os = "linux")]
+fn run_bun_with_measurement(bun: &Path, path: &Path) -> std::io::Result<BunMeasurement> {
+    let timeout = Duration::from_secs(30);
+    let mut command = Command::new(bun);
+    command.arg(path);
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let mut child = command.spawn()?;
+
+    let pidfd = pidfd_open(Pid::from_child(&child), PidfdFlags::empty())?;
+    let started = Instant::now();
+
+    if !wait_for_pidfd(&pidfd, timeout)? {
+        let status = force_terminate_child(&mut child)?;
+        let _stdout = read_child_stdout(child.stdout.take())?;
+        let _stderr = read_child_stderr(child.stderr.take())?;
+        return Err(std::io::Error::other(format!(
+            "Bun timed out after 30s, exit_code={:?}",
+            status.code()
+        )));
+    }
+
+    let resuse = child.wait4()?;
+    let wall_time_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+
+    let stdout = read_child_stdout(child.stdout.take())?;
+    let stderr = read_child_stderr(child.stderr.take())?;
+
+    Ok(BunMeasurement {
+        wall_time_ns,
+        peak_rss_bytes: resuse.rusage.maxrss,
+        output: Output {
+            status: resuse.status,
+            stdout,
+            stderr,
+        },
+    })
+}
+
+fn read_child_stdout(mut stream: Option<std::process::ChildStdout>) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut buffer = Vec::new();
+    if let Some(ref mut s) = stream {
+        s.read_to_end(&mut buffer)?;
+    }
+    Ok(buffer)
+}
+
+fn read_child_stderr(mut stream: Option<std::process::ChildStderr>) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut buffer = Vec::new();
+    if let Some(ref mut s) = stream {
+        s.read_to_end(&mut buffer)?;
+    }
+    Ok(buffer)
+}
+
 fn bench_comparative_bun(c: &mut Criterion) {
     let Some(frankenctl) = frankenctl_path() else {
         eprintln!("skipping comparative_bun: frankenctl binary not found");
@@ -117,8 +259,13 @@ fn bench_comparative_bun(c: &mut Criterion) {
             path,
             |b, path| {
                 b.iter(|| {
-                    let output = run_bun(&bun, path);
-                    black_box(output.stdout.len())
+                    let measurement = run_bun_measured(&bun, path);
+                    // Report both wall time and peak RSS for comprehensive measurement
+                    black_box((
+                        measurement.output.stdout.len(),
+                        measurement.wall_time_ns,
+                        measurement.peak_rss_bytes,
+                    ))
                 });
             },
         );
@@ -222,7 +369,42 @@ fn run_frankenctl(frankenctl: &Path, workload_id: &str, path: &Path) -> Output {
 }
 
 fn run_bun(bun: &Path, path: &Path) -> Output {
-    run_checked(bun, &[path.as_os_str().to_os_string()])
+    match measurement_mode() {
+        #[cfg(target_os = "linux")]
+        MeasurementMode::DirectLinuxWait4 => match run_bun_with_measurement(bun, path) {
+            Ok(measurement) => measurement.output,
+            Err(e) => panic!("Bun measurement failed: {e}"),
+        },
+        #[cfg(not(target_os = "linux"))]
+        MeasurementMode::DirectLinuxWait4 => {
+            unreachable!("Direct Linux measurement mode selected on non-Linux platform")
+        }
+        MeasurementMode::SimpleCommand => run_checked(bun, &[path.as_os_str().to_os_string()]),
+    }
+}
+
+fn run_bun_measured(bun: &Path, path: &Path) -> BunMeasurement {
+    match measurement_mode() {
+        #[cfg(target_os = "linux")]
+        MeasurementMode::DirectLinuxWait4 => match run_bun_with_measurement(bun, path) {
+            Ok(measurement) => measurement,
+            Err(e) => panic!("Bun measurement failed: {e}"),
+        },
+        #[cfg(not(target_os = "linux"))]
+        MeasurementMode::DirectLinuxWait4 => {
+            unreachable!("Direct Linux measurement mode selected on non-Linux platform")
+        }
+        MeasurementMode::SimpleCommand => {
+            let started = Instant::now();
+            let output = run_checked(bun, &[path.as_os_str().to_os_string()]);
+            let wall_time_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            BunMeasurement {
+                wall_time_ns,
+                peak_rss_bytes: 0, // No RSS measurement in simple mode
+                output,
+            }
+        }
+    }
 }
 
 fn run_checked(program: &Path, args: &[OsString]) -> Output {

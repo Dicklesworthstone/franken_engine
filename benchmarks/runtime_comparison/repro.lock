@@ -13,11 +13,14 @@
   },
   "runtime_pins": {
     "node_lts": "22.13.1",
+    "bun_stable": "1.1.43",
     "node_command": "node",
+    "bun_command": "bun",
     "measurement_mode": "DirectLinuxWait4"
   },
   "commands": [
     "cargo bench -p frankenengine-engine --bench comparative_node -- --noplot",
+    "cargo bench -p frankenengine-engine --bench comparative_bun -- --noplot",
     "frankenctl benchmark compare --manifest benchmarks/runtime_comparison/manifest.json"
   ],
   "methodology": {

@@ -2071,6 +2071,136 @@ Artifacts are written under:
 - `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_target_deltas.jsonl`
 - `artifacts/rgc_cross_platform_matrix/<timestamp>/matrix_summary.json`
 
+## RGC Lockstep Oracle Pipeline
+
+`bd-cixqu.9.3` implements the full Node+Bun lockstep oracle pipeline that compares 
+FrankenEngine execution against reference runtimes. The gate promotes the lockstep 
+oracle from SIMULATED to OBSERVED status by capturing real divergence/convergence 
+verdicts with typed evidence atoms per the I.2 divergence classification taxonomy.
+
+### When to Run
+
+Run the lockstep oracle pipeline gate:
+- As part of release validation to verify runtime compatibility
+- After significant runtime changes to detect regressions  
+- When investigating divergence reports from production
+- For periodic conformance monitoring against reference implementations
+
+### Usage
+
+```bash
+# Full CI mode - tests all workloads
+./scripts/run_rgc_lockstep_oracle_pipeline.sh ci
+
+# Development mode - optionally filter to specific workload
+./scripts/run_rgc_lockstep_oracle_pipeline.sh dev numeric_loop
+
+# Replay previous run for verification
+./scripts/e2e/rgc_lockstep_oracle_pipeline_replay.sh
+
+# Replay specific preserved bundle  
+RGC_LOCKSTEP_ORACLE_PIPELINE_REPLAY_RUN_DIR=/path/to/bundle ./scripts/e2e/rgc_lockstep_oracle_pipeline_replay.sh
+```
+
+### Artifacts Generated
+
+The gate emits a comprehensive artifact bundle under `artifacts/lockstep_oracle/${timestamp}/`:
+
+**Core Artifacts:**
+- `run_manifest.json` - Complete artifact manifest with content hashes
+- `events.jsonl` - Structured event log for the entire pipeline
+- `commands.txt` - Shell command transcript with environment
+- `summary.txt` - Operator-readable summary (5-10 lines)
+
+**Step Logs:**
+- `step_logs/step_001_setup.log` - Environment and directory setup
+- `step_logs/step_002_build.log` - Lockstep orchestrator compilation
+- `step_logs/step_003_workload_generation.log` - Test workload trace generation
+- `step_logs/step_004_node_comparison.log` - Node.js vs FrankenEngine comparison
+- `step_logs/step_005_bun_comparison.log` - Bun vs FrankenEngine comparison  
+- `step_logs/step_006_analysis.log` - Divergence classification and evidence generation
+
+**Trace Data:**
+- `workload_traces/node_traces/*.trace.json` - Node.js execution traces
+- `workload_traces/bun_traces/*.trace.json` - Bun execution traces
+- `workload_traces/franken_traces/*.trace.json` - FrankenEngine execution traces
+
+**Analysis Results:**
+- `divergence_reports/node_vs_franken.json` - Node.js comparison results
+- `divergence_reports/bun_vs_franken.json` - Bun comparison results
+- `divergence_reports/evidence_atoms.jsonl` - Classified divergence evidence
+
+### Reading Divergence Verdicts
+
+Each comparison report contains:
+
+```json
+{
+  "summary": {
+    "total_cases": 5,
+    "pass_cases": 4, 
+    "failed_cases": 1
+  },
+  "case_results": [
+    {
+      "fixture_ref": "numeric_loop",
+      "pass": false,
+      "divergence": {
+        "class": "EventSequence",
+        "message": "console_output mismatch: expected '42', got '43'"
+      }
+    }
+  ]
+}
+```
+
+Evidence atoms in `evidence_atoms.jsonl` provide structured classification:
+
+```json
+{
+  "schema_version": "franken-engine.divergence-evidence.v1",
+  "classification": {
+    "EngineBug": {
+      "severity": "Minor",
+      "reproducer": "Console output mismatch in numeric_loop",
+      "expected_behavior": "Output should match Node.js: '42'",
+      "actual_behavior": "FrankenEngine outputs: '43'"
+    }
+  },
+  "classification_confidence": "Automated"
+}
+```
+
+**Classification Types:**
+- **EngineBug**: Genuine FrankenEngine bugs (Critical/Major/Minor/Cosmetic)
+- **IntentionalImprovement**: Deliberate improvements (Performance/Security/Diagnostics)  
+- **CompatibilityDebt**: Known deviations needing ecosystem fixes (Blocker/High/Medium/Low)
+- **EcosystemAmbiguity**: Reference disagreements or spec gaps
+
+### Triage Workflow
+
+1. **Check summary.txt** for quick overview of pass/fail rates
+2. **Review divergence_reports/** for specific runtime comparison results  
+3. **Examine evidence_atoms.jsonl** for classified divergence evidence
+4. **Use classification confidence** to prioritize manual review:
+   - `Automated` - High confidence, can proceed with triage rules
+   - `Tentative` - Requires human investigation  
+   - `Disputed` - Needs expert resolution
+
+### Environment Variables
+
+- `RGC_LOCKSTEP_ORACLE_ARTIFACTS_DIR` - Override artifacts directory
+- `RGC_LOCKSTEP_ORACLE_WORKLOAD_FILTER` - Filter to specific workloads
+- `RGC_LOCKSTEP_ORACLE_PIPELINE_REPLAY_RUN_DIR` - Pin replay to specific bundle
+
+### Integration Points
+
+The lockstep oracle pipeline integrates with:
+- **Runtime comparison benchmarks** (I.1) - Generates actual runtime traces
+- **Divergence classification taxonomy** (I.2) - Applies typed evidence atoms
+- **Evidence ledger system** - Chains evidence for audit trail
+- **Operator triage surface** (I.6) - Feeds divergence analysis workflow
+
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |

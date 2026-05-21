@@ -134,7 +134,10 @@ run_step() {
 }
 
 setup_artifacts() {
-    run_step "setup" mkdir -p "${ARTIFACTS_DIR}" "${STEP_LOGS_DIR}" "${WORKLOAD_TRACES_DIR}" "${DIVERGENCE_REPORTS_DIR}"
+    # Create initial directories before calling run_step
+    mkdir -p "${ARTIFACTS_DIR}" "${STEP_LOGS_DIR}" "${WORKLOAD_TRACES_DIR}" "${DIVERGENCE_REPORTS_DIR}"
+
+    run_step "setup" echo "Artifact directories created successfully"
 
     # Create trace subdirectories
     mkdir -p "${WORKLOAD_TRACES_DIR}/node_traces"

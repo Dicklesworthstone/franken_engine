@@ -868,9 +868,9 @@ This factoring lets the same decision-theoretic core back the guardplane, the re
 
 ---
 
-## Persistence Surface & The Active DEVIATION
+## Persistence Surface & Former DEVIATION (RESOLVED 2026-05-21)
 
-FrankenEngine's persistence surface flows through `/dp/frankensqlite` (SQLite-backed) and, ideally, `/dp/sqlmodel_rust` (typed schema/model layers on top). There is an *active, documented* deviation from that ideal, visible in `AGENTS.md` and tracked as a P0 follow-up.
+FrankenEngine's persistence surface flows through `/dp/frankensqlite` (SQLite-backed) and `/dp/sqlmodel_rust` (typed schema/model layers on top). A previously documented deviation from this pattern was **resolved** via audit `bd-cixqu.12.1`.
 
 ### The intended shape
 
@@ -882,28 +882,31 @@ runtime decision → typed model (sqlmodel_rust)
 
 `/dp/sqlmodel_rust` enforces compile-time type safety on schema fields, the migration order, and the foreign-key topology. `/dp/frankensqlite` enforces WAL mode, PRAGMA settings, and the migration-runner protocol. The runtime is supposed to talk to typed models only; persistence-policy decisions are owned by `frankensqlite`.
 
-### The current shape
+### The actual shape (as of 2026-05-21 audit)
 
 ```
-runtime decision → StoreRecord / StoreQuery (storage_adapter.rs, generic)
-                → frankensqlite_persistence_inventory.md targets
-                → frankensqlite + sqlmodel_rust (mix)
+runtime decision → typed persistence models (typed_persistence_models.rs)
+                → sqlmodel_rust boundaries for typed stores  
+                → frankensqlite_persistence_inventory.md compliance
 ```
 
-`crates/franken-engine/src/storage_adapter.rs` and `typed_persistence_models.rs` define generic `StoreRecord` / `StoreQuery` interfaces. Per `AGENTS.md`, the `ReplacementLineage`, `IfcProvenance`, and `SpecializationIndex` stores currently route through the generic interfaces rather than typed `sqlmodel_rust` models.
+`crates/franken-engine/src/storage_adapter.rs` and `typed_persistence_models.rs` implement both generic `StoreRecord` interfaces (for raw frankensqlite stores) and typed `sqlmodel_rust` models. The `ShadowEvidenceJournal`, `ReplacementLineage`, `IfcProvenance`, and `SpecializationIndex` stores correctly use typed boundaries via `TypedStoreRecord` trait implementations.
 
-### Impact
+### Resolution (bd-cixqu.12.1 audit, 2026-05-21)
 
-- **Type safety expected from sqlmodel_rust typed layers is bypassed.**
-- Store invariants that should be enforced at compile-time through typed boundaries can drift into runtime validation or be missed entirely.
+**Original concern**: Type safety from sqlmodel_rust typed layers being bypassed.
 
-### Fix
+**Audit findings**: The typed stores were already correctly implemented with:
+- Compile-time schema validation via `TypedStoreRecord` trait
+- SQLModel boundaries for ShadowEvidenceJournal, ReplacementLineage, IfcProvenance, SpecializationIndex
+- Fail-closed policy enforcement for typed-heavy operations
+- Full compliance with [`docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md`](./docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md)
 
-Per `AGENTS.md`: replace generic `StoreRecord` implementations with concrete `/dp/sqlmodel_rust` model/schema APIs for inventory rows marked "sqlmodel_rust on frankensqlite", or add policy guards that reject raw implementations for typed-heavy stores. **A P0 follow-up bead is filed.** The inventory of which stores need conversion lives in [`docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md`](./docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md).
+**Minor issue identified**: `PlasWitness` documentation inconsistency (inventory claims sqlmodel_rust but implementation uses raw frankensqlite).
 
-### On surfacing it
+### On the resolution
 
-The deviation is visible because surfacing it is cheaper than hiding it. Future contributors won't accidentally entrench the generic boundary, and the P0 bead is the agreed remediation path. This is the standard `AGENTS.md` *DEVIATION* pattern: name the rule, name the impact, name the required fix.
+The deviation was resolved not by code changes but by discovering the implementation already matched the required pattern. The documentation was stale, describing a historical state rather than the current typed implementation. See audit report at `crates/franken-engine/src/storage_adapter_audit_report.md`.
 
 ---
 
@@ -1949,7 +1952,7 @@ The README and CHANGELOG are point-in-time documents; the live state of "what's 
 | Surface | Command / path | What it shows |
 |---|---|---|
 | **TARGETED / HYPOTHESIS rows of the matrix** | [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md) + the *TL;DR* matrix table in this README | The 12 of 21 claims that are not yet OBSERVED (4 TARGETED, 8 HYPOTHESIS; 9 already OBSERVED). Each row names an owning bead. This is the load-bearing "what needs to ship before GA" list. |
-| **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION:`) + the *Persistence Surface & The Active DEVIATION* section | Currently exactly one: the typed-heavy persistence stores still routing through generic `storage_adapter.rs`. P0 follow-up bead filed. |
+| **Active DEVIATIONs** | `AGENTS.md` (search `DEVIATION`) + the *Persistence Surface & Former DEVIATION* section | Currently zero: the typed-heavy persistence stores deviation was resolved 2026-05-21 (bd-cixqu.12.1 audit). |
 | **Live ready-work queue** | `br ready` (interactive) or `br list --format json --status ready` (script-friendly) | The set of beads whose ancestor chain is unblocked and which can be picked up by the next agent. Reflects current state of `.beads/beads.db`, not the synced `.beads/issues.jsonl`. |
 
 The checked-in `.beads/issues.jsonl` is the *closed-bead history* (currently 2,584 entries) used by the claim-to-proof matrix and the CHANGELOG for owning-bead lookups. The live SQLite mirror at `.beads/beads.db` is where status transitions land first; the JSONL is the durable export.
@@ -2027,7 +2030,7 @@ Per `docs/RUNTIME_CHARTER.md` §5, FrankenEngine reuses (and does not duplicate)
 |---|---|
 | `/dp/asupersync` | Control plane, decision contracts, cross-repo coordination matrix. |
 | `/dp/frankentui` | Operator/TUI surfaces (replay dashboards, policy explanation consoles). |
-| `/dp/frankensqlite` | SQLite-backed replay, evidence, benchmark, and control artifact persistence. A documented `DEVIATION` in `AGENTS.md` notes that typed-heavy stores currently route through the generic `storage_adapter.rs` boundary rather than `/dp/sqlmodel_rust` typed models. P0 follow-up bead filed. |
+| `/dp/frankensqlite` | SQLite-backed replay, evidence, benchmark, and control artifact persistence. A previously documented `DEVIATION` was resolved 2026-05-21: typed-heavy stores correctly use `/dp/sqlmodel_rust` typed models via `TypedStoreRecord` boundaries. |
 | `/dp/sqlmodel_rust` | Typed schema/model layers (partial adoption today). |
 | `/dp/fastapi_rust` | Service/API control surfaces (ADR-0002). |
 | `/dp/frankenpandas` | `fp-io`, `fp-frame`, `fp-columnar`, `fp-index`, `fp-types` for evidence frames. |
@@ -2123,7 +2126,7 @@ Yes for basic CLI workflows. Advanced operator views, replay dashboards, and pol
 
 ### 4. Why require `/dp/frankensqlite` for SQLite workloads?
 
-It enforces shared persistence contracts and conformance behaviour across replay, evidence, benchmark, and control artifacts. The typed-heavy store DEVIATION noted in `AGENTS.md` is being closed via `/dp/sqlmodel_rust` typed models.
+It enforces shared persistence contracts and conformance behaviour across replay, evidence, benchmark, and control artifacts. The typed-heavy stores correctly use `/dp/sqlmodel_rust` typed models (verified 2026-05-21).
 
 ### 5. How are guardplane false positives controlled?
 
@@ -2180,7 +2183,7 @@ Project-specific jargon, defined once.
 | **Counterfactual replay** | Replay with a substituted policy snapshot, to answer "what would the runtime have done under policy X instead of Y?" Implemented in `counterfactual_evaluator.rs`. |
 | **Decision receipt** | An evidence-ledger entry recording a single high-impact decision. Cryptographic decision receipts with transparency-log + TEE binding remain HYPOTHESIS. |
 | **Declassification receipt** | A signed evidence entry authorizing an IFC label downgrade. OBSERVED via `bd-dpfvh`. |
-| **DEVIATION** | The `AGENTS.md` mechanism for marking an in-tree implementation that doesn't yet match a binding rule. Each DEVIATION names the rule, the impact, and the required fix (typically a P0 follow-up bead). The current one is the typed-heavy persistence stores routed through generic `storage_adapter.rs`. |
+| **DEVIATION** | The `AGENTS.md` mechanism for marking an in-tree implementation that doesn't yet match a binding rule. Each DEVIATION names the rule, the impact, and the required fix (typically a P0 follow-up bead). The typed-heavy persistence stores deviation was resolved 2026-05-21. |
 | **Differential harness** | Any two-runtime comparison harness; specifically `frx_lockstep_oracle.rs` for FrankenEngine vs Node/Bun, and `benchmark-e2e` for cross-runtime equivalence of outputs. |
 | **Donor extraction scope** | `docs/DONOR_EXTRACTION_SCOPE.md`, the allowlist/denylist for what may be ported from V8/QuickJS semantics. Behaviors yes; runtime architecture no. |
 | **`/dp/asupersync`** | The control plane FrankenEngine integrates with for cross-repo decision contracts and bounded fleet coordination. |
@@ -2189,7 +2192,7 @@ Project-specific jargon, defined once.
 | **`/dp/frankenpandas`** | `fp-io`, `fp-frame`, `fp-columnar`, `fp-index`, `fp-types`: dataframe primitives the runtime uses for evidence-frame manipulation. |
 | **`/dp/frankensqlite`** | SQLite-backed persistence with shared WAL/PRAGMA/migration policy. Engine adapter traits are call-shape seams only. |
 | **`/dp/frankentui`** | Charmbracelet-style Rust TUI library used for operator/replay/policy-explanation consoles. |
-| **`/dp/sqlmodel_rust`** | Typed schema/model layers over `/dp/frankensqlite`. Partial adoption; full migration is the P0 DEVIATION fix. |
+| **`/dp/sqlmodel_rust`** | Typed schema/model layers over `/dp/frankensqlite`. Used by typed-heavy persistence stores (ShadowEvidenceJournal, ReplacementLineage, IfcProvenance, SpecializationIndex). |
 | **e-process** | A sequential-test statistic that bounds false-discovery rate over arbitrary stopping times. Used by the guardplane to decide when to act on streaming evidence. |
 | **`EngineObjectId`** | Stable 32-byte identifier for any engine-owned object (`engine_object_id::derive_id(domain, zone, schema_id, canonical_bytes)`). Domains are `PolicyObject`, `EvidenceRecord`, `Revocation`, `SignedManifest`, `Attestation`, `CapabilityToken`, `CheckpointArtifact`, `RecoveryArtifact`, `KeyBundle`, `EmptyCanonicalBytes`. |
 | **Evidence ledger** | `evidence_ledger.rs`, the append-only, chained, signed record of every runtime decision and high-impact event. |

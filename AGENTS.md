@@ -72,21 +72,19 @@ Use Cargo only.
 
 ### Current Deviations (Requiring Follow-up)
 
-**DEVIATION**: Typed-heavy persistence stores are implemented through generic `storage_adapter.rs` 
-`StoreRecord/StoreQuery` interfaces instead of `/dp/sqlmodel_rust` typed model/schema layers as 
-mandated above. Specifically:
+**DEVIATION RESOLVED** (2026-05-21): Typed-heavy persistence stores routing through generic storage_adapter - **RESOLVED** via `bd-cixqu.12.1` audit.
 
-- `ReplacementLineage`, `IfcProvenance`, and `SpecializationIndex` stores use raw frankensqlite 
-  integration points (`frankensqlite::replacement::lineage_log`, etc.) instead of sqlmodel_rust 
-  typed boundaries as documented in `docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md`.
+**Original Issue**: Documentation claimed `ReplacementLineage`, `IfcProvenance`, and `SpecializationIndex` stores used raw frankensqlite integration points instead of sqlmodel_rust typed boundaries.
 
-**Impact**: Type safety and schema validation expected from sqlmodel_rust typed layers is bypassed. 
-Store invariants that should be enforced at compile-time through typed boundaries can drift into 
-runtime validation or be missed entirely.
+**What Actually Happened**: Audit found these stores *are* correctly implemented as sqlmodel_rust-backed:
+- `ShadowEvidenceJournal` → `sqlmodel_rust::ShadowEvidenceJournalEntry` ✅
+- `ReplacementLineage` → `sqlmodel_rust::ReplacementLineageEntry` ✅  
+- `IfcProvenance` → `sqlmodel_rust::IfcProvenanceEntry` ✅
+- `SpecializationIndex` → `sqlmodel_rust::SpecializationIndexEntry` ✅
 
-**Required Fix**: **P0 Follow-up Bead Filed** - Replace generic `StoreRecord` implementations with 
-concrete `/dp/sqlmodel_rust` model/schema APIs for inventory rows marked "sqlmodel_rust on 
-frankensqlite", or add policy guards that reject raw implementations for typed-heavy stores.
+**Retrospective**: The prose was stale. These stores already use typed boundaries via `typed_persistence_models.rs::TypedStoreRecord` trait with proper validation, SQLModel integration, and fail-closed policy enforcement. The only identified issue was a documentation inconsistency for `PlasWitness` (inventory says sqlmodel_rust but code implements raw frankensqlite).
+
+**Reference**: See audit report at `crates/franken-engine/src/storage_adapter_audit_report.md` (bd-cixqu.12.1).
 
 ---
 

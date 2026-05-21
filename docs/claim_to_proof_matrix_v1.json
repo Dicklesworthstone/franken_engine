@@ -259,24 +259,23 @@
       "verification_command": "./scripts/run_replay_coverage_metric_gate.sh ci && rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration frankenctl_compile_and_run_artifacts_are_byte_identical_with_fixed_inputs"
     },
     {
-      "actual_wording_state": "target",
-      "allowed_state": "target",
-      "artifact_path": null,
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-014",
       "claim_id": "FE-CLAIM-014",
       "claim_scope": "capability",
-      "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments.",
-      "decision": "downgrade_until_live_proof",
-      "downgrade_text": "Target: at least three impossible-by-default production features with per-feature proof artifacts.",
-      "freshness_days": null,
-      "owning_bead": "bd-1qkrc",
-      "reason": "Production status and proof handles must be named per feature before observed wording is valid.",
+      "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments: signed IFC declassification receipts (FE-CLAIM-015), deterministic replay coverage (FE-CLAIM-013), and red-team compromise-rate reduction (FE-CLAIM-011).",
+      "decision": "allow_observed",
+      "freshness_days": 30,
+      "owning_bead": "bd-cixqu.6.6",
+      "reason": "Promoted to OBSERVED under bd-cixqu.6.6 after F.1 (catalog spec, bd-cixqu.6.1), F.2 (IFC bundle, bd-cixqu.6.2), F.3 (replay bundle, bd-cixqu.6.3), F.4 (red-team bundle, bd-cixqu.6.4), and F.5 (RGC gate + replay wrapper, bd-cixqu.6.5). The F.5 gate scripts/run_rgc_production_feature_catalog.sh validates all three sub-bundles against franken-engine.production-feature-catalog-bundle.v1 schema, emits a unified manifest with per-feature sha256 hashes for fleet-distribution drift detection, and passes in ci mode with 3/3 features present. Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-014/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 61,
         "must_contain": "At least `3` production features",
         "start_line": 61
       },
-      "verification_command": "TBD: run impossible-by-default proof index once bd-3mp80, bd-dpfvh, bd-1py8v, and bd-1bao8 close"
+      "verification_command": "./scripts/run_rgc_production_feature_catalog.sh ci"
     },
     {
       "actual_wording_state": "observed",

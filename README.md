@@ -263,7 +263,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 | Surface | Count / size (tracked HEAD, verified 2026-05-20) |
 |---|---|
-| Source modules in `crates/franken-engine/src/` | 511 (`baseline_interpreter.rs` alone is ~1.25 MB / 31,914 LoC) |
+| Source modules in `crates/franken-engine/src/` | 495 (`baseline_interpreter.rs` alone is ~1.25 MB / 31,914 LoC; count per `docs/ARCHITECTURE_INVENTORY.md`, the generator-canonical figure) |
 | Internal operator binaries in `crates/franken-engine/src/bin/` | 57 |
 | Integration tests in `crates/franken-engine/tests/` | 1,394 files (37 are RGC gate tests) |
 | Operator gate scripts in `scripts/run_*.sh` | 241 (56 RGC, 36 parser, 34 FRX, the rest claim/evidence/build plumbing) |
@@ -271,7 +271,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 | Architecture / contract docs in `docs/` | 672 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
 | Impossible-by-default demos under `examples/` | 13 capabilities, 20 numbered demo directories (`01_…` – `22_…` with gaps) |
 | Tracked beads in `.beads/issues.jsonl` | 2,584 issues (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
-| Cargo fuzz harnesses | 30 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 13 in `crates/franken-engine/fuzz/fuzz_targets/` |
+| Cargo fuzz harnesses | 31 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 14 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
 
 ### Workspace Layout
@@ -282,7 +282,7 @@ franken_engine/
 ├── AGENTS.md                        # Hard rules for AI coding agents
 ├── CHANGELOG.md                     # Synthesized 4-month history
 ├── crates/
-│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 511 modules
+│   ├── franken-engine/              # Engine core: parser, IR, interpreter, orchestrator, 495 modules
 │   │   ├── src/bin/frankenctl.rs    # Primary CLI (+ 56 internal operator binaries)
 │   │   ├── src/baseline_interpreter.rs   # Core VM (31,914 LoC)
 │   │   ├── benches/                 # comparative_node, comparative_bun, hot_paths
@@ -1064,7 +1064,7 @@ ADRs are added when a binding decision is taken; they are not amended retroactiv
 
 ## Module Inventory By Theme
 
-The 511 source modules in `crates/franken-engine/src/` are unrelated alphabetically; this table groups the load-bearing ones by theme. The complete generated count and exports list is regenerated into `docs/ARCHITECTURE_INVENTORY.md` by the `franken-architecture-inventory` binary.
+The 495 source modules in `crates/franken-engine/src/` are unrelated alphabetically; this table groups the load-bearing ones by theme. The complete generated count and exports list is regenerated into `docs/ARCHITECTURE_INVENTORY.md` by the `franken-architecture-inventory` binary.
 
 | Theme | Representative modules |
 |---|---|
@@ -1684,7 +1684,7 @@ The full layered stack is what enforces the project's *evidence-before-claims* p
 
 ## Fuzz Targets Catalogue
 
-Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `crates/franken-engine/fuzz/fuzz_targets/` crate-local (13 targets). 30 coverage-guided harnesses in total. Two target names appear in both trees (`parse_js_ts.rs`, `capability_profile_deserialize.rs`); they cover different fuzz dictionaries and corpus seeds.
+Two `cargo-fuzz` trees: `fuzz/fuzz_targets/` at the repo root (17 targets) and `crates/franken-engine/fuzz/fuzz_targets/` crate-local (14 targets). 31 coverage-guided harnesses in total. Two target names appear in both trees (`parse_js_ts.rs`, `capability_profile_deserialize.rs`); they cover different fuzz dictionaries and corpus seeds.
 
 ### Top-level `fuzz/fuzz_targets/`
 

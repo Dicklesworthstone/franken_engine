@@ -601,12 +601,13 @@ impl TeeAttestationPolicy {
 
         let mut approved_measurements = BTreeMap::new();
         for platform in TeePlatform::ALL {
-            approved_measurements.insert(platform, vec![
-                MeasurementDigest {
+            approved_measurements.insert(
+                platform,
+                vec![MeasurementDigest {
                     algorithm: MeasurementAlgorithm::Sha256,
                     digest_hex: "deadbeefcafebabe".repeat(4), // 32 bytes for SHA256
-                }
-            ]);
+                }],
+            );
         }
 
         Self {

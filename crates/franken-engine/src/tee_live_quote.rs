@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::evidence_contract::{AttestationValidityWindow, TeeAttestationBinding};
-use crate::tee_attestation_policy::{TeePlatform, TeeAttestationPolicy};
 use crate::hash_tiers::ContentHash;
 use crate::signature_preimage::{SigningKey, VerificationKey, sign_preimage};
+use crate::tee_attestation_policy::{TeeAttestationPolicy, TeePlatform};
 
 /// Configuration for TEE quote generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,7 +37,7 @@ pub struct TeeQuoteConfig {
 impl Default for TeeQuoteConfig {
     fn default() -> Self {
         Self {
-            platform: TeePlatform::IntelSgx, // Default to Intel SGX
+            platform: TeePlatform::IntelSgx,            // Default to Intel SGX
             freshness_window: Duration::from_secs(300), // 5 minutes
             max_retries: 3,
             quote_timeout: Duration::from_secs(10),
@@ -152,14 +152,10 @@ impl TeeQuoteGenerator {
             TeeCapability::Available { platform } => {
                 self.generate_live_quote(decision_data, nonce, platform)
             }
-            TeeCapability::NotAvailable => {
-                TeeQuoteResult::SafeModeFallback {
-                    safe_mode_attestation: self.generate_safe_mode_record(
-                        decision_data,
-                        "TEE hardware not available",
-                    ),
-                }
-            }
+            TeeCapability::NotAvailable => TeeQuoteResult::SafeModeFallback {
+                safe_mode_attestation: self
+                    .generate_safe_mode_record(decision_data, "TEE hardware not available"),
+            },
             TeeCapability::Error { reason } => TeeQuoteResult::Failed {
                 error: TeeQuoteError::HardwareNotAvailable,
             },
@@ -182,10 +178,7 @@ impl TeeQuoteGenerator {
                 let quote_digest = hex::encode(ContentHash::compute(&quote_bytes).as_bytes());
 
                 let now = SystemTime::now();
-                let valid_from = now
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
+                let valid_from = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
                 let valid_until = (now + self.config.freshness_window)
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
@@ -194,7 +187,9 @@ impl TeeQuoteGenerator {
                 let binding = TeeAttestationBinding {
                     quote_digest,
                     measurement_id,
-                    attested_signer_key_id: hex::encode(self.signing_key.verification_key().as_bytes()),
+                    attested_signer_key_id: hex::encode(
+                        self.signing_key.verification_key().as_bytes(),
+                    ),
                     nonce: nonce.to_string(),
                     validity_window: AttestationValidityWindow {
                         valid_from: chrono::DateTime::from_timestamp(valid_from as i64, 0)
@@ -237,17 +232,30 @@ impl TeeQuoteGenerator {
         let mut quote_data = BTreeMap::new();
         quote_data.insert("platform", platform.canonical_tag());
         quote_data.insert("nonce", nonce);
-        quote_data.insert("decision_data_hash", &hex::encode(ContentHash::compute(decision_data).as_bytes()));
-        quote_data.insert("timestamp", &SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string());
+        quote_data.insert(
+            "decision_data_hash",
+            &hex::encode(ContentHash::compute(decision_data).as_bytes()),
+        );
+        quote_data.insert(
+            "timestamp",
+            &SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_string(),
+        );
 
-        let quote_json = serde_json::to_string(&quote_data).map_err(|e| {
-            TeeQuoteError::GenerationFailed {
+        let quote_json =
+            serde_json::to_string(&quote_data).map_err(|e| TeeQuoteError::GenerationFailed {
                 reason: format!("Quote serialization failed: {}", e),
-            }
-        })?;
+            })?;
 
         let quote_bytes = quote_json.into_bytes();
-        let measurement_id = format!("{}_measurement_{}", platform.canonical_tag(), hex::encode(&ContentHash::compute(&quote_bytes).as_bytes()[..8]));
+        let measurement_id = format!(
+            "{}_measurement_{}",
+            platform.canonical_tag(),
+            hex::encode(&ContentHash::compute(&quote_bytes).as_bytes()[..8])
+        );
 
         Ok((quote_bytes, measurement_id))
     }
@@ -263,7 +271,20 @@ impl TeeQuoteGenerator {
     ) -> SafeModeAttestationRecord {
         let record_id = format!(
             "safe_mode_{}",
-            hex::encode(&ContentHash::compute(&format!("{}{}", reason, SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()).as_bytes()).as_bytes()[..8])
+            hex::encode(
+                &ContentHash::compute(
+                    &format!(
+                        "{}{}",
+                        reason,
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    )
+                    .as_bytes()
+                )
+                .as_bytes()[..8]
+            )
         );
 
         let decision_data_hash = hex::encode(ContentHash::compute(decision_data).as_bytes());
@@ -314,10 +335,12 @@ impl TeeQuoteGenerator {
             .map_err(|e| TeeQuoteError::InvalidQuoteFormat {
                 details: format!("Invalid valid_from timestamp: {}", e),
             })?;
-        let valid_until = chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until)
-            .map_err(|e| TeeQuoteError::InvalidQuoteFormat {
-                details: format!("Invalid valid_until timestamp: {}", e),
-            })?;
+        let valid_until = chrono::DateTime::parse_from_rfc3339(
+            &binding.validity_window.valid_until,
+        )
+        .map_err(|e| TeeQuoteError::InvalidQuoteFormat {
+            details: format!("Invalid valid_until timestamp: {}", e),
+        })?;
 
         if now < valid_from.with_timezone(&chrono::Utc) {
             return Err(TeeQuoteError::PolicyViolation {
@@ -376,7 +399,12 @@ mod tests {
 
         let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
         let capability = generator.detect_tee_capability();
-        assert_eq!(capability, TeeCapability::Available { platform: TeePlatform::IntelSgx });
+        assert_eq!(
+            capability,
+            TeeCapability::Available {
+                platform: TeePlatform::IntelSgx
+            }
+        );
 
         std::env::remove_var("FRANKEN_TEE_ENABLED");
     }
@@ -499,7 +527,10 @@ mod tests {
 
         let result = generator.validate_attestation_binding(&binding, &policy);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), TeeQuoteError::PolicyViolation { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            TeeQuoteError::PolicyViolation { .. }
+        ));
     }
 
     #[test]

@@ -12,14 +12,15 @@ use std::collections::BTreeMap;
 
 use frankenengine_engine::evidence_contract::{
     ActionType, AttestationValidityWindow, DecisionAction, ExpectedLossEntry, PosteriorSnapshot,
-    ReceiptRecord, SignatureAlgorithm, SignatureBundle, TeeAttestationBinding, VerificationMetadata,
-};
-use frankenengine_engine::tee_attestation_policy::{TeePlatform, TeeAttestationPolicy};
-use frankenengine_engine::tee_live_quote::{
-    SafeModeAttestationRecord, TeeCapability, TeeQuoteConfig, TeeQuoteGenerator, TeeQuoteResult,
-    TeeQuoteError,
+    ReceiptRecord, SignatureAlgorithm, SignatureBundle, TeeAttestationBinding,
+    VerificationMetadata,
 };
 use frankenengine_engine::signature_preimage::SigningKey;
+use frankenengine_engine::tee_attestation_policy::{TeeAttestationPolicy, TeePlatform};
+use frankenengine_engine::tee_live_quote::{
+    SafeModeAttestationRecord, TeeCapability, TeeQuoteConfig, TeeQuoteError, TeeQuoteGenerator,
+    TeeQuoteResult,
+};
 
 /// Helper to create a valid test receipt without TEE binding.
 fn create_test_receipt() -> ReceiptRecord {
@@ -101,9 +102,12 @@ fn test_tee_capability_detection_available() {
     let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
 
-    assert_eq!(capability, TeeCapability::Available {
-        platform: TeePlatform::IntelSgx
-    });
+    assert_eq!(
+        capability,
+        TeeCapability::Available {
+            platform: TeePlatform::IntelSgx
+        }
+    );
 
     std::env::remove_var("FRANKEN_TEE_ENABLED");
 }
@@ -146,8 +150,10 @@ fn test_live_quote_generation_success() {
 
             // Verify validity window
             let now = chrono::Utc::now();
-            let valid_from = chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_from).unwrap();
-            let valid_until = chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until).unwrap();
+            let valid_from =
+                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_from).unwrap();
+            let valid_until =
+                chrono::DateTime::parse_from_rfc3339(&binding.validity_window.valid_until).unwrap();
 
             assert!(valid_from.with_timezone(&chrono::Utc) <= now);
             assert!(valid_until.with_timezone(&chrono::Utc) > now);
@@ -191,16 +197,23 @@ fn test_safe_mode_fallback() {
     let result = generator.generate_quote(decision_data, nonce);
 
     match result {
-        TeeQuoteResult::SafeModeFallback { safe_mode_attestation } => {
+        TeeQuoteResult::SafeModeFallback {
+            safe_mode_attestation,
+        } => {
             assert!(!safe_mode_attestation.record_id.is_empty());
             assert!(!safe_mode_attestation.initiated_at.is_empty());
-            assert_eq!(safe_mode_attestation.fallback_reason, "TEE hardware not available");
+            assert_eq!(
+                safe_mode_attestation.fallback_reason,
+                "TEE hardware not available"
+            );
             assert!(!safe_mode_attestation.decision_data_hash.is_empty());
             assert!(!safe_mode_attestation.signature.is_empty());
             assert!(!safe_mode_attestation.signer_public_key.is_empty());
 
             // Verify the timestamp format
-            assert!(chrono::DateTime::parse_from_rfc3339(&safe_mode_attestation.initiated_at).is_ok());
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&safe_mode_attestation.initiated_at).is_ok()
+            );
         }
         _ => panic!("Expected safe mode fallback, got: {:?}", result),
     }
@@ -218,7 +231,9 @@ fn test_safe_mode_attestation_record_structure() {
     let result = generator.generate_quote(decision_data, "test_nonce");
 
     match result {
-        TeeQuoteResult::SafeModeFallback { safe_mode_attestation } => {
+        TeeQuoteResult::SafeModeFallback {
+            safe_mode_attestation,
+        } => {
             // Verify required fields are present and non-empty
             assert!(!safe_mode_attestation.record_id.is_empty());
             assert!(!safe_mode_attestation.initiated_at.is_empty());
@@ -302,8 +317,8 @@ fn test_receipt_serialization_with_tee_binding() {
             assert!(json.contains("quote_digest"));
 
             // Test deserialization
-            let deserialized: ReceiptRecord = serde_json::from_str(&json)
-                .expect("Receipt should deserialize from JSON");
+            let deserialized: ReceiptRecord =
+                serde_json::from_str(&json).expect("Receipt should deserialize from JSON");
             assert!(deserialized.tee_attestation_binding.is_some());
             assert_eq!(receipt, deserialized);
         }
@@ -337,7 +352,10 @@ fn test_attestation_binding_validation_success() {
     };
 
     let result = generator.validate_attestation_binding(&binding, &policy);
-    assert!(result.is_ok(), "Valid attestation binding should pass validation");
+    assert!(
+        result.is_ok(),
+        "Valid attestation binding should pass validation"
+    );
 }
 
 #[test]
@@ -361,7 +379,10 @@ fn test_attestation_binding_validation_expired() {
 
     let result = generator.validate_attestation_binding(&binding, &policy);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TeeQuoteError::PolicyViolation { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        TeeQuoteError::PolicyViolation { .. }
+    ));
 }
 
 #[test]
@@ -385,7 +406,10 @@ fn test_attestation_binding_validation_not_yet_valid() {
 
     let result = generator.validate_attestation_binding(&binding, &policy);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TeeQuoteError::PolicyViolation { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        TeeQuoteError::PolicyViolation { .. }
+    ));
 }
 
 #[test]
@@ -409,7 +433,10 @@ fn test_attestation_binding_validation_unsupported_platform() {
 
     let result = generator.validate_attestation_binding(&binding, &policy);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), TeeQuoteError::UnsupportedPlatform { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        TeeQuoteError::UnsupportedPlatform { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -433,7 +460,11 @@ fn test_end_to_end_tee_workflow() {
     match quote_result {
         TeeQuoteResult::Success { binding, raw_quote } => {
             // Step 3: Validate the binding against policy
-            assert!(generator.validate_attestation_binding(&binding, &policy).is_ok());
+            assert!(
+                generator
+                    .validate_attestation_binding(&binding, &policy)
+                    .is_ok()
+            );
 
             // Step 4: Create receipt with TEE binding
             let receipt = create_test_receipt().with_tee_attestation_binding(binding);
@@ -443,8 +474,8 @@ fn test_end_to_end_tee_workflow() {
 
             // Step 6: Test serialization round-trip
             let json = serde_json::to_string(&receipt).expect("Receipt serialization");
-            let deserialized: ReceiptRecord = serde_json::from_str(&json)
-                .expect("Receipt deserialization");
+            let deserialized: ReceiptRecord =
+                serde_json::from_str(&json).expect("Receipt deserialization");
             assert_eq!(receipt, deserialized);
 
             // Step 7: Verify TEE binding is preserved
@@ -474,7 +505,9 @@ fn test_end_to_end_safe_mode_workflow() {
     let quote_result = generator.generate_quote(decision_data, nonce);
 
     match quote_result {
-        TeeQuoteResult::SafeModeFallback { safe_mode_attestation } => {
+        TeeQuoteResult::SafeModeFallback {
+            safe_mode_attestation,
+        } => {
             // Step 3: Create receipt without TEE binding (safe mode)
             let receipt = create_test_receipt();
 
@@ -484,13 +517,16 @@ fn test_end_to_end_safe_mode_workflow() {
 
             // Step 5: Verify safe mode record is properly structured
             assert!(!safe_mode_attestation.record_id.is_empty());
-            assert_eq!(safe_mode_attestation.fallback_reason, "TEE hardware not available");
+            assert_eq!(
+                safe_mode_attestation.fallback_reason,
+                "TEE hardware not available"
+            );
 
             // Step 6: Test serialization of safe mode record
             let safe_mode_json = serde_json::to_string(&safe_mode_attestation)
                 .expect("Safe mode record serialization");
-            let deserialized: SafeModeAttestationRecord = serde_json::from_str(&safe_mode_json)
-                .expect("Safe mode record deserialization");
+            let deserialized: SafeModeAttestationRecord =
+                serde_json::from_str(&safe_mode_json).expect("Safe mode record deserialization");
             assert_eq!(safe_mode_attestation, deserialized);
         }
         _ => panic!("End-to-end safe mode test expected safe mode fallback"),

@@ -471,6 +471,7 @@ pub struct VerificationMetadata {
 
 impl ReceiptRecord {
     /// Create a new receipt record with the current schema version.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         receipt_id: String,
         decision_id: String,

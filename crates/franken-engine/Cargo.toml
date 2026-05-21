@@ -49,6 +49,11 @@ name = "hot_paths"
 path = "benches/hot_paths.rs"
 harness = false
 
+[[bench]]
+name = "denominator_scoring"
+path = "benches/denominator_scoring.rs"
+harness = false
+
 [[test]]
 name = "cancellation_lifecycle_integration"
 path = "tests/cancellation_lifecycle_integration.rs"

@@ -2608,4 +2608,89 @@ mode) covers:
 - Hard rejection on stale bundles (currently warning-only).
 - 4th and 5th named features beyond the F.1-declared three.
 
+## Fleet Convergence SLO Gate
+
+(Added by `bd-cixqu.2.2` — declared-SLO half of Track B's fleet
+quarantine convergence promotion.)
+
+### What it gates
+
+`scripts/run_rgc_fleet_convergence_slo_gate.sh` validates the
+declared convergence SLO contract at
+`docs/fleet_convergence_slo_v1.json` against the B.1 fleet harness
+surface (`crates/franken-engine/tests/fleet_convergence_harness_integration.rs`
++ `crates/franken-engine/src/fleet_simulator.rs` +
+`crates/franken-engine/src/fleet_immune_protocol.rs`).
+
+The SLO contract declares, per partition profile:
+
+- `partition_profile` (one of `normal`, `degraded`, `healing`)
+- `fleet_size_nodes`
+- `target_convergence_percentile` (e.g. `0.99`)
+- `target_convergence_wall_time_seconds`
+- `max_acceptable_drop_rate`
+
+Plus an `unsupported_profiles` map declaring why
+`permanent_split` and `split_brain` are refused (covered by
+bd-cixqu.2.6's `partition` mode below).
+
+### Modes
+
+- `ci` — SLO contract schema validation + B.1 harness file
+  cross-reference + per-secondary-SLO validation +
+  unsupported-profile coverage. Does not invoke cargo; consumers
+  that want live percentile measurements run the harness
+  separately via rch. **Default and recommended for CI.**
+- `partition` — bd-cixqu.2.6 legacy lane. Invokes the
+  `convergence_slo_gate_test` cargo bin against
+  `docs/fleet_partition_fault_profiles_v1.json`, asserting
+  permanent_split / split_brain refuse and normal / degraded /
+  healing admit.
+- `selftest` — shape-only contract validation; no cargo, usable
+  pre-rch.
+
+### How to add a new partition profile
+
+1. Append to `docs/fleet_convergence_slo_v1.json.secondary_slos[]`
+   with all five SLO fields plus a `rationale` string.
+2. Re-run `./scripts/run_rgc_fleet_convergence_slo_gate.sh ci`. The
+   layer-3 per-secondary-SLO validator must accept the new entry.
+
+### How to mark a profile as unsupported
+
+Append to `docs/fleet_convergence_slo_v1.json.unsupported_profiles`
+with a string value explaining why (the gate's layer-4 check pins
+the canonical set `{"permanent_split", "split_brain"}`; widening
+that set requires editing both the SLO contract and the gate's
+layer-4 comparison).
+
+### Replay
+
+`scripts/e2e/rgc_fleet_convergence_slo_replay.sh ci` re-runs the
+gate against the latest (or pinned via
+`RGC_FLEET_CONVERGENCE_SLO_REPLAY_RUN_DIR`) source bundle and
+compares verdict + primary SLO. Exit codes: 0 = match, 1 = no
+source bundle, 2 = bundle invalid, 3 = verdict mismatch, 4 =
+primary-SLO field mismatch.
+
+### Verification
+
+- `./scripts/run_rgc_fleet_convergence_slo_gate.sh selftest`: PASS.
+- `./scripts/run_rgc_fleet_convergence_slo_gate.sh ci`: verdict
+  `pass`, primary SLO matches contract, secondary SLOs validated
+  (2/2 currently).
+- `./scripts/e2e/rgc_fleet_convergence_slo_replay.sh ci`: exit 0
+  (verdict + primary SLO match between source and replay).
+- `shellcheck -x -e SC2016,SC2155` on both scripts: clean.
+
+### Out of scope (tracked for follow-up)
+
+- Live percentile measurement integration with the B.1 harness via
+  cargo test — gate currently validates the *contract* only; the
+  *measured* percentile feed will be wired by a follow-up bead that
+  parses the harness JSON output.
+- Matrix promotion of FE-CLAIM-005 from TARGETED to OBSERVED —
+  blocked on bd-cixqu.2.3 (de-escalation primitive, which is in
+  turn blocked on bd-cixqu.1.3 TEE).
+
 ## Limitations

@@ -1,0 +1,49 @@
+{
+  "schema_version": "franken-engine.fleet-convergence-slo.v1",
+  "owning_bead": "bd-cixqu.2.2",
+  "parent_claim": "FE-CLAIM-005",
+  "generated_at_utc": "2026-05-21T22:15:00Z",
+  "generated_by": "MossyLion (bd-cixqu.2.2)",
+  "description": "Bounded convergence SLO for the fleet quarantine + revocation propagation surface. Declares the partition profile + fleet size + target convergence percentile + target wall-time the harness (B.1) must satisfy before FE-CLAIM-005 can promote from TARGETED to OBSERVED.",
+  "slo": {
+    "partition_profile": "normal",
+    "fleet_size_nodes": 100,
+    "target_convergence_percentile": 0.99,
+    "target_convergence_wall_time_seconds": 5.0,
+    "max_acceptable_drop_rate": 0.001
+  },
+  "secondary_slos": [
+    {
+      "partition_profile": "degraded",
+      "fleet_size_nodes": 100,
+      "target_convergence_percentile": 0.95,
+      "target_convergence_wall_time_seconds": 15.0,
+      "max_acceptable_drop_rate": 0.01,
+      "rationale": "Single AZ-equivalent loss; convergence still required but with relaxed deadline."
+    },
+    {
+      "partition_profile": "healing",
+      "fleet_size_nodes": 100,
+      "target_convergence_percentile": 0.99,
+      "target_convergence_wall_time_seconds": 30.0,
+      "max_acceptable_drop_rate": 0.005,
+      "rationale": "Post-partition recovery lane; deadline allows for connectivity restoration + state reconciliation."
+    }
+  ],
+  "unsupported_profiles": {
+    "permanent_split": "Convergence is mathematically impossible under permanent network split; the gate correctly refuses to publish an SLO that would imply otherwise (covered by bd-cixqu.2.6).",
+    "split_brain": "Two-leader scenario violates the single-source-of-truth assumption that the convergence SLO is conditional on; refused for the same reason as permanent_split."
+  },
+  "harness": {
+    "source_file": "crates/franken-engine/src/fleet_simulator.rs",
+    "harness_module": "crates/franken-engine/src/fleet_immune_protocol.rs",
+    "integration_test": "crates/franken-engine/tests/fleet_convergence_harness_integration.rs",
+    "owning_bead": "bd-cixqu.2.1"
+  },
+  "gate_configuration": {
+    "fail_closed_on_missing_percentile_evidence": true,
+    "fail_closed_on_walltime_exceeded": true,
+    "warning_on_drop_rate_above_max": true
+  },
+  "verification_command": "./scripts/run_rgc_fleet_convergence_slo_gate.sh ci"
+}

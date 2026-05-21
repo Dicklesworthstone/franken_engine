@@ -316,6 +316,7 @@ pub mod plas_release_gate;
 pub mod policy_as_data_security;
 pub mod policy_checkpoint;
 pub mod policy_controller;
+pub mod policy_theorem_engine;
 pub mod policy_theorem_compiler;
 pub mod polymorphic_inline_cache;
 pub mod portfolio_governor;

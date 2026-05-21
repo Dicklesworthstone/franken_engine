@@ -154,6 +154,183 @@ impl fmt::Display for FrxDivergenceClass {
     }
 }
 
+/// Typed evidence atoms for divergence classification (bd-cixqu.9.2).
+///
+/// Each lockstep oracle divergence is classified into one of these categories
+/// for systematic triage and evidence ledger integration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DivergenceEvidenceAtom {
+    /// Genuine FrankenEngine bug - behavior differs from reference implementation incorrectly
+    EngineBug {
+        divergence_class: FrxDivergenceClass,
+        severity: BugSeverity,
+        reproducer: String,
+        expected_behavior: String,
+        actual_behavior: String,
+    },
+    /// Intentional improvement - FrankenEngine deliberately improves on reference behavior
+    IntentionalImprovement {
+        divergence_class: FrxDivergenceClass,
+        improvement_type: ImprovementType,
+        rationale: String,
+        compatibility_impact: CompatibilityImpact,
+    },
+    /// Compatibility debt - Known deviation that needs addressing for ecosystem compatibility
+    CompatibilityDebt {
+        divergence_class: FrxDivergenceClass,
+        debt_priority: DebtPriority,
+        ecosystem_impact: Vec<String>,
+        mitigation_strategy: Option<String>,
+    },
+    /// Ecosystem ambiguity - Reference implementations disagree or behavior is underspecified
+    EcosystemAmbiguity {
+        divergence_class: FrxDivergenceClass,
+        ambiguity_type: AmbiguityType,
+        reference_behaviors: Vec<ReferenceRuntimeBehavior>,
+        franken_behavior: String,
+        specification_gap: Option<String>,
+    },
+}
+
+/// Bug severity levels for EngineBug atoms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BugSeverity {
+    /// Causes incorrect program termination or data corruption
+    Critical,
+    /// Causes incorrect program behavior but no corruption
+    Major,
+    /// Minor behavioral deviation with minimal impact
+    Minor,
+    /// Cosmetic differences (e.g., error message formatting)
+    Cosmetic,
+}
+
+/// Types of intentional improvements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImprovementType {
+    /// Better performance characteristics
+    Performance,
+    /// Enhanced security properties
+    Security,
+    /// Improved error diagnostics
+    Diagnostics,
+    /// Better memory efficiency
+    MemoryEfficiency,
+    /// Enhanced determinism properties
+    Determinism,
+}
+
+/// Compatibility impact assessment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompatibilityImpact {
+    /// No impact on existing code
+    None,
+    /// May affect edge cases in unusual code patterns
+    Minimal,
+    /// Could affect some real-world code
+    Moderate,
+    /// Likely to affect significant amount of real-world code
+    Significant,
+}
+
+/// Compatibility debt priority levels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DebtPriority {
+    /// Must be fixed before v1.0 release
+    Blocker,
+    /// Should be fixed for ecosystem compatibility
+    High,
+    /// Nice to have for broader compatibility
+    Medium,
+    /// Low impact, can be deferred
+    Low,
+}
+
+/// Types of ecosystem ambiguity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmbiguityType {
+    /// ECMAScript specification is unclear or incomplete
+    SpecificationGap,
+    /// Reference implementations disagree on behavior
+    ImplementationDivergence,
+    /// Historical evolution led to multiple valid behaviors
+    LegacyVariation,
+    /// Platform-specific behavior that varies by environment
+    PlatformSpecific,
+}
+
+/// Behavior observed in a reference runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReferenceRuntimeBehavior {
+    pub runtime_name: String,
+    pub runtime_version: String,
+    pub observed_behavior: String,
+    pub context_notes: Option<String>,
+}
+
+/// Signed evidence atom for divergence classification (bd-cixqu.9.2).
+///
+/// Each divergence produces a signed evidence atom that chains into the evidence ledger
+/// for auditable triage and classification decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedDivergenceEvidence {
+    pub schema_version: String,
+    pub evidence_id: String,
+    pub generated_at_utc: String,
+    pub lockstep_case_id: String,
+    pub classification: DivergenceEvidenceAtom,
+    pub original_divergence: FrxDivergenceDetail,
+    pub classification_confidence: ClassificationConfidence,
+    pub evidence_sources: Vec<EvidenceSource>,
+    pub signature: Option<String>,
+}
+
+/// Classification confidence levels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassificationConfidence {
+    /// Automated classification with high confidence
+    Automated,
+    /// Human-reviewed and confirmed
+    HumanConfirmed,
+    /// Requires further investigation
+    Tentative,
+    /// Disputed classification requiring resolution
+    Disputed,
+}
+
+/// Sources of evidence used for classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceSource {
+    pub source_type: EvidenceSourceType,
+    pub identifier: String,
+    pub description: String,
+}
+
+/// Types of evidence sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceSourceType {
+    /// ECMAScript specification section
+    Specification,
+    /// Reference implementation behavior
+    ReferenceImplementation,
+    /// Test262 test suite results
+    Test262,
+    /// Community discussions or issues
+    Community,
+    /// Historical behavior analysis
+    Historical,
+    /// Manual investigation results
+    Manual,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrxTraceEventSignature {
     pub seq: u64,
@@ -1162,6 +1339,331 @@ fn missing_runtime_trace_result(
         }),
         replay_command,
     }
+}
+
+// ── Divergence Classification Functions (bd-cixqu.9.2) ─────────────────────
+
+/// Schema version for signed divergence evidence.
+pub const DIVERGENCE_EVIDENCE_SCHEMA_VERSION: &str = "franken-engine.divergence-evidence.v1";
+
+/// Create signed evidence atom from a divergence with automatic classification.
+///
+/// This function applies the divergence taxonomy to classify a lockstep oracle
+/// divergence into typed evidence atoms for evidence ledger integration.
+pub fn create_divergence_evidence(
+    divergence: &FrxDivergenceDetail,
+    case_id: &str,
+    confidence: ClassificationConfidence,
+) -> SignedDivergenceEvidence {
+    let evidence_id = format!("divergence-evidence-{}", uuid_v4_like());
+    let classification = classify_divergence(divergence);
+
+    SignedDivergenceEvidence {
+        schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
+        evidence_id,
+        generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        lockstep_case_id: case_id.to_string(),
+        classification,
+        original_divergence: divergence.clone(),
+        classification_confidence: confidence,
+        evidence_sources: vec![EvidenceSource {
+            source_type: EvidenceSourceType::ReferenceImplementation,
+            identifier: "lockstep-oracle-differential-analysis".to_string(),
+            description: "Automated lockstep oracle divergence detection".to_string(),
+        }],
+        signature: None, // TODO: Implement evidence signing
+    }
+}
+
+/// Classify a divergence into the appropriate evidence atom category.
+///
+/// Applies classification rules from the divergence taxonomy to determine
+/// the most appropriate category for a given divergence.
+pub fn classify_divergence(divergence: &FrxDivergenceDetail) -> DivergenceEvidenceAtom {
+    // Apply classification heuristics based on divergence patterns
+    match &divergence.class {
+        FrxDivergenceClass::SchemaViolation => {
+            // Schema violations are typically engine bugs
+            DivergenceEvidenceAtom::EngineBug {
+                divergence_class: divergence.class.clone(),
+                severity: classify_bug_severity(&divergence.message),
+                reproducer: format!("Lockstep oracle case: {}", divergence.message),
+                expected_behavior: extract_expected_behavior(divergence),
+                actual_behavior: extract_actual_behavior(divergence),
+            }
+        }
+        FrxDivergenceClass::EventSequence => {
+            // Event sequence differences may indicate timing or execution order issues
+            if is_performance_related(&divergence.message) {
+                DivergenceEvidenceAtom::IntentionalImprovement {
+                    divergence_class: divergence.class.clone(),
+                    improvement_type: ImprovementType::Performance,
+                    rationale: "Optimized execution ordering".to_string(),
+                    compatibility_impact: CompatibilityImpact::Minimal,
+                }
+            } else if is_console_output_difference(divergence) {
+                classify_console_output_divergence(divergence)
+            } else {
+                DivergenceEvidenceAtom::CompatibilityDebt {
+                    divergence_class: divergence.class.clone(),
+                    debt_priority: DebtPriority::Medium,
+                    ecosystem_impact: vec!["Runtime execution order compatibility".to_string()],
+                    mitigation_strategy: Some(
+                        "Align execution ordering with reference implementations".to_string(),
+                    ),
+                }
+            }
+        }
+        FrxDivergenceClass::StateTransition => {
+            // State transitions may indicate deeper semantic differences
+            DivergenceEvidenceAtom::EcosystemAmbiguity {
+                divergence_class: divergence.class.clone(),
+                ambiguity_type: AmbiguityType::ImplementationDivergence,
+                reference_behaviors: extract_reference_behaviors(divergence),
+                franken_behavior: extract_franken_behavior(divergence),
+                specification_gap: Some("State transition semantics underspecified".to_string()),
+            }
+        }
+        _ => {
+            // Default classification for other divergence types
+            DivergenceEvidenceAtom::CompatibilityDebt {
+                divergence_class: divergence.class.clone(),
+                debt_priority: DebtPriority::Medium,
+                ecosystem_impact: vec!["General runtime compatibility".to_string()],
+                mitigation_strategy: None,
+            }
+        }
+    }
+}
+
+/// Generate batch signed evidence for multiple divergences.
+pub fn create_batch_divergence_evidence(
+    divergences: &[(FrxDivergenceDetail, String)], // (divergence, case_id)
+    confidence: ClassificationConfidence,
+) -> Vec<SignedDivergenceEvidence> {
+    divergences
+        .iter()
+        .map(|(div, case_id)| create_divergence_evidence(div, case_id, confidence.clone()))
+        .collect()
+}
+
+/// Apply triage rules from the taxonomy to determine priority and assignment.
+pub fn apply_triage_rules(evidence: &SignedDivergenceEvidence) -> TriageResult {
+    match &evidence.classification {
+        DivergenceEvidenceAtom::EngineBug { severity, .. } => {
+            match severity {
+                BugSeverity::Critical => TriageResult {
+                    priority: TrPriority::P0,
+                    assignment: TriageAssignment::EngineTeam,
+                    sla_hours: Some(24),
+                    escalation_required: true,
+                },
+                BugSeverity::Major => TriageResult {
+                    priority: TrPriority::P1,
+                    assignment: TriageAssignment::EngineTeam,
+                    sla_hours: Some(72),
+                    escalation_required: false,
+                },
+                BugSeverity::Minor => TriageResult {
+                    priority: TrPriority::P2,
+                    assignment: TriageAssignment::EngineTeam,
+                    sla_hours: Some(168), // 1 week
+                    escalation_required: false,
+                },
+                BugSeverity::Cosmetic => TriageResult {
+                    priority: TrPriority::P3,
+                    assignment: TriageAssignment::Backlog,
+                    sla_hours: None,
+                    escalation_required: false,
+                },
+            }
+        }
+        DivergenceEvidenceAtom::CompatibilityDebt { debt_priority, .. } => {
+            match debt_priority {
+                DebtPriority::Blocker => TriageResult {
+                    priority: TrPriority::P0,
+                    assignment: TriageAssignment::CompatibilityTeam,
+                    sla_hours: Some(48),
+                    escalation_required: true,
+                },
+                DebtPriority::High => TriageResult {
+                    priority: TrPriority::P1,
+                    assignment: TriageAssignment::CompatibilityTeam,
+                    sla_hours: Some(120), // 5 days
+                    escalation_required: false,
+                },
+                DebtPriority::Medium => TriageResult {
+                    priority: TrPriority::P2,
+                    assignment: TriageAssignment::CompatibilityTeam,
+                    sla_hours: Some(336), // 2 weeks
+                    escalation_required: false,
+                },
+                DebtPriority::Low => TriageResult {
+                    priority: TrPriority::P3,
+                    assignment: TriageAssignment::Backlog,
+                    sla_hours: None,
+                    escalation_required: false,
+                },
+            }
+        }
+        DivergenceEvidenceAtom::IntentionalImprovement {
+            compatibility_impact,
+            ..
+        } => match compatibility_impact {
+            CompatibilityImpact::Significant => TriageResult {
+                priority: TrPriority::P1,
+                assignment: TriageAssignment::ArchitectureTeam,
+                sla_hours: Some(72),
+                escalation_required: false,
+            },
+            _ => TriageResult {
+                priority: TrPriority::P2,
+                assignment: TriageAssignment::DocumentationTeam,
+                sla_hours: Some(168),
+                escalation_required: false,
+            },
+        },
+        DivergenceEvidenceAtom::EcosystemAmbiguity { .. } => TriageResult {
+            priority: TrPriority::P2,
+            assignment: TriageAssignment::StandardsTeam,
+            sla_hours: Some(240), // 10 days
+            escalation_required: false,
+        },
+    }
+}
+
+/// Result of applying triage rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriageResult {
+    pub priority: TrPriority,
+    pub assignment: TriageAssignment,
+    pub sla_hours: Option<u64>,
+    pub escalation_required: bool,
+}
+
+/// Triage priority levels.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrPriority {
+    P0, // Critical
+    P1, // High
+    P2, // Medium
+    P3, // Low
+}
+
+/// Triage assignment targets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageAssignment {
+    EngineTeam,
+    CompatibilityTeam,
+    ArchitectureTeam,
+    StandardsTeam,
+    DocumentationTeam,
+    Backlog,
+}
+
+// ── Classification Helper Functions ─────────────────────────────────────────
+
+fn uuid_v4_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:016x}", timestamp)
+}
+
+fn classify_bug_severity(message: &str) -> BugSeverity {
+    let lower_message = message.to_lowercase();
+    if lower_message.contains("crash")
+        || lower_message.contains("segfault")
+        || lower_message.contains("panic")
+    {
+        BugSeverity::Critical
+    } else if lower_message.contains("incorrect") || lower_message.contains("wrong") {
+        BugSeverity::Major
+    } else if lower_message.contains("format") || lower_message.contains("display") {
+        BugSeverity::Cosmetic
+    } else {
+        BugSeverity::Minor
+    }
+}
+
+fn is_performance_related(message: &str) -> bool {
+    let lower_message = message.to_lowercase();
+    lower_message.contains("timing")
+        || lower_message.contains("performance")
+        || lower_message.contains("speed")
+}
+
+fn is_console_output_difference(divergence: &FrxDivergenceDetail) -> bool {
+    divergence.message.contains("console_output")
+        || divergence
+            .react_signature
+            .as_ref()
+            .map_or(false, |sig| sig.event.contains("console_output"))
+        || divergence
+            .franken_signature
+            .as_ref()
+            .map_or(false, |sig| sig.event.contains("console_output"))
+}
+
+fn classify_console_output_divergence(divergence: &FrxDivergenceDetail) -> DivergenceEvidenceAtom {
+    // Console output differences are often engine bugs unless they're clearly improvements
+    if divergence.message.contains("more precise") || divergence.message.contains("better") {
+        DivergenceEvidenceAtom::IntentionalImprovement {
+            divergence_class: divergence.class.clone(),
+            improvement_type: ImprovementType::Diagnostics,
+            rationale: "Improved console output precision".to_string(),
+            compatibility_impact: CompatibilityImpact::Minimal,
+        }
+    } else {
+        DivergenceEvidenceAtom::EngineBug {
+            divergence_class: divergence.class.clone(),
+            severity: BugSeverity::Minor,
+            reproducer: format!("Console output mismatch: {}", divergence.message),
+            expected_behavior: extract_expected_behavior(divergence),
+            actual_behavior: extract_actual_behavior(divergence),
+        }
+    }
+}
+
+fn extract_expected_behavior(divergence: &FrxDivergenceDetail) -> String {
+    divergence
+        .react_signature
+        .as_ref()
+        .map(|sig| format!("{}: {}", sig.phase, sig.event))
+        .unwrap_or_else(|| "Reference implementation behavior".to_string())
+}
+
+fn extract_actual_behavior(divergence: &FrxDivergenceDetail) -> String {
+    divergence
+        .franken_signature
+        .as_ref()
+        .map(|sig| format!("{}: {}", sig.phase, sig.event))
+        .unwrap_or_else(|| "FrankenEngine behavior".to_string())
+}
+
+fn extract_reference_behaviors(divergence: &FrxDivergenceDetail) -> Vec<ReferenceRuntimeBehavior> {
+    if let Some(react_sig) = &divergence.react_signature {
+        vec![ReferenceRuntimeBehavior {
+            runtime_name: "Reference".to_string(),
+            runtime_version: "unknown".to_string(),
+            observed_behavior: format!("{}: {}", react_sig.phase, react_sig.event),
+            context_notes: Some(react_sig.outcome.clone()),
+        }]
+    } else {
+        vec![]
+    }
+}
+
+fn extract_franken_behavior(divergence: &FrxDivergenceDetail) -> String {
+    divergence
+        .franken_signature
+        .as_ref()
+        .map(|sig| format!("{}: {} (outcome: {})", sig.phase, sig.event, sig.outcome))
+        .unwrap_or_else(|| "FrankenEngine behavior not captured".to_string())
 }
 
 #[cfg(test)]
@@ -2349,5 +2851,468 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    // ====================================================================
+    // Divergence Classification Tests (bd-cixqu.9.2)
+    // ====================================================================
+
+    #[test]
+    fn divergence_evidence_atom_serde_roundtrip() {
+        let atom = DivergenceEvidenceAtom::EngineBug {
+            divergence_class: FrxDivergenceClass::EventSequence,
+            severity: BugSeverity::Major,
+            reproducer: "Test reproducer".to_string(),
+            expected_behavior: "Expected output".to_string(),
+            actual_behavior: "Actual output".to_string(),
+        };
+
+        let json = serde_json::to_string(&atom).expect("should serialize");
+        let back: DivergenceEvidenceAtom = serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(atom, back);
+    }
+
+    #[test]
+    fn signed_divergence_evidence_serde_roundtrip() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::SchemaViolation,
+            message: "Test divergence message".to_string(),
+            event_index: Some(1),
+            react_signature: None,
+            franken_signature: None,
+        };
+
+        let evidence = SignedDivergenceEvidence {
+            schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
+            evidence_id: "test-evidence-123".to_string(),
+            generated_at_utc: "2026-05-21T19:53:00Z".to_string(),
+            lockstep_case_id: "test-case-456".to_string(),
+            classification: DivergenceEvidenceAtom::EngineBug {
+                divergence_class: FrxDivergenceClass::SchemaViolation,
+                severity: BugSeverity::Critical,
+                reproducer: "Test bug reproducer".to_string(),
+                expected_behavior: "Expected behavior".to_string(),
+                actual_behavior: "Actual behavior".to_string(),
+            },
+            original_divergence: divergence,
+            classification_confidence: ClassificationConfidence::Automated,
+            evidence_sources: vec![EvidenceSource {
+                source_type: EvidenceSourceType::ReferenceImplementation,
+                identifier: "node-22.13.1".to_string(),
+                description: "Node.js reference execution".to_string(),
+            }],
+            signature: Some("mock-signature".to_string()),
+        };
+
+        let json = serde_json::to_string(&evidence).expect("should serialize");
+        let back: SignedDivergenceEvidence =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(evidence, back);
+    }
+
+    #[test]
+    fn classify_divergence_schema_violation_as_engine_bug() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::SchemaViolation,
+            message: "Invalid schema format detected".to_string(),
+            event_index: None,
+            react_signature: None,
+            franken_signature: None,
+        };
+
+        let classification = classify_divergence(&divergence);
+        match classification {
+            DivergenceEvidenceAtom::EngineBug {
+                divergence_class,
+                severity,
+                ..
+            } => {
+                assert_eq!(divergence_class, FrxDivergenceClass::SchemaViolation);
+                assert_eq!(severity, BugSeverity::Minor);
+            }
+            _ => panic!("Expected EngineBug classification for schema violation"),
+        }
+    }
+
+    #[test]
+    fn classify_divergence_performance_improvement() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::EventSequence,
+            message: "Timing optimization detected in execution order".to_string(),
+            event_index: Some(2),
+            react_signature: None,
+            franken_signature: None,
+        };
+
+        let classification = classify_divergence(&divergence);
+        match classification {
+            DivergenceEvidenceAtom::IntentionalImprovement {
+                improvement_type,
+                compatibility_impact,
+                ..
+            } => {
+                assert_eq!(improvement_type, ImprovementType::Performance);
+                assert_eq!(compatibility_impact, CompatibilityImpact::Minimal);
+            }
+            _ => panic!(
+                "Expected IntentionalImprovement classification for performance optimization"
+            ),
+        }
+    }
+
+    #[test]
+    fn classify_divergence_console_output_difference() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::EventSequence,
+            message: "Console output differs".to_string(),
+            event_index: Some(2),
+            react_signature: Some(FrxTraceEventSignature {
+                seq: 2,
+                phase: "execution".to_string(),
+                event: "console_output:42".to_string(),
+                decision_path: "test".to_string(),
+                outcome: "ok".to_string(),
+            }),
+            franken_signature: Some(FrxTraceEventSignature {
+                seq: 2,
+                phase: "execution".to_string(),
+                event: "console_output:43".to_string(),
+                decision_path: "test".to_string(),
+                outcome: "ok".to_string(),
+            }),
+        };
+
+        let classification = classify_divergence(&divergence);
+        match classification {
+            DivergenceEvidenceAtom::EngineBug {
+                severity,
+                reproducer,
+                expected_behavior,
+                actual_behavior,
+                ..
+            } => {
+                assert_eq!(severity, BugSeverity::Minor);
+                assert!(reproducer.contains("Console output mismatch"));
+                assert!(expected_behavior.contains("console_output:42"));
+                assert!(actual_behavior.contains("console_output:43"));
+            }
+            _ => panic!("Expected EngineBug classification for console output difference"),
+        }
+    }
+
+    #[test]
+    fn classify_divergence_state_transition_as_ambiguity() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::StateTransition,
+            message: "Different state handling observed".to_string(),
+            event_index: Some(1),
+            react_signature: Some(FrxTraceEventSignature {
+                seq: 1,
+                phase: "state".to_string(),
+                event: "transition".to_string(),
+                decision_path: "test".to_string(),
+                outcome: "ok".to_string(),
+            }),
+            franken_signature: None,
+        };
+
+        let classification = classify_divergence(&divergence);
+        match classification {
+            DivergenceEvidenceAtom::EcosystemAmbiguity {
+                ambiguity_type,
+                reference_behaviors,
+                franken_behavior,
+                ..
+            } => {
+                assert_eq!(ambiguity_type, AmbiguityType::ImplementationDivergence);
+                assert_eq!(reference_behaviors.len(), 1);
+                assert_eq!(reference_behaviors[0].runtime_name, "Reference");
+                assert!(franken_behavior.contains("state: transition"));
+            }
+            _ => panic!("Expected EcosystemAmbiguity classification for state transition"),
+        }
+    }
+
+    #[test]
+    fn create_divergence_evidence_generates_valid_structure() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::SchemaViolation,
+            message: "Test divergence".to_string(),
+            event_index: None,
+            react_signature: None,
+            franken_signature: None,
+        };
+
+        let evidence = create_divergence_evidence(
+            &divergence,
+            "test-case-123",
+            ClassificationConfidence::Automated,
+        );
+
+        assert_eq!(evidence.schema_version, DIVERGENCE_EVIDENCE_SCHEMA_VERSION);
+        assert!(!evidence.evidence_id.is_empty());
+        assert_eq!(evidence.lockstep_case_id, "test-case-123");
+        assert_eq!(
+            evidence.classification_confidence,
+            ClassificationConfidence::Automated
+        );
+        assert_eq!(evidence.original_divergence, divergence);
+        assert_eq!(evidence.evidence_sources.len(), 1);
+        assert_eq!(
+            evidence.evidence_sources[0].source_type,
+            EvidenceSourceType::ReferenceImplementation
+        );
+        assert!(evidence.signature.is_none()); // Not implemented yet
+    }
+
+    #[test]
+    fn create_batch_divergence_evidence() {
+        let divergences = vec![
+            (
+                FrxDivergenceDetail {
+                    class: FrxDivergenceClass::SchemaViolation,
+                    message: "First divergence".to_string(),
+                    event_index: None,
+                    react_signature: None,
+                    franken_signature: None,
+                },
+                "case-1".to_string(),
+            ),
+            (
+                FrxDivergenceDetail {
+                    class: FrxDivergenceClass::EventSequence,
+                    message: "Second divergence".to_string(),
+                    event_index: Some(1),
+                    react_signature: None,
+                    franken_signature: None,
+                },
+                "case-2".to_string(),
+            ),
+        ];
+
+        let evidence_batch = create_batch_divergence_evidence(
+            &divergences,
+            ClassificationConfidence::HumanConfirmed,
+        );
+
+        assert_eq!(evidence_batch.len(), 2);
+        assert_eq!(evidence_batch[0].lockstep_case_id, "case-1");
+        assert_eq!(evidence_batch[1].lockstep_case_id, "case-2");
+        assert_eq!(
+            evidence_batch[0].classification_confidence,
+            ClassificationConfidence::HumanConfirmed
+        );
+        assert_eq!(
+            evidence_batch[1].classification_confidence,
+            ClassificationConfidence::HumanConfirmed
+        );
+    }
+
+    #[test]
+    fn apply_triage_rules_critical_bug() {
+        let evidence = SignedDivergenceEvidence {
+            schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
+            evidence_id: "test-123".to_string(),
+            generated_at_utc: "2026-05-21T19:53:00Z".to_string(),
+            lockstep_case_id: "case-123".to_string(),
+            classification: DivergenceEvidenceAtom::EngineBug {
+                divergence_class: FrxDivergenceClass::SchemaViolation,
+                severity: BugSeverity::Critical,
+                reproducer: "Crash on startup".to_string(),
+                expected_behavior: "Normal execution".to_string(),
+                actual_behavior: "Segmentation fault".to_string(),
+            },
+            original_divergence: FrxDivergenceDetail {
+                class: FrxDivergenceClass::SchemaViolation,
+                message: "Crash".to_string(),
+                event_index: None,
+                react_signature: None,
+                franken_signature: None,
+            },
+            classification_confidence: ClassificationConfidence::Automated,
+            evidence_sources: vec![],
+            signature: None,
+        };
+
+        let triage = apply_triage_rules(&evidence);
+        assert_eq!(triage.priority, TrPriority::P0);
+        assert_eq!(triage.assignment, TriageAssignment::EngineTeam);
+        assert_eq!(triage.sla_hours, Some(24));
+        assert!(triage.escalation_required);
+    }
+
+    #[test]
+    fn apply_triage_rules_compatibility_debt() {
+        let evidence = SignedDivergenceEvidence {
+            schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
+            evidence_id: "test-456".to_string(),
+            generated_at_utc: "2026-05-21T19:53:00Z".to_string(),
+            lockstep_case_id: "case-456".to_string(),
+            classification: DivergenceEvidenceAtom::CompatibilityDebt {
+                divergence_class: FrxDivergenceClass::StateTransition,
+                debt_priority: DebtPriority::High,
+                ecosystem_impact: vec!["Framework X".to_string(), "Library Y".to_string()],
+                mitigation_strategy: Some("Add compatibility mode".to_string()),
+            },
+            original_divergence: FrxDivergenceDetail {
+                class: FrxDivergenceClass::StateTransition,
+                message: "State mismatch".to_string(),
+                event_index: None,
+                react_signature: None,
+                franken_signature: None,
+            },
+            classification_confidence: ClassificationConfidence::HumanConfirmed,
+            evidence_sources: vec![],
+            signature: None,
+        };
+
+        let triage = apply_triage_rules(&evidence);
+        assert_eq!(triage.priority, TrPriority::P1);
+        assert_eq!(triage.assignment, TriageAssignment::CompatibilityTeam);
+        assert_eq!(triage.sla_hours, Some(120));
+        assert!(!triage.escalation_required);
+    }
+
+    #[test]
+    fn apply_triage_rules_ecosystem_ambiguity() {
+        let evidence = SignedDivergenceEvidence {
+            schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
+            evidence_id: "test-789".to_string(),
+            generated_at_utc: "2026-05-21T19:53:00Z".to_string(),
+            lockstep_case_id: "case-789".to_string(),
+            classification: DivergenceEvidenceAtom::EcosystemAmbiguity {
+                divergence_class: FrxDivergenceClass::HydrationOutcome,
+                ambiguity_type: AmbiguityType::SpecificationGap,
+                reference_behaviors: vec![],
+                franken_behavior: "FrankenEngine choice".to_string(),
+                specification_gap: Some("ECMAScript unclear".to_string()),
+            },
+            original_divergence: FrxDivergenceDetail {
+                class: FrxDivergenceClass::HydrationOutcome,
+                message: "Ambiguous behavior".to_string(),
+                event_index: None,
+                react_signature: None,
+                franken_signature: None,
+            },
+            classification_confidence: ClassificationConfidence::Tentative,
+            evidence_sources: vec![],
+            signature: None,
+        };
+
+        let triage = apply_triage_rules(&evidence);
+        assert_eq!(triage.priority, TrPriority::P2);
+        assert_eq!(triage.assignment, TriageAssignment::StandardsTeam);
+        assert_eq!(triage.sla_hours, Some(240));
+        assert!(!triage.escalation_required);
+    }
+
+    #[test]
+    fn bug_severity_classification_from_message() {
+        assert_eq!(
+            classify_bug_severity("System crash detected"),
+            BugSeverity::Critical
+        );
+        assert_eq!(
+            classify_bug_severity("Panic in runtime"),
+            BugSeverity::Critical
+        );
+        assert_eq!(
+            classify_bug_severity("Incorrect calculation result"),
+            BugSeverity::Major
+        );
+        assert_eq!(
+            classify_bug_severity("Wrong output value"),
+            BugSeverity::Major
+        );
+        assert_eq!(
+            classify_bug_severity("Error message format differs"),
+            BugSeverity::Cosmetic
+        );
+        assert_eq!(
+            classify_bug_severity("Display formatting issue"),
+            BugSeverity::Cosmetic
+        );
+        assert_eq!(
+            classify_bug_severity("Other minor issue"),
+            BugSeverity::Minor
+        );
+    }
+
+    #[test]
+    fn is_performance_related_detection() {
+        assert!(is_performance_related("Timing optimization detected"));
+        assert!(is_performance_related(
+            "Performance improvement in execution"
+        ));
+        assert!(is_performance_related("Speed enhancement"));
+        assert!(!is_performance_related("Console output differs"));
+        assert!(!is_performance_related("Schema validation failed"));
+    }
+
+    #[test]
+    fn is_console_output_difference_detection() {
+        let divergence_with_console = FrxDivergenceDetail {
+            class: FrxDivergenceClass::EventSequence,
+            message: "Console output differs between runtimes".to_string(),
+            event_index: Some(1),
+            react_signature: Some(FrxTraceEventSignature {
+                seq: 1,
+                phase: "execution".to_string(),
+                event: "console_output:42".to_string(),
+                decision_path: "test".to_string(),
+                outcome: "ok".to_string(),
+            }),
+            franken_signature: None,
+        };
+
+        let divergence_without_console = FrxDivergenceDetail {
+            class: FrxDivergenceClass::StateTransition,
+            message: "State mismatch detected".to_string(),
+            event_index: None,
+            react_signature: None,
+            franken_signature: None,
+        };
+
+        assert!(is_console_output_difference(&divergence_with_console));
+        assert!(!is_console_output_difference(&divergence_without_console));
+    }
+
+    #[test]
+    fn extract_behaviors_from_signatures() {
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::EventSequence,
+            message: "Different behaviors observed".to_string(),
+            event_index: Some(1),
+            react_signature: Some(FrxTraceEventSignature {
+                seq: 1,
+                phase: "render".to_string(),
+                event: "component_mount".to_string(),
+                decision_path: "root/child".to_string(),
+                outcome: "success".to_string(),
+            }),
+            franken_signature: Some(FrxTraceEventSignature {
+                seq: 1,
+                phase: "execution".to_string(),
+                event: "component_init".to_string(),
+                decision_path: "root/child".to_string(),
+                outcome: "ok".to_string(),
+            }),
+        };
+
+        let expected = extract_expected_behavior(&divergence);
+        let actual = extract_actual_behavior(&divergence);
+        let franken = extract_franken_behavior(&divergence);
+        let ref_behaviors = extract_reference_behaviors(&divergence);
+
+        assert_eq!(expected, "render: component_mount");
+        assert_eq!(actual, "execution: component_init");
+        assert_eq!(franken, "execution: component_init (outcome: ok)");
+        assert_eq!(ref_behaviors.len(), 1);
+        assert_eq!(ref_behaviors[0].runtime_name, "Reference");
+        assert_eq!(
+            ref_behaviors[0].observed_behavior,
+            "render: component_mount"
+        );
+        assert_eq!(ref_behaviors[0].context_notes, Some("success".to_string()));
     }
 }

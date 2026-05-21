@@ -1,0 +1,320 @@
+{
+  "schema_version": "franken-engine.lockstep-divergence-taxonomy.v1",
+  "schema_hash": "sha256:a1b2c3d4e5f6789abcdef0123456789abcdef0123456789abcdef01234567890",
+  "generated_at_utc": "2026-05-21T19:53:00Z",
+  "version": "1.0",
+  "description": "Divergence classification taxonomy and triage rules for lockstep oracle differential analysis",
+
+  "classification_atoms": {
+    "description": "Typed evidence atoms for divergence classification",
+    "categories": {
+      "engine_bug": {
+        "description": "Genuine FrankenEngine bug - behavior differs from reference implementation incorrectly",
+        "fields": {
+          "divergence_class": "FrxDivergenceClass enum value",
+          "severity": "Critical | Major | Minor | Cosmetic",
+          "reproducer": "String description of how to reproduce the bug",
+          "expected_behavior": "String describing the correct reference behavior",
+          "actual_behavior": "String describing the incorrect FrankenEngine behavior"
+        },
+        "examples": [
+          {
+            "divergence_class": "event_sequence",
+            "severity": "major",
+            "reproducer": "Numeric loop workload produces different console output: expected '49995000', got '49995001'",
+            "expected_behavior": "console_output:49995000 from Node.js reference",
+            "actual_behavior": "console_output:49995001 from FrankenEngine execution"
+          }
+        ]
+      },
+      "intentional_improvement": {
+        "description": "FrankenEngine deliberately improves on reference behavior",
+        "fields": {
+          "divergence_class": "FrxDivergenceClass enum value",
+          "improvement_type": "Performance | Security | Diagnostics | MemoryEfficiency | Determinism",
+          "rationale": "String explaining why the improvement was made",
+          "compatibility_impact": "None | Minimal | Moderate | Significant"
+        },
+        "examples": [
+          {
+            "divergence_class": "event_sequence",
+            "improvement_type": "performance",
+            "rationale": "FrankenEngine optimizes execution order for better cache locality",
+            "compatibility_impact": "minimal"
+          }
+        ]
+      },
+      "compatibility_debt": {
+        "description": "Known deviation that needs addressing for ecosystem compatibility",
+        "fields": {
+          "divergence_class": "FrxDivergenceClass enum value",
+          "debt_priority": "Blocker | High | Medium | Low",
+          "ecosystem_impact": "Array of strings describing affected ecosystem components",
+          "mitigation_strategy": "Optional string describing how to address the debt"
+        },
+        "examples": [
+          {
+            "divergence_class": "state_transition",
+            "debt_priority": "high",
+            "ecosystem_impact": ["Popular framework X relies on specific error timing", "Test suite Y expects particular execution order"],
+            "mitigation_strategy": "Implement compatibility mode for legacy timing behavior"
+          }
+        ]
+      },
+      "ecosystem_ambiguity": {
+        "description": "Reference implementations disagree or behavior is underspecified",
+        "fields": {
+          "divergence_class": "FrxDivergenceClass enum value",
+          "ambiguity_type": "SpecificationGap | ImplementationDivergence | LegacyVariation | PlatformSpecific",
+          "reference_behaviors": "Array of ReferenceRuntimeBehavior objects",
+          "franken_behavior": "String describing FrankenEngine's behavior choice",
+          "specification_gap": "Optional string describing the specification ambiguity"
+        },
+        "examples": [
+          {
+            "divergence_class": "hydration_outcome",
+            "ambiguity_type": "implementation_divergence",
+            "reference_behaviors": [
+              {
+                "runtime_name": "Node.js",
+                "runtime_version": "22.13.1",
+                "observed_behavior": "Throws TypeError on invalid hydration",
+                "context_notes": "Strict validation mode"
+              },
+              {
+                "runtime_name": "Bun",
+                "runtime_version": "1.1.43",
+                "observed_behavior": "Logs warning and continues execution",
+                "context_notes": "Permissive fallback mode"
+              }
+            ],
+            "franken_behavior": "Throws RangeError with detailed diagnostic message",
+            "specification_gap": "ECMAScript does not specify error handling for hydration mismatches"
+          }
+        ]
+      }
+    }
+  },
+
+  "classification_heuristics": {
+    "description": "Rules for automatic divergence classification",
+    "rules": [
+      {
+        "condition": "divergence_class == 'schema_violation'",
+        "classification": "engine_bug",
+        "rationale": "Schema violations indicate structural problems in the implementation"
+      },
+      {
+        "condition": "message.contains('console_output') && message.contains('more precise')",
+        "classification": "intentional_improvement",
+        "improvement_type": "diagnostics",
+        "rationale": "Enhanced console output precision is an intentional improvement"
+      },
+      {
+        "condition": "divergence_class == 'event_sequence' && message.contains('timing')",
+        "classification": "intentional_improvement",
+        "improvement_type": "performance",
+        "rationale": "Timing optimizations are generally intentional improvements"
+      },
+      {
+        "condition": "divergence_class == 'state_transition'",
+        "classification": "ecosystem_ambiguity",
+        "ambiguity_type": "implementation_divergence",
+        "rationale": "State transitions often reveal implementation-specific choices"
+      },
+      {
+        "condition": "message.contains('crash') || message.contains('panic')",
+        "classification": "engine_bug",
+        "severity": "critical",
+        "rationale": "Runtime crashes are always critical bugs"
+      }
+    ]
+  },
+
+  "triage_rules": {
+    "description": "Priority and assignment rules for divergence evidence",
+    "priority_mapping": {
+      "P0": {
+        "description": "Critical - immediate action required",
+        "sla_hours": 24,
+        "escalation_required": true,
+        "triggers": [
+          "engine_bug.severity == 'critical'",
+          "compatibility_debt.debt_priority == 'blocker'"
+        ]
+      },
+      "P1": {
+        "description": "High priority - action required within business week",
+        "sla_hours": 72,
+        "escalation_required": false,
+        "triggers": [
+          "engine_bug.severity == 'major'",
+          "compatibility_debt.debt_priority == 'high'",
+          "intentional_improvement.compatibility_impact == 'significant'"
+        ]
+      },
+      "P2": {
+        "description": "Medium priority - action required within sprint",
+        "sla_hours": 168,
+        "escalation_required": false,
+        "triggers": [
+          "engine_bug.severity == 'minor'",
+          "compatibility_debt.debt_priority == 'medium'",
+          "ecosystem_ambiguity.*"
+        ]
+      },
+      "P3": {
+        "description": "Low priority - backlog item",
+        "sla_hours": null,
+        "escalation_required": false,
+        "triggers": [
+          "engine_bug.severity == 'cosmetic'",
+          "compatibility_debt.debt_priority == 'low'",
+          "intentional_improvement.compatibility_impact in ['none', 'minimal']"
+        ]
+      }
+    },
+
+    "assignment_rules": {
+      "engine_team": {
+        "description": "Core FrankenEngine implementation team",
+        "triggers": ["engine_bug.*"],
+        "escalation_path": "architecture_team"
+      },
+      "compatibility_team": {
+        "description": "Ecosystem compatibility specialists",
+        "triggers": ["compatibility_debt.*"],
+        "escalation_path": "architecture_team"
+      },
+      "architecture_team": {
+        "description": "System architecture and design decisions",
+        "triggers": [
+          "intentional_improvement.compatibility_impact == 'significant'",
+          "escalations from engine_team",
+          "escalations from compatibility_team"
+        ],
+        "escalation_path": "standards_team"
+      },
+      "standards_team": {
+        "description": "ECMAScript standards and specification experts",
+        "triggers": [
+          "ecosystem_ambiguity.ambiguity_type in ['specification_gap', 'implementation_divergence']"
+        ],
+        "escalation_path": "external_review"
+      },
+      "documentation_team": {
+        "description": "Documentation and communication specialists",
+        "triggers": [
+          "intentional_improvement.compatibility_impact in ['none', 'minimal', 'moderate']"
+        ],
+        "escalation_path": "architecture_team"
+      },
+      "backlog": {
+        "description": "Unassigned backlog items",
+        "triggers": [
+          "priority == 'P3' && estimated_effort > 'large'"
+        ],
+        "escalation_path": "architecture_team"
+      }
+    }
+  },
+
+  "evidence_ledger_integration": {
+    "description": "Integration with the evidence ledger system",
+    "schema_reference": "franken-engine.divergence-evidence.v1",
+    "signing_requirements": {
+      "required_fields": [
+        "evidence_id",
+        "generated_at_utc",
+        "lockstep_case_id",
+        "classification",
+        "classification_confidence"
+      ],
+      "signature_algorithm": "Ed25519",
+      "signature_key_source": "evidence_ledger_signing_key"
+    },
+    "ledger_chaining": {
+      "previous_evidence_hash": "SHA-256 hash of previous evidence in chain",
+      "merkle_root_inclusion": "Evidence is included in periodic merkle root",
+      "verification_path": "Merkle proof path for evidence verification"
+    }
+  },
+
+  "confidence_levels": {
+    "automated": {
+      "description": "Automated classification with high confidence heuristics",
+      "review_required": false,
+      "validity_period_hours": 720
+    },
+    "human_confirmed": {
+      "description": "Human expert has reviewed and confirmed the classification",
+      "review_required": false,
+      "validity_period_hours": null
+    },
+    "tentative": {
+      "description": "Initial classification requiring further investigation",
+      "review_required": true,
+      "validity_period_hours": 168
+    },
+    "disputed": {
+      "description": "Classification is disputed and requires resolution",
+      "review_required": true,
+      "validity_period_hours": 48
+    }
+  },
+
+  "metrics_and_reporting": {
+    "key_metrics": [
+      {
+        "name": "divergence_rate",
+        "description": "Percentage of lockstep cases that diverge",
+        "calculation": "failed_cases / total_cases * 100",
+        "target": "< 5% for stable features"
+      },
+      {
+        "name": "classification_accuracy",
+        "description": "Percentage of automated classifications confirmed by human review",
+        "calculation": "confirmed_automated / total_automated * 100",
+        "target": "> 85% for production deployment"
+      },
+      {
+        "name": "triage_sla_compliance",
+        "description": "Percentage of cases triaged within SLA",
+        "calculation": "triaged_within_sla / total_triaged * 100",
+        "target": "> 90% overall"
+      },
+      {
+        "name": "resolution_velocity",
+        "description": "Average time to resolve divergence evidence",
+        "calculation": "sum(resolution_time) / resolved_count",
+        "target": "< 7 days for P1, < 21 days for P2"
+      }
+    ],
+    "reporting_cadence": {
+      "daily": ["new_divergences", "high_priority_backlog"],
+      "weekly": ["classification_accuracy", "triage_sla_compliance"],
+      "monthly": ["resolution_velocity", "ecosystem_impact_assessment"]
+    }
+  },
+
+  "evolution_and_maintenance": {
+    "version_history": [
+      {
+        "version": "1.0",
+        "release_date": "2026-05-21",
+        "changes": "Initial taxonomy definition with four core evidence atom types",
+        "migration_notes": "No migration required - initial release"
+      }
+    ],
+    "review_schedule": {
+      "quarterly": "Review classification heuristics and triage rule effectiveness",
+      "semi_annual": "Update evidence atom types based on observed patterns",
+      "annual": "Major taxonomy revision with stakeholder input"
+    },
+    "feedback_mechanisms": [
+      "Divergence classification appeals process",
+      "Triage rule effectiveness monitoring",
+      "Community feedback on taxonomy completeness"
+    ]
+  }
+}

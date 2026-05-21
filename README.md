@@ -270,7 +270,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 | Operator gate scripts in `scripts/run_*.sh` | 241 (56 RGC, 36 parser, 34 FRX, the rest claim/evidence/build plumbing) |
 | Replay wrappers in `scripts/e2e/*_replay.sh` | 158 (83 have an exact `<gate>_replay.sh` partner to a `run_<gate>.sh`; the remaining 75 cover composite or sub-gate replay shapes) |
 | Architecture / contract docs in `docs/` | 672 top-level files (`*.md` + `*.json` contracts) plus `docs/architecture/`, `docs/adr/`, `docs/plans/`, `docs/templates/`, `docs/operator-gates/` |
-| Impossible-by-default demos under `examples/` | 13 capabilities, 20 numbered demo directories (`01_…` – `22_…` with gaps) |
+| Impossible-by-default demos under `examples/` | 13 impossible-by-default *capabilities* + 7 additional live-runtime / integration demos = 20 numbered directories (`01_…` through `22_…`, with gaps at `08_…` and `10_…`). The 13 capabilities are the originally-scoped set; the 7 additional dirs cover live-runtime variants and integration smokes that sit alongside but are not themselves separate capability claims. |
 | Tracked beads in `.beads/issues.jsonl` | 2,584 issues (open + closed); see `memory/enrichment_sessions.md` for the lib-test landing journal (35,000+ unit tests recorded by 2026-03-19) |
 | Cargo fuzz harnesses | 31 across two trees: 17 in top-level `fuzz/fuzz_targets/` + 14 in `crates/franken-engine/fuzz/fuzz_targets/` |
 | Benchmark suites in `benchmarks/` | `macro/`, `micro/`, `runtime_comparison/` |
@@ -294,7 +294,7 @@ franken_engine/
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
 │   └── franken-core/                # In-progress extracted runtime; excluded from workspace
 ├── docs/                            # Charters, contracts, audits, gate specs (672 top-level files + subdirs)
-├── examples/                        # 13 impossible-by-default capability demos + live runtime examples
+├── examples/                        # 13 impossible-by-default capabilities across 20 numbered demo dirs (01..22, gaps at 08/10) + live runtime examples
 ├── scripts/                         # 241 run_*.sh gate runners + e2e/*_replay.sh wrappers
 ├── runbooks/                        # Incident-evidence collector + emergency rollback
 ├── fuzz/                            # cargo-fuzz harnesses (parser, ts_module_resolution, shadow_panel)

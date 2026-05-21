@@ -72,11 +72,8 @@ impl PrincipalId {
     }
 
     pub fn to_hex(&self) -> String {
-        let mut s = String::with_capacity(64);
-        for byte in &self.0 {
-            s.push_str(&format!("{byte:02x}"));
-        }
-        s
+        // Zero-allocation: use hex::encode with static LUT (same optimization as EngineObjectId)
+        hex::encode(self.0)
     }
 }
 

@@ -146,11 +146,8 @@ impl VerificationKey {
 
     /// Hex-encoded representation.
     pub fn to_hex(&self) -> String {
-        let mut s = String::with_capacity(VERIFICATION_KEY_LEN * 2);
-        for byte in &self.inner {
-            write!(s, "{byte:02x}").expect("serde deserialization should succeed");
-        }
-        s
+        // Zero-allocation: use hex::encode with static LUT (same optimization as EngineObjectId)
+        hex::encode(self.inner)
     }
 
     /// Create the internal Ed25519 verifying key.

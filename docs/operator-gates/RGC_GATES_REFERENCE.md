@@ -2201,6 +2201,145 @@ The lockstep oracle pipeline integrates with:
 - **Evidence ledger system** - Chains evidence for audit trail
 - **Operator triage surface** (I.6) - Feeds divergence analysis workflow
 
+## Capability-Typed Compile-Time Rejection Gate
+
+`bd-cixqu.3` (FE-CLAIM-006, Track C) lands the compile-time ambient-authority
+rejection contract. The gate refuses to lower a TS source whose call sites
+reach a capability surface the calling scope has not declared, and emits a
+structured diagnostic naming the source span and the missing capability.
+
+The diagnostic surface and operator workflow described below are anchored
+to three already-shipped child beads:
+
+- `bd-cixqu.3.1` (C.1) — typed [`EffectSet`](../../crates/franken-engine/src/effect_set.rs) +
+  [`EffectAnnotation`](../../crates/franken-engine/src/effect_set.rs) contract for IR2
+  function/method nodes, with policy distinguishability (Empty / Inherited / Declared).
+- `bd-cixqu.3.3` (C.3) — 16-entry red-team negative scenario corpus under
+  [`crates/franken-engine/tests/red_team_scenarios/`](../../crates/franken-engine/tests/red_team_scenarios/),
+  each declaring the expected `LoweringPipelineError` variant in its manifest.
+- `bd-cixqu.3.6` (C.6) — `capability_shadowed_import` laundering attempt
+  fixture, validated by `red_team_scenario_manifest_validation.rs`.
+
+The gate runner and its replay wrapper (`./scripts/run_rgc_capability_typed_compile_time.sh`
++ `./scripts/e2e/rgc_capability_typed_compile_time_replay.sh`) are tracked
+under `bd-cixqu.3.4`; the lowering-side rejection emitter is `bd-cixqu.3.2`.
+This section documents the operator-facing contract those beads will satisfy.
+
+### When to run
+
+- Before promoting an extension manifest to a deployment lane.
+- After editing source under `extensions/<name>/` whose effect set could
+  have changed (any new `require()` / `import` of a host module, any new
+  computed-member access on `process` / `globalThis`).
+- After any change to a `declare_capability` annotation in source.
+- After updates to `effect_set::EffectKind` (schema-bump event).
+
+### Expected artifacts
+
+When the gate runs to completion it emits the following under
+`artifacts/rgc_capability_typed_compile_time/<timestamp>/`:
+
+- `capability_rejection_report.json` — list of call sites that were
+  refused, the source span of each, and the `EffectSet` that would have
+  been required for acceptance.
+- `effect_annotation_inventory.json` — every function/method node in the
+  lowered IR with its resolved `EffectAnnotation` (policy + effect set).
+- `run_manifest.json` — schema id, host facts, content hashes, operator
+  verification commands.
+- `trace_ids.json` — UUIDv7 trace / decision / policy ids for the run.
+- `events.jsonl` — structured event stream including every emitted
+  `LoweringPipelineError::UnauthorizedFlow` / `UnsupportedSyntax`.
+- `commands.txt` — verbatim shell transcript for replay.
+
+### Interpreting `LoweringPipelineError::AmbientAuthorityViolation`
+
+This diagnostic fires when the lowering pass refuses a call site whose
+target reaches an ambient-authority surface that the calling scope has
+not declared. Read the fields in this order:
+
+1. **`source_span`** — the file path, line, and column of the rejected
+   call site. Open it in your editor before continuing; the rest of the
+   diagnostic refers to identifiers visible at that span.
+2. **`required_capability`** — the `EffectKind` (e.g. `fs.read`,
+   `proc.spawn`, `runtime.eval`) the call site would need to be granted
+   for the lowering to accept it. This is the canonical capability id;
+   the same string appears in extension manifests and in
+   [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](../CLAIM_TO_PROOF_MATRIX_V1.md).
+3. **`calling_scope_effects`** — the resolved `EffectSet` the calling
+   scope declared. If this set is empty, the calling scope opted out of
+   every capability and the rejection is correct by construction; the
+   fix is to declare the capability at the appropriate scope, not to
+   widen here.
+4. **`evasion_class`** — when the lowering recognises the call site as a
+   well-known evasion attempt (capability-shadowed import, computed-member
+   access on `process`, `eval` / `new Function`, `Reflect.apply` of an
+   ambient target, `with`-block over ambient binding, etc.), this field
+   names the matching pattern. The 16-entry red-team scenario corpus is
+   the canonical reference for evasion classes.
+5. **`chain_root`** — when the rejected binding is reached through a
+   transitive re-export chain, this is the original Node module the
+   chain root resolves to. A `chain_root` of `child_process` plus an
+   `evasion_class` of `capability_shadowed_import` is the canonical
+   laundering pattern (see `bd-cixqu.3.6`).
+
+### Operator action: legitimate use case
+
+If the rejected call site is a legitimate use the extension intends to
+make, walk through the workflow in
+[`docs/operator-gates/ADDING_A_NEW_CAPABILITY.md`](./ADDING_A_NEW_CAPABILITY.md).
+That document covers: identifying the required `EffectKind`, editing the
+extension manifest to declare it, regenerating the typed-effect
+inventory, and rerunning the gate.
+
+### Operator action: bug or laundering attempt
+
+If the rejected call site is *not* a legitimate use — i.e. the evasion
+class is one of the catalogued laundering patterns, or the rejected
+binding reaches `child_process` / `fs.write` / `runtime.eval` from a
+scope that has no business being there — escalate to a security review:
+
+1. Capture the full `capability_rejection_report.json` and
+   `events.jsonl` from the gate run.
+2. Note the `chain_root` and `evasion_class` in the security ticket.
+3. Cross-reference the matching scenario under
+   `crates/franken-engine/tests/red_team_scenarios/` if the
+   `evasion_class` is one of the 16 catalogued attack vectors.
+4. Do NOT add the capability to the manifest as a workaround; the
+   intended response is for the extension to stop reaching the surface,
+   not for the deployment lane to widen its trust envelope.
+
+### Diagnostic format invariants
+
+The diagnostic message format itself is pinned by ≥20 unit tests on the
+`LoweringPipelineError::AmbientAuthorityViolation` rendering (deferred to
+the diagnostic implementation in `bd-cixqu.3.2`). The invariants the
+tests enforce:
+
+- Every diagnostic carries a non-empty `source_span` and a
+  `required_capability` that is a valid `EffectKind::as_str()` value.
+- The diagnostic is deterministic across runs given the same inputs —
+  identical source plus identical capability manifest produces identical
+  diagnostic bytes.
+- The diagnostic includes the `bd-cixqu.3` claim id for traceability.
+- Field ordering in the rendered text is stable so replay diffs are
+  meaningful.
+
+### Integration points
+
+This gate integrates with:
+
+- **EffectSet contract** (`bd-cixqu.3.1`) — every diagnostic
+  `required_capability` is an `EffectKind` value.
+- **Red-team scenario corpus** (`bd-cixqu.3.3`, `bd-cixqu.3.6`) — the
+  `evasion_class` field's value space is the corpus's `attack_vector`
+  set.
+- **Claim-to-proof matrix** (`docs/CLAIM_TO_PROOF_MATRIX_V1.md`) — every
+  `EffectKind` has a row in the matrix declaring its current proof
+  state. Promoting a capability from HYPOTHESIS to OBSERVED requires
+  this gate to run green against a corpus that exercises the surface.
+- **Operator status reports** — the gate's `events.jsonl` feeds the
+  operator-status bundle for the deployment lane.
+
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
